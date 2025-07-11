@@ -1,104 +1,25 @@
 import numpy as np
-import random
-from datetime import datetime, timedelta
 from collections import Counter
+from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-from scipy.stats import gaussian_kde
-
 from sqlalchemy import func
 from sqlalchemy.orm import aliased
 from ivan.sports.mlb.models import Lineup, MLBPlayer
-from ivan.core.utils import get_config_value, show_player_exposures, show_team_exposures
+from ivan.core.utils import get_config_value
 
 PITCHER_POS = {"SP", "RP", "P"}
 
 class DummyPlayer:
-    """Zero‑projection/ownership placeholder for missing players."""
-    def __init__(self, id_):
-        self.id              = id_
-        self.name            = "Unknown"
-        self.team            = "N/A"
-        self.position        = ["Unknown"]
-        self.salary          = 0
+    def __init__(self, pid: int):
+        self.id = pid
+        self.position = ""
+        self.team = None
+        self.lp = 0
+        self.adj_r = 1
+        self.adj_p = 1
         self.fpts_projection = 0.0
-        self.ownership       = 0.0
-        self.ops             = 0.0
-        self.adjusted_params = (0, 0)
-
-
-def diagnostic_report(
-    own_avg,
-    proj_norm,
-    stack_labels,
-    stack_dist,
-    final_inds,
-    bw_own,
-    bw_proj
-):
-    """
-    Generates diagnostics comparing predicted vs actual distributions:
-      1) Ownership KDE vs sampled histogram
-      2) Projection KDE vs sampled histogram
-      3) Stack-type predicted vs actual bar chart
-
-    Parameters:
-    - own_avg: array-like of avg ownership per lineup
-    - proj_norm: array-like of normalized projection sums per lineup
-    - stack_labels: list of stack-type labels (one per lineup)
-    - stack_dist: dict mapping each stack-type string → predicted probability
-    - final_inds: list/array of selected lineup indices
-    - bw_own: float bandwidth for ownership KDE
-    - bw_proj: float bandwidth for projection KDE
-    """
-    own_avg    = np.asarray(own_avg)
-    proj_norm  = np.asarray(proj_norm)
-    final_inds = np.asarray(final_inds)
-
-    # Ownership plot
-    x_own = np.linspace(own_avg.min(), own_avg.max(), 200)
-    kde_own = gaussian_kde(own_avg, bw_method=bw_own)
-    plt.figure(figsize=(6, 4))
-    plt.plot(x_own, kde_own(x_own), label='Predicted KDE (Own)')
-    plt.hist(own_avg[final_inds], bins=30, density=True, alpha=0.6, label='Actual Sampled (Own)')
-    plt.title('Ownership: Predicted vs Actual')
-    plt.xlabel('Avg Ownership')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # Projection plot
-    x_proj = np.linspace(proj_norm.min(), proj_norm.max(), 200)
-    kde_proj = gaussian_kde(proj_norm, bw_method=bw_proj)
-    plt.figure(figsize=(6, 4))
-    plt.plot(x_proj, kde_proj(x_proj), label='Predicted KDE (Proj)')
-    plt.hist(proj_norm[final_inds], bins=30, density=True, alpha=0.6, label='Actual Sampled (Proj)')
-    plt.title('Projection: Predicted vs Actual')
-    plt.xlabel('Normalized Projection')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # Stack-type distribution
-    stack_types = sorted(stack_dist.keys())
-    y_pred = np.array([stack_dist.get(st, 0.0) for st in stack_types])
-    counts = Counter(stack_labels[i] for i in final_inds)
-    total = len(final_inds)
-    y_act = np.array([counts.get(st, 0)/total for st in stack_types])
-
-    x = np.arange(len(stack_types))
-    w = 0.35
-    plt.figure(figsize=(8, 4))
-    plt.bar(x - w/2, y_pred, width=w, label='Predicted')
-    plt.bar(x + w/2, y_act, width=w, label='Actual')
-    plt.xticks(x, stack_types, rotation=45, ha='right')
-    plt.title('Stack-type: Predicted vs Actual')
-    plt.ylabel('Probability')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
+        self.stdv = 0.0
+        self.ownership = 0.0
 
 def fetch_latest_map(session, all_ids):
     sub = (
@@ -113,105 +34,131 @@ def fetch_latest_map(session, all_ids):
     P2 = aliased(MLBPlayer)
     latest = (
         session.query(P2)
-               .join(sub, (P2.id == sub.c.id) & (P2.created_at == sub.c.max_dt))
+               .join(sub, (P2.id==sub.c.id)&(P2.created_at==sub.c.max_dt))
                .all()
     )
-    return {p.id: p for p in latest}
-
+    return {p.id:p for p in latest}
 
 def sample_lineups_fast(
     session,
-    n_lineups,
-    config,
-    own_bin_probs,
-    proj_bin_probs,
-    stack_dist,
-    bin_edges
-):
+    n_lineups: int,
+    config: dict,
+    stack_dist: dict[str, float],
+    proj_bin_probs: np.ndarray
+) -> list[Lineup]:
     """
-    Fast sampler that:
-      • Matches fixed-bin ownership, projection, and stack distributions
-      • Injects noise for exploration
-      • Penalizes individual player exposure deviations
+    Fast approximate sampler: one‐shot weighted draw (no per‐draw penalties).
+    Matches:
+      • normalized projection‐sum distribution (proj_bin_probs over [0,1])
+      • stack‐type distribution (stack_dist)
+    Then prints exposures & deviations and plots projection histogram.
     """
     # 1) fetch recent lineups
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    all_lups = session.query(Lineup).filter(Lineup.created_at >= cutoff).all()
-    if len(all_lups) < n_lineups:
-        raise ValueError(f"Only {len(all_lups)} lineups available, need {n_lineups}.")
+    cutoff   = datetime.utcnow() - timedelta(hours=24)
+    all_lups = session.query(Lineup).filter(Lineup.created_at>=cutoff).all()
+    if not all_lups:
+        raise ValueError("No recent lineups available.")
 
-    # 2) fetch latest player info
-    all_ids = {pid for lup in all_lups for pid in lup.player_ids_list}
+    # 2) latest player data & target ownership (for reporting only)
+    all_ids    = {pid for lup in all_lups for pid in lup.player_ids_list}
     latest_map = fetch_latest_map(session, all_ids)
-    target_own = {pid: (latest_map.get(pid, DummyPlayer(pid)).ownership or 0)/100.0 for pid in all_ids}
+    target_own = {
+        pid: (latest_map.get(pid, DummyPlayer(pid)).ownership or 0.0)/100.0
+        for pid in all_ids
+    }
 
-    # 3) compute per-lineup metrics
-    proj_vals, own_vals, stacks, records = [], [], [], []
-    for lup in all_lups:
-        players = [latest_map.get(pid, DummyPlayer(pid)) for pid in lup.player_ids_list]
-        proj_vals.append(sum(p.fpts_projection or 0.0 for p in players))
-        own_vals.append(np.mean([p.ownership/100.0 for p in players]))
-        cnt=Counter(p.team for p in players);
-        top=sorted(cnt.values(), reverse=True)
-        stacks.append(f"{top[0]}-{top[1] if len(top)>1 else 0}")
-        records.append((lup, [p.id for p in players]))
+    # 3) build pool & compute raw projections + stacks
+    pool      = [(lup, lup.player_ids_list) for lup in all_lups]
+    N         = len(pool)
+    proj_vals = np.zeros(N, dtype=float)
+    stacks    = [None]*N
 
-    proj_vals=np.array(proj_vals); max_p=proj_vals.max() or 1.0
-    proj_norm=proj_vals/max_p; own_vals=np.array(own_vals)
+    for i, (_, pids) in enumerate(pool):
+        players      = [latest_map.get(pid, DummyPlayer(pid)) for pid in pids]
+        proj_vals[i] = sum(p.fpts_projection for p in players)
+        cnt          = Counter(p.team for p in players)
+        top_two      = sorted(cnt.values(), reverse=True)
+        stacks[i]    = f"{top_two[0]}-{top_two[1] if len(top_two)>1 else 0}"
 
-    # 4) bins
-    own_bins=np.clip(np.digitize(own_vals, bin_edges)-1,0,len(own_bin_probs)-1)
-    proj_bins=np.clip(np.digitize(proj_norm,bin_edges)-1,0,len(proj_bin_probs)-1)
+    # 4) normalize projections to [0,1]
+    pmin, pmax = proj_vals.min(), proj_vals.max()
+    if pmax > pmin:
+        norm_proj = (proj_vals - pmin)/(pmax - pmin)
+    else:
+        norm_proj = np.zeros_like(proj_vals)
 
-    # 5) base weights
-    base_w=own_bin_probs[own_bins]*proj_bin_probs[proj_bins]*np.array([stack_dist.get(s,1e-6) for s in stacks])
-    w=np.clip(base_w,1e-12,None); w/=w.sum()
+    # 5) build one‐shot weight vector
+    alpha_proj = get_config_value(config, "field.proj_exponent") or 1.5
+    B          = len(proj_bin_probs)
+    bin_edges  = np.linspace(0,1,B+1)
+    proj_bins  = np.clip(np.digitize(norm_proj, bin_edges)-1, 0, B-1)
+    w_proj     = proj_bin_probs[proj_bins] ** alpha_proj
+    w_stack    = np.array([stack_dist.get(s,1e-6) for s in stacks])
+    w          = w_proj * w_stack
+    w          = np.clip(w, 1e-12, None)
+    w         /= w.sum()
 
-    # 6) noise
-    sigma=get_config_value(config,'field.noise_sigma') or 0.1
-    w+=sigma*np.random.rand(len(w)); w=np.clip(w,1e-12,None); w/=w.sum()
+    # 6) sample all at once (with replacement)
+    chosen_idx = np.random.choice(N, size=n_lineups, replace=True, p=w)
 
-    # 7) incidence matrix
-    player_ids=sorted(all_ids); pid2idx={pid:i for i,pid in enumerate(player_ids)}
-    N=len(records); P=len(player_ids)
-    M=np.zeros((N,P),dtype=int)
-    for i,(_,pids) in enumerate(records):
-        for pid in pids: M[i,pid2idx[pid]]=1
-
-    # 8) expected exposures
-    exp_j=w@M
-
-    # 9) player penalties
-    beta=get_config_value(config,'field.penalty_beta') or 10.0
-    dev=exp_j-np.array([target_own[pid] for pid in player_ids])
-    player_pen=np.exp(-beta*dev**2)
-
-    #10) lineup penalties
-    lineup_pen=np.prod(np.where(M,player_pen,1.0),axis=1)
-
-    #11) combine and sample
-    w*=lineup_pen; w=np.clip(w,1e-12,None); w/=w.sum()
-    chosen_idx=np.random.choice(N,n_lineups,replace=False,p=w)
-
-    #12) collect
-    chosen=[]
+    # 7) attach players and collect chosen lineups
+    chosen = []
     for idx in chosen_idx:
-        lup,_=records[idx]
-        lup.players=[latest_map.get(pid,DummyPlayer(pid)) for pid in lup.player_ids_list]
+        lup, pids = pool[idx]
+        lup.players = [latest_map.get(pid, DummyPlayer(pid)) for pid in pids]
         chosen.append(lup)
 
-    #13) reporting + diagnostics
-    lists=[l.player_ids_list for l in chosen]
-    show_player_exposures(session,lists)
-    show_team_exposures(session,lists,stack_size=4)
-    diagnostic_report(
-        own_avg=own_vals,
-        proj_norm=proj_norm,
-        stack_labels=stacks,
-        stack_dist=stack_dist,
-        final_inds=chosen_idx,
-        bw_own=None,
-        bw_proj=None
-    )
+    # 8) compute exposures & deviations
+    exposures = Counter(p.id for lup in chosen for p in lup.players)
+    total     = len(chosen)
+    pid2player = {p.id:p for lup in chosen for p in lup.players}
+
+    pitchers, batters = {}, {}
+    for pid, cnt in exposures.items():
+        expf    = cnt/total
+        proj_own= target_own.get(pid,0.0)
+        pl      = pid2player[pid]
+        entry   = (expf, proj_own, getattr(pl,"name",f"PID {pid}"), pl.team or "NA")
+        if any(pos in PITCHER_POS for pos in pl.position):
+            pitchers[pid] = entry
+        else:
+            batters[pid]  = entry
+
+    def print_exposures(title, dct, top_n=None):
+        print(f"\n{title}")
+        print(f"{'Name':<20}  {'Team':<5}  {'Exposure':>10}  {'ProjOwn':>10}")
+        items = sorted(dct.values(), key=lambda x:x[0], reverse=True)
+        if top_n: items = items[:top_n]
+        for expf, projf, nm, tm in items:
+            print(f"{nm:<20}  {tm:<5}  {expf:>9.2%}  {projf:>9.2%}")
+
+    def print_deviators(title, dct, top_n=5):
+        print(f"\n{title}")
+        print(f"{'Name':<20}  {'Team':<5}  {'Exposure':>10}  {'ProjOwn':>10}  {'Dev':>8}")
+        devs = [(abs(expf-projf), expf, projf, nm, tm) for expf,projf,nm,tm in dct.values()]
+        for dev, expf, projf, nm, tm in sorted(devs, reverse=True)[:top_n]:
+            print(f"{nm:<20}  {tm:<5}  {expf:>9.2%}  {projf:>9.2%}  {dev:>7.2%}")
+
+    print_exposures("ALL Pitcher Exposures",   pitchers)
+    print_exposures("Top 20 Batter Exposures",  batters, top_n=20)
+    print_deviators("Top 5 Pitcher Deviations", pitchers)
+    print_deviators("Top 5 Batter Deviations",  batters)
+
+    # 9) plot projection histogram vs target
+    chosen_proj = np.array([sum(p.fpts_projection for p in lup.players) for lup in chosen])
+    if pmax>pmin:
+        chosen_norm = (chosen_proj - pmin)/(pmax - pmin)
+    else:
+        chosen_norm = np.zeros_like(chosen_proj)
+
+    plt.hist(chosen_norm, bins=bin_edges, edgecolor="black", alpha=0.7, label="Sampled")
+    centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    plt.plot(centers, proj_bin_probs*total, "--", linewidth=2, label="Target")
+    plt.title("Lineup Normalized Projection Sum")
+    plt.xlabel("Normalized Projection (0–1)")
+    plt.ylabel("Number of Lineups")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
     return chosen

@@ -11,7 +11,8 @@ from sqlalchemy import (
     func,
     Float,
     Boolean,
-    ForeignKey
+    ForeignKey,
+    UniqueConstraint
 )
 from dataclasses import dataclass
 from ivan.database.session import Base

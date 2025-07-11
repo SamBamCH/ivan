@@ -1,100 +1,104 @@
-# IVAN – DFS Brain
+# ivan
 
-## Table of Contents
+A modular, multi-sport analytics and simulation framework built in Python.
 
-- [Prerequisites](#prerequisites)  
-- [Installation](#installation)  
-- [MLB Database Initialization](#mlb-database-initialization)  
-- [Fetching Historical MLB Data](#fetching-historical-mlb-data)  
-- [Configuration](#configuration)  
-- [Running an MLB Simulation](#running-an-mlb-simulation)   
-- [Adding a New Sport](#adding-a-new-sport)  
+## 🚀 Overview
+`ivan` is designed to support robust sports analytics pipelines for multiple sports (initially MLB and NFL) with shared core utilities, database integration, statistical modeling, and lineup sampling. Its modular structure makes it easy to add new sports, customize regressors and KDE fitting, and scale simulations.
 
+## 📦 Installation
 
-This repo powers **IVAN**, your multi-sport DFS simulation engine.  
-Below is the directory structure and a brief description of each component.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/SamBamCH/ivan.git
+   cd ivan
+   ```
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # on Windows: venv\Scripts\activate
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```text
-ivan/
-├── src/
-│   └── ivan/                        # Everything under src/ivan is clearly part of the “Ivan” library. You’ll import it in your scripts like: "from ivan.core.player import BasePlayer"
-│       ├── core/                    # sport-agnostic interfaces & utilities
-│       │   ├── player.py            # BasePlayer & abstract methods
-│       │   ├── lineup.py            # BaseLineup & abstract methods
-│       │   ├── constraints.py       # BaseConstraints interface
-│       │   └── utils.py             # config loader, logging, parsing gametime
-│       │
-│       ├── database/                # shared DB session factory
-│       │   └── session.py           # init_db(sport) → SQLAlchemy Session
-│       │
-│       └── sports/                  # one sub-package per sport
-│           └── mlb/                 # MLB implementation
-│               ├── models.py        # ORM classes: MLBStat, MLBLineup, MLBSimResult
-│               ├── fetcher.py       # get_raw_boxscores() via MLB-StatsAPI #TODO: schedule
-│               └── ingest.py        # reads in all player data from csv files to DB
+## 🗂️ Directory Structure
+
+```
+ivan/                            # top-level Python package
+├── __init__.py
+├── core/                        # Generic utilities and config
+│   ├── __init__.py
+│   ├── config.py                # Configuration loader and settings
+│   └── utils.py                 # File I/O, logging, helpers
 │
-├── scripts/                         # thin, user-facing runners
-│   └── mlb/
-│       ├── create_db.py             # python scripts/mlb/create_db.py
-│       ├── fetch_boxscores.py       # python scripts/mlb/fetch_boxscores.py --start …
-│       └── ingest.py                # python scripts/mlb/ingest.py 
+├── database/                    # Database and session management
+│   ├── __init__.py
+│   └── session.py               # init_db(), get_session()
 │
-├── config/                          # per-sport JSON settings
-│   └── mlb.json
+├── sports/                      # Per-sport implementations
+│   ├── __init__.py
+│   ├── common/                  # Shared across all sports
+│   │   ├── __init__.py
+│   │   ├── kdes.py              # Gaussian KDE & histogram utilities
+│   │   ├── io.py                # data in/out
+│   │   └── regressors.py        # Bin regressors & fallback models
+│   │
+│   ├── mlb/                     # MLB-specific functionality
+│   │   ├── __init__.py
+│   │   ├── constraints.py       # lp model constraints
+│   │   ├── models.py            # SQLAlchemy models for MLB
+│   │   ├── sampling.py          # lineup sampling logic
+│   │   ├── selection.py         # lineup selection & dedupe logic
+│   │   ├── diagnostics.py       # plotting and histogram checks
+│   │   └── build_models.py      # batch KDE & regressor training
+│   │
+│   └── nfl/                     # NFL-specific functionality (stub)
+│       ├── __init__.py
+│       ├── models.py
+│       ├── sampling.py
+│       ├── selection.py
+│       └── diagnostics.py
 │
-├── data/                            # runtime data files (SQLite DBs, outputs)
-│   └── mlb/
-│       └── mlb_history.sqlite
+├── scripts/                     # Command-line entrypoints
+│   ├── mlb_analyze.py           # Analyze MLB pipelines
+│   ├── mlb_simulate.py          # Run MLB lineup simulations
+│   └── nfl_analyze.py           # Stub for NFL analysis
 │
-├── pyproject.toml / setup.py        # build, package & dependency config
-└── README.md                        # this file
+└── tests/                       # Pytest test suite
+    ├── core/
+    ├── database/
+    └── sports/
+        ├── mlb/
+        └── nfl/
 ```
 
-## Prerequisites
+## 🔧 Usage
 
-- **Python** 3.8+  
-- A POSIX‑style shell (macOS/Linux) or PowerShell/WSL (Windows)  
-- **Git** and a virtual‑environment tool (`venv`, `pipenv`, `conda`, etc.)  
-- [`statsapi`](https://pypi.org/project/statsapi/) for MLB box scores  
-- [`SQLAlchemy`](https://www.sqlalchemy.org/) for ORM + SQLite  
+- **Database setup:**
+  ```python
+  from ivan.database.session import init_db
+  init_db()
+  ```
 
-## Installation of IVAN
+- **Fit models:**
+  ```bash
+  python -m scripts.mlb_analyze
+  ```
 
-Follow these three steps to get IVAN up and running:
+- **Simulate lineups:**
+  ```bash
+  python -m scripts.mlb_simulate --contest-id 123456789
+  ```
 
-1. **Clone the repository (don't have one yet)**  
-    ```bash 
-    git clone https://github.com/your-username/ivan-dfs-brain.git
-    cd ivan-dfs-brain
-    ```
-2. **Create & activate a virual environment**
-    ```bash
-    python -m venv .venv
+## 🤝 Contributing
 
-    #macOS / Linux
-    source .venv/bin/activate
+1. Fork the repo.
+2. Create a feature branch: `git checkout -b feature/awesome-sport`
+3. Commit your changes and push: `git push origin feature/awesome-sport`
+4. Open a pull request.
 
-    #Windows PowerShell
-    .\.venv\Scripts\Activate.ps1
-    ```
-3. **Install IVAN in editable mode (not sure what this does yet)**
-    ```bash
-    pip install -e .
-    ```
+## 📜 License
 
-## MLB Database Initialization
-
-Before fetching any games or running simulations, you must initialize the per‑sport SQLite database and create the table schema:
-
-1. **Using the installed CLI**  
-   ```bash
-   ivan-create-db
-   ```
-2. **Directly via the python script**
-    ```bash
-    python scripts/mlb/create_db.py
-    ```
-
-
-
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 

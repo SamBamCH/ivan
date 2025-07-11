@@ -5,6 +5,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 from abc import ABCMeta
+import time
+from sqlalchemy.exc import OperationalError
 
 class BaseModelMeta(DeclarativeMeta, ABCMeta):
     """Metaclass that merges SQLAlchemy’s DeclarativeMeta and ABCMeta."""
@@ -23,13 +25,29 @@ def init_db(sport: str, db_url: str = None):
     If db_url is provided, use it directly. Otherwise, default to sqlite:///{DB_DIR}/{sport}/{sport}_history.sqlite
     """
     if db_url:
-        engine = create_engine(db_url, echo=False, future=True)
+        engine = create_engine(db_url,                                 
+                               connect_args={
+                                    # wait up to 30s for locks to clear
+                                    "timeout": 30,
+                                    # allow sharing connections across threads (not strictly needed for separate procs)
+                                    "check_same_thread": False,
+                                },
+                                echo=False, 
+                                future=True)
     else:
         # ensure the directory exists
         sqlite_folder = os.path.join(DB_DIR, sport)
         os.makedirs(sqlite_folder, exist_ok=True)
         sqlite_path = os.path.join(sqlite_folder, f"{sport}_history.sqlite")
-        engine = create_engine(f"sqlite:///{sqlite_path}", echo=False, future=True)
+        engine = create_engine(f"sqlite:///{sqlite_path}",
+                                connect_args={
+                                    # wait up to 30s for locks to clear
+                                    "timeout": 30,
+                                    # allow sharing connections across threads (not strictly needed for separate procs)
+                                    "check_same_thread": False,
+                                },
+                               echo=False, 
+                               future=True)
     return engine
 
 
@@ -39,3 +57,17 @@ def get_session(engine):
     """
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return SessionLocal()
+
+def safe_commit(session, max_tries=5):
+    for i in range(max_tries):
+        try:
+            session.commit()
+            return
+        except OperationalError as e:
+            if "database is locked" in str(e).lower():
+                backoff = 0.1 * (2 ** i)
+                time.sleep(backoff)
+            else:
+                raise
+    # if we reach here, we never succeeded
+    raise RuntimeError("Could not commit after retries—DB still locked")

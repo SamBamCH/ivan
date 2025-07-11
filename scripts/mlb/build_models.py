@@ -12,7 +12,7 @@ repo_root = os.path.abspath(
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from ivan.sports.mlb.build_models import build_nb_model, build_team_copulas, build_slate_bin_regressors
+from ivan.sports.mlb.model_calculations import build_nb_model, build_team_copulas, build_slate_bin_regressors
 
 
 def main():

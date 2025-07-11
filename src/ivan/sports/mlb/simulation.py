@@ -195,23 +195,19 @@ def simulate_one_contest(
         bin_md = pickle.load(f)
     scaler        = bin_md['scaler']
     Xs_new        = scaler.transform(slate_features)
-    own_bin_probs  = bin_md['own_model' ].predict(Xs_new)[0]
     proj_bin_probs = bin_md['proj_model'].predict(Xs_new)[0]
     stack_dist     = dict(zip(
         bin_md['stack_types'],
         bin_md['stack_model'].predict(Xs_new)[0]
     ))
-    bin_edges      = bin_md['bin_edges']
 
     # 4) sample lineups
     chosen = sample_lineups_fast(
         session=session,
         n_lineups=contest.total_entries,
         config=cfg,
-        own_bin_probs=own_bin_probs,
-        proj_bin_probs=proj_bin_probs,
         stack_dist=stack_dist,
-        bin_edges=bin_edges
+        proj_bin_probs=proj_bin_probs,
     )
 
     # 5) load scaled payouts
@@ -225,12 +221,20 @@ def simulate_one_contest(
     )
 
     # 6) prepare for simulation
-    all_pids = {pid for l in chosen for pid in l.player_ids_list}
-    dbp = session.query(MLBPlayer).filter(MLBPlayer.id.in_(all_pids)).all()
-    player_map = {p.id: p for p in dbp}
-    lineup_players = [[player_map.get(pid, MLBPlayer(id=pid)) for pid in l.player_ids_list] for l in chosen]
-    unique_players = list({p.id: p for lp in lineup_players for p in lp}.values())
-    lineup_ix = [[unique_players.index(p) for p in lp] for lp in lineup_players]
+    unique_players = []
+    for lup in chosen:
+        for p in lup.players:
+            if p not in unique_players:
+                unique_players.append(p)
+
+    # map each player object to its index
+    p2idx = {p: idx for idx, p in enumerate(unique_players)}
+
+    # now build the index‐lists for each lineup
+    lineup_ix = [
+        [p2idx[p] for p in lup.players]
+        for lup in chosen
+    ]
 
     # 7) run simulations in parallel
     chunk_size = math.ceil(num_sims / min(6, num_sims))

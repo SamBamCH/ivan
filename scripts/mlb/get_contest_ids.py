@@ -12,7 +12,7 @@ from selenium.webdriver.common.by import By
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.mlb.models import HistoricalContest
-from ivan.sports.mlb.fetcher import get_upcoming_contest_ids
+from ivan.sports.common.draftkings import get_upcoming_contest_ids
 
 
 def parse_sd(sd_str: str) -> datetime:

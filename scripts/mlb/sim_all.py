@@ -6,6 +6,7 @@ import pandas as pd
 
 from ivan.database.session import init_db, get_session, Base
 from ivan.sports.mlb.simulation import simulate_one_contest
+from sqlalchemy import text
 
 
 def parse_args():
@@ -32,6 +33,19 @@ def main():
     engine  = init_db("mlb", cfg.get("database_url"))
     Base.metadata.create_all(engine)
     session = get_session(engine)
+
+    # 1a) clear existing sims in the DB
+    try:
+        print("Clearing lineup_simulation_results table...")
+        session.execute(text("DELETE FROM lineup_simulation_results"))
+        session.commit()
+        print("✅ lineup_simulation_results has been emptied.")
+    except Exception as e:
+        session.rollback()
+        print(f"❌ Error clearing table: {e}")
+    finally:
+        session.close()
+
 
     # 2) Read entries_csv with both "Contest ID" and "Contest Name"
     df = pd.read_csv(
