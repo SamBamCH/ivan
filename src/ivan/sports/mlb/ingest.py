@@ -52,7 +52,6 @@ def ingest_projections():
     sess   = get_session(engine)
 
     proj_dir  = cfg['paths']['projections_dir']
-    hero_path = cfg['paths']['hero_projections']
 
     # ─── NEW: read the player_ids.csv to know which teams are on our slate ───
     pid_fp = cfg['paths']['ids']
@@ -290,55 +289,55 @@ def ingest_projections():
         sess.add(pp)
 
     # ─── INGEST HERO ───
-    with open(hero_path, encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            hp = HeroProjection(
-                source_id    = to_int(row.get('ID')),
-                name         = normalize_name(row.get('Name')),
-                pos          = row.get('Pos'),
-                team         = row.get('Team'),
-                opp          = row.get('Opp'),
-                salary       = to_int(row.get('Salary')),
-                stdv         = to_float(row.get('STDV')),
-                value        = to_float(row.get('Value')),
-                hand         = row.get('Hand'),
-                order_rank   = to_int(row.get('Order')),
-                runs         = to_float(row.get('Runs')),
-                era          = to_float(row.get('ERA')),
-                k9           = to_float(row.get('K/9')),
-                whip         = to_float(row.get('WHIP')),
-                woba         = to_float(row.get('wOBA')),
-                iso          = to_float(row.get('ISO')),
-                floor        = to_float(row.get('Floor')),
-                ceiling      = to_float(row.get('Ceiling')),
-                rnkgpp       = to_int(row.get('RnkGPP')),
-                rnkcash      = to_int(row.get('RnkCash')),
-                top1         = to_float(row.get('Top 1')),
-                top5         = to_float(row.get('Top 5')),
-                top10        = to_float(row.get('Top 10')),
-                two_x        = to_float(row.get('2X')),
-                two_5_x      = to_float(row.get('2.5X')),
-                three_x      = to_float(row.get('3X')),
-                three_5_x    = to_float(row.get('3.5X')),
-                four_x       = to_float(row.get('4X')),
-                four_5_x     = to_float(row.get('4.5X')),
-                five_x       = to_float(row.get('5X')),
-                five_5_x     = to_float(row.get('5.5X')),
-                optimal      = to_float(row.get('Optimal')),
-                lev          = to_float(row.get('Lev')),
-                hero_own     = to_float(row.get('Hero Own')),
-                hero_proj    = to_float(row.get('Hero Proj.')),
-                user_own     = to_float(row.get('User Own')),
-                user_proj    = to_float(row.get('User Proj.')),
-                agg_proj     = to_float(row.get('Agg Proj.')),
-                rdm_pct      = to_float(row.get('Rdm %')),
-                min_exp      = to_float(row.get('Min. Exp.')),
-                max_exp      = to_float(row.get('Max. Exp.')),
-                build_exp    = to_float(row.get('Build Exp.')),
-                created_at   = batch_ts
-            )
-            sess.add(hp)
+    # with open(hero_path, encoding='utf-8-sig') as f:
+    #     reader = csv.DictReader(f)
+    #     for row in reader:
+    #         hp = HeroProjection(
+    #             source_id    = to_int(row.get('ID')),
+    #             name         = normalize_name(row.get('Name')),
+    #             pos          = row.get('Pos'),
+    #             team         = row.get('Team'),
+    #             opp          = row.get('Opp'),
+    #             salary       = to_int(row.get('Salary')),
+    #             stdv         = to_float(row.get('STDV')),
+    #             value        = to_float(row.get('Value')),
+    #             hand         = row.get('Hand'),
+    #             order_rank   = to_int(row.get('Order')),
+    #             runs         = to_float(row.get('Runs')),
+    #             era          = to_float(row.get('ERA')),
+    #             k9           = to_float(row.get('K/9')),
+    #             whip         = to_float(row.get('WHIP')),
+    #             woba         = to_float(row.get('wOBA')),
+    #             iso          = to_float(row.get('ISO')),
+    #             floor        = to_float(row.get('Floor')),
+    #             ceiling      = to_float(row.get('Ceiling')),
+    #             rnkgpp       = to_int(row.get('RnkGPP')),
+    #             rnkcash      = to_int(row.get('RnkCash')),
+    #             top1         = to_float(row.get('Top 1')),
+    #             top5         = to_float(row.get('Top 5')),
+    #             top10        = to_float(row.get('Top 10')),
+    #             two_x        = to_float(row.get('2X')),
+    #             two_5_x      = to_float(row.get('2.5X')),
+    #             three_x      = to_float(row.get('3X')),
+    #             three_5_x    = to_float(row.get('3.5X')),
+    #             four_x       = to_float(row.get('4X')),
+    #             four_5_x     = to_float(row.get('4.5X')),
+    #             five_x       = to_float(row.get('5X')),
+    #             five_5_x     = to_float(row.get('5.5X')),
+    #             optimal      = to_float(row.get('Optimal')),
+    #             lev          = to_float(row.get('Lev')),
+    #             hero_own     = to_float(row.get('Hero Own')),
+    #             hero_proj    = to_float(row.get('Hero Proj.')),
+    #             user_own     = to_float(row.get('User Own')),
+    #             user_proj    = to_float(row.get('User Proj.')),
+    #             agg_proj     = to_float(row.get('Agg Proj.')),
+    #             rdm_pct      = to_float(row.get('Rdm %')),
+    #             min_exp      = to_float(row.get('Min. Exp.')),
+    #             max_exp      = to_float(row.get('Max. Exp.')),
+    #             build_exp    = to_float(row.get('Build Exp.')),
+    #             created_at   = batch_ts
+    #         )
+    #         sess.add(hp)
 
     # ─── COMMIT EVERYTHING ───
     sess.commit()

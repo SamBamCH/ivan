@@ -6,13 +6,14 @@ import pickle
 from pathlib import Path
 from datetime import datetime
 from sqlalchemy import delete
+import numpy as np
 
 from ivan.database.session import init_db, get_session, Base
 from ivan.sports.mlb.models import (
     BatterProjection,
     PitcherProjection,
-    HeroProjection,
-    MLBPlayer
+    MLBPlayer,
+    MLBStat
 )
 from ivan.sports.mlb.ingest import ingest_projections
 from ivan.core.utils import parse_game_time, PROJECT_ROOT, normalize_name
@@ -76,11 +77,7 @@ def init_players(batch_ts: datetime):
                 PitcherProjection.team      == team,
                 PitcherProjection.created_at== batch_ts
             ).one_or_none()
-            hp = sess.query(HeroProjection).filter(
-                HeroProjection.name        == name,
-                HeroProjection.team        == team,
-                HeroProjection.created_at  == batch_ts
-            ).one_or_none()
+            
             # assign non-P projections
             if position != 'P' and bp:
                 p.opponent        = bp.opp_tm
@@ -99,13 +96,20 @@ def init_players(batch_ts: datetime):
                 p.ipl             = None
                 p.doubles_2h      = pp.doubles_2h
 
-                if not hp or hp.stdv is None:
-                    raise RuntimeError(
-                        f"Pitcher '{name}' has no std dev in HERO projections—"
-                        " name mismatch between RG and HERO files."
-                    )
-                p.stdv = hp.stdv
-
+                # calculate pitcher stdv from mlb_stats history
+                hist = (
+                    sess.query(MLBStat.dk_fpts)
+                        .filter(
+                            MLBStat.name.in_([name]),
+                            MLBStat.position.in_(["SP","RP","P"])
+                        )
+                        .all()
+                )
+                vals = [v[0] for v in hist if v[0] is not None]
+                if len(vals) < 2:
+                    p.stdv = p.fpts_projection / 2
+                else:
+                    p.stdv = float(np.std(vals, ddof=1))
             else:
                 missing_projections.append((name, position))
                 continue
