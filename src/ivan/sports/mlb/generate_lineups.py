@@ -40,20 +40,17 @@ def simulate_uncorrelated_fpts(players, config):
 def generate_single_lineup(
     players,
     config,
-    seed,
     max_retries=3,
     min_projection_sum=None,
     return_ids_only=False
 ):
-    random.seed(seed)
-    np.random.seed(seed)
 
     site    = 'dk'  # or config["site"]
     verbose = config.get("verbose", False)
 
     for attempt in range(1, max_retries + 1):
         simulated_fpts = simulate_uncorrelated_fpts(players, config)
-        problem_name  = f"field_lineup_{seed}_attempt{attempt}"
+        problem_name  = f"field_lineup_attempt{attempt}"
         problem       = plp.LpProblem(problem_name, plp.LpMaximize)
 
         # build your variables & constraints just like before
@@ -84,7 +81,7 @@ def generate_single_lineup(
 
         # 2) if not Optimal, dump the LP for inspection
         if status != "Optimal":
-            fn = f"debug_lineup_{seed}_{attempt}.lp"
+            fn = f"debug_lineup_{attempt}.lp"
             problem.writeLP(fn)
             print(f"[DEBUG] Wrote LP to {fn} (open it or run `glpsol --check {fn}`)")
             # 3) you can now comment‐out blocks above (static vs. stack vs. projection)
@@ -156,7 +153,7 @@ def generate_and_store_field_lineups(
 
     while created < num_lineups:
         ids = generate_single_lineup(
-            players, config, seed,
+            players, config,
             min_projection_sum=get_config_value(config, "lineup.min_fpts_threshold"),
             return_ids_only=True
         )

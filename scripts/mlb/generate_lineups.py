@@ -7,6 +7,7 @@ from math import ceil
 import os
 
 from ivan.database.session import init_db, get_session
+from ivan.sports.mlb.models import Lineup
 from ivan.sports.mlb.generate_lineups import generate_and_store_field_lineups
 
 BATCH_COMMIT_SIZE = 100  # commit every 100 lineups
@@ -32,6 +33,35 @@ def worker(num_lineups: int, config_path: str):
         batch_size=BATCH_COMMIT_SIZE
     )
     print(f"[PID {os.getpid()}] generated {created} lineups")
+
+def deduplicate_lineups():
+    """
+    Remove any saved Lineup records that share the same set of player IDs,
+    regardless of order, keeping only the first occurrence.
+    """
+    engine  = init_db("mlb")
+    session = get_session(engine)
+
+    seen_keys  = set()
+    duplicates = []
+
+    for lu in session.query(Lineup).all():
+        # FIX: call the method to get the list, or directly access the JSON
+        ids = lu.player_ids()               # ← note the () 
+        # ids = lu.player_ids_list          # ← alternative: iterate the JSON column
+        key = tuple(sorted(ids))
+
+        if key in seen_keys:
+            duplicates.append(lu)
+        else:
+            seen_keys.add(key)
+
+    if duplicates:
+        for dup in duplicates:
+            session.delete(dup)
+        session.commit()
+
+    print(f"Deduplicator: removed {len(duplicates)} duplicate lineups, kept {len(seen_keys)} unique.")
 
 
 def main():
@@ -71,4 +101,8 @@ def main():
           f"in {args.num_jobs} jobs.")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # your existing entrypoint
+    exit_code = main()
+    # then run the deduper
+    deduplicate_lineups()
+    sys.exit(exit_code)
