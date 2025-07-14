@@ -12,8 +12,9 @@ PITCHER_POS = {"SP", "RP", "P"}
 class DummyPlayer:
     def __init__(self, pid: int):
         self.id = pid
-        self.position = ""
-        self.team = None
+        self.name = str(pid)      # ensure name is a string
+        self.position = []        # empty list so `any(...)` won’t blow up
+        self.team = ""            # empty string so formatting works
         self.lp = 0
         self.adj_r = 1
         self.adj_p = 1
