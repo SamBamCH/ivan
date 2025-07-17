@@ -8,7 +8,8 @@ from selenium import webdriver
 def get_upcoming_contest_ids(
     sess: requests.Session,
     sport: str = "MLB",
-    days_ahead: int = 1
+    days_ahead: int = 1,
+    entry_filter: int = 200
 ) -> list[str]:
     # 1) fetch raw JSON
     start = date.today().isoformat()
@@ -41,7 +42,7 @@ def get_upcoming_contest_ids(
         # keep guaranteed contests where either
         #  • m > 200,  OR
         #  • a > 50  AND  m > 100
-        if is_g and (m > 200 or (a > 50 and m > 100)):
+        if is_g and (m > entry_filter or (a > 50 and m > 100)):
             filtered.append(c)
 
     # 4) debug: print first 5 of your filtered contests

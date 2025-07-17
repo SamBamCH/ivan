@@ -1,13 +1,13 @@
-#!/usr/bin/env python
-# scripts/mlb/create_db.py
-import os
 from ivan.database.session import init_db, Base
-import ivan.sports.lol.models
+from ivan.sports.lol.models import LOLPlayer, HistoricalContest, ContestPayout, LOLStat
 
-def main():
-    # point at data/mlb/mlb_history.sqlite
-    engine = init_db("lol")
-    Base.metadata.create_all(engine)
-
-if __name__ == "__main__":
-    main()
+engine = init_db("lol")
+Base.metadata.create_all(
+    bind=engine,
+    tables=[
+        LOLPlayer.__table__,
+        HistoricalContest.__table__,
+        ContestPayout.__table__,
+        LOLStat.__table__,
+    ]
+)

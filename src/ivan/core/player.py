@@ -1,27 +1,29 @@
 # src/ivan/core/player.py
-from abc import ABC, abstractmethod
-from typing import Optional
+from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy.orm import declarative_mixin
 from datetime import datetime
 
-class BasePlayer(ABC):
-    id: int
-    name: str
-    team: str
-    gametime: datetime
-    salary: int
-    
-    #TODO: add actual abstractmethods below. 
-    # @abstractmethod
-    # def load_from_db(self, session) -> None:
-    #     """Populate this object’s fields from whatever ORM row(s) exist."""
-    #     ...
+@declarative_mixin
+class BasePlayer:
+    """Shared player fields + behavior for ALL sports."""
+    id       = Column(Integer,   primary_key=True)
+    name     = Column(String,    nullable=True)
+    team     = Column(String,    nullable=False)
+    salary   = Column(Integer,   nullable=False)
 
-    # @abstractmethod
-    # def save_to_db(self, session) -> None:
-    #     """Upsert this object back into the `player` table."""
-    #     ...
+    def __repr__(self):
+        return (
+            f"<{self.__class__.__name__}"
+            f" id={self.id!r}"
+            f" name={self.name!r}"
+            f" team={self.team!r}>"
+        )
 
-    # @abstractmethod
-    # def enrich(self) -> None:
-    #     """Any additional in‑memory calculation (e.g. run_total, ops)."""
-    #     ...
+    # if you still want abstract hooks, you can keep them—
+    # but *do not* subclass ABC here.  Instead, just document:
+    def enrich(self) -> None:
+        """
+        (Optional) post‐load calculation, e.g. computing
+        fantasy points, runs, etc.
+        """
+        pass

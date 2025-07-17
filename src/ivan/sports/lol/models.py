@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import Optional, List, Any, Tuple
 from sqlalchemy.orm import Session, relationship
+from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import (
     Column,
     Integer,
@@ -12,15 +13,18 @@ from sqlalchemy import (
     Float,
     Boolean,
     ForeignKey,
-    UniqueConstraint
+    UniqueConstraint,
+    MetaData
 )
 from dataclasses import dataclass
-from ivan.database.session import Base
 from ivan.core.player import BasePlayer
 from ivan.core.lineup import BaseLineup
 
+lol_metadata = MetaData()
+LOLBase = declarative_base(metadata=lol_metadata)
 
-class LOLStat(Base):
+
+class LOLStat(LOLBase):
     __tablename__ = "lol_stats"
 
     id                        = Column(Integer, primary_key=True, autoincrement=True)
@@ -217,4 +221,47 @@ class LOLStat(Base):
     opp_kills_at_25           = Column(Integer,  default=0)
     opp_assists_at_25         = Column(Integer,  default=0)
     opp_deaths_at_25          = Column(Integer,  default=0)
+
+class LOLPlayer(LOLBase, BasePlayer):
+    __tablename__ = 'lol_player'
+
+    id              = Column(Integer,   primary_key=True)
+    name            = Column(String,    nullable=False)
+    team            = Column(String,    nullable=False)
+    opponent        = Column(String,    nullable=False)
+    gametime        = Column(String,    nullable=True) #leaving this as a string, because league doesn't have lateswap, so we don't need to fiddle with Datetime objects. 
+    salary          = Column(Integer,   nullable=False)
+    game_position   = Column(String,    nullable=False)
+    roster_position = Column(String,    nullable=False)
+
+class HistoricalContest(LOLBase):
+    __tablename__ = "historical_contest_information"
+
+    contest_id          = Column(Integer, primary_key=True)
+    draft_group_id      = Column(Integer, nullable=False)
+    name                = Column(String, nullable=True)
+    date                = Column(DateTime, nullable=True)
+    entry_fee           = Column(Float, nullable=False)
+    contest_type        = Column(String, nullable=True)
+    total_entries       = Column(Integer, nullable=False)
+    multi_entry         = Column(Integer, nullable=False)
+
+class ContestPayout(LOLBase):
+    __tablename__ = "payouts"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    contest_id    = Column(
+        Integer,
+        ForeignKey("historical_contest_information.contest_id"),
+        nullable=False,
+        index=True
+    )
+    min_position  = Column(Integer, nullable=False)
+    max_position  = Column(Integer, nullable=False)
+    payout_amount = Column(Float, nullable=False)   # e.g. 1500.0
+    payout_text   = Column(String(32), nullable=True)  # e.g. "$1,500.00"
+    currency      = Column(String(16), default="USD")  # “USD”
+
+    # (Optional) backref if you want to navigate from HistoricalContest → payouts
+    # contest = relationship("HistoricalContest", back_populates="payouts")
 

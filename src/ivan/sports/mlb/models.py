@@ -256,16 +256,12 @@ class MLBPlayer(Base, BasePlayer):
     ipl             = Column(Boolean, nullable=True)
     doubles_2h      = Column(String,  nullable=True)
 
-    #from DFS Hero projection files
-    stdv            = Column(Float,     nullable=True)
-
     #from enrichments
+    stdv            = Column(Float,     nullable=True)
     ops             = Column(Float,     nullable=True)
     adj_r           = Column(Float,     nullable=False)
     adj_p           = Column(Float,     nullable=False)
     
-
-
     created_at      = Column(DateTime, nullable=False)
 
     def calculate_ops(self, session, limit: int = 10) -> float:
