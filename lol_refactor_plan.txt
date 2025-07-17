@@ -1,0 +1,10 @@
+initialize player-model DB
+load players
+get contest ids
+get payouts
+generate_lineups
+    generate samples
+        different from sim? i.e. generate how the field would (i.e. maximizing median fpts) instead of using my good sim logic? only use my logic for ranking the sampled lineups. Prone to overfitting otherwise
+sim_all
+    sample captains in a unique way
+        might need to add some conditions to the generate_lineups function to use this as well. 

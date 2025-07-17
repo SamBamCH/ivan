@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import argparse
-from ivan.sports.mlb.fetcher import fetch_and_store
+from ivan.sports.mlb.stat_fetcher import fetch_and_store
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser("Backfill MLB boxscore data")
