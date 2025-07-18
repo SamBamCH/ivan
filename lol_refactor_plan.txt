@@ -1,6 +1,3 @@
-generate_lineups
-    generate samples
-        different from sim? i.e. generate how the field would (i.e. maximizing median fpts) instead of using my good sim logic? only use my logic for ranking the sampled lineups. Prone to overfitting otherwise
 ingest  
     p.enrich - need to figure what we need for sims later
 sim_all

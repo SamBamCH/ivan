@@ -6,10 +6,11 @@ from datetime import datetime
 @declarative_mixin
 class BasePlayer:
     """Shared player fields + behavior for ALL sports."""
-    id       = Column(Integer,   primary_key=True)
-    name     = Column(String,    nullable=True)
-    team     = Column(String,    nullable=False)
-    salary   = Column(Integer,   nullable=False)
+    id          = Column(Integer,   primary_key=True)
+    name        = Column(String,    nullable=True)
+    team        = Column(String,    nullable=False)
+    salary      = Column(Integer,   nullable=False)
+    created_at  = Column(DateTime,  nullable=False)
 
     def __repr__(self):
         return (

@@ -233,6 +233,28 @@ class LOLPlayer(LOLBase, BasePlayer):
     salary          = Column(Integer,   nullable=False)
     game_position   = Column(String,    nullable=False)
     roster_position = Column(String,    nullable=False)
+    odds            = Column(Integer,   nullable=False)
+    created_at      = Column(DateTime,  nullable=False)
+
+@dataclass
+class FieldPlayer:
+    id: int
+    name: str
+    team: str
+    opponent: str
+    gametime: str
+    salary: int
+    game_position: str
+    roster_position: str
+    odds: int
+
+    def __eq__(self, other):
+        return isinstance(other, FieldPlayer) and self.id == other.id
+
+    def __hash__(self):
+        return hash(self.id)
+
+
 
 class HistoricalContest(LOLBase):
     __tablename__ = "historical_contest_information"
@@ -265,3 +287,11 @@ class ContestPayout(LOLBase):
     # (Optional) backref if you want to navigate from HistoricalContest → payouts
     # contest = relationship("HistoricalContest", back_populates="payouts")
 
+class Lineup(LOLBase, BaseLineup):
+    __tablename__ = "lineup"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    player_ids_list  = Column(JSON,    nullable=False)
+    created_at       = Column(DateTime, server_default=func.now(), nullable=False)
+
+   
