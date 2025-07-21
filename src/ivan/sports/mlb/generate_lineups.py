@@ -109,7 +109,7 @@ def generate_and_store_field_lineups(
     recent upload batch, then builds exactly num_lineups of them.
     """
     if num_lineups is None:
-        num_lineups = get_config_value(config, "contest.field.num_field_lineups")
+        num_lineups = 1000
 
     # find the most recent upload timestamp
     latest_upload = session.query(func.max(MLBPlayer.created_at)).scalar()

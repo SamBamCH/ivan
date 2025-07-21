@@ -4,8 +4,8 @@ fit_slate_kde_batch_db.py
 
 Loop through every historical contest CSV in a directory, derive slate
 features (num_games, total_entries, max_entries, entry_fee, top ownership stats,
-payout percentages), fit 1D Gaussian KDEs on (avg ownership)
-and (normalized projection sum), and upsert each model into the database.
+payout percentages), fit 1D Gaussian KDEs on (min–max scaled avg ownership)
+and (min–fixed-max scaled projection sum), and upsert each model into the database.
 """
 import re
 import argparse
@@ -61,7 +61,7 @@ def main():
     )
     p.add_argument(
         "--dir", "-d",
-        default=r"I:\data\mlb\historical_contests",
+        default=r"D:\ivan\data\mlb\historical_contests",
         help="Directory with contest-standings-<id>.csv files"
     )
     args = p.parse_args()
@@ -80,8 +80,7 @@ def main():
         if "Lineup" not in df.columns:
             print(f"⚠️ skipping {csv_fp.name}: no 'Lineup'")
             continue
-        raw = df["Lineup"].astype(str).tolist()
-        parsed = [parse_lineup(c) for c in raw]
+        parsed = [parse_lineup(str(c)) for c in df["Lineup"]]
         total_entries = len(parsed)
 
         # fetch contest metadata
@@ -125,14 +124,14 @@ def main():
         pmap = batch_fetch_latest(session, PitcherProjection, "player", p_names, pitcher_cutoff)
         bmap = batch_fetch_latest(session, BatterProjection,  "name",   b_names,  batter_cutoff)
 
-        # build arrays & collect teams + owner list
-        ownerships, projs, teams, owner_vals = [], [], set(), []
+        # gather projection sums and ownerships
+        projs, ownerships, teams = [], [], set()
+        owner_vals = []  # for slate-level metrics
         for rec in list(pmap.values()) + list(bmap.values()):
             pct = (getattr(rec, 'ownership', None) or getattr(rec, 'pown', 0.0)) / 100.0
             owner_vals.append(pct)
 
         stack_types = []
-
         for lu in parsed:
             counts = Counter()
             vals, owns = [], []
@@ -156,18 +155,17 @@ def main():
             ownerships.append(np.mean(owns))
 
         total = len(stack_types)
-        stack_counts = Counter(stack_types)
-        stack_probs  = {stype: cnt/total for stype, cnt in stack_counts.items()}
-
-        if not projs:
+        if total == 0:
             print(f" no valid lineups for {cid}")
             continue
+        stack_counts = Counter(stack_types)
+        stack_probs  = {stype: cnt/total for stype, cnt in stack_counts.items()}
 
         # derive slate-level ownership metrics
         owner_vals = sorted(owner_vals, reverse=True)
         top_owned   = owner_vals[0]
-        top_5_owned = np.mean(owner_vals[:5]) if len(owner_vals)>=5 else np.mean(owner_vals)
-        top_10_owned= np.mean(owner_vals[:10]) if len(owner_vals)>=10 else np.mean(owner_vals)
+        top_5_owned = np.mean(owner_vals[:5])
+        top_10_owned= np.mean(owner_vals[:10])
 
         # payout percentages
         first_amt = (
@@ -185,13 +183,27 @@ def main():
         first_pct = first_amt / total_pool
         top5_pct  = top5_amt  / total_pool
 
-        # normalize & fit KDEs + histograms
-        max_proj    = float(max(projs))
-        projs_norm  = [p/max_proj for p in projs]
-        kde_own     = gaussian_kde(np.array(ownerships))
+        # --- min-max scale for projections & ownerships before fitting KDEs
+        # use a fixed lower bound of 70 for projections
+        fixed_pmin = 70.0
+        pmax = float(max(projs))
+        if pmax > fixed_pmin:
+            projs_norm = [(p - fixed_pmin)/(pmax - fixed_pmin) for p in projs]
+        else:
+            # all projections at or below fixed_pmin; default to mid-range
+            projs_norm = [0.5] * len(projs)
+
+        # ownerships still dynamic
+        omin, omax = float(min(ownerships)), float(max(ownerships))
+        if omax > omin:
+            owns_norm = [(o - omin)/(omax - omin) for o in ownerships]
+        else:
+            owns_norm = [0.5] * len(ownerships)
+
+        kde_own     = gaussian_kde(np.array(owns_norm))
         kde_proj    = gaussian_kde(np.array(projs_norm))
-        cnts_o,bins_o = np.histogram(ownerships,   bins=20)
-        cnts_p, bins_p = np.histogram(projs_norm,    bins=20)
+        cnts_o, bins_o = np.histogram(owns_norm, bins=20)
+        cnts_p, bins_p = np.histogram(projs_norm, bins=20)
 
         num_games = max(len(teams)//2, 1)
         print(f" derived games={num_games}, entries={total_entries}, "
@@ -211,7 +223,7 @@ def main():
             top5_pct        = top5_pct,
             bw_own          = float(kde_own.factor),
             bw_proj         = float(kde_proj.factor),
-            max_proj        = max_proj,
+            max_proj        = pmax,
             hist_own_bins    = bins_o.tolist(),
             hist_own_counts  = cnts_o.tolist(),
             hist_proj_bins   = bins_p.tolist(),

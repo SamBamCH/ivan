@@ -240,7 +240,7 @@ def build_slate_bin_regressors(session):
         uniform = np.ones(BINS) / BINS
         own_model = ConstantRegressor(uniform)
         # Projection as Normal(μ=0.85, σ=0.1)
-        proj_model = NormalBinRegressor(mean=0.85, std=0.1, bin_edges=bin_edges)
+        proj_model = NormalBinRegressor(mean=0.60, std=0.15, bin_edges=bin_edges)
         # No stacks
         stack_model = ConstantRegressor(np.zeros((0,)))
         stack_types = []

@@ -117,9 +117,4 @@ def choose_lineup_ids(
             if len(selected) >= num_lineups:
                 break
 
-    # 11) print exposures & return IDs
-    chosen_id_lists = [sims[i].lineup.player_ids_list for i in selected]
-    show_player_exposures(session, chosen_id_lists)
-    show_team_exposures(session, chosen_id_lists, stack_size=3)
-
     return [sims[i].lineup_id for i in selected]

@@ -1,9 +1,13 @@
 import requests
-import time
+from selenium import webdriver
+import requests
+import pandas as pd
+import io, zipfile
 from datetime import date, timedelta
 from pprint import pprint
-from selenium.webdriver.chrome.options import Options
-from selenium import webdriver
+import pandas as pd
+
+
 
 def get_upcoming_contest_ids(
     sess: requests.Session,
@@ -56,51 +60,50 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def get_dk_session_with_selenium(user_data_dir: str=None, profile: str="Default"):
-    """
-    Launch Chrome, let you complete login+2FA, then harvest cookies into a Session.
-    """
-    # (optional) reuse your existing profile so some cookies persist
-    opts = Options()
-    if user_data_dir:
-        opts.add_argument(f"--user-data-dir={user_data_dir}")
-        opts.add_argument(f"--profile-directory={profile}")
-
+def build_requests_session_from_selenium(contest_id):
+    opts = webdriver.ChromeOptions()
+    opts.add_argument(r"--user-data-dir=C:\selenium\chrome-profile")
     driver = webdriver.Chrome(options=opts)
-    driver.get("https://www.draftkings.com/account")     # DK will redirect to login
 
-    print("\n→ Please complete login + 2FA in the browser window.")
-    while "myaccount.draftkings.com" not in driver.current_url:
-        time.sleep(1)
-    print("✓ Login complete, extracting cookies…")
+    # 1) Hit the homepage so you’re signed in
+    driver.get("https://www.draftkings.com")
 
+    # 2) Now _also_ hit the contest page so it drops the uc=… and contest cookies
+    gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
+    driver.get(gc_url)
+
+    # 3) Extract all cookies
     sess = requests.Session()
     for c in driver.get_cookies():
-        sess.cookies.set(c['name'], c['value'],
-                         domain=c['domain'],
-                         path=c['path'],
-                         secure=c.get('secure', False),
-                         rest={"HttpOnly": c.get('httpOnly', False)},
-                         expires=c.get('expiry', None))
+        sess.cookies.set(c['name'], c['value'], domain=c['domain'], path=c['path'])
+    sess.headers.update({
+        "User-Agent": driver.execute_script("return navigator.userAgent"),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+
     driver.quit()
     return sess
 
-def fetch_contest_json_requests(
-    sess: requests.Session,
-    contest_id: int,
-    draft_group_id: int
-) -> dict:
-    """
-    Calls DraftKings' getContestStandings JSON endpoint and returns a dict.
-    """
-    url = "https://www.draftkings.com/lobby/getContestStandings"
-    params = {
-        "contestId":    contest_id,
-        "draftGroupId": draft_group_id,
-        "startRow":     1,
-        "endRow":       50000,
-    }
-    resp = sess.get(url, params=params)
+
+def get_contest_dataframe(contest_id):
+    sess = build_requests_session_from_selenium(contest_id)
+
+    # Already hit /contest/gamecenter in Selenium; no need to do it again here
+
+    # Inject CSRF header
+    csrf = sess.cookies.get("_csrf") or sess.cookies.get("csrf_token")
+    if csrf:
+        sess.headers["X-CSRF-Token"] = csrf
+
+    export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
+    resp = sess.get(export_url, headers={
+        "Referer": f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
+    })
     resp.raise_for_status()
-    return resp.json()
+
+    # Now this should be a real ZIP
+    z = zipfile.ZipFile(io.BytesIO(resp.content))
+    csv = next(f for f in z.namelist() if f.endswith(".csv"))
+    return pd.read_csv(z.open(csv))
 

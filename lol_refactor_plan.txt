@@ -1,5 +1,5 @@
-ingest  
-    p.enrich - need to figure what we need for sims later
 sim_all
     sample captains in a unique way
         might need to add some conditions to the generate_lineups function to use this as well. 
+ingest  
+    p.enrich - need to figure what we need for sims later

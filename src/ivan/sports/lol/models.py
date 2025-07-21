@@ -294,4 +294,7 @@ class Lineup(LOLBase, BaseLineup):
     player_ids_list  = Column(JSON,    nullable=False)
     created_at       = Column(DateTime, server_default=func.now(), nullable=False)
 
+    def player_ids(self) -> List[int]:
+        return list(self.player_ids_list)
+
    

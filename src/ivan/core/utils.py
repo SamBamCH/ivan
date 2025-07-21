@@ -110,15 +110,22 @@ def normalize_name(name: str) -> str:
     # 6. override special cases
     return _NAME_OVERRIDES.get(name, name)
 
+import importlib
+from collections import defaultdict
+from sqlalchemy.orm import Session
+
 def show_player_exposures(
     session: Session,
+    sport: str,
     lineup_id_lists: list[list[int]]
 ) -> None:
     """
     Prints each player’s exposure vs. target ownership:
       Player     Team     Owner%    Expo%
-    Expects `lineup_id_lists` as a list of lineups,
-    each lineup being a list of player‐IDs (ints).
+
+    - session: SQLAlchemy session
+    - sport: one of your sport folder names, e.g. "mlb", "lol"
+    - lineup_id_lists: list of lineups, each a list of player‐IDs (ints)
     """
     total = len(lineup_id_lists)
     if total == 0:
@@ -131,16 +138,21 @@ def show_player_exposures(
         for pid in lineup:
             exposure_count[pid] += 1
 
-    # 2) bulk‐fetch all those players
+    # 2) dynamically import the correct Player class
+    module      = importlib.import_module(f"ivan.sports.{sport}.models")
+    cls_name    = sport.upper() + "Player"
+    PlayerClass = getattr(module, cls_name)
+
+    # 3) bulk-fetch all those players
     players = (
         session
-        .query(MLBPlayer)
-        .filter(MLBPlayer.id.in_(exposure_count.keys()))
+        .query(PlayerClass)
+        .filter(PlayerClass.id.in_(exposure_count.keys()))
         .all()
     )
     player_map = {p.id: p for p in players}
 
-    # 3) print table
+    # 4) print table
     header = f"{'Player':<25} {'Team':<10} {'Owner%':>7} {'Expo%':>7}"
     print("\n" + header)
     print("-" * len(header))
@@ -153,7 +165,7 @@ def show_player_exposures(
         p = player_map.get(pid)
         if p:
             name      = p.name
-            team      = p.team
+            team      = getattr(p, "team", "")
             owner_pct = getattr(p, "ownership", 0.0)
         else:
             name, team, owner_pct = f"<unknown {pid}>", "", 0.0
