@@ -1,35 +1,45 @@
 import re
 from collections import Counter
-from pathlib import Path
 from datetime import datetime
+from typing import List, Tuple, Dict
 
 import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
-from sqlalchemy import desc, func
+from sqlalchemy import func
 
-from ivan.database.session  import init_db, get_session
-from ivan.core.utils        import normalize_name
+from ivan.core.utils import normalize_name
 from ivan.sports.mlb.models import (
-    BatterProjection, PitcherProjection,
-    HistoricalContest, ContestPayout, SlateKDEModel,
+    HistoricalContest,
+    ContestPayout,
+    ActualContestEntry,
+    SlateKDEModel,
+    BatterProjection,
+    PitcherProjection,
 )
 
-# regex to extract (pos, name) pairs
-_LINEUP_REGEX = re.compile(
-    r"\b(1B|2B|3B|SS|C|OF|P)\s+(.+?)(?=(?:\s(?:1B|2B|3B|SS|C|OF|P)\s)|$)"
-)
+# regex to extract (position, name) pairs from a lineup string
+_LINEUP_REGEX = re.compile(r"\b(1B|2B|3B|SS|C|OF|P)\s+(.+?)(?=(?:\s(?:1B|2B|3B|SS|C|OF|P)\s)|$)")
 PITCHER_POS = {"SP", "RP", "P"}
 
-def _parse_lineup(cell: str):
-    return _LINEUP_REGEX.findall(cell)
+def _parse_lineup(cell: str) -> List[Tuple[str, str]]:
+    """
+    Parse a single 'Lineup' cell into a list of (position, player_name) tuples.
+    """
+    return _LINEUP_REGEX.findall(cell or "")
 
-def _batch_fetch_latest(session, Model, key_attr, names, cutoff_dt):
+
+def _batch_fetch_latest(session, Model, key_attr: str, names: set, cutoff_dt: datetime) -> Dict[str, any]:
+    """
+    Retrieve the most recent projection record for each name in `names` before `cutoff_dt`.
+    Returns a mapping name -> ORM instance.
+    """
     rows = (
         session.query(Model)
                .filter(getattr(Model, key_attr).in_(names),
                        Model.created_at <= cutoff_dt)
-               .order_by(getattr(Model, key_attr), desc(Model.created_at))
+               .order_by(getattr(Model, key_attr),
+                         Model.created_at.desc())
                .all()
     )
     latest = {}
@@ -39,148 +49,246 @@ def _batch_fetch_latest(session, Model, key_attr, names, cutoff_dt):
             latest[k] = r
     return latest
 
-def fit_slate_kdes(contest_dir: str, db_key: str = "mlb"):
+
+def parse_df(df: pd.DataFrame, contest_id: int) -> Tuple[
+        List[List[Tuple[str, str]]],
+        List[Dict],
+        List[Dict]
+    ]:
     """
-    Loop through all contest-standings-<id>.csv in `contest_dir`,
-    fit KDEs and upsert into the SlateKDEModel table.
+    Given a raw standings DataFrame from DraftKings:
+      - split off the last 4 columns (actual ownership info)
+      - base_df contains everything else (Lineup, Position, Payout, etc.)
+      - own_df contains the last 4 columns: Player, Roster Position, %Drafted, FPTS
+
+    Returns:
+      1) lineups: list of parsed lineup-lists [(pos,name),...]
+      2) payouts: list of dicts for ContestPayout upsert
+      3) actuals: list of dicts for ActualContestEntry upsert (including ownership)
     """
-    engine  = init_db(db_key)
-    session = get_session(engine)
+    # split into base and ownership dataframes
+    base_df = df.iloc[:, :-4]
+    own_df  = df.iloc[:, -4:].copy()
 
-    for csv_fp in Path(contest_dir).glob("contest-standings-*.csv"):
-        m = re.search(r"contest-standings-(\d+)\.csv$", csv_fp.name)
-        if not m:
-            continue
-        cid = int(m.group(1))
+    # 1) parse all lineups from base_df
+    lineups = [_parse_lineup(cell) for cell in base_df["Lineup"].astype(str)]
 
-        df = pd.read_csv(csv_fp, engine="python")
-        if "Lineup" not in df.columns:
-            print(f"⚠️ skipping {csv_fp.name}: no 'Lineup'")
-            continue
-
-        # parse lineups & fetch contest metadata
-        parsed       = [_parse_lineup(c) for c in df["Lineup"].astype(str)]
-        total_entries = len(parsed)
-        hc = session.query(HistoricalContest).get(cid)
-        if not hc:
-            print(f"⚠️ no HistoricalContest for id={cid}")
-            continue
-        contest_dt   = hc.date
-        max_entries  = hc.multi_entry
-        entry_fee    = hc.entry_fee
-        total_pool   = entry_fee * hc.total_entries
-        print(f"\nContest {cid}: {hc.name} @ {contest_dt}")
-
-        # find most‐recent projection timestamps
-        day_start = datetime(contest_dt.year, contest_dt.month, contest_dt.day)
-        same_p   = session.query(func.max(PitcherProjection.created_at))\
-                          .filter(PitcherProjection.created_at.between(day_start, contest_dt))\
-                          .scalar()
-        fallback = session.query(func.max(PitcherProjection.created_at))\
-                          .filter(PitcherProjection.created_at <= contest_dt)\
-                          .scalar()
-        pitcher_cutoff = same_p or fallback
-
-        same_b   = session.query(func.max(BatterProjection.created_at))\
-                          .filter(BatterProjection.created_at.between(day_start, contest_dt))\
-                          .scalar()
-        fallback = session.query(func.max(BatterProjection.created_at))\
-                          .filter(BatterProjection.created_at <= contest_dt)\
-                          .scalar()
-        batter_cutoff = same_b or fallback
-
-        asof_ts = max(pitcher_cutoff, batter_cutoff)
-        print(f"  using projections as of {asof_ts}")
-
-        # collect all player names
-        p_names, b_names = set(), set()
-        for lu in parsed:
-            for pos, nm in lu:
-                nn = normalize_name(nm)
-                (p_names if pos in PITCHER_POS else b_names).add(nn)
-
-        pmap = _batch_fetch_latest(session, PitcherProjection, "player", p_names, pitcher_cutoff)
-        bmap = _batch_fetch_latest(session, BatterProjection,  "name",   b_names,  batter_cutoff)
-
-        # build per‐lineup arrays
-        ownerships, projs, teams, owner_vals, stack_types = [], [], set(), [], []
-        for rec in list(pmap.values()) + list(bmap.values()):
-            pct = (getattr(rec, 'ownership', None) or getattr(rec, 'pown', 0.0)) / 100.0
-            owner_vals.append(pct)
-
-        for lu in parsed:
-            counts, vals, owns = Counter(), [], []
-            for pos, nm in lu:
-                nn  = normalize_name(nm)
-                rec = pmap.get(nn) if pos in PITCHER_POS else bmap.get(nn)
-                if rec and pos not in PITCHER_POS:
-                    counts[rec.team] += 1
-                if not rec:
-                    continue
-                vals.append(rec.fpts)
-                pct = (getattr(rec, 'ownership', None) or getattr(rec, 'pown', 0.0)) / 100.0
-                owns.append(pct)
-                teams.add(rec.team)
-            if not vals:
+    # 2) build payout tiers using base_df
+    payouts = []
+    if "Position" in base_df.columns and "Payout" in base_df.columns:
+        for payout_val, grp in base_df.groupby("Payout"):
+            amt = float(str(payout_val).replace("$", "").replace(",", "")) or 0.0
+            if amt <= 0.0:
                 continue
-            top_two = sorted(counts.values(), reverse=True)[:2]
-            stack_types.append(f"{top_two[0] if top_two else 0}-{top_two[1] if len(top_two)>1 else 0}")
-            projs.append(sum(vals))
-            ownerships.append(np.mean(owns))
+            min_pos = int(grp["Position"].min())
+            max_pos = int(grp["Position"].max())
+            payouts.append({
+                "contest_id": contest_id,
+                "min_position": min_pos,
+                "max_position": max_pos,
+                "payout_amount": amt,
+                "payout_text": payout_val,
+                "currency": "USD"
+            })
 
-        if not projs:
-            print(f" no valid lineups for {cid}")
+    # 3) collect actual entry results merging base_df + own_df
+    actuals = []
+    for idx, row in base_df.iterrows():
+        # safe EntryId conversion (handle NaN)
+        raw_id = row.get("EntryId")
+        if pd.isna(raw_id):
+            raw_id = row.get("Entry")
+        if pd.isna(raw_id):
+            entry_id = 0
+        else:
+            entry_id = int(raw_id)
+
+        # safe rank conversion
+        raw_rank = row.get("Position") or row.get("Rank")
+        rank = int(raw_rank) if raw_rank is not None and not pd.isna(raw_rank) else 0
+
+        # points and payout
+        pts = float(row.get("Points") or row.get("FantasyPoints") or 0.0)
+        payout_amt = float(str(row.get("Payout", "0")).replace("$", "").replace(",", "")) or 0.0
+
+        # pull ownership info from own_df
+        orow = own_df.iloc[idx]
+        owner = orow.get("%Drafted") or orow.get("%Draft") or None
+        fpts   = orow.get("FPTS") or None
+
+        actuals.append({
+            "contest_id":     contest_id,
+            "entry_id":       entry_id,
+            # lineup_id to resolve later
+            "lineup":         row["Lineup"],
+            "username":       row.get("User") or row.get("Username"),
+            "rank":           rank,
+            "fantasy_points": pts,
+            "payout":         payout_amt,
+            # include actual ownership fields
+            "percent_drafted": owner,
+            "actual_fpts":     fpts,
+        })
+
+    return lineups, payouts, actuals
+
+
+def upsert_payout_changes(session, payouts: List[Dict]) -> None:
+    """
+    Upsert the ContestPayout tiers for a given contest.
+    """
+    for p in payouts:
+        cp = ContestPayout(
+            contest_id    = p["contest_id"],
+            min_position  = p["min_position"],
+            max_position  = p["max_position"],
+            payout_amount = p["payout_amount"],
+            payout_text   = p["payout_text"],
+            currency      = p["currency"]
+        )
+        session.merge(cp)
+
+
+def upsert_actuals(session, actuals: List[Dict]) -> None:
+    """
+    Upsert each entry's actual result into actual_contest_entry.
+    NOTE: `lineup_id` resolution from the raw string must be handled later.
+    """
+    for a in actuals:
+        ace = ActualContestEntry(
+            contest_id     = a["contest_id"],
+            entry_id       = a["entry_id"],
+            lineup_id      = None,  # TODO: link to saved Lineup.id
+            username       = a["username"],
+            rank           = a["rank"],
+            fantasy_points = a["fantasy_points"],
+            payout         = a["payout"]
+        )
+        session.merge(ace)
+
+def fit_slate_kde(
+    session,
+    hc: HistoricalContest,
+    lineups: List[List[Tuple[str, str]]]
+) -> None:
+    """
+    Given a HistoricalContest and its parsed lineup data,
+    compute slate-level KDE bandwidths and fixed-bin histogram counts,
+    then upsert a SlateKDEModel (only counts, no bin edges).
+    """
+    cid          = hc.contest_id
+    contest_dt   = hc.date
+    total_entries= hc.total_entries
+    max_entries  = hc.multi_entry
+    entry_fee    = hc.entry_fee
+
+    # --- find cutoff timestamps for projections
+    day_start = datetime(contest_dt.year, contest_dt.month, contest_dt.day)
+    latest = lambda Model: (
+        session.query(func.max(Model.created_at))
+               .filter(Model.created_at <= contest_dt)
+               .scalar()
+    )
+    pitcher_cutoff = latest(PitcherProjection)
+    batter_cutoff  = latest(BatterProjection)
+    cutoff_ts      = max(pitcher_cutoff, batter_cutoff)
+
+    # --- batch fetch latest projections as of cutoff_ts
+    p_names, b_names = set(), set()
+    for lu in lineups:
+        for pos, nm in lu:
+            nn = normalize_name(nm)
+            (p_names if pos in PITCHER_POS else b_names).add(nn)
+
+    pmap = _batch_fetch_latest(session, PitcherProjection, "player", p_names, pitcher_cutoff)
+    bmap = _batch_fetch_latest(session, BatterProjection,  "name",   b_names,  batter_cutoff)
+
+    # --- build per-lineup projections & ownership lists
+    projs, ownerships, teams, stack_types = [], [], set(), []
+    owner_vals = [
+        (getattr(rec, 'ownership', None) or getattr(rec, 'pown', 0.0)) / 100.0
+        for rec in list(pmap.values()) + list(bmap.values())
+    ]
+
+    for lu in lineups:
+        team_counts, vals, owns = Counter(), [], []
+        for pos, nm in lu:
+            nn  = normalize_name(nm)
+            rec = pmap.get(nn) if pos in PITCHER_POS else bmap.get(nn)
+            if not rec:
+                continue
+            if pos not in PITCHER_POS:
+                team_counts[rec.team] += 1
+            vals.append(rec.fpts)
+            owns.append((getattr(rec, 'ownership', None) or getattr(rec, 'pown', 0.0)) / 100.0)
+            teams.add(rec.team)
+
+        if not vals:
             continue
 
-        # slate‐level stats
-        owner_vals   = sorted(owner_vals, reverse=True)
-        top_owned    = owner_vals[0]
-        top_5_owned  = np.mean(owner_vals[:5])   if len(owner_vals)>=5  else top_owned
-        top_10_owned = np.mean(owner_vals[:10])  if len(owner_vals)>=10 else top_owned
+        # simple “stack type” as e.g. "2-1"
+        top_two = sorted(team_counts.values(), reverse=True)[:2]
+        stack_types.append(f"{top_two[0] if top_two else 0}-{top_two[1] if len(top_two)>1 else 0}")
 
-        first_amt = session.query(func.sum(ContestPayout.payout_amount))\
-                           .filter(ContestPayout.contest_id==cid,
-                                   ContestPayout.min_position<=1,
-                                   ContestPayout.max_position>=1).scalar() or 0.0
-        top5_amt  = session.query(func.sum(ContestPayout.payout_amount))\
-                           .filter(ContestPayout.contest_id==cid,
-                                   ContestPayout.min_position.between(1,5)).scalar() or 0.0
-        first_pct = first_amt / total_pool
-        top5_pct  = top5_amt  / total_pool
+        projs.append(sum(vals))
+        ownerships.append(np.mean(owns))
 
-        # normalize + fit KDEs
-        max_proj      = float(max(projs))
-        projs_norm    = [p/max_proj for p in projs]
-        kde_own       = gaussian_kde(np.array(ownerships))
-        kde_proj      = gaussian_kde(np.array(projs_norm))
-        cnts_o,bins_o = np.histogram(ownerships, bins=20)
-        cnts_p,bins_p = np.histogram(projs_norm, bins=20)
+    if not projs:
+        return
 
-        num_games = max(len(teams)//2, 1)
-        print(f" derived games={num_games}, entries={total_entries}, max_entries={max_entries}, entry_fee={entry_fee}")
+    # --- slate-level summary stats
+    owner_vals.sort(reverse=True)
+    top_owned    = owner_vals[0]
+    top_5_owned  = np.mean(owner_vals[:5])   if len(owner_vals)>=5  else top_owned
+    top_10_owned = np.mean(owner_vals[:10])  if len(owner_vals)>=10 else top_owned
 
-        # upsert
-        model = SlateKDEModel(
-            contest_date     = contest_dt,
-            num_games        = num_games,
-            total_entries    = total_entries,
-            max_entries      = max_entries,
-            entry_fee        = entry_fee,
-            top_owned        = top_owned,
-            top_5_owned      = top_5_owned,
-            top_10_owned     = top_10_owned,
-            first_pct        = first_pct,
-            top5_pct         = top5_pct,
-            bw_own           = float(kde_own.factor),
-            bw_proj          = float(kde_proj.factor),
-            max_proj         = max_proj,
-            hist_own_bins    = bins_o.tolist(),
-            hist_own_counts  = cnts_o.tolist(),
-            hist_proj_bins   = bins_p.tolist(),
-            hist_proj_counts = cnts_p.tolist(),
-            hist_stack_types = list(Counter(stack_types).keys()),
-            hist_stack_probs = list(Counter(stack_types).values()),
-        )
-        session.merge(model)
-        session.commit()
-        print(f" ✔ upserted model for {num_games}_{total_entries}_{max_entries}")
+    # payout % for 1st & top 5
+    pool = entry_fee * total_entries
+    sum_payout = lambda lo, hi: (
+        session.query(func.sum(ContestPayout.payout_amount))
+               .filter(ContestPayout.contest_id==cid,
+                       ContestPayout.min_position.between(lo, hi))
+               .scalar() or 0.0
+    )
+    first_pct = sum_payout(1, 1) / pool
+    top5_pct  = sum_payout(1, 5) / pool
+
+    # --- floor at 70, min-max scale projections to [0,1]
+    MIN_PROJ = 70.0
+    bounded = [max(p, MIN_PROJ) for p in projs]
+    max_proj = float(max(bounded))
+    projs_norm = [(p - MIN_PROJ) / (max_proj - MIN_PROJ) for p in bounded]
+
+    # --- KDE bandwidths
+    kde_own  = gaussian_kde(np.array(ownerships))
+    kde_proj = gaussian_kde(np.array(projs_norm))
+
+    # --- fixed-bin histograms (counts only)
+    fixed_bins = np.linspace(0, 1, 21)  # 0.00,0.05,…,1.00
+    hist_own_counts, _  = np.histogram(ownerships, bins=fixed_bins)
+    hist_proj_counts, _ = np.histogram(projs_norm,   bins=fixed_bins)
+
+    num_games = max(len(teams)//2, 1)
+
+    model = SlateKDEModel(
+        contest_date     = contest_dt,
+        num_games        = num_games,
+        total_entries    = total_entries,
+        max_entries      = max_entries,
+        entry_fee        = entry_fee,
+        top_owned        = top_owned,
+        top_5_owned      = top_5_owned,
+        top_10_owned     = top_10_owned,
+        first_pct        = first_pct,
+        top5_pct         = top5_pct,
+        bw_own           = float(kde_own.factor),
+        bw_proj          = float(kde_proj.factor),
+        max_proj         = max_proj,
+        # only counts now:
+        hist_own_counts  = hist_own_counts.tolist(),
+        hist_proj_counts = hist_proj_counts.tolist(),
+        hist_stack_types = list(Counter(stack_types).keys()),
+        hist_stack_probs = list(Counter(stack_types).values()),
+    )
+    session.merge(model)
+

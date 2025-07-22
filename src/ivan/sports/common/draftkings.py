@@ -60,50 +60,44 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def build_requests_session_from_selenium(contest_id):
+def build_requests_session(profile_dir: str) -> requests.Session:
     opts = webdriver.ChromeOptions()
-    opts.add_argument(r"--user-data-dir=C:\selenium\chrome-profile")
+    opts.add_argument(f"--user-data-dir={profile_dir}")
     driver = webdriver.Chrome(options=opts)
 
-    # 1) Hit the homepage so you’re signed in
+    # hit home to ensure you’re signed‑in
     driver.get("https://www.draftkings.com")
-
-    # 2) Now _also_ hit the contest page so it drops the uc=… and contest cookies
-    gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
-    driver.get(gc_url)
-
-    # 3) Extract all cookies
+    # collect cookies
     sess = requests.Session()
     for c in driver.get_cookies():
-        sess.cookies.set(c['name'], c['value'], domain=c['domain'], path=c['path'])
+        sess.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"])
+    # set headers once
     sess.headers.update({
         "User-Agent": driver.execute_script("return navigator.userAgent"),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     })
-
     driver.quit()
     return sess
 
 
-def get_contest_dataframe(contest_id):
-    sess = build_requests_session_from_selenium(contest_id)
+def get_contest_dataframe(sess: requests.Session, contest_id: int) -> pd.DataFrame:
+    # 1) hit the gamecenter page so it sets the uc=… cookie for this contest
+    gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
+    resp = sess.get(gc_url)
+    resp.raise_for_status()
 
-    # Already hit /contest/gamecenter in Selenium; no need to do it again here
-
-    # Inject CSRF header
+    # 2) inject CSRF from cookies
     csrf = sess.cookies.get("_csrf") or sess.cookies.get("csrf_token")
     if csrf:
         sess.headers["X-CSRF-Token"] = csrf
 
+    # 3) download the ZIP
     export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
-    resp = sess.get(export_url, headers={
-        "Referer": f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
-    })
+    resp = sess.get(export_url, headers={"Referer": gc_url})
     resp.raise_for_status()
 
-    # Now this should be a real ZIP
     z = zipfile.ZipFile(io.BytesIO(resp.content))
-    csv = next(f for f in z.namelist() if f.endswith(".csv"))
-    return pd.read_csv(z.open(csv))
+    csv_name = next(f for f in z.namelist() if f.endswith(".csv"))
+    return pd.read_csv(z.open(csv_name))
 

@@ -478,9 +478,7 @@ class SlateKDEModel(Base):
     max_proj        = Column(Float,   nullable=False)
 
     # Optional: coarse histograms (20-bin)
-    hist_own_bins    = Column(JSON,    nullable=True)
     hist_own_counts  = Column(JSON,    nullable=True)
-    hist_proj_bins   = Column(JSON,    nullable=True)
     hist_proj_counts = Column(JSON,    nullable=True)
     hist_stack_types = Column(JSON,    nullable=False)
     hist_stack_probs = Column(JSON,    nullable=False)

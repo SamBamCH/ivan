@@ -254,27 +254,39 @@ def build_slate_bin_regressors(session):
         }
 
     # --- Real-data branch ---
-    # 1) Prepare feature matrix X
-    X = np.array([
+     # 1) load all historical slate-level summaries
+    recs = session.query(SlateKDEModel).all()
+    bin_edges = np.linspace(0.0, 1.0, BINS + 1)
+
+    # 2) feature matrix X: 9 numeric slate features
+    if not recs:
+        raise RuntimeError("No historical SlateKDEModel data available.")
+
+    X = np.vstack([
         [
-            r.num_games, r.total_entries, r.max_entries, r.entry_fee,
-            r.top_owned, r.top_5_owned, r.top_10_owned,
-            r.first_pct, r.top5_pct
-        ] for r in recs
-    ], dtype=float)
+            r.num_games,
+            r.total_entries,
+            r.max_entries,
+            r.entry_fee,
+            r.top_owned,
+            r.top_5_owned,
+            r.top_10_owned,
+            r.first_pct,
+            r.top5_pct,
+        ]
+        for r in recs
+    ]).astype(float)
 
-    # 2) Compute normalized bin counts for ownership and projection histograms
-    Y_own = np.zeros((len(recs), BINS))
-    Y_proj = np.zeros((len(recs), BINS))
+    # 3) normalized bin‐mass targets for ownership & projection
+    Y_own  = np.zeros((len(recs), BINS), dtype=float)
+    Y_proj = np.zeros((len(recs), BINS), dtype=float)
     for i, r in enumerate(recs):
-        counts_own = np.array(r.hist_own_counts, dtype=float)
-        counts_proj = np.array(r.hist_proj_counts, dtype=float)
-        if counts_own.sum() > 0:
-            Y_own[i] = counts_own / counts_own.sum()
-        if counts_proj.sum() > 0:
-            Y_proj[i] = counts_proj / counts_proj.sum()
+        c_own  = np.array(r.hist_own_counts,  dtype=float)
+        c_proj = np.array(r.hist_proj_counts, dtype=float)
+        if c_own.sum()  > 0:  Y_own[i]  = c_own  / c_own.sum()
+        if c_proj.sum() > 0:  Y_proj[i] = c_proj / c_proj.sum()
 
-    # 3) Stack-type probabilities
+    # 4) stack‐type probabilities matrix
     all_stacks = sorted({st for r in recs for st in r.hist_stack_types})
     S = len(all_stacks)
     Y_stack = np.zeros((len(recs), S), dtype=float)
@@ -283,20 +295,18 @@ def build_slate_bin_regressors(session):
         for j, st in enumerate(all_stacks):
             Y_stack[i, j] = pm.get(st, 0.0)
 
-    # 4) Standardize features
+    # 5) standardize features
     scaler = StandardScaler().fit(X)
-    Xs = scaler.transform(X)
+    Xs     = scaler.transform(X)
 
-    # 5) Train multi-output regressors
-    own_model = MultiOutputRegressor(
-        RandomForestRegressor(n_estimators=200, random_state=0)
-    ).fit(Xs, Y_own)
-    proj_model = MultiOutputRegressor(
-        RandomForestRegressor(n_estimators=200, random_state=0)
-    ).fit(Xs, Y_proj)
-    stack_model = MultiOutputRegressor(
-        RandomForestRegressor(n_estimators=200, random_state=0)
-    ).fit(Xs, Y_stack)
+    # 6) fit multi‐output RF regressors
+    rf_params = dict(n_estimators=200, random_state=0)
+    own_model  = MultiOutputRegressor(RandomForestRegressor(**rf_params)) \
+                    .fit(Xs, Y_own)
+    proj_model = MultiOutputRegressor(RandomForestRegressor(**rf_params)) \
+                    .fit(Xs, Y_proj)
+    stack_model= MultiOutputRegressor(RandomForestRegressor(**rf_params)) \
+                    .fit(Xs, Y_stack)
 
     return {
         'scaler':      scaler,
@@ -304,5 +314,5 @@ def build_slate_bin_regressors(session):
         'proj_model':  proj_model,
         'stack_model': stack_model,
         'stack_types': all_stacks,
-        'bin_edges':   bin_edges
+        'bin_edges':   bin_edges,
     }
