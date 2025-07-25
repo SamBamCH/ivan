@@ -10,7 +10,6 @@ class BasePlayer:
     name        = Column(String,    nullable=True)
     team        = Column(String,    nullable=False)
     salary      = Column(Integer,   nullable=False)
-    created_at  = Column(DateTime,  nullable=False)
 
     def __repr__(self):
         return (

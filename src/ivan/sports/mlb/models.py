@@ -461,16 +461,17 @@ class SlateKDEModel(Base):
     __tablename__ = 'slate_kde_model'
 
     # Composite PK for one model per slate-feature combination
-    contest_date    = Column(DateTime, primary_key=True) #date of the contest
-    num_games       = Column(Integer, primary_key=True) #total games on the slate
-    total_entries   = Column(Integer, primary_key=True) #total entries in contest
-    max_entries     = Column(Integer, primary_key=True) #total entries one user can enter (i.e. 1, 20, 150)
-    entry_fee       = Column(Float, primary_key=True) #entry fee of the contest
-    top_owned       = Column(Float, primary_key=True) #top owned player on the slate, expressed as a %
-    top_5_owned     = Column(Float, primary_key=True) #average ownership of top 5 highest owned players on the slate, expressed as a %
-    top_10_owned    = Column(Float, primary_key=True) #average ownership of top 10 highest owned players on the slate, expressed as a %
-    first_pct       = Column(Float, primary_key=True) #percent of the total prize pool paid out to first place
-    top5_pct        = Column(Float, primary_key=True) #percent of the total prize pool paid out to the first 5 places. 
+    contest_id      = Column(Integer, primary_key=True)
+    contest_date    = Column(DateTime, nullable=False) #date of the contest
+    num_games       = Column(Integer, nullable=False) #total games on the slate
+    total_entries   = Column(Integer, nullable=False) #total entries in contest
+    max_entries     = Column(Integer, nullable=False) #total entries one user can enter (i.e. 1, 20, 150)
+    entry_fee       = Column(Float, nullable=False) #entry fee of the contest
+    top_owned       = Column(Float, nullable=False) #top owned player on the slate, expressed as a %
+    top_5_owned     = Column(Float, nullable=False) #average ownership of top 5 highest owned players on the slate, expressed as a %
+    top_10_owned    = Column(Float, nullable=False) #average ownership of top 10 highest owned players on the slate, expressed as a %
+    first_pct       = Column(Float, nullable=False) #percent of the total prize pool paid out to first place
+    top5_pct        = Column(Float, nullable=False) #percent of the total prize pool paid out to the first 5 places. 
 
     # KDE parameters
     bw_own          = Column(Float,   nullable=False)

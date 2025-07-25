@@ -1,4 +1,5 @@
 import re
+import logging
 from collections import Counter
 from datetime import datetime
 from typing import List, Tuple, Dict
@@ -7,6 +8,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
 from sqlalchemy import func
+from ivan.database.session import init_db, get_session
+from ivan.sports.common.draftkings import build_requests_session, download_contest_dataframe
 
 from ivan.core.utils import normalize_name
 from ivan.sports.mlb.models import (
@@ -271,6 +274,7 @@ def fit_slate_kde(
     num_games = max(len(teams)//2, 1)
 
     model = SlateKDEModel(
+        contest_id       = cid,
         contest_date     = contest_dt,
         num_games        = num_games,
         total_entries    = total_entries,
@@ -291,4 +295,49 @@ def fit_slate_kde(
         hist_stack_probs = list(Counter(stack_types).values()),
     )
     session.merge(model)
+
+
+def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    log = logging.getLogger("get_contest_data")
+
+    # init DB & HTTP session
+    engine  = init_db("mlb")
+    session = get_session(engine)
+    sess    = build_requests_session(profile_dir)
+
+    # build a subquery to skip contests we’ve already modeled
+    now  = datetime.now()
+    subq = session.query(SlateKDEModel.contest_id)
+    to_process = (
+        session.query(HistoricalContest)
+               .filter(
+                   ~HistoricalContest.contest_id.in_(subq),
+                   HistoricalContest.date <= now
+               )
+               .all()
+    )
+    log.info("Need to process %d new contests", len(to_process))
+
+    for hc in to_process:
+        cid, sched = hc.contest_id, hc.date
+        log.info("→ Modeling contest %s @ %s", cid, sched)
+
+        df = download_contest_dataframe(sess, cid)
+        if df is None:
+            continue
+
+        lineups, payouts, actuals = parse_df(df, cid)
+        try:
+            # only modeling for now; payouts/actuals can be un-commented if desired
+            # upsert_payout_changes(session, payouts)
+            # upsert_actuals(session, actuals)
+            fit_slate_kde(session, hc, lineups)
+            session.commit()
+            log.info("✔ Modeled %s", cid)
+        except Exception:
+            session.rollback()
+            log.exception("✗ Failed modeling %s", cid)
+
+    log.info("All done.")
 

@@ -1,13 +1,22 @@
-import requests
-from selenium import webdriver
-import requests
-import pandas as pd
-import io, zipfile
+import time
+import io
+import zipfile
+import logging
+import json
 from datetime import date, timedelta
-from pprint import pprint
+from typing import List, Dict, Any, Optional
+
+import requests
 import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from http.client import RemoteDisconnected
+from requests.exceptions import RequestException
 
 
+# Base URLs
+LOBBY_URL = "https://www.draftkings.com/lobby/getcontests"
+API_BASE  = "https://api.draftkings.com/draftgroups/v1"
 
 def get_upcoming_contest_ids(
     sess: requests.Session,
@@ -60,44 +69,156 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def build_requests_session(profile_dir: str) -> requests.Session:
-    opts = webdriver.ChromeOptions()
+def build_requests_session(profile_dir: str, headless: bool = True) -> requests.Session:
+    """
+    Launch Chrome *just* to grab your DraftKings cookies & UA, then quit.
+    """
+    opts = Options()
+    if headless:
+        opts.add_argument("--headless")
     opts.add_argument(f"--user-data-dir={profile_dir}")
     driver = webdriver.Chrome(options=opts)
-
-    # hit home to ensure you’re signed‑in
     driver.get("https://www.draftkings.com")
-    # collect cookies
+    time.sleep(2)  # allow any SSO redirect
+    user_agent = driver.execute_script("return navigator.userAgent")
+    cookies    = driver.get_cookies()
+    driver.quit()
+
     sess = requests.Session()
-    for c in driver.get_cookies():
-        sess.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"])
-    # set headers once
+    for c in cookies:
+        sess.cookies.set(c["name"], c["value"], domain=c["domain"])
     sess.headers.update({
-        "User-Agent": driver.execute_script("return navigator.userAgent"),
+        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     })
-    driver.quit()
     return sess
 
+def download_contest_dataframe(
+    sess: requests.Session,
+    contest_id: int,
+    max_retries: int = 3,
+    timeout: int = 10
+) -> pd.DataFrame | None:
+    """
+    Try up to `max_retries` to pull and unzip the DK CSV.
+    Returns a DataFrame or None if all attempts fail.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            # step 1: hit gamecenter to set uc=… cookie
+            gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
+            r1 = sess.get(gc_url, timeout=timeout)
+            r1.raise_for_status()
 
-def get_contest_dataframe(sess: requests.Session, contest_id: int) -> pd.DataFrame:
-    # 1) hit the gamecenter page so it sets the uc=… cookie for this contest
-    gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
-    resp = sess.get(gc_url)
-    resp.raise_for_status()
+            # step 2: inject CSRF if present
+            csrf = sess.cookies.get("_csrf") or sess.cookies.get("csrf_token")
+            if csrf:
+                sess.headers["X-CSRF-Token"] = csrf
 
-    # 2) inject CSRF from cookies
-    csrf = sess.cookies.get("_csrf") or sess.cookies.get("csrf_token")
-    if csrf:
-        sess.headers["X-CSRF-Token"] = csrf
+            # step 3: pull the ZIP
+            export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
+            r2 = sess.get(export_url, headers={"Referer": gc_url}, timeout=timeout)
+            r2.raise_for_status()
 
-    # 3) download the ZIP
-    export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
-    resp = sess.get(export_url, headers={"Referer": gc_url})
-    resp.raise_for_status()
+            z = zipfile.ZipFile(io.BytesIO(r2.content))
+            csv_name = next(f for f in z.namelist() if f.endswith(".csv"))
+            return pd.read_csv(z.open(csv_name))
 
-    z = zipfile.ZipFile(io.BytesIO(resp.content))
-    csv_name = next(f for f in z.namelist() if f.endswith(".csv"))
-    return pd.read_csv(z.open(csv_name))
+        except (RemoteDisconnected, zipfile.BadZipFile, RequestException) as e:
+            print(f"[warn] Contest {contest_id} attempt {attempt}/{max_retries} failed: {e}")
+            time.sleep(1)
+
+    print(f"[error] Contest {contest_id} skipped after {max_retries} attempts.")
+    return None
+
+def fetch_all_contests(sport: str = "MLB") -> List[Dict[str, Any]]:
+    """
+    Hit the Lobby endpoint and return the raw list of contests.
+    """
+    r = requests.get(LOBBY_URL, params={"sport": sport})
+    r.raise_for_status()
+    data = r.json()
+
+    if isinstance(data, dict) and "Contests" in data:
+        return data["Contests"]
+    if isinstance(data, dict) and "contests" in data:
+        return data["contests"]
+    if isinstance(data, list):
+        return data
+
+    logging.warning("Unexpected lobby JSON keys: %s", list(data.keys()))
+    return []
+
+
+def summarize_slates(contests: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    """
+    Build a mapping:
+      draftGroupId -> {
+        gameType: str,
+        sdstring: str,
+        name:     str,
+        count:    int  # how many contest entries share this dg
+      }
+    """
+    summary: Dict[int, Dict[str, Any]] = {}
+    for c in contests:
+        dg = c.get("dg") or c.get("id")
+        if not dg:
+            continue
+
+        if dg not in summary:
+            summary[dg] = {
+                "gameType": c.get("gameType"),
+                "sdstring": c.get("sdstring"),
+                "name":     c.get("n"),
+                "count":    1
+            }
+        else:
+            summary[dg]["count"] += 1
+
+    return summary
+
+
+def get_upcoming_slate_ids(sport: str = "MLB") -> List[int]:
+    """
+    Returns all unique draftGroupIds for upcoming slates.
+    """
+    contests = fetch_all_contests(sport)
+    seen: List[int] = []
+    for c in contests:
+        dg = c.get("dg")
+        if dg and dg not in seen:
+            seen.append(dg)
+
+    if not seen:
+        raise RuntimeError(f"No upcoming slates for '{sport}'")
+    logging.info("Found %d slates: %s", len(seen), seen)
+    return seen
+
+
+def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
+    """
+    Fetch the draftables for one slate, tagging each with `draftGroupId`
+    and pretty‑printing the first payload for inspection.
+    """
+    url = f"{API_BASE}/draftgroups/{draft_group_id}/draftables"
+    logging.debug("GET %s", url)
+    r = requests.get(url)
+    r.raise_for_status()
+
+    payload = r.json()
+    draftables = payload.get("draftables", [])
+
+    # dump the first one so you know all available keys
+    if draftables:
+        logging.info("=== First draftable payload ===\n%s", json.dumps(draftables[0], indent=2))
+    else:
+        logging.warning("No draftables for DG=%s", draft_group_id)
+
+    # tag for easy upsert
+    for p in draftables:
+        p["draftGroupId"] = draft_group_id
+
+    return draftables
 
