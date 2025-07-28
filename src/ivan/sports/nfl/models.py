@@ -117,5 +117,17 @@ class ContestPayout(NFLBase):
     payout_text   = Column(String(32), nullable=True)  # e.g. "$1,500.00"
     currency      = Column(String(16), default="USD")  # “USD”
 
+class NFLOdds(NFLBase):
+    __tablename__ = "odds"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    player          = Column(String,  nullable=False)
+    market          = Column(String,  nullable=False)
+    sportsbook      = Column(String,  nullable=False)
+    side            = Column(String,  nullable=False)
+    point           = Column(Float,   nullable=False)
+    price           = Column(Integer, nullable=False)
+    last_update     = Column(String,  nullable=True)
+
 
    

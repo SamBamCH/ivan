@@ -1,8 +1,12 @@
 import requests
 from datetime import datetime
+from dateutil import parser
+import pprint
+import pandas as pd
 
+from ivan.core.utils import map_team_name_to_abbreviation, normalize_name
 
-def get_upcoming_events(sport, api_key):
+def _get_upcoming_events(sport, api_key):
     """
     Fetches all upcoming events for the specified sport.
 
@@ -21,31 +25,8 @@ def get_upcoming_events(sport, api_key):
         print(f"Error fetching upcoming events: {response.status_code} - {response.text}")
         return None
 
-def filter_events_by_first_event_date(events):
-    """
-    Filters events that occur on the same date as the first event.
 
-    Args:
-        events (list): A list of events.
-
-    Returns:
-        list: A list of events that occur on the same date as the first event.
-    """
-    if not events:
-        return []
-
-    # Get the date of the first event
-    first_event_date = datetime.strptime(events[0]['commence_time'], '%Y-%m-%dT%H:%M:%SZ').date()
-
-    # Filter events that occur on the same date as the first event
-    filtered_events = [
-        event for event in events
-        if datetime.strptime(event['commence_time'], '%Y-%m-%dT%H:%M:%SZ').date() == first_event_date
-    ]
-
-    return filtered_events
-
-def get_event_odds(sport, api_key, event_id, markets=None):
+def _get_event_odds(sport, api_key, event_id, markets=None):
     """
     Fetches odds for a specific event.
 
@@ -77,31 +58,79 @@ def get_event_odds(sport, api_key, event_id, markets=None):
         print(f"Error fetching event odds: {response.status_code} - {response.text}")
         return None
 
-def get_odds(sport, api_key):
+def get_odds(sport, api_key, relevant_teams):
     """
-    Fetches odds for the first event and other events on the same day.
+    Fetches odds only for each team’s next upcoming event.
 
     Returns:
-        dict: A JSON response containing odds data for the events or None if any step fails.
+        dict: mapping team_abbreviation -> odds JSON
     """
-    # Get all upcoming events
-    events = get_upcoming_events(sport, api_key)
+    # 1) grab all upcoming events
+    events = _get_upcoming_events(sport, api_key)
     if not events:
         print("No upcoming events found.")
-        return None
+        return {}
 
-    # Filter events to include only those on the same date as the first event
-    filtered_events = filter_events_by_first_event_date(events)
-    if not filtered_events:
-        print("No events found for the same date as the first event.")
-        return None
+    # 2) sort them by start time (earliest first)
+    events = sorted(
+        events,
+        key=lambda ev: parser.isoparse(ev['commence_time'])
+    )
 
-    # Fetch odds for each filtered event
-    odds_data = {}
-    for event in filtered_events:
-        event_id = event['id']
-        event_odds = get_event_odds(sport, api_key, event_id)
-        if event_odds:
-            odds_data[event_id] = event_odds
+    # 3) pick the first event for each relevant team
+    next_event_by_team: dict[str, dict] = {}
+    for ev in events:
+        for side in ('home_team', 'away_team'):
+            team_abbr = map_team_name_to_abbreviation(ev[side])
+            if team_abbr in relevant_teams and team_abbr not in next_event_by_team:
+                next_event_by_team[team_abbr] = ev
 
-    return odds_data
+        # if we already have all teams covered, break early
+        if len(next_event_by_team) == len(relevant_teams):
+            break
+
+    # 4) fetch odds just for those next events
+    odds_by_team: dict[str, dict] = {}
+    for team, ev in next_event_by_team.items():
+        ev_id = ev['id']
+        odds = _get_event_odds(sport, api_key, ev_id)
+        odds_by_team[team] = odds
+
+    return odds_by_team
+
+def parse_odds(odds_by_team: dict) -> pd.DataFrame:
+    """
+    Flatten the nested odds JSON into a DataFrame with columns:
+    player (pk), market, sportsbook, side, point, price, last_update
+    """
+    rows = []
+    for _, ev in odds_by_team.items():
+        if not ev or not ev.get("bookmakers"):
+            continue
+
+        for bm in ev["bookmakers"]:
+            sportsbook = bm["key"]
+            for market in bm["markets"]:
+                market_key = market["key"]
+                last_update = market["last_update"]
+                for outcome in market["outcomes"]:
+                    player_name = outcome["description"]
+                    normalized = normalize_name(player_name)
+                    side = outcome.get("name", "Over")
+                    # default point for anytime TD bets
+                    point = outcome.get("point", 0.5) if market_key == "player_anytime_td" else outcome.get("point")
+                    price = outcome["price"]
+
+                    rows.append({
+                        "player": normalized,
+                        "market": market_key,
+                        "sportsbook": sportsbook,
+                        "side": side,
+                        "point": point,
+                        "price": price,
+                        "last_update": last_update
+                    })
+    df = pd.DataFrame(rows)
+    return df
+    
+

@@ -83,6 +83,41 @@ _NAME_OVERRIDES = {
     # add more mappings as needed...
 }
 
+_TEAM_RENAME_DICT = {
+            'Miami Dolphins': 'MIA',
+            'San Francisco 49ers': 'SF',
+            'Buffalo Bills': 'BUF',
+            'Chicago Bears': 'CHI',
+            'Houston Texans': 'HOU',
+            'Baltimore Ravens': 'BAL',
+            'Las Vegas Raiders': 'LV',
+            'Carolina Panthers': 'CAR',
+            'Los Angeles Chargers': 'LAC',
+            'Jacksonville Jaguars': 'JAX',
+            'Cleveland Browns': 'CLE',
+            'Dallas Cowboys': 'DAL',
+            'New Orleans Saints': 'NO',
+            'Detroit Lions': 'DET',
+            'Tampa Bay Buccaneers': 'TB',
+            'Green Bay Packers': 'GB',
+            'Indianapolis Colts': 'IND',
+            'Minnesota Vikings': 'MIN',
+            'New England Patriots': 'NE',
+            'Seattle Seahawks': 'SEA',
+            'Washington Commanders': 'WAS',
+            'New York Giants': 'NYG',
+            'Tennessee Titans': 'TEN',
+            'New York Jets': 'NYJ',
+            'Arizona Cardinals': 'ARI',
+            'Los Angeles Rams': 'LAR',
+            'Kansas City Chiefs': 'KC',
+            'Cincinnati Bengals': 'CIN',
+            'Denver Broncos': 'DEN',
+            'Pittsburgh Steelers': 'PIT',
+            'Atlanta Falcons': 'ATL',
+            'Philadelphia Eagles': 'PHI'
+        }
+
 def normalize_name(name: str) -> str:
     """
     Normalize a player’s name (or any source name) by:
@@ -270,4 +305,16 @@ def match_contest_id(session, orig_id: int, name: str) -> int:
         f"No HistoricalContest for contest_id={orig_cid}, "
         f"and no rows with name='{name}'."
     )
+
+def map_team_name_to_abbreviation(full_team_name):
+    """
+    Convert full team name to its abbreviation using the mapping.
+    If the team name is not found, print it and return the original team name.
+    """
+
+
+    abbreviation = _TEAM_RENAME_DICT.get(full_team_name)
+    if not abbreviation:
+        print(f"Missing team abbreviation for: {full_team_name}")
+    return abbreviation or full_team_name
 
