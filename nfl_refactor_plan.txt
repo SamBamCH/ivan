@@ -1,0 +1,30 @@
+odds table
+    build model
+    create_db
+    populate odds
+        *normalize name for matching
+historical stats table 
+    normalize name for matching
+p.enrich()
+    can pull odds/stats from respective tables by matching normalized name
+    calculate distribution
+        need fpts and std dev for sim
+
+
+*******************************FLOW:
+
+get_stats.py - can schedule daily
+get_odds.py - can schedule if have enough tokens. need to look how many it uses. 
+
+everything up to this point is in ingest.py
+    load draftkings players
+    p.enrich
+
+
+
+
+team copulas model
+group slate players by game
+generate_correlated_fpts
+generate lineups
+

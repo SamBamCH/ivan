@@ -58,13 +58,6 @@ def get_upcoming_contest_ids(
         if is_g and (m > entry_filter or (a > 50 and m > 100)):
             filtered.append(c)
 
-    # 4) debug: print first 5 of your filtered contests
-    print("\n=== First 5 GUARANTEED contests matching your criteria ===")
-    for c in filtered[:5]:
-        print(f"dg: {c.get('id')}   a: {c.get('a')}   m: {c.get('m')}   IsGuaranteed: {c.get('attr',{}).get('IsGuaranteed')}")
-        pprint(c, width=80)
-        print("-" * 60)
-
     # 5) return the IDs you actually want to download
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered

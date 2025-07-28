@@ -14,14 +14,46 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     UniqueConstraint,
-    MetaData
+    MetaData,
+    Table,
+    PrimaryKeyConstraint
 )
+from sqlalchemy.ext.automap import automap_base
+
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from ivan.core.player import BasePlayer
 from ivan.core.lineup import BaseLineup
+from ivan.core.utils          import PROJECT_ROOT
+from ivan.database.session import init_db
 
 nfl_metadata = MetaData()
 NFLBase = declarative_base(metadata=nfl_metadata)
+
+# ── 1) load your DB URL & init engine ────────────────────────────────────────
+cfg    = json.load(open(Path(PROJECT_ROOT) / "config" / "nfl.json", encoding="utf-8"))
+engine = init_db("nfl", cfg["database_url"])
+
+# ── 2) reflect only the nfl_stats table ────────────────────────────────────
+metadata = MetaData()
+nfl_stats_table = Table(
+    "nfl_stats",
+    metadata,
+    autoload_with=engine
+)
+
+# ── 3) declare a composite PK so the mapper knows how to identify rows ────
+nfl_stats_table.append_constraint(
+        PrimaryKeyConstraint("week", "season", "season_type", "player_display_name", name="pk_nfl_stats")
+    )
+
+# ── 4) automap that table into an ORM class ────────────────────────────────
+AutomapBase = automap_base(metadata=metadata)
+AutomapBase.prepare()
+
+# Now NFLStat is a normal mapped class you can import elsewhere:
+NFLStat = AutomapBase.classes.nfl_stats
 
 
 class NFLPlayer(NFLBase, BasePlayer):
