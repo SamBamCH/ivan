@@ -2,8 +2,14 @@ historical stats table
     normalize name for matching
 p.enrich()
     can pull odds/stats from respective tables by matching normalized name
-    calculate distribution
-        need fpts and std dev for sim
+    calculate each stat's independent model for each player.
+        have 'general' based on historical groups? 
+            pass known odds for stat to general to get new distribution
+    model dependencies between same player different stats
+    
+
+build_team_copulas?
+
 
 
 *******************************FLOW:

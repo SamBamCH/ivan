@@ -69,6 +69,9 @@ class NFLPlayer(NFLBase, BasePlayer):
     salary          = Column(Integer,   nullable=False)
     status          = Column(String,    nullable=True)
 
+    fpts_dist_name   = Column(String, nullable=True)    # e.g. 'gamma'
+    fpts_dist_params = Column(JSON, nullable=True)  # list/tuple of params
+
 @dataclass
 class FieldPlayer:
     dk_player_id: int

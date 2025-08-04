@@ -204,7 +204,7 @@ def simulate_one_contest(
     # 4) sample lineups
     chosen = sample_lineups_fast(
         session=session,
-        n_lineups=contest.total_entries,
+        n_lineups=min(contest.total_entries, 10000),
         config=cfg,
         stack_dist=stack_dist,
         proj_bin_probs=proj_bin_probs,
@@ -237,13 +237,13 @@ def simulate_one_contest(
     ]
 
     # 7) run simulations in parallel
-    chunk_size = math.ceil(num_sims / min(6, num_sims))
+    chunk_size = math.ceil(num_sims / min(8, num_sims)) #TODO: pull this out to config file
     full_scores  = np.zeros((num_sims, M))
     full_payouts = np.zeros_like(full_scores)
     full_rois    = np.zeros_like(full_scores)
     full_ranks   = np.zeros((num_sims, M), dtype=int)
 
-    with ProcessPoolExecutor(max_workers=min(6, num_sims)) as exe:
+    with ProcessPoolExecutor(max_workers=min(8, num_sims)) as exe: #TODO: pull this out to config file
         futures = []
         copulas = load_copulas()
         for start in range(0, num_sims, chunk_size):

@@ -10,9 +10,8 @@ scripts/mlb/ingest.py
 """
 
 import sys
-import os   # ← added for API key
+from pathlib import Path
 import logging
-import pprint
 from datetime import datetime
 from dateutil import parser
 from ivan.database.session import init_db, get_session
@@ -23,6 +22,7 @@ from ivan.sports.common.draftkings import (
     summarize_slates,
     get_players_for_slate,
 )
+from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
 from ivan.sports.common.odds import get_odds, parse_odds  # ← import your odds function
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -96,13 +96,17 @@ def main():
 
     api_key = '58699e4fe47856c9182db84884772536'
 
-    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
+    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams)) #TODO: add a 'update_odds' arg, so we don't need to waste api calls? 
     df_odds = parse_odds(odds)
 
-    records = df_odds.to_dict(orient='records')
+    records = df_odds.to_dict(orient='records') 
     session.bulk_insert_mappings(NFLOdds, records)
     session.commit()
     logging.info(f"✔ Inserted {len(records)} odds rows into the database")
+
+    model_dir = 'data/nfl/models'
+    generate_and_fit_all(session, Path(model_dir), n_samples=10000)
+
     
     
 
