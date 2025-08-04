@@ -107,7 +107,8 @@ def main():
     #TODO: adjust single stat distributions to pass through a known odds point once we have more player odds available
     
     model_dir = 'data/nfl/models'
-    generate_and_fit_all(session, Path(model_dir), n_samples=10000)
+    generate_and_fit_all(session, Path(model_dir), n_samples=10000)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
+    
 
     
     
