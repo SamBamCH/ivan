@@ -104,6 +104,8 @@ def main():
     session.commit()
     logging.info(f"✔ Inserted {len(records)} odds rows into the database")
 
+    #TODO: adjust single stat distributions to pass through a known odds point once we have more player odds available
+    
     model_dir = 'data/nfl/models'
     generate_and_fit_all(session, Path(model_dir), n_samples=10000)
 
