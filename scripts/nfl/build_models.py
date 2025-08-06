@@ -2,36 +2,74 @@
 """
 scripts/nfl/build_models.py
 
-Thin wrapper that delegates to the core modeling functions in
-`ivan.sports.nfl.model_builder`.
+Build marginals + copulas and, if --plot, run diagnostics.
 """
 import argparse
 from pathlib import Path
 
-from ivan.sports.nfl.player_level_calculations import build_models
+import joblib
+import numpy as np
+import pandas as pd
+from scipy.stats import kstest, anderson_ksamp
+from sqlalchemy.orm import Session
 
+from ivan.sports.nfl.player_level_calculations import build_models as build_player_models
+from ivan.sports.nfl.team_level_calculations   import build_team_models, _compute_fpts
+from ivan.sports.nfl.diagnostics              import (
+    plot_marginal_fit,
+    test_marginal_ks,
+    plot_copula_corr,
+    compare_empirical_vs_model_scatter,
+    estimate_tail_dependence
+)
+from ivan.sports.nfl.models import NFLStat
+from ivan.database.session import init_db, get_session
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description='Build and store NFL stat models (marginals + copulas)'
-    )
-    parser.add_argument(
-        '--db-url', required=False, default=None,
-        help='Optional database URL for NFL stats (default uses data/nfl/nfl_history.sqlite)'
-    )
-    parser.add_argument(
-        '--model-dir', default='data/nfl/models',
-        help='Directory to save model files'
-    )
-    parser.add_argument(
-        '--plot', action='store_true',
-        help='Generate diagnostic plots of data vs fitted PDFs'
-    )
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--db-url',    default=None)
+    parser.add_argument('--model-dir', default='data/nfl/models')
+    parser.add_argument('--plot',      action='store_true')
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir)
-    build_models(args.db_url, model_dir, args.plot)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
+    print("→ Building player‐level models")
+    build_player_models(args.db_url, model_dir, args.plot)
+
+    print("→ Building team‐level copulas")
+    build_team_models(args.db_url, model_dir)
+
+    if args.plot:
+        print("→ Running diagnostics…")
+        engine = init_db('nfl', args.db_url)
+        session = get_session(engine)
+        ### 2) Team copula diagnostics ###
+        # for each team, compare empirical corr vs saved copula
+        # pivot your fpts exactly as in build_team_models:
+        df_all = pd.read_sql(session.query(NFLStat).statement, session.bind)
+        df_all['fpts'] = _compute_fpts(df_all)
+        pivot = df_all.pivot_table(
+            index=['season','week','recent_team'],
+            columns='position_group',
+            values='fpts',
+            aggfunc='sum',
+            fill_value=0
+        )[['QB','RB','WR','TE']]
+
+        for team in pivot.index.get_level_values('recent_team').unique():
+            team_data = pivot.xs(team, level='recent_team')
+            vine = joblib.load(model_dir / 'team_vines' / f"{team}_vine.pkl")
+            if np.random.rand() > 0.9: # only plot random 10% of teams
+                # 2a) empirical corr heatmap
+                plot_copula_corr(team, team_data)
+                # 2b) scatter of (U_i, U_j) for data vs model
+                compare_empirical_vs_model_scatter(team, team_data, vine)
+            # 2c) tail‐dependence estimate
+            τ_data  = estimate_tail_dependence(team_data)
+            τ_model = estimate_tail_dependence(vine.sample(len(team_data)))
+            print(f"{team:3s} τ_data={τ_data:.2f}, τ_model={τ_model:.2f}")
 
 if __name__ == '__main__':
     main()

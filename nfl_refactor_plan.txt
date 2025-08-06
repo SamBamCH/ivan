@@ -1,16 +1,3 @@
-historical stats table 
-    normalize name for matching
-p.enrich()
-    can pull odds/stats from respective tables by matching normalized name
-    calculate each stat's independent model for each player.
-        have 'general' based on historical groups? 
-            pass known odds for stat to general to get new distribution
-    model dependencies between same player different stats
-    
-
-build_team_copulas?
-
-
 
 *******************************FLOW:
 
@@ -18,19 +5,41 @@ get_stats.py - can schedule daily
 everything up to this point is in ingest.py
     load draftkings players
     get_odds
-    p.enrich
+    calculate params
 
 
 
 
-team copulas model
 group slate players by game
+team copulas model
 generate_correlated_fpts
 generate lineups
 '
 
 
+overall flow: 
 
+historical model building
+    independent stat distributions
+    dependencies of stats for a single player
+    copulas model by team
+        generalized by position
+ingest
+    get dk ids
+    get odds
+    calculate fpts distributions
+generate_lineups
+    group players by game
+    generate correlated samples
+    build lp problem
+    store lineup in DB
+sim_all
+    sample generated lineups
+    generate_correlated_samples
+    rank lineups
+    store sim results
+choose_all
+    euclidian distance
 
 
 
