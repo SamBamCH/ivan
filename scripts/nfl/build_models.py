@@ -41,7 +41,7 @@ def main():
     print("→ Building team‐level copulas")
     build_team_models(args.db_url, model_dir)
 
-    if args.plot:
+    if args.plot: #WILL NOT PLOT IF --plot arg isn't passed
         print("→ Running diagnostics…")
         engine = init_db('nfl', args.db_url)
         session = get_session(engine)
@@ -57,6 +57,8 @@ def main():
             aggfunc='sum',
             fill_value=0
         )[['QB','RB','WR','TE']]
+
+        print(pivot.head())
 
         for team in pivot.index.get_level_values('recent_team').unique():
             team_data = pivot.xs(team, level='recent_team')

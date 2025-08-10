@@ -11,10 +11,8 @@ everything up to this point is in ingest.py
 
 
 group slate players by game
-team copulas model
 generate_correlated_fpts
 generate lineups
-'
 
 
 overall flow: 
