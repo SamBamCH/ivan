@@ -62,57 +62,96 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def build_requests_session(profile_dir: str, headless: bool = True) -> requests.Session:
+def build_requests_session(profile_dir: str, headless: bool = False) -> requests.Session:
     """
-    Launch Chrome *just* to grab your DraftKings cookies & UA, then quit.
+    Launch Chrome with your real profile, ensure you're logged in,
+    copy cookies + UA into a requests.Session.
     """
     opts = Options()
+    # run non-headless so Chrome can fully load the persisted profile/cookies
     if headless:
-        opts.add_argument("--headless")
+        opts.add_argument("--headless=new")  # if you must, but prefer False
     opts.add_argument(f"--user-data-dir={profile_dir}")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--lang=en-US")
+
     driver = webdriver.Chrome(options=opts)
-    driver.get("https://www.draftkings.com")
-    time.sleep(2)  # allow any SSO redirect
-    user_agent = driver.execute_script("return navigator.userAgent")
-    cookies    = driver.get_cookies()
-    driver.quit()
+    try:
+        driver.get("https://www.draftkings.com/")
+        # Give time for any SSO redirect
+        time.sleep(3)
+
+        # Wait (briefly) until a DK cookie that only exists when logged in appears.
+        # Adjust names if your cookies differ; examples: 'dkng', 'dkng_session', 'api_token'
+        wanted = {"dkng", "dkng_session", "api_token", "csrf_token"}
+        for _ in range(20):
+            names = {c["name"] for c in driver.get_cookies()}
+            if wanted & names:
+                break
+            time.sleep(0.25)
+        else:
+            print("[warn] Did not detect an authenticated cookie. You may not be logged in for this profile.")
+
+        user_agent = driver.execute_script("return navigator.userAgent")
+        cookies    = driver.get_cookies()
+    finally:
+        driver.quit()
 
     sess = requests.Session()
+    # Copy cookies verbatim for the right domain
     for c in cookies:
-        sess.cookies.set(c["name"], c["value"], domain=c["domain"])
+        # requests needs domain like '.draftkings.com' or 'www.draftkings.com'
+        sess.cookies.set(c["name"], c["value"], domain=c.get("domain") or "www.draftkings.com")
+
+    # Browser-like headers
     sess.headers.update({
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
     })
     return sess
 
-def download_contest_dataframe(
-    sess: requests.Session,
-    contest_id: int,
-    max_retries: int = 3,
-    timeout: int = 10
-) -> pd.DataFrame | None:
-    """
-    Try up to `max_retries` to pull and unzip the DK CSV.
-    Returns a DataFrame or None if all attempts fail.
-    """
+def download_contest_dataframe(sess: requests.Session, contest_id: int,
+                               max_retries: int = 3, timeout: int = 20) -> pd.DataFrame | None:
+    gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
+    export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
+
     for attempt in range(1, max_retries + 1):
         try:
-            # step 1: hit gamecenter to set uc=… cookie
-            gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
-            r1 = sess.get(gc_url, timeout=timeout)
+            # Touch gamecenter first (sets important cookies)
+            r1 = sess.get(gc_url, timeout=timeout, allow_redirects=True,
+                          headers={"Referer": "https://www.draftkings.com/"})
             r1.raise_for_status()
 
-            # step 2: inject CSRF if present
-            csrf = sess.cookies.get("_csrf") or sess.cookies.get("csrf_token")
+            # Some flows use a CSRF cookie/header; add if present
+            csrf = (sess.cookies.get("_csrf") or
+                    sess.cookies.get("csrf_token") or
+                    sess.cookies.get("XSRF-TOKEN"))
+            hdrs = {
+                "Referer": gc_url,
+                "Origin": "https://www.draftkings.com",
+            }
             if csrf:
-                sess.headers["X-CSRF-Token"] = csrf
+                hdrs["X-CSRF-Token"] = csrf
 
-            # step 3: pull the ZIP
-            export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
-            r2 = sess.get(export_url, headers={"Referer": gc_url}, timeout=timeout)
+            r2 = sess.get(export_url, timeout=timeout, allow_redirects=True, headers=hdrs)
             r2.raise_for_status()
+
+            ctype = r2.headers.get("Content-Type", "").lower()
+            if "zip" not in ctype and "csv" not in ctype:
+                # Almost certainly an HTML interstitial (login/bot wall)
+                snippet = r2.text[:300].replace("\n", " ")
+                print(f"[warn] export returned non-zip content-type={ctype}; html head: {snippet}")
+                raise zipfile.BadZipFile("export did not return a zip/csv")
+
+            # Some DK exports return raw CSV (no zip); handle both
+            if "csv" in ctype and "zip" not in ctype:
+                return pd.read_csv(io.StringIO(r2.text))
 
             z = zipfile.ZipFile(io.BytesIO(r2.content))
             csv_name = next(f for f in z.namelist() if f.endswith(".csv"))
@@ -120,7 +159,7 @@ def download_contest_dataframe(
 
         except (RemoteDisconnected, zipfile.BadZipFile, RequestException) as e:
             print(f"[warn] Contest {contest_id} attempt {attempt}/{max_retries} failed: {e}")
-            time.sleep(1)
+            time.sleep(1.5)
 
     print(f"[error] Contest {contest_id} skipped after {max_retries} attempts.")
     return None

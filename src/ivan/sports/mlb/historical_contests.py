@@ -1,7 +1,7 @@
 import re
 import logging
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Tuple, Dict
 
 import numpy as np
@@ -306,30 +306,41 @@ def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
     session = get_session(engine)
     sess    = build_requests_session(profile_dir)
 
-    # build a subquery to skip contests we’ve already modeled
-    now  = datetime.now()
-    subq = session.query(SlateKDEModel.contest_id)
+    # only process contests in the last 3 days (up to now)
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=7)
+
+    # skip contests we’ve already modeled
+    modeled_subq = session.query(SlateKDEModel.contest_id)
+
     to_process = (
         session.query(HistoricalContest)
-               .filter(
-                   ~HistoricalContest.contest_id.in_(subq),
-                   HistoricalContest.date <= now
-               )
-               .all()
+        .filter(
+            HistoricalContest.date >= cutoff,
+            HistoricalContest.date <= now,
+            ~HistoricalContest.contest_id.in_(modeled_subq),
+        )
+        .all()
     )
-    log.info("Need to process %d new contests", len(to_process))
+
+    log.info("Need to process %d contests in window [%s → %s]", len(to_process), cutoff, now)
 
     for hc in to_process:
+        # extra guard in case any rows have weird timestamps
+        if not (cutoff <= hc.date <= now):
+            continue
+
         cid, sched = hc.contest_id, hc.date
         log.info("→ Modeling contest %s @ %s", cid, sched)
 
         df = download_contest_dataframe(sess, cid)
         if df is None:
+            log.warning("[warn] Contest %s: download returned None", cid)
             continue
 
         lineups, payouts, actuals = parse_df(df, cid)
         try:
-            # only modeling for now; payouts/actuals can be un-commented if desired
+            # only modeling for now
             # upsert_payout_changes(session, payouts)
             # upsert_actuals(session, actuals)
             fit_slate_kde(session, hc, lineups)
