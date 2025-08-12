@@ -12,7 +12,8 @@ from sqlalchemy import (
     Float,
     Boolean,
     ForeignKey,
-    UniqueConstraint
+    UniqueConstraint,
+    Text
 )
 from dataclasses import dataclass
 from ivan.database.session import Base
@@ -50,6 +51,8 @@ class MLBStat(Base):
 
     obp            = Column(Float, nullable=True)
     slg            = Column(Float, nullable=True)
+
+
 
 
 
@@ -483,5 +486,16 @@ class SlateKDEModel(Base):
     hist_proj_counts = Column(JSON,    nullable=True)
     hist_stack_types = Column(JSON,    nullable=False)
     hist_stack_probs = Column(JSON,    nullable=False)
+
+class ContestIngestStatus(Base):
+    __tablename__ = "contest_ingest_status"
+
+    contest_id         = Column(String, primary_key=True)
+    attempts           = Column(Integer, nullable=False, default=0)
+    permanently_failed = Column(Boolean, nullable=False, default=False)
+    last_error         = Column(Text)
+    first_failed_at    = Column(DateTime(timezone=True))
+    last_attempt_at    = Column(DateTime(timezone=True))
+    updated_at         = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
 

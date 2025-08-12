@@ -204,7 +204,11 @@ def simulate_one_contest(
     # 4) sample lineups
     chosen = sample_lineups_fast(
         session=session,
+<<<<<<< Updated upstream
         n_lineups=min(contest.total_entries, 50000), #TODO: wrap this lower for worse systems. 35000 lineups x 1000 sims uses like 16 gb of RAM, 10000 x1000 should be able to run on any system i would think. 
+=======
+        n_lineups=min(contest.total_entries, 15000),
+>>>>>>> Stashed changes
         config=cfg,
         stack_dist=stack_dist,
         proj_bin_probs=proj_bin_probs,

@@ -1,9 +1,13 @@
 #!/usr/bin/env python
+from __future__ import annotations
+import importlib
 import os
 import json
-from sqlalchemy import text
+from sqlalchemy import text, exists
+from sqlalchemy.orm import Session
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any
 import numpy as np
 import matplotlib.pyplot as plt
 from ivan.database.session import init_db, get_session, Base
@@ -11,6 +15,191 @@ from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.mlb.models import Lineup
 from ivan.sports.mlb.sample_lineups import fetch_latest_map, PITCHER_POS
 from ivan.sports.mlb.sample_lineups import DummyPlayer
+
+
+def _resolve_models(sport: str) -> Dict[str, Any]:
+    """
+    Dynamically import ivan.sports.<sport>.models and pull the common classes we need.
+    Expected (per sport):
+      - HistoricalContest (required)
+      - SlateKDEModel    (optional but recommended)
+      - ContestIngestStatus (optional; if present, used for skip/attempt tracking)
+      - ContestPayout, ActualContestEntry (optional; used to protect deletes)
+    """
+    mod = importlib.import_module(f"ivan.sports.{sport}.models")
+    want = [
+        "HistoricalContest",
+        "SlateKDEModel",
+        "ContestIngestStatus",
+        "ContestPayout",
+        "ActualContestEntry",
+    ]
+    out = {}
+    for name in want:
+        out[name] = getattr(mod, name, None)
+    if out["HistoricalContest"] is None:
+        raise RuntimeError(f"{sport}: models.HistoricalContest is required.")
+    return out
+
+def _to_aware_utc(dt: datetime) -> datetime:
+    """Make naive datetimes UTC-aware; pass through aware ones."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        # treat stored naive timestamps as UTC (change to local if that's your convention)
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+def window_start(days: int = 7) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+def within_window(dt: datetime, days: int = 7) -> bool:
+    """True iff dt is within [now - days, now]."""
+    if dt is None:
+        return False
+    dt_utc = _to_aware_utc(dt)
+    now = datetime.now(timezone.utc)
+    return (now - timedelta(days=days)) <= dt_utc <= now
+
+# --- Selection helpers --------------------------------------------------------
+
+def select_contests_to_process(db, sport: str, days: int = 7) -> list:
+    m = _resolve_models(sport)
+    HistoricalContest = m["HistoricalContest"]
+    SlateKDEModel     = m["SlateKDEModel"]
+    ContestIngestStatus = m["ContestIngestStatus"]
+
+    now = datetime.now(timezone.utc)
+    start = window_start(days)
+
+    q = db.query(HistoricalContest)
+
+    # DB-side coarse window (works for most backends)
+    q = q.filter(
+        HistoricalContest.date <= now,
+        HistoricalContest.date >= start,
+    )
+
+    if SlateKDEModel is not None:
+        modeled_subq = db.query(SlateKDEModel.contest_id)
+        q = q.filter(~HistoricalContest.contest_id.in_(modeled_subq))
+
+    if ContestIngestStatus is not None:
+        failed_subq = db.query(ContestIngestStatus.contest_id).filter(
+            ContestIngestStatus.permanently_failed.is_(True)
+        )
+        q = q.filter(~HistoricalContest.contest_id.in_(failed_subq))
+
+    candidates = q.all()
+
+    # Python-side strict guard (handles tz-naive rows, odd drivers, etc.)
+    to_process = [hc for hc in candidates if within_window(hc.date, days)]
+    return to_process
+
+def counts_snapshot(db, sport: str, days: int = 7) -> dict:
+    m = _resolve_models(sport)
+    HistoricalContest = m["HistoricalContest"]
+    SlateKDEModel     = m["SlateKDEModel"]
+    ContestIngestStatus = m["ContestIngestStatus"]
+
+    now = datetime.now(timezone.utc)
+    start = window_start(days)
+
+    # Coarse DB window
+    window_q = db.query(HistoricalContest).filter(
+        HistoricalContest.date >= start,
+        HistoricalContest.date <= now,
+    )
+
+    already_modeled = 0
+    if SlateKDEModel is not None:
+        already_modeled = window_q.filter(
+            HistoricalContest.contest_id.in_(db.query(SlateKDEModel.contest_id))
+        ).count()
+
+    permanently_skipped = 0
+    if ContestIngestStatus is not None:
+        permanently_skipped = window_q.filter(
+            HistoricalContest.contest_id.in_(
+                db.query(ContestIngestStatus.contest_id).filter(
+                    ContestIngestStatus.permanently_failed.is_(True)
+                )
+            )
+        ).count()
+
+    return {"already_modeled": already_modeled, "permanently_skipped": permanently_skipped}
+
+# --- Ingest status (retry/skip) ----------------------------------------------
+
+def mark_success(db: Session, sport: str, contest_id: str) -> None:
+    m = _resolve_models(sport)
+    CIS = m["ContestIngestStatus"]
+    if CIS is None:
+        return  # no status table for this sport; silently ignore
+
+    now = datetime.now(timezone.utc)
+    st = db.query(CIS).get(contest_id)
+    if st:
+        st.attempts = 0
+        st.permanently_failed = False
+        st.last_error = None
+        st.last_attempt_at = now
+    else:
+        db.add(CIS(
+            contest_id=contest_id,
+            attempts=0,
+            permanently_failed=False,
+            last_error=None,
+            last_attempt_at=now,
+        ))
+
+def mark_failure(db: Session, sport: str, contest_id: str, err_msg: str, max_attempts: int = 3) -> None:
+    m = _resolve_models(sport)
+    CIS = m["ContestIngestStatus"]
+    if CIS is None:
+        return  # no status table; silently ignore
+
+    now = datetime.now(timezone.utc)
+    st = db.query(CIS).get(contest_id)
+    if not st:
+        db.add(CIS(
+            contest_id=contest_id,
+            attempts=1,
+            permanently_failed=False,
+            last_error=err_msg,
+            first_failed_at=now,
+            last_attempt_at=now,
+        ))
+    else:
+        st.attempts = (st.attempts or 0) + 1
+        st.last_error = err_msg
+        st.last_attempt_at = now
+        if st.attempts >= max_attempts:
+            st.permanently_failed = True
+
+# --- Purge tracking older than window ----------------------------------------
+
+def purge_stale_contest_tracking(db, sport: str, days: int = 7) -> dict:
+    m = _resolve_models(sport)
+    HistoricalContest = m["HistoricalContest"]
+    CIS = m["ContestIngestStatus"]
+
+    cutoff = window_start(days)
+    deleted_cis = 0
+
+    if CIS is not None:
+        stale_hc_ids = db.query(HistoricalContest.contest_id).filter(HistoricalContest.date < cutoff)
+        deleted_cis = (
+            db.query(CIS)
+              .filter(
+                  (CIS.contest_id.in_(stale_hc_ids)) |
+                  ((CIS.last_attempt_at.isnot(None)) & (CIS.last_attempt_at < cutoff))
+              )
+              .delete(synchronize_session=False)
+        )
+
+    db.commit()
+    return {"deleted_cis": deleted_cis}
 
 
 CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config', 'mlb.json')
@@ -162,3 +351,6 @@ def check_lineups():
 
     print_top_deviators("Top 5 Deviations — Pitchers", pitchers)
     print_top_deviators("Top 5 Deviations — Batters", batters)
+
+
+

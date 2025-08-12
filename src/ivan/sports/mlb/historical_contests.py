@@ -1,7 +1,11 @@
 import re
 import logging
 from collections import Counter
+<<<<<<< Updated upstream
 from datetime import datetime, timedelta
+=======
+from datetime import datetime, timezone
+>>>>>>> Stashed changes
 from typing import List, Tuple, Dict
 
 import numpy as np
@@ -19,11 +23,19 @@ from ivan.sports.mlb.models import (
     SlateKDEModel,
     BatterProjection,
     PitcherProjection,
+    ContestIngestStatus
+)
+from ivan.database.management import (
+    select_contests_to_process,
+    mark_success, mark_failure,
+    window_start, within_window,
 )
 
 # regex to extract (position, name) pairs from a lineup string
 _LINEUP_REGEX = re.compile(r"\b(1B|2B|3B|SS|C|OF|P)\s+(.+?)(?=(?:\s(?:1B|2B|3B|SS|C|OF|P)\s)|$)")
 PITCHER_POS = {"SP", "RP", "P"}
+
+MAX_ATTEMPTS = 3  # after this, mark permanently_failed
 
 def _parse_lineup(cell: str) -> List[Tuple[str, str]]:
     """
@@ -297,15 +309,16 @@ def fit_slate_kde(
     session.merge(model)
 
 
-def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    log = logging.getLogger("get_contest_data")
-
-    # init DB & HTTP session
-    engine  = init_db("mlb")
+def get_contest_data(days: int = 7, sport: str = "mlb", profile_dir: str = r"C:\selenium\chrome-profile"):
+    """
+    Download + parse + fit for contests within the date window only.
+    Skips already-modeled and permanently-failed.
+    """
+    engine  = init_db(sport)
     session = get_session(engine)
-    sess    = build_requests_session(profile_dir)
+    sess    = build_requests_session(profile_dir)  
 
+<<<<<<< Updated upstream
     # only process contests in the last 3 days (up to now)
     now = datetime.utcnow()
     cutoff = now - timedelta(days=7)
@@ -324,8 +337,14 @@ def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
     )
 
     log.info("Need to process %d contests in window [%s → %s]", len(to_process), cutoff, now)
+=======
+    to_process = select_contests_to_process(session, sport, days=days)
+    logging.info("Need to process %d new contests", len(to_process))
+>>>>>>> Stashed changes
 
+    attempted = succeeded = failed = 0
     for hc in to_process:
+<<<<<<< Updated upstream
         # extra guard in case any rows have weird timestamps
         if not (cutoff <= hc.date <= now):
             continue
@@ -336,19 +355,42 @@ def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
         df = download_contest_dataframe(sess, cid)
         if df is None:
             log.warning("[warn] Contest %s: download returned None", cid)
+=======
+        # Double-guard in case of weird tz rows
+        if not within_window(hc.date, days):
+>>>>>>> Stashed changes
             continue
 
-        lineups, payouts, actuals = parse_df(df, cid)
+        cid = hc.contest_id
+        logging.info("→ Modeling contest %s @ %s", cid, hc.date)
+
         try:
+<<<<<<< Updated upstream
             # only modeling for now
+=======
+            df = download_contest_dataframe(sess, cid)
+            if df is None:
+                logging.warning("[warn] Contest %s: download returned None", cid)
+                mark_failure(session, sport, cid, "download returned None")
+                session.commit()
+                failed += 1
+                continue
+
+            lineups, payouts, actuals = parse_df(df, cid)
+>>>>>>> Stashed changes
             # upsert_payout_changes(session, payouts)
             # upsert_actuals(session, actuals)
             fit_slate_kde(session, hc, lineups)
+
+            mark_success(session, sport, cid)
             session.commit()
-            log.info("✔ Modeled %s", cid)
-        except Exception:
+            succeeded += 1
+
+        except Exception as e:
             session.rollback()
-            log.exception("✗ Failed modeling %s", cid)
+            logging.warning("[warn] Contest %s attempt failed: %s", cid, e)
+            mark_failure(session, sport, cid, f"{type(e).__name__}: {e}")
+            session.commit()
+            failed += 1
 
-    log.info("All done.")
-
+    logging.info("Ingest summary — attempted:%d succeeded:%d failed:%d", attempted, succeeded, failed)
