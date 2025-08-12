@@ -392,6 +392,5 @@ def build_models(db_url: str, model_dir: Path | str, do_plot: bool = False) -> N
 
     print('Fitting stacked player copulas...')
     fit_stacked_player_copulas(session, position_configs, marginals, model_dir)
-    print(f'Stacked player copulas saved under {model_dir / 'stacked_player_copulas'}')
 
 

@@ -1,21 +1,10 @@
-
-*******************************FLOW:
-
-get_stats.py - can schedule daily
-everything up to this point is in ingest.py
-    load draftkings players
-    get_odds
-    calculate params
-
-
-
-
+#TODO:
 group slate players by game
 generate_correlated_fpts
 generate lineups
 
 
-overall flow: 
+###################overall flow: 
 
 historical model building
     independent stat distributions
@@ -44,5 +33,6 @@ choose_all
 'fears
 
 *different draftables format for showdown/classic. Might mess up the projection process or finding odds.
+*not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
 
 
