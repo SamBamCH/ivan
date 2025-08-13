@@ -1,7 +1,18 @@
 #TODO:
-group slate players by game
-generate_correlated_fpts
-generate lineups
+BUILD ENTIRE PROCESS FLOW
+    generate lineups
+    store lineups
+    sample lineups for sim
+
+CORRECT/FINE-TUNE
+    make sure code is modular and scalable to different formats
+
+DIAGNOSTICS
+    test generate_correlated_fpts
+    test field sampling
+    test choosing algorithm
+
+
 
 
 ###################overall flow: 
@@ -34,5 +45,6 @@ choose_all
 
 *different draftables format for showdown/classic. Might mess up the projection process or finding odds.
 *not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
+*all copulas/marginal diagnostic testing point toward issues with fits as of 8/13/2025. I think this will correct once we start adjusting for known odds. We just don't have any odds yet. 
 
 
