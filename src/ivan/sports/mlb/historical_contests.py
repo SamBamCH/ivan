@@ -1,11 +1,7 @@
 import re
 import logging
 from collections import Counter
-<<<<<<< Updated upstream
 from datetime import datetime, timedelta
-=======
-from datetime import datetime, timezone
->>>>>>> Stashed changes
 from typing import List, Tuple, Dict
 
 import numpy as np
@@ -309,16 +305,18 @@ def fit_slate_kde(
     session.merge(model)
 
 
-def get_contest_data(days: int = 7, sport: str = "mlb", profile_dir: str = r"C:\selenium\chrome-profile"):
-    """
-    Download + parse + fit for contests within the date window only.
-    Skips already-modeled and permanently-failed.
-    """
-    engine  = init_db(sport)
-    session = get_session(engine)
-    sess    = build_requests_session(profile_dir)  
+# define once near imports
+log = logging.getLogger(__name__)
 
-<<<<<<< Updated upstream
+def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    log = logging.getLogger("get_contest_data")
+
+    # init DB & HTTP session
+    engine  = init_db("mlb")
+    session = get_session(engine)
+    sess    = build_requests_session(profile_dir)
+
     # only process contests in the last 3 days (up to now)
     now = datetime.utcnow()
     cutoff = now - timedelta(days=7)
@@ -337,14 +335,8 @@ def get_contest_data(days: int = 7, sport: str = "mlb", profile_dir: str = r"C:\
     )
 
     log.info("Need to process %d contests in window [%s → %s]", len(to_process), cutoff, now)
-=======
-    to_process = select_contests_to_process(session, sport, days=days)
-    logging.info("Need to process %d new contests", len(to_process))
->>>>>>> Stashed changes
 
-    attempted = succeeded = failed = 0
     for hc in to_process:
-<<<<<<< Updated upstream
         # extra guard in case any rows have weird timestamps
         if not (cutoff <= hc.date <= now):
             continue
@@ -355,42 +347,18 @@ def get_contest_data(days: int = 7, sport: str = "mlb", profile_dir: str = r"C:\
         df = download_contest_dataframe(sess, cid)
         if df is None:
             log.warning("[warn] Contest %s: download returned None", cid)
-=======
-        # Double-guard in case of weird tz rows
-        if not within_window(hc.date, days):
->>>>>>> Stashed changes
             continue
 
-        cid = hc.contest_id
-        logging.info("→ Modeling contest %s @ %s", cid, hc.date)
-
+        lineups, payouts, actuals = parse_df(df, cid)
         try:
-<<<<<<< Updated upstream
             # only modeling for now
-=======
-            df = download_contest_dataframe(sess, cid)
-            if df is None:
-                logging.warning("[warn] Contest %s: download returned None", cid)
-                mark_failure(session, sport, cid, "download returned None")
-                session.commit()
-                failed += 1
-                continue
-
-            lineups, payouts, actuals = parse_df(df, cid)
->>>>>>> Stashed changes
             # upsert_payout_changes(session, payouts)
             # upsert_actuals(session, actuals)
             fit_slate_kde(session, hc, lineups)
-
-            mark_success(session, sport, cid)
             session.commit()
-            succeeded += 1
-
-        except Exception as e:
+            log.info("✔ Modeled %s", cid)
+        except Exception:
             session.rollback()
-            logging.warning("[warn] Contest %s attempt failed: %s", cid, e)
-            mark_failure(session, sport, cid, f"{type(e).__name__}: {e}")
-            session.commit()
-            failed += 1
+            log.exception("✗ Failed modeling %s", cid)
 
-    logging.info("Ingest summary — attempted:%d succeeded:%d failed:%d", attempted, succeeded, failed)
+    log.info("All done.")

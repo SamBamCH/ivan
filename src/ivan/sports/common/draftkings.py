@@ -62,7 +62,7 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def build_requests_session(profile_dir: str, headless: bool = True) -> requests.Session:
+def build_requests_session(profile_dir: str, headless: bool = False) -> requests.Session:
     """
     Launch Chrome with your real profile, ensure you're logged in,
     copy cookies + UA into a requests.Session.

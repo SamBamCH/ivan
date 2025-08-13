@@ -1,0 +1,4 @@
+#known issues: 
+
+get_contest_data function isn't working within overnight.py
+    don't have time to fix right now with NFL looming, but the problem appears to be getting an authenticated DK session in order to hit the contest endpoint. 

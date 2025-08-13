@@ -44,13 +44,10 @@ def main() -> None:
     # 0) Purge stale tracking (> WINDOW_DAYS)
     purge_counts = purge_stale_contest_tracking(db, SPORT, days=WINDOW_DAYS)
     print(f"🧹 Purge: {purge_counts}")
-
-    # 1) last night’s box scores (keep as-is)
-    fetch_and_store(days_back=1)
-
-    # 2) parse & model contest data (kept as-is; it can leverage ingest-status if present)
+    # 1) parse & model contest data (kept as-is; it can leverage ingest-status if present)
     get_contest_data()
-
+    # 2) last night’s box scores (keep as-is)
+    fetch_and_store(days_back=1)
     # 3) rebuild models (kept as-is)
     build_models()
 
