@@ -1,0 +1,87 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.0.6 Chrome/138.0.7204.100 Electron/37.2.3 Safari/537.36" version="28.0.6">
+  <diagram name="Page-1" id="MxDuaoPu6Be-4efcM0_z">
+    <mxGraphModel dx="860" dy="1192" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-1" value="ingestion" style="swimlane;startSize=20;horizontal=1;childLayout=flowLayout;flowOrientation=north;resizable=0;interRankCellSpacing=50;containerType=tree;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="140" y="70" width="140" height="640" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-2" value="init_db" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="40" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;noEdgeStyle=1;orthogonal=1;" edge="1" source="C1MUuQ2tVFhu9r09GdSM-2" target="C1MUuQ2tVFhu9r09GdSM-11" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="70" y="92" />
+              <mxPoint x="70" y="118" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-11" value="clear NFLPlayer" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="130" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;noEdgeStyle=1;orthogonal=1;" edge="1" target="C1MUuQ2tVFhu9r09GdSM-13" source="C1MUuQ2tVFhu9r09GdSM-11" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="420" y="740" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="70" y="182" />
+              <mxPoint x="70" y="208" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-13" value="get draftkings draftables" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="220" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;noEdgeStyle=1;orthogonal=1;" edge="1" target="C1MUuQ2tVFhu9r09GdSM-15" source="C1MUuQ2tVFhu9r09GdSM-13" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="380" y="750" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="70" y="272" />
+              <mxPoint x="70" y="298" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-15" value="write all player_ids to DB" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="310" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;noEdgeStyle=1;orthogonal=1;" edge="1" target="C1MUuQ2tVFhu9r09GdSM-19" source="C1MUuQ2tVFhu9r09GdSM-15" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="610" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="70" y="362" />
+              <mxPoint x="70" y="388" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-19" value="get all odds" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="400" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;noEdgeStyle=1;orthogonal=1;" edge="1" target="C1MUuQ2tVFhu9r09GdSM-21" source="C1MUuQ2tVFhu9r09GdSM-19" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="310" y="620" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="70" y="452" />
+              <mxPoint x="70" y="478" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-21" value="write odds to DB" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="490" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;noEdgeStyle=1;orthogonal=1;" edge="1" target="C1MUuQ2tVFhu9r09GdSM-23" source="C1MUuQ2tVFhu9r09GdSM-21" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="250" y="590" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="70" y="542" />
+              <mxPoint x="70" y="568" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="C1MUuQ2tVFhu9r09GdSM-23" value="calculate fpts distributions" style="whiteSpace=wrap;html=1;" vertex="1" parent="C1MUuQ2tVFhu9r09GdSM-1">
+          <mxGeometry x="20" y="580" width="100" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

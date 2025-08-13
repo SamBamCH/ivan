@@ -92,22 +92,7 @@ def main():
 
     session.commit()
     logging.info("✔ Done ingesting players for selected slate.")
-    logging.info(f"Relevant teams to fetch odds for: {sorted(relevant_teams)}")
-
-    api_key = '58699e4fe47856c9182db84884772536'
-
-    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams)) #TODO: add a 'update_odds' arg, so we don't need to waste api calls? 
-    df_odds = parse_odds(odds)
-
-    records = df_odds.to_dict(orient='records') 
-    session.bulk_insert_mappings(NFLOdds, records)
-    session.commit()
-    logging.info(f"✔ Inserted {len(records)} odds rows into the database")
-
-    #TODO: adjust single stat distributions to pass through a known odds point once we have more player odds available
-    
-    model_dir = 'data/nfl/models'
-    generate_and_fit_all(session, Path(model_dir), n_samples=10000)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
+    logging.info(f"Relevant teams to fetch odds for: {sorted(relevant_teams)}, {len(relevant_teams) / 2} games")
     
 
     
