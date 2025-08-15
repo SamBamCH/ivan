@@ -3,8 +3,8 @@ import joblib
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 from copulas.multivariate import VineCopula
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ivan.database.session import init_db, get_session
@@ -20,6 +20,11 @@ _FPTS_WEIGHTS = {
     'TE': {'receptions': 1, 'receiving_yards': .1, 'receiving_tds': 6},
 }
 
+def _read_sql(session: Session, stmt) -> pd.DataFrame:
+    """Always hand pandas a real Connection (SQLAlchemy 2.x safe)."""
+    with session.bind.connect() as conn:
+        return pd.read_sql(stmt, conn)
+
 def _compute_fpts(df: pd.DataFrame) -> pd.Series:
     fpts = pd.Series(0.0, index=df.index)
     for pos, weights in _FPTS_WEIGHTS.items():
@@ -27,17 +32,26 @@ def _compute_fpts(df: pd.DataFrame) -> pd.Series:
         if not mask.any():
             continue
         cols = [s for s in weights if s in df.columns]
+        if not cols:
+            continue
         block = df.loc[mask, cols]
-        fpts.loc[mask] = block.mul(pd.Series(weights)).sum(axis=1)
+        fpts.loc[mask] = block.mul(pd.Series(weights), axis=1).sum(axis=1)
     return fpts
+
+def _coerce_team_col(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize team column to 'recent_team' if needed."""
+    if 'recent_team' in df.columns:
+        return df
+    for cand in ('team', 'team_abbrev'):
+        if cand in df.columns:
+            return df.rename(columns={cand: 'recent_team'})
+    raise RuntimeError("Could not find a team column (recent_team/team/team_abbrev).")
 
 def build_team_models(db_url: str, model_dir: Path) -> dict[str, VineCopula]:
     """
-    For each team:
-      1) Pivot history to (year,week,team) × position_group → fpts  
-      2) U = rank_pct(axis=0).clip(1e-6,1-1e-6)  
-      3) vine = VineCopula('center'); vine.fit(U)  
-      4) save vine; return vine objects  
+    Fit a per-team 5D vine copula over (QB, RB, WR, TE, DST).
+    Saves each vine to {model_dir}/team_vines/{TEAM}_vine.pkl
+    Returns {team: VineCopula}.
     """
     model_dir = Path(model_dir)
     vine_dir = model_dir / 'team_vines'
@@ -45,35 +59,59 @@ def build_team_models(db_url: str, model_dir: Path) -> dict[str, VineCopula]:
 
     engine = init_db('nfl', db_url)
     session = get_session(engine)
-    df = pd.read_sql(session.query(NFLStat).statement, session.bind)
-    df['fpts'] = _compute_fpts(df)
 
-    # pivot by (year, week, team)
-    pivot = df.pivot_table(
-        index=['season','week','recent_team'],
+    # 1) Player-level stats -> compute fpts and pivot (season, week, team)
+    df_stats = _read_sql(session, session.query(NFLStat).statement)
+    df_stats = _coerce_team_col(df_stats)
+    df_stats['fpts'] = _compute_fpts(df_stats)
+
+    pivot = df_stats.pivot_table(
+        index=['season', 'week', 'recent_team'],
         columns='position_group',
         values='fpts',
         aggfunc='sum',
-        fill_value=0
+        fill_value=0.0
     )
 
-    # keep only the four positions
-    pivot = pivot[['QB', 'RB', 'WR', 'TE']]
+    # 2) Join DST game points (season, week, team)
+    dst = _read_sql(session, text("SELECT season, week, team, dst_points FROM nfl_dst_game"))
+    if not dst.empty:
+        dst = dst.rename(columns={'team': 'recent_team'})
+        pivot = pivot.join(
+            dst.set_index(['season', 'week', 'recent_team'])['dst_points']
+        )
 
-    print(pivot.head())
+    # 3) Reorder/select columns and rename DST
+    want = [c for c in ['QB', 'RB', 'WR', 'TE'] if c in pivot.columns]
+    want += ['dst_points']  # ensure DST is included
+    # It’s ok if 'dst_points' is missing (no rows) — fillna handles that.
+    pivot = pivot.reindex(columns=want)
+    pivot = pivot.rename(columns={'dst_points': 'DST'}).fillna(0.0)
 
-    vines = {}
-    for team in pivot.index.get_level_values('recent_team').unique():
-        mat = pivot.xs(team, level='recent_team')  # rows = (year,week), cols = QB/RB/WR/TE
+    vines: dict[str, VineCopula] = {}
+    team_index = pivot.index.get_level_values('recent_team').unique()
+    for team in team_index:
+        mat = pivot.xs(team, level='recent_team')  # (season, week) rows
 
-        # 1) empirical uniforms
-        U = mat.rank(axis=0, pct=True).clip(1e-6, 1-1e-6)
+        # If DST wasn’t present at all, add a zero column so we still fit a stable dimension
+        if 'DST' not in mat.columns:
+            mat['DST'] = 0.0
 
-        # 2) fit vine copula
+        # Ensure exact order (QB,RB,WR,TE,DST) for consistent column-to-dimension mapping
+        ordered_cols = [c for c in ['QB', 'RB', 'WR', 'TE', 'DST'] if c in mat.columns]
+        mat = mat[ordered_cols]
+
+        # Skip teams with too few observations to be meaningful
+        if len(mat) < 5:
+            # You can relax/raise this threshold if needed
+            continue
+
+        # 4) Empirical uniforms in R^5 (rank transform per column)
+        U = mat.rank(axis=0, pct=True, method='average').clip(1e-6, 1 - 1e-6)
+
         vine = VineCopula('center')
         vine.fit(U)
 
-        # persist
         joblib.dump(vine, vine_dir / f"{team}_vine.pkl")
         vines[team] = vine
 

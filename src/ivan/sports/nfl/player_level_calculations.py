@@ -12,6 +12,7 @@ from scipy.stats import norm
 import matplotlib.pyplot as plt
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLStat
 
@@ -217,37 +218,51 @@ def fit_position_marginals(
     model_dir: Path,
     do_plot: bool = False
 ) -> dict[str, dict]:
-    """
-    Fit marginals, using manual override where specified.
-    Returns: {position: {stat: {'dist', 'params', 'fit_info'}}}.
-    """
     results: dict[str, dict] = {}
-    for pos, cfg in configs.items():
-        df = pd.read_sql(
-            session.query(NFLStat)
-                   .filter(NFLStat.position_group == pos)
-                   .filter(getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'])
-                   .statement,
-            session.bind
-        )
-        overrides = cfg.get('overrides', {})
-        stats_out: dict[str, dict] = {}
-        for stat in cfg['stats']:
-            data = df[stat].dropna().to_numpy()
-            plot_path = Path(model_dir)/'plots'/pos/f"{stat}.png" if do_plot else None
-            if stat in overrides:
-                name = overrides[stat]
-                params, fit_info = fit_distribution_by_name(data, name)
-            else:
-                # automatically choose best among list
-                stype = cfg['stat_types'][stat]
-                dist_list = continuous_dists if stype=='continuous' else count_dists
-                name, params, info = fit_best_distribution(
-                    data, dist_list, bins=50, plot=do_plot, plot_path=plot_path
+    from sqlalchemy import select
+
+    with session.bind.connect() as conn:
+        for pos, cfg in configs.items():
+            stmt = (
+                select(NFLStat)
+                .where(
+                    NFLStat.position_group == pos,
+                    getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'],
                 )
-                fit_info = info
-            stats_out[stat] = {'dist': name, 'params': params, 'fit_info': fit_info}
-        results[pos] = stats_out
+            )
+            df = pd.read_sql(stmt, conn)  # ← inside loop
+
+            overrides = cfg.get('overrides', {})
+            stats_out: dict[str, dict] = {}
+
+            for stat in cfg['stats']:
+                # tolerate missing columns
+                if stat not in df.columns:
+                    stats_out[stat] = {'dist': None, 'params': None, 'fit_info': {}}
+                    continue
+
+                data = df[stat].dropna().to_numpy()
+                plot_path = Path(model_dir)/'plots'/pos/f"{stat}.png" if do_plot else None
+
+                if stat in overrides:
+                    name = overrides[stat]
+                    params, fit_info = fit_distribution_by_name(data, name)
+                else:
+                    stype = cfg['stat_types'][stat]
+                    dist_list = continuous_dists if stype == 'continuous' else count_dists
+                    name, params, info = fit_best_distribution(
+                        data, dist_list, bins=50, plot=do_plot, plot_path=plot_path
+                    )
+                    fit_info = info
+
+                stats_out[stat] = {'dist': name, 'params': params, 'fit_info': fit_info}
+
+            results[pos] = stats_out  # ← inside loop
+
+    # optional sanity check
+    missing = [p for p in configs if p not in results]
+    if missing:
+        raise RuntimeError(f"Missing marginals for positions: {missing}")
     return results
 
 def fit_position_copulas(session: Session, configs: dict, marginals: dict) -> dict[str, np.ndarray]:
@@ -255,30 +270,41 @@ def fit_position_copulas(session: Session, configs: dict, marginals: dict) -> di
     Fit Gaussian copula for each position’s stats using pooled games across all players.
     Returns {position: corr_matrix}.
     """
-    out = {}
-    for pos, cfg in configs.items():
-        df = pd.read_sql(
-            session.query(NFLStat)
-                   .filter(NFLStat.position_group == pos)
-                   .filter(getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'])
-                   .statement,
-            session.bind
-        )
-        Z_cols = []
-        for stat in cfg['stats']:
-            info = marginals[pos][stat]
-            if not info['dist']:
-                continue
-            dist_fn = getattr(st, info['dist'])
-            frozen = dist_fn(*info['params'])
-            # convert to numpy array of floats to avoid pandas extension types
-            arr = df[stat].clip(lower=0).to_numpy(dtype=float)
-            u = frozen.cdf(arr)
-            z = norm.ppf(np.clip(u, 1e-6, 1-1e-6))
-            Z_cols.append(z)
-        if Z_cols:
-            Z = np.vstack(Z_cols).T
-            out[pos] = np.corrcoef(Z, rowvar=False)
+    out: dict[str, np.ndarray] = {}
+
+    with session.bind.connect() as conn:
+        for pos, cfg in configs.items():
+            # you can keep session.query(...).statement if you prefer
+            stmt = (
+                select(NFLStat)
+                .where(
+                    NFLStat.position_group == pos,
+                    getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'],
+                )
+            )
+            df = pd.read_sql(stmt, conn)
+
+            Z_cols = []
+            mpos = marginals.get(pos, {})
+            for stat in cfg['stats']:
+                info = mpos.get(stat)
+                if not info or not info.get('dist') or not info.get('params'):
+                    continue
+                if stat not in df.columns:
+                    continue
+
+                dist_fn = getattr(st, info['dist'])
+                frozen = dist_fn(*info['params'])
+
+                arr = df[stat].clip(lower=0).to_numpy(dtype=float)
+                u = frozen.cdf(arr)
+                z = norm.ppf(np.clip(u, 1e-6, 1 - 1e-6))
+                Z_cols.append(z)
+
+            if Z_cols:
+                Z = np.vstack(Z_cols).T
+                out[pos] = np.corrcoef(Z, rowvar=False)
+
     return out
 
 
@@ -290,37 +316,48 @@ def fit_player_copulas(session: Session, configs: dict, marginals: dict, model_d
     """
     player_dir = Path(model_dir) / 'player_copulas'
     player_dir.mkdir(parents=True, exist_ok=True)
-    out = {}
-    players = (
-        session.query(NFLStat.player_id, NFLStat.position_group)
-               .filter(NFLStat.position_group.in_(configs.keys()))
-               .distinct()
-    )
-    for player_id, pos in players:
-        cfg = configs[pos]
-        df = pd.read_sql(
-            session.query(NFLStat)
-                   .filter(NFLStat.player_id == player_id)
-                   .filter(getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'])
-                   .statement,
-            session.bind
+    out: dict[int, np.ndarray] = {}
+
+    with session.bind.connect() as conn:
+        players = (
+            session.query(NFLStat.player_id, NFLStat.position_group)
+                   .filter(NFLStat.position_group.in_(configs.keys()))
+                   .distinct()
         )
-        Z_cols = []
-        for stat in cfg['stats']:
-            info = marginals[pos][stat]
-            if not info['dist']:
-                continue
-            dist_fn = getattr(st, info['dist'])
-            frozen = dist_fn(*info['params'])
-            arr = df[stat].clip(lower=0).to_numpy(dtype=float)
-            u = frozen.cdf(arr)
-            z = norm.ppf(np.clip(u, 1e-6, 1-1e-6))
-            Z_cols.append(z)
-        if Z_cols:
-            Z = np.vstack(Z_cols).T
-            corr = np.corrcoef(Z, rowvar=False)
-            out[player_id] = corr
-            joblib.dump(corr, player_dir / f"player_{player_id}_copula.pkl")
+
+        for player_id, pos in players:
+            cfg = configs[pos]
+            stmt = (
+                select(NFLStat)
+                .where(
+                    NFLStat.player_id == player_id,
+                    getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'],
+                )
+            )
+            df = pd.read_sql(stmt, conn)
+
+            Z_cols = []
+            mpos = marginals.get(pos, {})
+            for stat in cfg['stats']:
+                info = mpos.get(stat)
+                if not info or not info.get('dist') or not info.get('params'):
+                    continue
+                if stat not in df.columns:
+                    continue
+
+                dist_fn = getattr(st, info['dist'])
+                frozen = dist_fn(*info['params'])
+                arr = df[stat].clip(lower=0).to_numpy(dtype=float)
+                u = frozen.cdf(arr)
+                z = norm.ppf(np.clip(u, 1e-6, 1 - 1e-6))
+                Z_cols.append(z)
+
+            if Z_cols:
+                Z = np.vstack(Z_cols).T
+                corr = np.corrcoef(Z, rowvar=False)
+                out[player_id] = corr
+                joblib.dump(corr, player_dir / f"player_{player_id}_copula.pkl")
+
     return out
 
 
@@ -330,43 +367,54 @@ def fit_stacked_player_copulas(session: Session, configs: dict, marginals: dict,
     Saves one correlation matrix per position.
     Returns {position: corr_matrix}.
     """
-    out = {}
+    out: dict[str, np.ndarray] = {}
     stacked_dir = Path(model_dir) / 'stacked_player_copulas'
     stacked_dir.mkdir(parents=True, exist_ok=True)
-    for pos, cfg in configs.items():
-        Z_all = []
-        players = (
-            session.query(NFLStat.player_id)
-                   .filter(NFLStat.position_group == pos)
-                   .distinct()
-        )
-        for (player_id,) in players:
-            df = pd.read_sql(
-                session.query(NFLStat)
-                       .filter(NFLStat.player_id == player_id)
-                       .filter(getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'])
-                       .statement,
-                session.bind
+
+    with session.bind.connect() as conn:
+        for pos, cfg in configs.items():
+            Z_all = []
+            players = (
+                session.query(NFLStat.player_id)
+                       .filter(NFLStat.position_group == pos)
+                       .distinct()
             )
-            Z_cols = []
-            for stat in cfg['stats']:
-                info = marginals[pos][stat]
-                if not info['dist']:
-                    continue
-                dist_fn = getattr(st, info['dist'])
-                frozen = dist_fn(*info['params'])
-                arr = df[stat].clip(lower=0).to_numpy(dtype=float)
-                u = frozen.cdf(arr)
-                z = norm.ppf(np.clip(u, 1e-6, 1-1e-6))
-                Z_cols.append(z)
-            if Z_cols:
-                Z_player = np.vstack(Z_cols).T
-                Z_all.append(Z_player)
-        if Z_all:
-            Z_stack = np.vstack(Z_all)
-            corr = np.corrcoef(Z_stack, rowvar=False)
-            out[pos] = corr
-            joblib.dump(corr, stacked_dir / f"{pos}_stacked_copula.pkl")
+            for (player_id,) in players:
+                stmt = (
+                    select(NFLStat)
+                    .where(
+                        NFLStat.player_id == player_id,
+                        getattr(NFLStat, cfg['filter_stat']) > cfg['filter_threshold'],
+                    )
+                )
+                df = pd.read_sql(stmt, conn)
+
+                Z_cols = []
+                mpos = marginals.get(pos, {})
+                for stat in cfg['stats']:
+                    info = mpos.get(stat)
+                    if not info or not info.get('dist') or not info.get('params'):
+                        continue
+                    if stat not in df.columns:
+                        continue
+
+                    dist_fn = getattr(st, info['dist'])
+                    frozen = dist_fn(*info['params'])
+                    arr = df[stat].clip(lower=0).to_numpy(dtype=float)
+                    u = frozen.cdf(arr)
+                    z = norm.ppf(np.clip(u, 1e-6, 1 - 1e-6))
+                    Z_cols.append(z)
+
+                if Z_cols:
+                    Z_player = np.vstack(Z_cols).T
+                    Z_all.append(Z_player)
+
+            if Z_all:
+                Z_stack = np.vstack(Z_all)
+                corr = np.corrcoef(Z_stack, rowvar=False)
+                out[pos] = corr
+                joblib.dump(corr, stacked_dir / f"{pos}_stacked_copula.pkl")
+
     return out
 
 

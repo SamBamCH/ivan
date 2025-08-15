@@ -14,6 +14,7 @@ from scipy.stats import kstest, anderson_ksamp
 from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.player_level_calculations import build_models as build_player_models
+from ivan.sports.nfl.dst_scoring import build_dst_game_table
 from ivan.sports.nfl.team_level_calculations   import build_team_models, _compute_fpts
 from ivan.sports.nfl.diagnostics              import (
     plot_marginal_fit,
@@ -37,6 +38,10 @@ def main():
 
     print("→ Building player‐level models")
     build_player_models(args.db_url, model_dir, args.plot)
+
+    _years = [2023,2024]  # add more as needed (e.g., 2019..2023)
+    nrows = build_dst_game_table(args.db_url, years=_years)
+    print(f"   wrote {nrows} rows to nfl_dst_game")
 
     print("→ Building team‐level copulas")
     build_team_models(args.db_url, model_dir)

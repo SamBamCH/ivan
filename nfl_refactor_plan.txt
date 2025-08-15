@@ -1,11 +1,20 @@
 #TODO:
 BUILD ENTIRE PROCESS FLOW
+    add DST to correlated sample generation
+        build_models include DST
+            add dst to fpts calculations
     generate lineups
     store lineups
     sample lineups for sim
 
+ONCE WE HAVE ODDS:
+    see what's available for DST/K
+    adjust stat distributions to pass through known points
+
 CORRECT/FINE-TUNE
     make sure code is modular and scalable to different formats
+    pull all config values out of correlation/lineup generation
+    
 
 DIAGNOSTICS
     test generate_correlated_fpts

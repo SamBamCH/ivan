@@ -21,12 +21,14 @@ try:
 except Exception:  # pragma: no cover
     VineCopula = object  # type: ignore
 
-_POSITIONS = ["QB", "RB", "WR", "TE"]
+# 1) Keep full list (for grouping/looping), but define a separate vine order.
+_POSITIONS = ["QB", "RB", "WR", "TE", "DST"]
+_VINE_POSITIONS = ["QB", "RB", "WR", "TE"]  # <-- vine dimension/order is 4
 
 
 @dataclass(frozen=True)
 class SamplingConfig:
-    n_samples: int = 10000
+    n_samples: int = 1
     alpha: float = 0.85  # strength of team-position dependence (1.0 = full, 0 = iid)
     jitter: float = 0.0  # tiny Gaussian jitter on uniforms to avoid ties
     seed: int | None = None
@@ -102,32 +104,14 @@ def _ppf_with_fallback(
 
 def generate_correlated_samples(
     session: Session,
-    model_dir: Path | str,
+    model_dir: Path | str = 'data/nfl/models',
     cfg: SamplingConfig = SamplingConfig(),
 ) -> Dict[int, np.ndarray]:
-    """
-    Generate correlated fpts samples per player for the current slate using
-    per-team vine copulas (QB,RB,WR,TE) and each player's fpts marginal.
 
-    Returns: {player_id: samples (n,)}
-
-    How it works
-    ------------
-    1) For each team with players on the slate, sample U_team ~ Vine(team) in R^4,
-       ordered as (QB, RB, WR, TE). These are uniforms capturing team-level
-       dependence between positions.
-    2) For every player of position P on that team, create a blended uniform
-       U_player = alpha * U_team[P] + (1-alpha) * iid_uniform (+ small jitter).
-    3) Map U_player through the player's fantasy points marginal (fitted earlier)
-       via PPF. If a player's marginal is missing, we simulate fpts via the
-       stat-level models and use empirical quantile mapping.
-    """
     model_dir = Path(model_dir)
     rng = np.random.default_rng(cfg.seed)
 
-    # Load resources
     vines = _load_team_vines(model_dir)
-    # Load stat-level models for fallback only if/when needed
     try:
         player_models = load_player_models(model_dir)
     except Exception:
@@ -135,37 +119,50 @@ def generate_correlated_samples(
 
     teams = _group_players_by_team_pos(session)
 
-    # Column index for team vine order
-    pos_to_col = {p: i for i, p in enumerate(_POSITIONS)}
+    # Column index only for the 4 vine positions
+    pos_to_col = {p: i for i, p in enumerate(_VINE_POSITIONS)}
 
     out: Dict[int, np.ndarray] = {}
 
     for team, pos_players in teams.items():
         vine = vines.get(team)
+
+        # Sample team-level uniforms for ONLY (QB,RB,WR,TE)
         if isinstance(vine, VineCopula):
-            U_team = np.asarray(vine.sample(cfg.n_samples))
+            U_team = np.asarray(vine.sample(cfg.n_samples))  # shape (n, 4)
         else:
-            print(f'no fitted copula for team {team}')
+            # Fallback: iid uniforms per vine position
+            U_team = rng.random((cfg.n_samples, len(_VINE_POSITIONS)))
         U_team = np.clip(U_team, 1e-6, 1 - 1e-6)
 
         for pos, players in pos_players.items():
-            col = pos_to_col[pos]
-            u_pos = U_team[:, col]
+            if pos in pos_to_col:
+                # Use the appropriate vine dimension
+                col = pos_to_col[pos]
+                u_pos_base = U_team[:, col]
+            elif pos == "DST":
+                # TEMP: treat DST as independent of the team vine (no copula yet)
+                # If you want a soft anti-correlation with opponent QB later,
+                # we can add an optional mode that uses 1 - opp_QB with a small alpha.
+                u_pos_base = rng.random(cfg.n_samples)
+            else:
+                # Any other positions (e.g., K) → independent for now
+                u_pos_base = rng.random(cfg.n_samples)
 
             for player in players:
                 # Blend team-level dependence with per-player noise
-                if cfg.alpha >= 1.0:
-                    u = u_pos.copy()
-                elif cfg.alpha <= 0.0:
-                    u = rng.random(cfg.n_samples)
+                if cfg.alpha >= 1.0 and pos in pos_to_col:
+                    u = u_pos_base.copy()
+                elif cfg.alpha <= 0.0 or pos not in pos_to_col:
+                    # If not in the vine (e.g., DST), just iid + jitter
+                    u = u_pos_base.copy()
                 else:
-                    u = cfg.alpha * u_pos + (1.0 - cfg.alpha) * rng.random(cfg.n_samples)
+                    u = cfg.alpha * u_pos_base + (1.0 - cfg.alpha) * rng.random(cfg.n_samples)
 
                 if cfg.jitter > 0:
                     u = u + rng.normal(0.0, cfg.jitter, size=u.shape)
                 u = np.clip(u, 1e-6, 1 - 1e-6)
 
-                # Transform to fpts via player's marginal (or fallback)
                 x = _ppf_with_fallback(u, player, session, player_models, cfg.n_samples)
                 out[player.id] = x
 

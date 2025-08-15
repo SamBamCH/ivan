@@ -132,5 +132,58 @@ class NFLOdds(NFLBase):
     price           = Column(Integer, nullable=False)
     last_update     = Column(String,  nullable=True)
 
+class Lineup(NFLBase, BaseLineup):
+    __tablename__ = "lineup"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    player_ids_list  = Column(JSON,    nullable=False)
+    created_at       = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # simulation_results = relationship(
+    #     "LineupSimulationResult",
+    #     backref="lineup",
+    #     cascade="all, delete-orphan",
+    #     lazy="select"
+    # )
+
+    def player_ids(self) -> List[int]:
+        return list(self.player_ids_list)
+
+    def to_dict(self, session: Session) -> dict:
+        players = (
+            session.query(NFLPlayer)
+                   .filter(NFLPlayer.id.in_(self.player_ids_list))
+                   .all()
+        )
+        pitchers = [p.id for p in players if p.position.upper()=='P']
+        batters  = [p.id for p in players if p.position.upper()!='P']
+        if len(pitchers)!=1 or len(batters)!=9:
+            raise ValueError("Lineup must have 1 pitcher and 9 batters.")
+        out = {'pitcher_id':pitchers[0]}
+        for idx,b_id in enumerate(batters,1): out[f'batter{idx}_id'] = b_id
+        return out
+
+    def save(self, session: Session) -> None:
+        session.add(self)
+        session.commit()
+
+    # def get_sim_arrays(self) -> Tuple[List[float],List[float],List[float],List[int]]:
+    #     """
+    #     Return the (fpts, payout, roi, rank) lists from the first sim result.
+    #     """
+    #     if not self.simulation_results:
+    #         return [], [], [], []
+    #     res = self.simulation_results[0]
+    #     return res.fpts, res.payout, res.roi, res.rank
+
+
+class NFLDSTGame(NFLBase):
+    __tablename__ = "nfl_dst_game"
+    season   = Column(Integer, primary_key=True)
+    week     = Column(Integer, primary_key=True)
+    team     = Column(String,  primary_key=True)
+    opponent = Column(String)
+    dst_points = Column(Float)
+
 
    

@@ -22,7 +22,7 @@ def get_upcoming_contest_ids(
     sess: requests.Session,
     sport: str = "MLB",
     days_ahead: int = 1,
-    entry_filter: int = 200
+    entry_filter: int = 100
 ) -> list[str]:
     # 1) fetch raw JSON
     start = date.today().isoformat()
