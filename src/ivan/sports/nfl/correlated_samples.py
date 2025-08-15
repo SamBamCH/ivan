@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+# add imports at top
+import pandas as pd
+from sqlalchemy import text
+
 
 import numpy as np
 import joblib
@@ -23,7 +27,7 @@ except Exception:  # pragma: no cover
 
 # 1) Keep full list (for grouping/looping), but define a separate vine order.
 _POSITIONS = ["QB", "RB", "WR", "TE", "DST"]
-_VINE_POSITIONS = ["QB", "RB", "WR", "TE"]  # <-- vine dimension/order is 4
+_VINE_POSITIONS = ["QB", "RB", "WR", "TE", "DST"]  # <-- vine dimension/order is 4
 
 
 @dataclass(frozen=True)
@@ -75,31 +79,49 @@ def _ppf_with_fallback(
     player_models: tuple[dict, dict] | None,
     n_samples: int,
 ) -> np.ndarray:
-    """
-    Transform uniforms to fpts using the player's fitted fpts distribution.
-    If missing, fall back to simulating fpts via stat-level models and
-    do empirical-quantile mapping.
-    """
     u = np.clip(u, 1e-6, 1 - 1e-6)
     dp = _player_dist(player)
     if dp:
         dist, params = dp
         return dist.ppf(u, *params)
 
-    # Fallback path: simulate fpts from stat marginals + stacked copula
+    pos = (player.position or "").upper()
+
+    # --- NEW: DST uses empirical quantiles from nfl_dst_game ---
+    if pos == "DST":
+        with session.bind.connect() as conn:
+            df = pd.read_sql(
+                text("SELECT dst_points FROM nfl_dst_game WHERE team = :t AND dst_points IS NOT NULL"),
+                conn,
+                params={"t": player.team},
+            )
+            if df.empty:
+                # fallback to league-wide empirical if team history is sparse
+                df = pd.read_sql(
+                    text("SELECT dst_points FROM nfl_dst_game WHERE dst_points IS NOT NULL"),
+                    conn,
+                )
+
+        vals = df["dst_points"].astype(float).to_numpy()
+        if vals.size == 0:
+            return np.zeros_like(u)  # ultimate fallback
+        vals.sort()
+        idx = np.minimum((u * (vals.size - 1)).astype(int), vals.size - 1)
+        return vals[idx]
+    # --- end DST path ---
+
+    # Non-DST fallback via stat-level models
     if player_models is None:
         raise ValueError(
             f"No fpts distribution for {player.name} and no stat-level models loaded for fallback."
         )
     marginals, stacked = player_models
-    # oversample to get a dense empirical CDF for smooth quantile mapping
-    sim = simulate_player_fpts(
-        session, player.id, marginals, stacked, n_samples=n_samples * 2
-    )
+    sim = simulate_player_fpts(session, player.id, marginals, stacked, n_samples=n_samples * 2)
     sim = np.asarray(sim)
     sim.sort()
     idx = np.minimum((u * (len(sim) - 1)).astype(int), len(sim) - 1)
     return sim[idx]
+
 
 
 def generate_correlated_samples(
@@ -122,6 +144,7 @@ def generate_correlated_samples(
     # Column index only for the 4 vine positions
     pos_to_col = {p: i for i, p in enumerate(_VINE_POSITIONS)}
 
+
     out: Dict[int, np.ndarray] = {}
 
     for team, pos_players in teams.items():
@@ -136,26 +159,18 @@ def generate_correlated_samples(
         U_team = np.clip(U_team, 1e-6, 1 - 1e-6)
 
         for pos, players in pos_players.items():
-            if pos in pos_to_col:
-                # Use the appropriate vine dimension
-                col = pos_to_col[pos]
-                u_pos_base = U_team[:, col]
-            elif pos == "DST":
-                # TEMP: treat DST as independent of the team vine (no copula yet)
-                # If you want a soft anti-correlation with opponent QB later,
-                # we can add an optional mode that uses 1 - opp_QB with a small alpha.
+            col = pos_to_col.get(pos)
+            if col is None:
+                # any unexpected positions → iid uniforms
                 u_pos_base = rng.random(cfg.n_samples)
             else:
-                # Any other positions (e.g., K) → independent for now
-                u_pos_base = rng.random(cfg.n_samples)
+                u_pos_base = U_team[:, col]
 
             for player in players:
-                # Blend team-level dependence with per-player noise
-                if cfg.alpha >= 1.0 and pos in pos_to_col:
+                if cfg.alpha >= 1.0 and col is not None:
                     u = u_pos_base.copy()
-                elif cfg.alpha <= 0.0 or pos not in pos_to_col:
-                    # If not in the vine (e.g., DST), just iid + jitter
-                    u = u_pos_base.copy()
+                elif cfg.alpha <= 0.0 or col is None:
+                    u = rng.random(cfg.n_samples)
                 else:
                     u = cfg.alpha * u_pos_base + (1.0 - cfg.alpha) * rng.random(cfg.n_samples)
 

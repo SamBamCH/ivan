@@ -1,8 +1,5 @@
 #TODO:
 BUILD ENTIRE PROCESS FLOW
-    add DST to correlated sample generation
-        build_models include DST
-            add dst to fpts calculations
     generate lineups
     store lineups
     sample lineups for sim
