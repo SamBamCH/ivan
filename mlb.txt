@@ -1,4 +1,9 @@
 #known issues: 
+modelling historical contests filtering contest_ids weird? 
+    seems like it's fetching a contest multiple times even if it's in the slate model which means it's already fitted. 
+        we just need it to fit if we haven't fit it yet. 
 
-get_contest_data function isn't working within overnight.py
-    don't have time to fix right now with NFL looming, but the problem appears to be getting an authenticated DK session in order to hit the contest endpoint. 
+
+#would like:
+store contest actual payouts for backtesting
+a way to purge old stats dynamically over time?

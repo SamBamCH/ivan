@@ -4,6 +4,16 @@ import os, sys, re
 import requests
 from datetime import datetime, timezone, timedelta
 
+import warnings, numpy as np
+from scipy.optimize import OptimizeWarning
+
+# silence SciPy runtime + optimizer warnings globally
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="scipy")
+warnings.filterwarnings("ignore", category=OptimizeWarning)
+
+# also mute numpy floating warnings globally (optional)
+np.seterr(divide="ignore", invalid="ignore", over="ignore")
+
 # ——— Ensure repo root on PYTHONPATH —————————————————————
 ROOT = os.path.abspath(os.path.join(__file__, os.pardir))
 if ROOT not in sys.path:

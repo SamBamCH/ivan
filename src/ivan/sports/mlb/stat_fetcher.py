@@ -46,7 +46,7 @@ def get_game_ids(days_back: int = 730) -> list[int]:
     split into ≤MAX_DAYS_PER_CALL windows, with minimal hydration
     and retries on timeout.
     """
-    today = datetime.now().date() - timedelta(days=1)
+    today = dt.now().date() - timedelta(days=1)
     start = today - timedelta(days=days_back - 1)
     all_ids = []
 
@@ -135,7 +135,7 @@ def extract_player_stats(game_id: int, original_date: str) -> list[dict]:
 
                 # build the dict
                 row = {
-                    "date"          : datetime.fromisoformat(original_date).date(),
+                    "date"          : dt.fromisoformat(original_date).date(),
                     "player_id"     : pid,
                     "name"          : pdata["person"]["fullName"],
                     "team"          : team,
