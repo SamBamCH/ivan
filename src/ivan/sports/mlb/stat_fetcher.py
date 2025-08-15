@@ -1,11 +1,13 @@
 import requests
 from datetime import date, timedelta
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime as dt
 from requests.exceptions import HTTPError
 import statsapi
 import json
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 import time
 from pprint import pprint
 
@@ -161,13 +163,54 @@ def extract_player_stats(game_id: int, original_date: str) -> list[dict]:
                 logger.exception(f"Game {game_id} / player {pid}: unexpected error")
     return rows
 
+def _as_date(s: str):
+    # StatsAPI gives 'YYYY-MM-DD' → convert to python date (model column is Date)
+    return dt.strptime(s, "%Y-%m-%d").date()
+
+def _upsert_mlb_stats(sess, rows: list[dict]) -> None:
+    """Insert-or-update on (date, player_id). Works for Postgres & SQLite."""
+    if not rows:
+        return
+    table = MLBStat.__table__
+    dialect = sess.bind.dialect.name
+
+    def update_map(stmt):
+        # update all columns except the PK
+        return {c.name: getattr(stmt.excluded, c.name)
+                for c in table.columns if c.name != "id"}
+
+    if dialect == "postgresql":
+        stmt = pg_insert(table).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date", "player_id"],
+            set_=update_map(stmt),
+        )
+        sess.execute(stmt)
+    elif dialect == "sqlite":
+        stmt = sqlite_insert(table).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date", "player_id"],
+            set_=update_map(stmt),
+        )
+        sess.execute(stmt)
+    else:
+        # Portable fallback (slower): row-by-row get-or-update
+        for r in rows:
+            existing = (sess.query(MLBStat)
+                        .filter(MLBStat.date == r["date"],
+                                MLBStat.player_id == r["player_id"])
+                        .one_or_none())
+            if existing:
+                for k, v in r.items():
+                    if k != "id":
+                        setattr(existing, k, v)
+            else:
+                sess.add(MLBStat(**r))
+
 
 def fetch_and_store(days_back: int = 730):
     """
-    Thin orchestrator for backfilling the MLBStat table:
-      1) init DB/session
-      2) chunked get_game_ids
-      3) extract_player_stats → normalize name, calc OBP/SLG → MLBStat(**) → add/commit
+    Backfill MLBStat with idempotent upserts on (date, player_id).
     """
     # 1) init DB/session
     cfg_path = PROJECT_ROOT / 'config' / 'mlb.json'
@@ -179,40 +222,41 @@ def fetch_and_store(days_back: int = 730):
     game_ids = get_game_ids(days_back=days_back)
     logger.info(f"Backfilling {len(game_ids)} games (last {days_back} days)")
 
-    # 3) loop & write
+    # 3) loop & upsert per game
     for idx, gid in enumerate(game_ids, start=1):
         gd = statsapi.get("game", {"gamePk": gid})["gameData"]["datetime"]["originalDate"]
         logger.info(f"[{idx}/{len(game_ids)}] Game {gid} on {gd}")
-        rows = extract_player_stats(gid, gd)
+        rows = extract_player_stats(gid, gd)  # expects a list[dict]
+
+        # Prepare rows for upsert
+        upsert_payload = []
+        game_date = _as_date(gd)
 
         for data in rows:
-            # normalize the name
+            # ensure required key fields
+            data["date"] = game_date
             data["name"] = normalize_name(data["name"])
 
             # calc OBP & SLG
-            pa   = data["pa"]
-            ab   = data["ab"]
-            hits = data["hits"]
-            bb   = data["bb"]
-            hbp  = data["hbp"]
-            doubles = data["doubles"]
-            triples = data["triples"]
-            hr       = data["hr"]
+            pa, ab = data["pa"], data["ab"]
+            hits, bb, hbp = data["hits"], data["bb"], data["hbp"]
+            doubles, triples, hr = data["doubles"], data["triples"], data["hr"]
 
             obp = (hits + bb + hbp) / pa if pa else 0.0
             tb  = hits + doubles + 2*triples + 3*hr
-            slg = tb / ab    if ab else 0.0
+            slg = (tb / ab) if ab else 0.0
             data["obp"] = obp
             data["slg"] = slg
 
-            sess.add(MLBStat(**data))
+            upsert_payload.append(data)
 
         try:
+            _upsert_mlb_stats(sess, upsert_payload)
             sess.commit()
-        except IntegrityError:
+        except IntegrityError as e:
             sess.rollback()
-            logger.warning(f"Rolled back game {gid} due to duplicate or bad rows")
+            logger.warning(f"Rolled back game {gid} upsert: {e}")
 
-    logger.info("✅ Done backfilling mlb_stats!")
+    logger.info("✅ Done backfilling mlb_stats (idempotent on (date, player_id))!")
 
 

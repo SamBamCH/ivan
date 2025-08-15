@@ -77,6 +77,8 @@ def build_requests_session(profile_dir: str, headless: bool = False) -> requests
     opts.add_argument("--lang=en-US")
 
     driver = webdriver.Chrome(options=opts)
+
+    time.sleep(10)
     try:
         driver.get("https://www.draftkings.com/")
         # Give time for any SSO redirect
@@ -114,6 +116,94 @@ def build_requests_session(profile_dir: str, headless: bool = False) -> requests
         "Upgrade-Insecure-Requests": "1",
         "Connection": "keep-alive",
     })
+    return sess
+
+def _cookies_to_requests_session(driver: webdriver.Chrome) -> requests.Session:
+    """Copy all visible cookies + user agent from Selenium into a requests.Session."""
+    sess = requests.Session()
+
+    # exact browser UA matters for some bot defenses
+    ua = driver.execute_script("return navigator.userAgent")
+    sess.headers.update({
+        "User-Agent": ua,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+    })
+
+    # copy cookies with original domain/path where possible
+    for c in driver.get_cookies():
+        # Some cookies specify domain like ".draftkings.com" (keep it),
+        # others omit domain; default to main site.
+        domain = c.get("domain") or "www.draftkings.com"
+        path   = c.get("path") or "/"
+        secure = bool(c.get("secure", False))
+        # requests requires a "create_cookie" to set path/domain
+        cookie = requests.cookies.create_cookie(
+            name=c["name"],
+            value=c.get("value", ""),
+            domain=domain,
+            path=path,
+            secure=secure,
+        )
+        try:
+            sess.cookies.set_cookie(cookie)
+        except Exception as e:
+            logging.debug(f"skip cookie {c['name']}: {e}")
+
+    return sess
+
+def build_requests_session_from_chrome(user_data_dir: str,
+                                       profile_directory: str = "Default",
+                                       headless: bool = False) -> requests.Session:
+    """
+    Launch Chrome using your real profile. Navigate to the lobby first to trigger SSO/bot cookies,
+    then copy cookies+UA into a requests.Session and return it.
+    """
+    opts = Options()
+    # IMPORTANT: Use your actual profile so you're already logged in
+    opts.add_argument(f"--user-data-dir={user_data_dir}")
+    opts.add_argument(f"--profile-directory={profile_directory}")
+    if headless:
+        # headless can miss some device-bound cookies; prefer non-headless when possible
+        opts.add_argument("--headless=new")
+
+    # helps avoid "automation" flags that some sites key on
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option('useAutomationExtension', False)
+
+    driver = webdriver.Chrome(options=opts)
+
+    try:
+        # 1) Hit the main site first (sets core cookies)
+        driver.get("https://www.draftkings.com/")
+        time.sleep(2)
+
+        # 2) Hit the lobby webapp (ensures DK sets akamai/bot cookies for this session)
+        driver.get("https://www.draftkings.com/lobby")   # sport tab doesn’t really matter
+        time.sleep(4)
+
+        # quick auth heuristic: look for a cookie that only appears post-login
+        have_auth_cookie = False
+        auth_markers = {"SINFN", "SSIDN", "SIDN", "dk_session", "knownUser"}  # varies by account/geo
+        names = {c["name"] for c in driver.get_cookies()}
+        if auth_markers & names:
+            have_auth_cookie = True
+
+        # Also make sure Akamai cookies are present (anti-bot)
+        akamai_ok = {"ak_bmsc", "bm_sv", "bm_sz"} & names
+
+        if not have_auth_cookie:
+            logging.warning("Did not find a clear 'logged-in' cookie in this profile (found: %s)", list(names)[:10])
+        if not akamai_ok:
+            logging.warning("Akamai cookies not seen yet; make sure you visited a real DK page (not just the API).")
+
+        # Build session from whatever the browser has right now
+        sess = _cookies_to_requests_session(driver)
+
+    finally:
+        driver.quit()
+
     return sess
 
 def download_contest_dataframe(sess: requests.Session, contest_id: int,

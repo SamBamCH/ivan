@@ -9,7 +9,7 @@ import pandas as pd
 from scipy.stats import gaussian_kde
 from sqlalchemy import func
 from ivan.database.session import init_db, get_session
-from ivan.sports.common.draftkings import build_requests_session, download_contest_dataframe
+from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe
 
 from ivan.core.utils import normalize_name
 from ivan.sports.mlb.models import (
@@ -308,20 +308,32 @@ def fit_slate_kde(
 # define once near imports
 log = logging.getLogger(__name__)
 
-def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
+def get_contest_data(
+    user_data_dir: str = None,
+    profile_directory: str = None,
+    headless: bool = False,
+):
+    """
+    Download contest CSVs with an authenticated requests.Session built from your
+    real Chrome profile. Only this flow requires auth; the 'upcoming contests'
+    discovery can remain unauthenticated elsewhere.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = logging.getLogger("get_contest_data")
 
-    # init DB & HTTP session
+    # init DB & authenticated HTTP session
     engine  = init_db("mlb")
     session = get_session(engine)
-    sess    = build_requests_session(profile_dir)
+    sess    = build_requests_session_from_chrome(
+        user_data_dir=user_data_dir,
+        profile_directory=profile_directory,
+        headless=headless,
+    )
 
-    # only process contests in the last 3 days (up to now)
+    # process contests in the last 7 days (up to now)
     now = datetime.utcnow()
     cutoff = now - timedelta(days=7)
 
-    # skip contests we’ve already modeled
     modeled_subq = session.query(SlateKDEModel.contest_id)
 
     to_process = (
@@ -337,7 +349,6 @@ def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
     log.info("Need to process %d contests in window [%s → %s]", len(to_process), cutoff, now)
 
     for hc in to_process:
-        # extra guard in case any rows have weird timestamps
         if not (cutoff <= hc.date <= now):
             continue
 
@@ -351,7 +362,7 @@ def get_contest_data(profile_dir: str = r"C:\selenium\chrome-profile"):
 
         lineups, payouts, actuals = parse_df(df, cid)
         try:
-            # only modeling for now
+            # Only modeling for now; uncomment if you want to persist payouts/actuals as well
             # upsert_payout_changes(session, payouts)
             # upsert_actuals(session, actuals)
             fit_slate_kde(session, hc, lineups)

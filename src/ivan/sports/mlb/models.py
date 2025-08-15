@@ -8,6 +8,7 @@ from sqlalchemy import (
     String,
     JSON,
     DateTime,
+    Date,
     func,
     Float,
     Boolean,
@@ -25,32 +26,27 @@ from ivan.core.lineup import BaseLineup
 class MLBStat(Base):
     __tablename__ = "mlb_stats"
 
-    id             = Column(Integer, primary_key=True, autoincrement=True)
-    date           = Column(DateTime,    nullable=False, index=True)
-    player_id      = Column(String,  nullable=False, index=True)
-    name           = Column(String,  nullable=False)
-    team           = Column(String,  nullable=False)
-    position       = Column(String,  nullable=False)
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    date     = Column(Date, nullable=False, index=True)
 
-    batting_order  = Column(Integer, default=0)
+    player_id = Column(String, nullable=False, index=True)
+    name      = Column(String, nullable=False)
+    team      = Column(String, nullable=False)
+    position  = Column(String, nullable=False)
+    batting_order = Column(Integer, default=0)
+    pa = Column(Integer, default=0); ab = Column(Integer, default=0)
+    runs = Column(Integer, default=0); hits = Column(Integer, default=0)
+    doubles = Column(Integer, default=0); triples = Column(Integer, default=0)
+    hr = Column(Integer, default=0); rbi = Column(Integer, default=0)
+    bb = Column(Integer, default=0); sb = Column(Integer, default=0)
+    hbp = Column(Integer, default=0)
+    dk_fpts = Column(Float, nullable=False, default=0.0)
+    fd_fpts = Column(Float, nullable=False, default=0.0)
+    obp = Column(Float); slg = Column(Float)
 
-    pa             = Column(Integer, default=0)
-    ab             = Column(Integer, default=0)
-    runs           = Column(Integer, default=0)
-    hits           = Column(Integer, default=0)
-    doubles        = Column(Integer, default=0)
-    triples        = Column(Integer, default=0)
-    hr             = Column(Integer, default=0)
-    rbi            = Column(Integer, default=0)
-    bb             = Column(Integer, default=0)
-    sb             = Column(Integer, default=0)
-    hbp            = Column(Integer, default=0)
-
-    dk_fpts        = Column(Float, nullable=False, default=0.0)
-    fd_fpts        = Column(Float, nullable=False, default=0.0)
-
-    obp            = Column(Float, nullable=True)
-    slg            = Column(Float, nullable=True)
+    __table_args__ = (
+        UniqueConstraint("date", "player_id", name="uq_mlb_stats_date_player"),
+    )
 
 
 
