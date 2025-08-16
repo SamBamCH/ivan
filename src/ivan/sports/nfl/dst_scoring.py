@@ -1,15 +1,13 @@
 # src/ivan/sports/nfl/build_dst_from_pbp.py
+
 from __future__ import annotations
 import pandas as pd
 from sqlalchemy import text
 from ivan.database.session import init_db, get_session
 
-# ---- small helper so pandas always gets a Connection (SA 2.0 safe) ----------
 def _read_sql(session, stmt) -> pd.DataFrame:
     with session.bind.connect() as conn:
         return pd.read_sql(stmt, conn)
-
-# -----------------------------------------------------------------------------
 
 def _pa_bonus(pa: int) -> int:
     if pa == 0: return 10
@@ -26,56 +24,64 @@ def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
             return c
     return None
 
-def _load_defense_events_from_stats(session, years: list[int], table: str = "nfl_stats") -> pd.DataFrame:
+# --- NEW: build from OFFENSE events (negatives that give DST points to opponent)
+def _load_offense_negatives_from_stats(session, years: list[int], table: str = "nfl_stats") -> pd.DataFrame:
+    """
+    Return per (season, week, OFFENSE team) the counts of offense-side negatives:
+      sacks_taken, ints_thrown, fumbles_lost, blocked_kicks_allowed, safeties_taken, ret_tds_allowed (optional)
+    We intentionally name the team column 'offense' here.
+    """
     years_sql = ",".join(str(int(y)) for y in years)
     df = _read_sql(session, text(f"SELECT * FROM {table} WHERE season IN ({years_sql})"))
     if df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=[
+            "season","week","offense",
+            "sacks_taken","ints_thrown","fumbles_lost"
+        ])
 
-    team_col   = _first_present(df, ["recent_team", "team", "team_abbrev"])
-    week_col   = _first_present(df, ["week"])
-    season_col = _first_present(df, ["season"])
-    if team_col is None or week_col is None or season_col is None:
-        raise RuntimeError("nfl_stats must include team, season, week columns (recent_team/team/team_abbrev).")
+    # Identify offense team/week/season columns
+    offense_col = _first_present(df, ["recent_team", "team", "team_abbrev", "posteam"])
+    week_col    = _first_present(df, ["week"])
+    season_col  = _first_present(df, ["season"])
+    if offense_col is None or week_col is None or season_col is None:
+        raise RuntimeError("nfl_stats must include offense team + season + week (recent_team/team/team_abbrev, season, week).")
 
-    sacks_col    = _first_present(df, ["sacks", "sack"])
-    ints_col     = _first_present(df, ["interceptions", "interception"])
-    fumrec_col   = _first_present(df, ["rushing_fumbles_lost", "fumbles_recovered", "fumbles_rec"])
-    blocked_col  = _first_present(df, ["blocked_kicks", "blocked_kick", "blocked"])
-    safeties_col = _first_present(df, ["safeties", "safety"])
-    dst_td_col   = _first_present(df, ["defense_td", "def_td", "def_st_tds", "return_touchdown"])
+    # Map likely offense-side columns
+    sacks_taken_col    = _first_present(df, ["sacks_taken", "sacked", "sacks"])  # often 'sacks' lives on QB/offense rows
+    ints_thrown_col    = _first_present(df, ["interceptions_thrown", "interceptions", "int"])
+    fumbles_lost_col   = _first_present(df, ["fumbles_lost", "rushing_fumbles_lost", "fum_lost"])
 
-    for c in [sacks_col, ints_col, fumrec_col, blocked_col, safeties_col, dst_td_col]:
+    for c in [sacks_taken_col, ints_thrown_col, fumbles_lost_col]:
         if c is not None:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-    group_keys = [season_col, week_col, team_col]
-    agg_dict = {}
-    if sacks_col:    agg_dict["sacks"]         = (sacks_col, "sum")
-    if ints_col:     agg_dict["interceptions"] = (ints_col, "sum")
-    if fumrec_col:   agg_dict["fumbles_rec"]   = (fumrec_col, "sum")
-    if blocked_col:  agg_dict["blocked_kicks"] = (blocked_col, "sum")
-    if safeties_col: agg_dict["safeties"]      = (safeties_col, "sum")
-    if dst_td_col:   agg_dict["def_st_tds"]    = (dst_td_col, "sum")
-
-    if not agg_dict:
-        return pd.DataFrame(columns=["season","week","team","sacks","interceptions","fumbles_rec","blocked_kicks","safeties","def_st_tds"])
-
-    def_agg = (
-        df.groupby(group_keys, dropna=False)
-          .agg(**{k: pd.NamedAgg(column=v[0], aggfunc=v[1]) for k, v in agg_dict.items()})
+    agg = (
+        df.groupby([season_col, week_col, offense_col], dropna=False)
+          .agg(
+              sacks_taken            =(sacks_taken_col, "sum") if sacks_taken_col else ("season", "size"),
+              ints_thrown            =(ints_thrown_col, "sum") if ints_thrown_col else ("season", "size"),
+              fumbles_lost           =(fumbles_lost_col, "sum") if fumbles_lost_col else ("season", "size"),
+          )
           .reset_index()
-          .rename(columns={season_col: "season", week_col: "week", team_col: "team"})
+          .rename(columns={season_col: "season", week_col: "week", offense_col: "offense"})
     )
 
-    for col in ["sacks","interceptions","fumbles_rec","blocked_kicks","safeties","def_st_tds"]:
-        if col not in def_agg.columns:
-            def_agg[col] = 0
+    # If a stat was missing, above produced a dummy count; force zeros instead.
+    for c in ["sacks_taken","ints_thrown","fumbles_lost"]:
+        if c not in agg.columns or (locals()[c.replace(" ", "_", -1) + "_col"] is None):
+            if c not in agg.columns:
+                agg[c] = 0
+            else:
+                # When we used dummy ("season","size") to satisfy agg signature, set to 0
+                agg[c] = 0
 
-    return def_agg[["season","week","team","sacks","interceptions","fumbles_rec","blocked_kicks","safeties","def_st_tds"]]
+    return agg[["season","week","offense","sacks_taken","ints_thrown","fumbles_lost"]]
 
-# If you want to require PBP presence (even if it’s in the same table), this loader stays SA 2.0 safe.
-def _load_pbp_keys(session, years: list[int], pbp_table: str = "nfl_stats") -> pd.DataFrame:
+def _load_pbp_keys_defense(session, years: list[int], pbp_table: str = "nfl_stats") -> pd.DataFrame:
+    """
+    Keys for rows known to exist in the PBP (defensive identity).
+    We prefer a defensive team column; fall back to team/recent_team if that's all we have.
+    """
     years_sql = ",".join(str(int(y)) for y in years)
     pbp = _read_sql(session, text(f"SELECT * FROM {pbp_table} WHERE season IN ({years_sql})"))
     if pbp.empty:
@@ -102,26 +108,37 @@ def build_dst_game_table(db_url: str, years: list[int],
                          pbp_table: str = "nfl_stats",
                          out_table: str = "nfl_dst_game") -> int:
     """
-    Build per-(season, week, team) DST fantasy points from your nfl_stats rows,
-    optionally requiring presence in {pbp_table}.
+    Build per-(season, week, DEFENSE team) DST fantasy points *from offense-side negatives*.
+    Output columns: season, week, team(DEF), opponent(OFF), dst_points
     """
     engine  = init_db("nfl", db_url)
     session = get_session(engine)
 
-    # 1) defensive events from weekly stats
-    def_agg = _load_defense_events_from_stats(session, years, table="nfl_stats")
-    if def_agg.empty:
-        raise RuntimeError("No defensive events found in nfl_stats for the requested years.")
+    # 1) OFFENSE negatives
+    off_agg = _load_offense_negatives_from_stats(session, years, table="nfl_stats")
 
-    # 2) points allowed (provides opponent + PA)
+    if off_agg.empty:
+        with engine.begin() as con:
+            pd.DataFrame(columns=["season","week","team","opponent","dst_points"]).to_sql(
+                out_table, con, if_exists="replace", index=False
+            )
+        return 0
+
+    # 2) Points allowed table: identify the DEFENSE for each (season,week, offense)
+    #    pa.team      = defense team
+    #    pa.opponent  = offense team
     pa = _read_sql(session, text(f"SELECT season, week, team, opponent, points_allowed FROM {pa_table}"))
+    if pa.empty:
+        # We can still compute event-driven DST points, but no PA bonus without this table
+        pa = pd.DataFrame(columns=["season","week","team","opponent","points_allowed"])
 
-    # 3) restrict to keys present in pbp_table (optional; default pbp_table='nfl_stats')
-    pbp_keys = _load_pbp_keys(session, years, pbp_table=pbp_table)
-
-    # 4) inner joins ensure rows are in both PA and PBP keys
-    df = def_agg.merge(pa, on=["season","week","team"], how="inner")
-    df = df.merge(pbp_keys, on=["season","week","team"], how="inner")
+    # 3) Join offense stats to their matched defense via PA table (on offense == pa.opponent)
+    df = off_agg.merge(
+        pa,
+        left_on=["season","week","offense"],
+        right_on=["season","week","opponent"],
+        how="inner"
+    )
     if df.empty:
         with engine.begin() as con:
             pd.DataFrame(columns=["season","week","team","opponent","dst_points"]).to_sql(
@@ -129,20 +146,40 @@ def build_dst_game_table(db_url: str, years: list[int],
             )
         return 0
 
-    # 5) compute points
+    # 4) Require presence in PBP for the DEFENSE (if desired)
+    pbp_def_keys = _load_pbp_keys_defense(session, years, pbp_table=pbp_table)
+
+    print(pbp_def_keys)
+    if not pbp_def_keys.empty:
+        df = df.merge(pbp_def_keys, on=["season","week","team"], how="inner")
+        if df.empty:
+            with engine.begin() as con:
+                pd.DataFrame(columns=["season","week","team","opponent","dst_points"]).to_sql(
+                    out_table, con, if_exists="replace", index=False
+                )
+            return 0
+
+    # 5) Compute DST points FOR THE DEFENSE using offense negatives + PA bonus
     df["points_allowed"] = pd.to_numeric(df["points_allowed"], errors="coerce").fillna(0).astype(int)
+
+    # Safe numeric coercion for all event columns
+    for c in ["sacks_taken","ints_thrown","fumbles_lost","blocked_kicks_allowed","safeties_taken","ret_tds_allowed"]:
+        if c not in df.columns:
+            df[c] = 0
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
     df["dst_points"] = (
-        df["sacks"].fillna(0).astype(int)          * 1
-      + df["interceptions"].fillna(0).astype(int) * 2
-      + df["fumbles_rec"].fillna(0).astype(int)   * 2
-      + df["def_st_tds"].fillna(0).astype(int)    * 6
-      + df["safeties"].fillna(0).astype(int)      * 2
-      + df["blocked_kicks"].fillna(0).astype(int) * 2
-      + df["points_allowed"].map(_pa_bonus)
+          df["sacks_taken"]           * 1
+        + df["ints_thrown"]           * 2
+        + df["fumbles_lost"]          * 2
+        + df["ret_tds_allowed"]       * 6
+        + df["safeties_taken"]        * 2
+        + df["blocked_kicks_allowed"] * 2
+        + df["points_allowed"].map(_pa_bonus)
     ).astype(float)
 
     out = (
-        df[["season","week","team","opponent","dst_points"]]
+        df[["season","week","team","opponent","dst_points"]]  # team = DEF, opponent = OFF
         .copy()
         .sort_values(["season","week","team"])
     )

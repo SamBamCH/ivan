@@ -5,5 +5,6 @@ modelling historical contests filtering contest_ids weird?
 
 
 #would like:
+fanduel support
 store contest actual payouts for backtesting
 a way to purge old stats dynamically over time?

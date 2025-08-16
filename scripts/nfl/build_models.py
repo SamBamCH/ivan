@@ -36,15 +36,15 @@ def main():
     model_dir = Path(args.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    print("→ Building player‐level models")
-    build_player_models(args.db_url, model_dir, args.plot)
+    # print("→ Building player‐level models")
+    build_player_models(args.db_url, model_dir, args.plot) 
 
     _years = [2023,2024]  # add more as needed (e.g., 2019..2023)
     nrows = build_dst_game_table(args.db_url, years=_years)
     print(f"   wrote {nrows} rows to nfl_dst_game")
 
-    print("→ Building team‐level copulas")
-    build_team_models(args.db_url, model_dir)
+    # print("→ Building team‐level copulas")
+    build_team_models(args.db_url, model_dir) 
 
     if args.plot: #WILL NOT PLOT IF --plot arg isn't passed
         print("→ Running diagnostics…")
