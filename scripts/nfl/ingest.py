@@ -10,6 +10,7 @@ scripts/mlb/ingest.py
 """
 
 import sys
+import re
 from pathlib import Path
 import logging
 from datetime import datetime
@@ -26,6 +27,67 @@ from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
 from ivan.sports.common.odds import get_odds, parse_odds  # ← import your odds function
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+_TEAM_RE = re.compile(r"\b[A-Z]{2,3}\b")
+
+def _extract_matchup_teams(comp: dict[str, object]) -> tuple[str|None, str|None]:
+    """
+    Try to extract (away, home) from the competition payload.
+    Priority 1: comp['name'] like 'TEN @ DEN'
+    Fallback:   scan for two team tokens in comp['name'] or nameDisplay
+    """
+    away = home = None
+
+    name = (comp or {}).get("name") or ""
+    # normalize common separators to '@'
+    normalized = (
+        name.replace(" vs. ", " @ ")
+            .replace(" vs ", " @ ")
+            .replace(" VS ", " @ ")
+            .replace(" at ", " @ ")
+            .replace(" AT ", " @ ")
+    )
+    if "@" in normalized:
+        parts = [p.strip() for p in normalized.split("@")]
+        if len(parts) == 2:
+            away, home = parts[0], parts[1]
+
+    if not (away and home):
+        # Fallback: try regex on name
+        tokens = _TEAM_RE.findall(name)
+        if len(tokens) >= 2:
+            away, home = tokens[0], tokens[-1]
+        else:
+            # Last fallback: nameDisplay array
+            nd = (comp or {}).get("nameDisplay") or []
+            vals = []
+            for item in nd:
+                if isinstance(item, dict):
+                    v = (item.get("value") or "").strip()
+                else:
+                    v = str(item).strip()
+                vals.extend(_TEAM_RE.findall(v))
+            if len(vals) >= 2:
+                away, home = vals[0], vals[-1]
+
+    # sanity: return None if they look invalid
+    if away == home:
+        return None, None
+    return away, home
+
+
+def _derive_opponent_for_player(team: str|None, comp: dict) -> str|None:
+    if not team or not comp:
+        return None
+    away, home = _extract_matchup_teams(comp)
+    if not (away and home):
+        return None
+    if team == away:
+        return home
+    if team == home:
+        return away
+    # If team didn't match either side (rare formatting issues), give up gracefully
+    return None
 
 
 def main():
@@ -45,7 +107,7 @@ def main():
     slate_info = summarize_slates(contests)
 
     # 3) print menu for user
-    print("Available MLB Slates:")
+    print("Available NFL Slates:")
     for i, (dg, info) in enumerate(slate_info.items(), start=1):
         print(f"{i:2}. DG={dg} | {info['gameType']:8} | entries={info['count']:2} | at {info['sdstring']} | '{info['name']}'")
     print()
@@ -69,30 +131,35 @@ def main():
     relevant_teams = set()
 
     for p in players:
-
-        if p.get("rosterSlotId") == 70:  # remove duplicates
+        # de-dupe some roster slots if needed
+        if p.get("rosterSlotId") == 70:
             logging.debug(f"Skipping {p.get('displayName')} (rosterSlotId=70)")
             continue
 
         team = p.get("teamAbbreviation")
-        relevant_teams.add(team)  # ← track this team
+        comp = p.get("competition") or {}
+        opp  = _derive_opponent_for_player(team, comp)
+
+        if team: relevant_teams.add(team)
+        if opp:  relevant_teams.add(opp)
 
         dbp = NFLPlayer(
             id             = p.get("draftableId"),
             name           = p.get("displayName"),
             team           = team,
-            opponent       = None,  # TODO: extract this
+            opponent       = opp,  # <-- now populated for all players (including DST)
             position       = p.get("position"),
             roster_slot_id = p.get("rosterSlotId"),
-            gametime       = parser.isoparse(p["competition"]["startTime"]),
+            gametime       = parser.isoparse(comp["startTime"]) if comp.get("startTime") else None,
             salary         = p.get("salary"),
-            status         = p.get("status")
+            status         = p.get("status"),
         )
         session.merge(dbp)
 
     session.commit()
     logging.info("✔ Done ingesting players for selected slate.")
-    logging.info(f"Relevant teams to fetch odds for: {sorted(relevant_teams)}, {len(relevant_teams) / 2} games")
+    logging.info(f"Relevant teams to fetch odds for: {sorted(relevant_teams)} ({len(relevant_teams) // 2} games)")
+
     
 
     

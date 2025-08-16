@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover
 
 # 1) Keep full list (for grouping/looping), but define a separate vine order.
 _POSITIONS = ["QB", "RB", "WR", "TE", "DST"]
-_VINE_POSITIONS = ["QB", "RB", "WR", "TE", "DST"]  # <-- vine dimension/order is 4
+_VINE_POSITIONS = ["QB", "RB", "WR", "TE", "OppDST"]  # 5D vine
 
 
 @dataclass(frozen=True)
@@ -141,7 +141,8 @@ def generate_correlated_samples(
 
     teams = _group_players_by_team_pos(session)
 
-    # Column index only for the 4 vine positions
+    oppdst_uniforms: dict[tuple[str, str], np.ndarray] = {}  # key = (dst_team, vs_team)
+
     pos_to_col = {p: i for i, p in enumerate(_VINE_POSITIONS)}
 
 
@@ -149,30 +150,52 @@ def generate_correlated_samples(
 
     for team, pos_players in teams.items():
         vine = vines.get(team)
-
-        # Sample team-level uniforms for ONLY (QB,RB,WR,TE)
+        # uniforms for (QB,RB,WR,TE,OppDST)
         if isinstance(vine, VineCopula):
-            U_team = np.asarray(vine.sample(cfg.n_samples))  # shape (n, 4)
+            U_team = np.asarray(vine.sample(cfg.n_samples))
         else:
-            # Fallback: iid uniforms per vine position
             U_team = rng.random((cfg.n_samples, len(_VINE_POSITIONS)))
         U_team = np.clip(U_team, 1e-6, 1 - 1e-6)
 
+        # find opponent for this team (take from any player row on this team)
+        opponent = None
+        for lst in pos_players.values():
+            for pl in lst:
+                if getattr(pl, "opponent", None):
+                    opponent = pl.opponent
+                    break
+            if opponent:
+                break
+
+        # stash OppDST uniforms for the opponent’s DST vs this team
+        if opponent is not None and 'OppDST' in pos_to_col:
+            opp_col = pos_to_col['OppDST']
+            oppdst_uniforms[(opponent, team)] = U_team[:, opp_col].copy()
+
+        # now fan out uniforms to players
         for pos, players in pos_players.items():
-            col = pos_to_col.get(pos)
-            if col is None:
-                # any unexpected positions → iid uniforms
-                u_pos_base = rng.random(cfg.n_samples)
-            else:
+            col = pos_to_col.get(pos)  # col is None for DST
+            # offense positions use team vine column
+            if pos in ('QB', 'RB', 'WR', 'TE') and col is not None:
                 u_pos_base = U_team[:, col]
+            else:
+                u_pos_base = None  # DST handled below
 
             for player in players:
-                if cfg.alpha >= 1.0 and col is not None:
-                    u = u_pos_base.copy()
-                elif cfg.alpha <= 0.0 or col is None:
-                    u = rng.random(cfg.n_samples)
+                if pos == 'DST':
+                    # use the OppDST uniforms stashed by the opponent team loop
+                    key = (player.team, getattr(player, "opponent", None))
+                    u = oppdst_uniforms.get(key)
+                    if u is None:
+                        u = rng.random(cfg.n_samples)  # fallback iid
                 else:
-                    u = cfg.alpha * u_pos_base + (1.0 - cfg.alpha) * rng.random(cfg.n_samples)
+                    # regular alpha‐mixing for offense positions
+                    if cfg.alpha >= 1.0 and u_pos_base is not None:
+                        u = u_pos_base.copy()
+                    elif cfg.alpha <= 0.0 or u_pos_base is None:
+                        u = rng.random(cfg.n_samples)
+                    else:
+                        u = cfg.alpha * u_pos_base + (1.0 - cfg.alpha) * rng.random(cfg.n_samples)
 
                 if cfg.jitter > 0:
                     u = u + rng.normal(0.0, cfg.jitter, size=u.shape)

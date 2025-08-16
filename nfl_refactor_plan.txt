@@ -1,6 +1,10 @@
 #TODO:
 BUILD ENTIRE PROCESS FLOW
     generate lineups
+        add DST to correlated sample draw
+            fix grouping before sample draw
+                store opponent
+                    extract opponent
     store lineups
     sample lineups for sim
 

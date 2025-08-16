@@ -73,20 +73,21 @@ def build_team_models(db_url: str, model_dir: Path) -> dict[str, VineCopula]:
         fill_value=0.0
     )
 
-    # 2) Join DST game points (season, week, team)
-    dst = _read_sql(session, text("SELECT season, week, team, dst_points FROM nfl_dst_game"))
+    # 2) Join OPPONENT DST points (season, week, team/opponent)
+    dst = _read_sql(session, text("SELECT season, week, team, opponent, dst_points FROM nfl_dst_game"))
     if not dst.empty:
-        dst = dst.rename(columns={'team': 'recent_team'})
-        pivot = pivot.join(
-            dst.set_index(['season', 'week', 'recent_team'])['dst_points']
+        # For each (season, week, recent_team) we want the DST points scored by the OPPONENT
+        # against this team. So align on opponent == recent_team.
+        opp_dst = (
+            dst.rename(columns={'opponent': 'recent_team'})
+            .set_index(['season', 'week', 'recent_team'])['dst_points']
         )
+        pivot = pivot.join(opp_dst)
 
-    # 3) Reorder/select columns and rename DST
+    # 3) Reorder/select columns and rename OppDST
     want = [c for c in ['QB', 'RB', 'WR', 'TE'] if c in pivot.columns]
-    want += ['dst_points']  # ensure DST is included
-    # It’s ok if 'dst_points' is missing (no rows) — fillna handles that.
-    pivot = pivot.reindex(columns=want)
-    pivot = pivot.rename(columns={'dst_points': 'DST'}).fillna(0.0)
+    want += ['dst_points']               # the joined series is still named 'dst_points'
+    pivot = pivot.reindex(columns=want).rename(columns={'dst_points': 'OppDST'}).fillna(0.0)
 
     vines: dict[str, VineCopula] = {}
     team_index = pivot.index.get_level_values('recent_team').unique()
@@ -98,7 +99,7 @@ def build_team_models(db_url: str, model_dir: Path) -> dict[str, VineCopula]:
             mat['DST'] = 0.0
 
         # Ensure exact order (QB,RB,WR,TE,DST) for consistent column-to-dimension mapping
-        ordered_cols = [c for c in ['QB', 'RB', 'WR', 'TE', 'DST'] if c in mat.columns]
+        ordered_cols = [c for c in ['QB', 'RB', 'WR', 'TE', 'OppDST'] if c in mat.columns]
         mat = mat[ordered_cols]
 
         # Skip teams with too few observations to be meaningful
