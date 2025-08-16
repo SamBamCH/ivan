@@ -1,7 +1,5 @@
 #TODO:
 BUILD ENTIRE PROCESS FLOW
-    fix DST_GAME table
-        not creating opponent DST fpts correctly i think
     generate lineups
         add DST to correlated sample draw
             fix grouping before sample draw
