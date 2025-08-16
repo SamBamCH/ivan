@@ -32,7 +32,7 @@ _VINE_POSITIONS = ["QB", "RB", "WR", "TE", "OppDST"]  # 5D vine
 
 @dataclass(frozen=True)
 class SamplingConfig:
-    n_samples: int = 1
+    n_samples: int = 100
     alpha: float = 0.85  # strength of team-position dependence (1.0 = full, 0 = iid)
     jitter: float = 0.0  # tiny Gaussian jitter on uniforms to avoid ties
     seed: int | None = None

@@ -1,9 +1,5 @@
 #TODO:
 BUILD ENTIRE PROCESS FLOW
-    generate lineups
-        add DST to correlated sample draw
-            fix grouping before sample draw
-    store lineups
     sample lineups for sim
 
 ONCE WE HAVE ODDS:

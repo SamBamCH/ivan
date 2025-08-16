@@ -21,6 +21,15 @@ _FLEX_ELIGIBLE  = {"RB", "WR", "TE"}
 
 PositionType = Union[str, Tuple[str, ...]]
 
+def _safe_var_name(name: str) -> str:
+    """Make a solver-safe var name: letters/digits/underscore, and never start with a digit."""
+    s = re.sub(r'[^A-Za-z0-9_]+', '_', str(name).strip())
+    if not s or s[0].isdigit():
+        s = 'x_' + s
+    # optional: keep names short to avoid super long lines
+    return s[:80]
+
+
 
 
 @dataclass(frozen=True)
@@ -215,8 +224,10 @@ def generate_single_lineup_from_samples(
     # Create binary decision variables for each (player, eligible_slot).
     lp_vars: Dict[Tuple[FieldPlayer, str], plp.LpVariable] = {}
     for p in players:
+        base = _safe_var_name(p.name)
         for slot in _slot_list_for_player(p):
-            lp_vars[(p, slot)] = plp.LpVariable(f"{p.name}_{slot}_{p.id}", cat=plp.LpBinary)
+            var_name = f"{base}_{slot}_{p.id}"
+            lp_vars[(p, slot)] = plp.LpVariable(var_name, cat=plp.LpBinary)
 
     # Objective: maximize sum of sampled fpts
     prob += plp.lpSum(
@@ -239,7 +250,12 @@ def generate_single_lineup_from_samples(
     NFLConstraints(prob, players, lp_vars, config, verbose).add_all()
 
     # Solve with GLPK
-    status_code = prob.solve(plp.GLPK(msg=False))
+    solver = plp.GLPK_CMD(
+    path=r"D:\ivan\glpk-4.65\w64\glpsol.exe",  # adjust if your exe lives elsewhere
+    keepFiles=True,                             # keep the .lp/.sol temp files
+    options=["--log", r"data\nfl/logs/glpsol.log"]  # write a GLPK log file
+    )
+    status_code = prob.solve(solver)
     status = plp.LpStatus[status_code]
 
     if status != "Optimal":
