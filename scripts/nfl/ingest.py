@@ -25,6 +25,7 @@ from ivan.sports.common.draftkings import (
 )
 from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
 from ivan.sports.common.odds import get_odds, parse_odds  # ← import your odds function
+from ivan.core.utils import normalize_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -145,7 +146,7 @@ def main():
 
         dbp = NFLPlayer(
             id             = p.get("draftableId"),
-            name           = p.get("displayName"),
+            name           = normalize_name(p.get("displayName")),
             team           = team,
             opponent       = opp,  # <-- now populated for all players (including DST)
             position       = p.get("position"),

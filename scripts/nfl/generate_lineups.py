@@ -15,7 +15,7 @@ created = generate_and_store_field_lineups(
     samples,
     config={
         "lineup": {
-            "min_salary": 0,
+            "min_salary": 48000,
             "max_salary": 50000,
             "qb_stack_min": 1,
             "max_players_per_team": 4,
@@ -24,6 +24,6 @@ created = generate_and_store_field_lineups(
         "verbose": False
     },
     num_lineups=10,
-    batch_size=10,
+    workers=4,
 )
 print(f"created {created} NFL lineups")

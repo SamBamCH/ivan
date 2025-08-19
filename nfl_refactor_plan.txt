@@ -1,13 +1,14 @@
 #TODO:
-make process up to this point (generating lineups) able to work with both classic/showdown. Chosen depending on what the payload from the draftable endpoint is. 
+adjust stat distributions to pass through known points
+*remove players from player table who aren't playing. 
+    can just use known odds? I would think anyone without ANY odds wouldn't be playing. 
+        Then we can just print players to terminal with a high salary that we're removing, to make sure that there are no name issues? 
 BUILD ENTIRE PROCESS FLOW
     INGEST
     ODDS
     PROJECTIONS
     GENERATE_LINEUPS
         dedupe lineup pool
-        TEST
-            probably need to beef up LP more. 
     SIM
         sample lineups
         generate_correlated_samples
@@ -17,12 +18,15 @@ BUILD ENTIRE PROCESS FLOW
     CHOOSE
 
 ONCE WE HAVE ODDS:
-    adjust stat distributions to pass through known points
     see what's available for DST/K
+    remove players with no odds
 
 CORRECT/FINE-TUNE
     make sure code is modular and scalable to different formats
     pull all config values out of correlation/lineup generation
+    make sure LP constraints are correct. 
+    copula sampled value diagnostics for both lp generation and sim
+
     
 
 DIAGNOSTICS
@@ -63,7 +67,5 @@ choose_all
 
 'fears
 
-*different draftables format for showdown/classic. Might mess up the projection process or finding odds.
 *not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
 *all copulas/marginal diagnostic testing point toward issues with fits as of 8/13/2025. I think this will correct once we start adjusting for known odds. We just don't have any odds yet. 
-

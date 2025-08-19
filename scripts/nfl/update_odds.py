@@ -12,18 +12,18 @@ engine = init_db("nfl", None)
 session = get_session(engine)
 
 
-api_key = '58699e4fe47856c9182db84884772536'
+# api_key = '58699e4fe47856c9182db84884772536'
 
-relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
+# relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
 
-odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
-df_odds = parse_odds(odds)
+# odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
+# df_odds = parse_odds(odds)
 
-records = df_odds.to_dict(orient='records') 
-session.bulk_insert_mappings(NFLOdds, records)
-session.commit()
+# records = df_odds.to_dict(orient='records') 
+# session.bulk_insert_mappings(NFLOdds, records)
+# session.commit()
 
 #TODO: adjust single stat distributions to pass through a known odds point once we have more player odds available
 
 model_dir = 'data/nfl/models'
-generate_and_fit_all(session, Path(model_dir), n_samples=10000)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
+generate_and_fit_all(session, Path(model_dir), n_samples=10000, verbose=True)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
