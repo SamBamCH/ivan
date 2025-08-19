@@ -5,7 +5,8 @@ import numpy as np
 from scipy.stats import rv_continuous, rv_discrete
 import scipy.stats as st
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text, func, exists
+from sqlalchemy.inspection import inspect
 
 from ivan.sports.nfl.player_level_calculations import (
     position_configs,
@@ -27,6 +28,128 @@ from sqlalchemy import and_, desc
 from ivan.core.utils import normalize_name
 from ivan.sports.nfl.models import NFLOdds
 
+# ---- FPTS summary persistence helpers ---------------------------------------
+import numpy as np
+from scipy.stats import skew, kurtosis
+
+
+
+def _finite(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=float).reshape(-1)
+    return x[np.isfinite(x)]
+
+def _fpts_summary(samples: np.ndarray,
+                  percentiles = (1, 5, 10, 25, 50, 75, 90, 95, 99)) -> dict:
+    xs = _finite(samples)
+    if xs.size == 0:
+        return {"n": 0}
+    s = {
+        "n": int(xs.size),
+        "mean": float(xs.mean()),
+        "std": float(xs.std(ddof=0)),
+        "min": float(xs.min()),
+        "max": float(xs.max()),
+        "skew": float(skew(xs, bias=True)) if xs.size > 2 else 0.0,
+        "kurtosis": float(kurtosis(xs, fisher=True, bias=True)) if xs.size > 3 else 0.0,
+    }
+    q = np.percentile(xs, percentiles)
+    for p, v in zip(percentiles, q):
+        s[f"p{int(p):02d}"] = float(v)
+    return s
+
+def _save_fpts_summary_on_player(session, player, summary: dict, verbose: bool = False) -> None:
+    """
+    Save summary onto NFLPlayer. If a JSON column like fpts_summary or
+    fpts_summary_json exists, store the whole dict there too.
+    Unknown attrs are skipped silently.
+    """
+        # Figure out which columns exist on the mapped table
+    mapper = inspect(NFLPlayer).mapper
+    cols = {attr.key for attr in mapper.column_attrs}
+    commit = True #can pull this out as arg if you need to. 
+
+    # Also populate scalar columns if they exist
+    mapping = {
+        "fpts_n": "n",
+        "fpts_mean": "mean",
+        "fpts_std": "std",
+        "fpts_min": "min",
+        "fpts_max": "max",
+        "fpts_skew": "skew",
+        "fpts_kurtosis": "kurtosis",
+        "fpts_p01": "p01",
+        "fpts_p05": "p05",
+        "fpts_p10": "p10",
+        "fpts_p25": "p25",
+        "fpts_p50": "p50",
+        "fpts_p75": "p75",
+        "fpts_p90": "p90",
+        "fpts_p95": "p95",
+        "fpts_p99": "p99",
+    }
+    # Build the update payload only for columns that actually exist
+    updates = {}
+
+    for col, key in mapping.items():
+        if col in cols and key in summary:
+            updates[col] = summary[key]
+
+    if not updates:
+        if verbose:
+            print(f"[summary] No matching columns on NFLPlayer; nothing to persist for id={player.id}")
+        return
+
+    # Do a direct UPDATE to avoid detached/dirty state issues
+    session.query(NFLPlayer).filter(NFLPlayer.id == player.id).update(
+        updates, synchronize_session=False
+    )
+    if verbose:
+        set_keys = ", ".join(f"{k}={updates[k]}" for k in sorted(updates.keys()))
+        print(f"[summary] Updated NFLPlayer id={player.id}: {set_keys}")
+
+    if commit:
+        session.commit()
+
+# --- TD odds → Poisson mean helpers ------------------------------------------
+def _poisson_mu_for_threshold(point: float, side: str, price: float) -> float:
+    """
+    Convert a 0.5-style TD line (or k+0.5) and price to a Poisson rate mu.
+    For 'over/yes': want P(X >= k+1) = p ; for 'under/no': P(X <= k) = p.
+    Solves for mu via monotone bisection on Poisson CDF/SF.
+    """
+    p = float(np.clip(american_to_prob(price), 1e-6, 1 - 1e-6))
+    k = int(np.floor(float(point if point is not None else 0.5)))
+    side_norm = str(side).lower().strip()
+
+    # choose target function
+    greater = side_norm in {"over", "yes"}
+    target = p
+
+    # expand hi until we bracket the target
+    lo, hi = 0.0, 1.0
+    for _ in range(40):
+        val = (st.poisson.sf(k, hi) if greater else st.poisson.cdf(k, hi))
+        if (val >= target and greater) or (val <= target and not greater):
+            break
+        hi *= 2.0
+    # bisection
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        val = (st.poisson.sf(k, mid) if greater else st.poisson.cdf(k, mid))
+        if (val > target and greater) or (val < target and not greater):
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def _poisson_mu_from_prob_at_least_one(prob_at_least_one: float) -> float:
+    """
+    If a market implies P(X>=1) = p for a Poisson X, then mu = -ln(1-p).
+    """
+    p = float(np.clip(prob_at_least_one, 1e-9, 1-1e-9))
+    return float(-np.log(1.0 - p))
+
 def _player_has_any_odds(session: Session, player_name: str) -> bool:
     """Fast existence check: does ANY odds row exist for this player name?"""
     q = session.query(exists().where(NFLOdds.player == player_name))
@@ -36,38 +159,28 @@ def american_to_prob(american: float) -> float:
     a = float(american)
     return 100.0 / (a + 100.0) if a >= 0 else (-a) / ((-a) + 100.0)
 
-# map stat -> keywords expected in NFLOdds.market (adjust if your market strings differ)
+# Replace your receiving_tds mapping (had _alternate only / anytime) with:
 _MARKET_KEYS = {
-    # Core stats used by your marginals
     "passing_yards":     ("player_pass_yds", "player_pass_yds_alternate"),
     "rushing_yards":     ("player_rush_yds", "player_rush_yds_alternate"),
     "receiving_yards":   ("player_reception_yds", "player_reception_yds_alternate"),
     "receptions":        ("player_receptions", "player_receptions_alternate"),
 
     "passing_tds":       ("player_pass_tds", "player_pass_tds_alternate"),
-    "rushing_tds":       ("player_rush_tds", "player_rush_tds_alternate", "player_anytime_td"),
-    "receiving_tds":     ("player_anytime_td", "player_reception_tds_alternate"),
+    "rushing_tds":       ("player_rush_tds", "player_rush_tds_alternate"),
+    "receiving_tds":     ("player_reception_tds", "player_reception_tds_alternate"),
 
-    # If you model INTs thrown as a stat:
     "interceptions":     ("player_pass_interceptions", "player_pass_interceptions_alternate"),
-
-    # If you model these (optional)
     "pass_attempts":     ("player_pass_attempts", "player_pass_attempts_alternate"),
     "pass_completions":  ("player_pass_completions", "player_pass_completions_alternate"),
 
-    # Role-only combined markets (used to infer role_factor)
-    "any_td_combined": (
-        "player_pass_rush_reception_tds", "player_pass_rush_reception_tds_alternate",
-        "player_rush_reception_tds",      "player_rush_reception_tds_alternate",
-        "player_tds_over",                # Over-only touchdowns
-        "player_anytime_td",              # Yes/No market
-    ),
-
-    # Pass-through entries so you can call with the API key directly
-    "player_anytime_td":                 ("player_anytime_td",),
-    "player_tds_over":                   ("player_tds_over",),
-    "player_pass_rush_reception_tds":    ("player_pass_rush_reception_tds", "player_pass_rush_reception_tds_alternate"),
-    "player_rush_reception_tds":         ("player_rush_reception_tds", "player_rush_reception_tds_alternate"),
+    # Combined scrimmage TD markets (used as a single source of truth)
+    "scrim_tds_combined": (
+        "player_anytime_td",                 # Yes/No, effectively > 0.5
+        "player_tds_over",                   # Over only (no Under side)
+        "player_rush_reception_tds",         # O/U rush+rec TDs
+        "player_pass_rush_reception_tds"     # O/U pass+rush+rec TDs (rarely used for non-QBs)
+    )
 }
 
 # tolerant mapping from your internal stat keys to likely NFLStat column names
@@ -470,14 +583,31 @@ def simulate_player_fpts(
 def fit_and_store_fpts_distribution(
     session: Session,
     player_id: int,
-    fpts_samples: np.ndarray
+    fpts_samples: np.ndarray,
+    *,
+    save_summary: bool = True,
+    verbose: bool = False
 ) -> None:
     """
     Fit a best marginal to the simulated fpts samples and persist it.
-    (DST included — we fit directly on empirical fpts samples)
+    Optionally store a compact summary (mean/std/percentiles) on NFLPlayer.
     """
+    # Guard: ensure we have usable data
+    xs = np.asarray(fpts_samples, dtype=float)
+    xs = xs[np.isfinite(xs)]
+    if xs.size == 0:
+        # Nothing to fit; you can choose to clear fields or skip
+        player = session.get(NFLPlayer, player_id)
+        if player is not None and hasattr(player, "fpts_dist_name"):
+            player.fpts_dist_name = None
+            player.fpts_dist_params = None
+            if save_summary:
+                _save_fpts_summary_on_player(session, player, {"n": 0})
+            session.commit()
+        return
+
     name, params, _ = fit_best_distribution(
-        fpts_samples,
+        xs,
         continuous_dists,
         bins=50,
         plot=False,
@@ -486,6 +616,18 @@ def fit_and_store_fpts_distribution(
     player = session.get(NFLPlayer, player_id)
     player.fpts_dist_name = name
     player.fpts_dist_params = params
+
+    if save_summary:
+        if verbose:
+            print('saving summary...')
+        summary = _fpts_summary(xs)
+        if verbose:
+            print(f'fpts summary: {summary}')
+        _save_fpts_summary_on_player(session, player, summary, verbose=verbose)
+
+        if verbose:
+            print('-' * 200)
+
     session.commit()
 
 
@@ -494,19 +636,22 @@ def generate_and_fit_all(
     model_dir: Path,
     n_samples: int = 10000,
     verbose: bool = False,
-    delete_players_without_odds: bool = False,  # <— NEW
+    delete_players_without_odds: bool = True,
+    save_fpts_sample: bool = True
 ) -> None:
     marginals, stacked_copulas = load_models(model_dir)
 
     deleted = 0  # optional counter
 
     for player in session.query(NFLPlayer).all():
-        # --- NEW: delete if no odds at all ---
-        if delete_players_without_odds and not _player_has_any_odds(session, player.name):
+        pos_upper = (player.position or "").upper()
+        keep_anyway = pos_upper in {"K", "DST", "D/ST", "DEF"}
+
+        if delete_players_without_odds and not keep_anyway and not _player_has_any_odds(session, player.name):
             if verbose:
                 print(f"[NO ODDS] Deleting NFLPlayer id={player.id} name={player.name}")
             session.delete(player)
-            session.commit()  # commit now to avoid FK issues on later queries
+            session.commit()
             deleted += 1
             continue
         # -------------------------------------
@@ -521,7 +666,7 @@ def generate_and_fit_all(
         )
         if verbose:
             print(f'FPTS FOR ID: {player.id} :: {fpts}')
-        fit_and_store_fpts_distribution(session, player.id, fpts)
+        fit_and_store_fpts_distribution(session, player.id, fpts, save_summary=save_fpts_sample, verbose=verbose)
 
     if verbose and delete_players_without_odds:
         print(f"[SUMMARY] Deleted {deleted} players with no odds.")

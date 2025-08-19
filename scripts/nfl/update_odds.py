@@ -12,7 +12,7 @@ engine = init_db("nfl", None)
 session = get_session(engine)
 
 
-# api_key = '58699e4fe47856c9182db84884772536'
+# api_key = '58699e4fe47856c9182db84884772536' #TODO: uncomment this when we want updated odds. removed it for now to save api calls
 
 # relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
 
@@ -23,7 +23,5 @@ session = get_session(engine)
 # session.bulk_insert_mappings(NFLOdds, records)
 # session.commit()
 
-#TODO: adjust single stat distributions to pass through a known odds point once we have more player odds available
-
 model_dir = 'data/nfl/models'
-generate_and_fit_all(session, Path(model_dir), n_samples=10000, verbose=True)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
+generate_and_fit_all(session, Path(model_dir), n_samples=10000, verbose=True, delete_players_without_odds=True, save_fpts_sample=True)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 

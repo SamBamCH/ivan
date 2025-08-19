@@ -1,8 +1,7 @@
 #TODO:
-adjust stat distributions to pass through known points
-*remove players from player table who aren't playing. 
-    can just use known odds? I would think anyone without ANY odds wouldn't be playing. 
-        Then we can just print players to terminal with a high salary that we're removing, to make sure that there are no name issues? 
+add back DST/Kicker
+devig
+check stat distributions more closely if still issues with fpts distributions
 BUILD ENTIRE PROCESS FLOW
     INGEST
     ODDS
@@ -19,10 +18,8 @@ BUILD ENTIRE PROCESS FLOW
 
 ONCE WE HAVE ODDS:
     see what's available for DST/K
-    remove players with no odds
 
 CORRECT/FINE-TUNE
-    make sure code is modular and scalable to different formats
     pull all config values out of correlation/lineup generation
     make sure LP constraints are correct. 
     copula sampled value diagnostics for both lp generation and sim

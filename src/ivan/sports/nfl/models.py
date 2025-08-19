@@ -72,6 +72,24 @@ class NFLPlayer(NFLBase, BasePlayer):
     fpts_dist_name   = Column(String, nullable=True)    # e.g. 'gamma'
     fpts_dist_params = Column(JSON, nullable=True)  # list/tuple of params
 
+    fpts_n          = Column(Integer, nullable=True)
+    fpts_mean       = Column(Float, nullable=True)
+    fpts_std        = Column(Float, nullable=True)
+    fpts_min        = Column(Float, nullable=True)
+    fpts_max        = Column(Float, nullable=True)
+    fpts_skew       = Column(Float, nullable=True)
+    fpts_kurtosis   = Column(Float, nullable=True)
+    fpts_p01        = Column(Float, nullable=True)
+    fpts_p05        = Column(Float, nullable=True)
+
+    fpts_p10        = Column(Float, nullable=True)
+    fpts_p25        = Column(Float, nullable=True)
+    fpts_p50        = Column(Float, nullable=True)
+    fpts_p75        = Column(Float, nullable=True)
+    fpts_p90        = Column(Float, nullable=True)
+    fpts_p95        = Column(Float, nullable=True)
+    fpts_p99        = Column(Float, nullable=True)    
+
 @dataclass
 class FieldPlayer:
     dk_player_id: int
