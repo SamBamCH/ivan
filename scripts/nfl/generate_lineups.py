@@ -9,7 +9,7 @@ engine  = init_db('nfl')
 session = get_session(engine)
 
 samples = generate_correlated_samples(session)  #TODO: add a num_samples key to config? 
-print(samples)
+
 created = generate_and_store_field_lineups(
     session,
     samples,

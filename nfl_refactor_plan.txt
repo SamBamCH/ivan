@@ -1,10 +1,24 @@
 #TODO:
+make process up to this point (generating lineups) able to work with both classic/showdown. Chosen depending on what the payload from the draftable endpoint is. 
 BUILD ENTIRE PROCESS FLOW
-    sample lineups for sim
+    INGEST
+    ODDS
+    PROJECTIONS
+    GENERATE_LINEUPS
+        dedupe lineup pool
+        TEST
+            probably need to beef up LP more. 
+    SIM
+        sample lineups
+        generate_correlated_samples
+        rank lineups
+        payouts
+        store results
+    CHOOSE
 
 ONCE WE HAVE ODDS:
-    see what's available for DST/K
     adjust stat distributions to pass through known points
+    see what's available for DST/K
 
 CORRECT/FINE-TUNE
     make sure code is modular and scalable to different formats
@@ -17,6 +31,7 @@ DIAGNOSTICS
     test choosing algorithm
 
 
+YES WE CAN AND WE SHOULD -can we clean up the structure of build_models.py? Seems like we could just remove the build_player_models container and have all the models fit on the same level.
 
 
 ###################overall flow: 
@@ -34,9 +49,10 @@ generate_lineups
     group players by game
     generate correlated samples
     build lp problem
+    solve
     store lineup in DB
 sim_all
-    sample generated lineups
+    sample generated lineups from DB
     generate_correlated_samples
     rank lineups
     store sim results
@@ -50,5 +66,4 @@ choose_all
 *different draftables format for showdown/classic. Might mess up the projection process or finding odds.
 *not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
 *all copulas/marginal diagnostic testing point toward issues with fits as of 8/13/2025. I think this will correct once we start adjusting for known odds. We just don't have any odds yet. 
-
 

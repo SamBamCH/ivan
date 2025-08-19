@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
     VineCopula = object  # type: ignore
 
 # 1) Keep full list (for grouping/looping), but define a separate vine order.
-_POSITIONS = ["QB", "RB", "WR", "TE", "DST"]
+_POSITIONS = ["QB", "RB", "WR", "TE", "DST", "K"]
 _VINE_POSITIONS = ["QB", "RB", "WR", "TE", "OppDST"]  # 5D vine
 
 
@@ -36,6 +36,10 @@ class SamplingConfig:
     alpha: float = 0.85  # strength of team-position dependence (1.0 = full, 0 = iid)
     jitter: float = 0.0  # tiny Gaussian jitter on uniforms to avoid ties
     seed: int | None = None
+    kicker_rho: float = 0.60 # how tightly K follows team offense uniforms
+    kicker_shape: float = 5.5 # Gamma shapy 'k' (mean = k*scale)
+    kicker_scale: float = 1.2 # Gamma scale 'θ' (default mean ~ 6.6)
+
 
 
 def _load_team_vines(model_dir: Path) -> Dict[str, VineCopula]:
@@ -78,6 +82,7 @@ def _ppf_with_fallback(
     session: Session,
     player_models: tuple[dict, dict] | None,
     n_samples: int,
+    cfg: SamplingConfig,
 ) -> np.ndarray:
     u = np.clip(u, 1e-6, 1 - 1e-6)
     dp = _player_dist(player)
@@ -86,6 +91,9 @@ def _ppf_with_fallback(
         return dist.ppf(u, *params)
 
     pos = (player.position or "").upper()
+
+    if pos == "K":
+        return st.gamma.ppf(u, cfg.kicker_shape, scale=cfg.kicker_scale)
 
     # --- NEW: DST uses empirical quantiles from nfl_dst_game ---
     if pos == "DST":
@@ -188,6 +196,13 @@ def generate_correlated_samples(
                     u = oppdst_uniforms.get(key)
                     if u is None:
                         u = rng.random(cfg.n_samples)  # fallback iid
+                elif pos == 'K':
+                    cols = [pos_to_col[p] for p in ('QB', 'RB', 'WR', 'TE') if p in pos_to_col]
+                    if cols:
+                        u_off = np.mean(U_team[:, cols], axis=1)
+                        u = cfg.kicker_rho * u_off + (1.0 - cfg.kicker_rho) * rng.random(cfg.n_samples)
+                    else:
+                        u = rng.random(cfg.n_samples)
                 else:
                     # regular alpha‐mixing for offense positions
                     if cfg.alpha >= 1.0 and u_pos_base is not None:
@@ -201,7 +216,7 @@ def generate_correlated_samples(
                     u = u + rng.normal(0.0, cfg.jitter, size=u.shape)
                 u = np.clip(u, 1e-6, 1 - 1e-6)
 
-                x = _ppf_with_fallback(u, player, session, player_models, cfg.n_samples)
+                x = _ppf_with_fallback(u, player, session, player_models, cfg.n_samples, cfg)
                 out[player.id] = x
 
     return out

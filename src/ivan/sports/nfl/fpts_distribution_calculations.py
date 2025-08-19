@@ -18,6 +18,8 @@ from ivan.sports.nfl.models import NFLPlayer
 # ------ NEW: DST helpers ------------------------------------------------------
 
 DST_POS = {"DST", "D/ST", "DEF"}
+KICKER_DEFAULT_SHAPE = 5.5
+KICKER_DEFAULT_SCALE = 1.2
 
 def _fetch_dst_points(session: Session, team: str | None, opponent: str | None) -> np.ndarray:
     """
@@ -109,6 +111,11 @@ def simulate_player_fpts(
     # ----- DST branch: skip marginals & stacked copulas completely ------------
     if pos == 'DST':
         return _sample_dst_fpts(session, getattr(player, "team", None), getattr(player, "opponent", None), n_samples)
+    
+    # ----- KICKER branch: super simple Gamma samples ---------------------------
+    if pos == 'K':
+        return st.gamma.rvs(KICKER_DEFAULT_SHAPE, scale=KICKER_DEFAULT_SCALE, size=n_samples).astype(float)
+
 
     # ----- Existing logic for skill positions ---------------------------------
     stats = position_configs[pos]['stats']

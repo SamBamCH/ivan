@@ -8,3 +8,12 @@ modelling historical contests filtering contest_ids weird?
 fanduel support
 store contest actual payouts for backtesting
 a way to purge old stats dynamically over time?
+recursively call functions until a condition is met? 
+    i.e. try to fetch all payouts
+        after that loop, try again, until the condition is met that there are no unfetched payouts. 
+
+
+
+NOTES
+
+run lower randomness on batters, higher on pitchers with a high min_fpts threshold

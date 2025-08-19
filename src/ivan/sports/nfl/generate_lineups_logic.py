@@ -197,8 +197,9 @@ def _as_bases(position: PositionType) -> Tuple[str, ...]:
 
 def _slot_list_for_player(p: FieldPlayer) -> List[str]:
     bases = _as_bases(p.position)
-    slots = list(bases)
-    if any(bp in _FLEX_ELIGIBLE for bp in bases):
+    allowed = set(_DK_SLOT_COUNTS.keys())
+    slots = [s for s in bases if s in allowed]
+    if any(bp in _FLEX_ELIGIBLE for bp in bases) and "FLEX" in allowed:
         slots.append("FLEX")
     return slots
 
@@ -271,6 +272,131 @@ def generate_single_lineup_from_samples(
     chosen_ids = list(dict.fromkeys(chosen_ids))
     return chosen_ids if len(chosen_ids) == sum(_DK_SLOT_COUNTS.values()) else None
 
+def generate_single_lineup_from_scores(
+    players: List[FieldPlayer],
+    scores: Dict[int, float],
+    config: dict | None = None,
+    debug_lp_path: Optional[str] = None,
+) -> Optional[List[int]]:
+    """
+    Classic lineup with a deterministic score vector (e.g., medians).
+    """
+    config  = config or {}
+    verbose = bool(get_config_value(config, "verbose", False))
+    prob    = plp.LpProblem("nfl_field_lineup_median", plp.LpMaximize)
+
+    lp_vars: Dict[Tuple[FieldPlayer, str], plp.LpVariable] = {}
+    for p in players:
+        base = _safe_var_name(p.name)
+        for slot in _slot_list_for_player(p):
+            lp_vars[(p, slot)] = plp.LpVariable(f"{base}_{slot}_{p.id}", cat=plp.LpBinary)
+
+    # Objective: maximize sum of medians + tiny salary tiebreak (keeps builds near cap)
+    salary_expr = plp.lpSum(
+        p.salary * lp_vars[(p, slot)]
+        for p in players for slot in _slot_list_for_player(p)
+    )
+    score_expr = plp.lpSum(
+        (scores.get(p.id, 0.0)) * lp_vars[(p, slot)]
+        for p in players for slot in _slot_list_for_player(p)
+    )
+    prob += score_expr + 1e-4 * (salary_expr / 50000.0), "MedianPlusSalaryTiebreak"
+
+    # Optional: min projection guard
+    min_proj = get_config_value(config, "lineup.min_fpts_threshold", None)
+    if min_proj is not None:
+        proj_expr = plp.lpSum(
+            (p.fpts_projection or 0.0) * lp_vars[(p, slot)]
+            for p in players for slot in _slot_list_for_player(p)
+        )
+        prob += (proj_expr >= float(min_proj)), "MinProjectionSum"
+
+    NFLConstraints(prob, players, lp_vars, config, verbose).add_all()
+
+    solver = plp.GLPK_CMD(path=r"D:\ivan\glpk-4.65\w64\glpsol.exe", keepFiles=True,
+                          options=["--log", r"data\nfl/logs/glpsol.log"])
+    status_code = prob.solve(solver)
+    if plp.LpStatus[status_code] != "Optimal":
+        if debug_lp_path:
+            prob.writeLP(debug_lp_path)
+        return None
+    chosen_ids = [p.id for (p, slot), var in lp_vars.items() if var.varValue == 1]
+    chosen_ids = list(dict.fromkeys(chosen_ids))
+    return chosen_ids if len(chosen_ids) == sum(_DK_SLOT_COUNTS.values()) else None
+
+def generate_single_showdown_lineup(
+    players: List[FieldPlayer],
+    roster_slot_by_id: Dict[int, int],
+    base_scores: Dict[int, float],
+    *,
+    jitter: float = 0.10,           # ±10% randomization to "un-optimize"
+    cap: int = 50000,
+    min_cap_drop: int = 0,          # random salary floor distance from cap (inclusive)
+    max_cap_drop: int = 1200,       # (e.g., uniform 0..1200)
+    debug_lp_path: Optional[str] = None,
+) -> Optional[List[int]]:
+    """
+    Build one DK Showdown lineup with 1 CPT (511) + 5 FLEX (512).
+    """
+    prob  = plp.LpProblem("dk_showdown", plp.LpMaximize)
+
+    # Partition pool by slot id (from DK payload)
+    CPT, FLEX = 511, 512
+    cpt_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == CPT]
+    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == FLEX]
+    if not cpt_ids or len(flex_ids) < 5:
+        return None
+
+    xC = plp.LpVariable.dicts("xC", cpt_ids, 0, 1, plp.LpBinary)
+    xF = plp.LpVariable.dicts("xF", flex_ids, 0, 1, plp.LpBinary)
+
+    # Exactly one CPT, exactly five FLEX
+    prob += plp.lpSum(xC[i] for i in cpt_ids) == 1, "ExactlyOneCaptain"
+    prob += plp.lpSum(xF[i] for i in flex_ids) == 5, "ExactlyFiveFlex"
+
+    # Mutually exclusive per real player: same name+team cannot appear twice
+    by_key: Dict[tuple, Dict[str, int]] = {}
+    for p in players:
+        key = (p.name, p.team)
+        rs  = roster_slot_by_id.get(p.id)
+        if rs == CPT:
+            by_key.setdefault(key, {})["cpt"] = p.id
+        elif rs == FLEX:
+            by_key.setdefault(key, {})["flex"] = p.id
+    for key, ids in by_key.items():
+        if "cpt" in ids and "flex" in ids:
+            prob += xC[ids["cpt"]] + xF[ids["flex"]] <= 1, f"NoDup_{_safe_var_name(key[0])}_{key[1]}"
+
+    # Salary: captain rows already have the DK-boosted salary in NFLPlayer
+    salary = {p.id: p.salary for p in players}
+    spend  = plp.lpSum(salary[i] * xC[i] for i in cpt_ids) + plp.lpSum(salary[i] * xF[i] for i in flex_ids)
+    # Near-cap floor randomized per lineup
+    import random as _rnd
+    min_spend = cap - _rnd.randint(min_cap_drop, max_cap_drop)
+    prob += spend <= cap,        "Cap"
+    prob += spend >= min_spend,  "NearCapFloor"
+
+    # Objective: lightly randomized points to avoid concentration
+    # (CPT rows already include the 1.5x DK CPT projection effect via their salary; points use same base)
+    # If you prefer, multiply base_scores for CPT by 1.5 here; or keep them equal and let jitter explore.
+    obj = (
+        plp.lpSum((base_scores.get(i, 0.0) * (1.0 + _rnd.uniform(-jitter, jitter))) * xC[i] for i in cpt_ids) +
+        plp.lpSum((base_scores.get(i, 0.0) * (1.0 + _rnd.uniform(-jitter, jitter))) * xF[i] for i in flex_ids)
+    )
+    prob += obj, "NoisyPoints"
+
+    solver = plp.GLPK_CMD(path=r"D:\ivan\glpk-4.65\w64\glpsol.exe", keepFiles=True,
+                          options=["--log", r"data\nfl/logs/glpsol.log"])
+    status = prob.solve(solver)
+    if plp.LpStatus[status] != "Optimal":
+        if debug_lp_path:
+            prob.writeLP(debug_lp_path)
+        return None
+
+    lineup = [i for i in cpt_ids if plp.value(xC[i]) > 0.5]
+    lineup += [i for i in flex_ids if plp.value(xF[i]) > 0.5]
+    return lineup if len(lineup) == 6 else None
+
 def generate_and_store_field_lineups(
     session: Session,
     samples: Dict[int, np.ndarray],
@@ -300,8 +426,9 @@ def generate_and_store_field_lineups(
     if not raw_players:
         return 0
 
-    # 2) Wrap into FieldPlayer (positions as tuple, ensure FLEX eligibility later)
+    # 2) Wrap into FieldPlayer and capture roster_slot_id by id (for Showdown)
     players: List[FieldPlayer] = []
+    roster_slot_by_id: Dict[int, int] = {}
     for rp in raw_players:
         pos = getattr(rp, "position", None)
         pos_tuple = _coerce_positions(pos or [])
@@ -314,6 +441,7 @@ def generate_and_store_field_lineups(
             position=pos_tuple,
             fpts_projection=float(getattr(rp, "fpts_projection", 0.0) or 0.0),
         ))
+        roster_slot_by_id[rp.id] = int(getattr(rp, "roster_slot_id", 0) or 0)
 
     # 3) Prepare iterate over sample indices
     n_samples = len(next(iter(samples.values())))
