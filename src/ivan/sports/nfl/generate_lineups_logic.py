@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Iterable, Union
 from datetime import datetime
 import random
+from math import ceil
 
 import numpy as np
 import pulp as plp
@@ -14,10 +15,10 @@ from ivan.core.utils import get_config_value
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 import re
 
-# ----- Roster & position config (DK Classic) -----
-# final roster = 9 slots: QB, RB, RB, WR, WR, WR, TE, DST, FLEX (RB/WR/TE)
-_DK_SLOT_COUNTS = {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "DST": 1, "FLEX": 1}
-_FLEX_ELIGIBLE  = {"RB", "WR", "TE"}
+# ----- slot configs for both formats -----
+_CLASSIC_SLOT_COUNTS  = {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "DST": 1, "FLEX": 1}
+_SHOWDOWN_SLOT_COUNTS = {"CPT": 1, "FLEX": 5}
+_FLEX_ELIGIBLE        = {"RB", "WR", "TE"}  # classic flex eligibility
 
 PositionType = Union[str, Tuple[str, ...]]
 
@@ -28,6 +29,40 @@ def _safe_var_name(name: str) -> str:
         s = 'x_' + s
     # optional: keep names short to avoid super long lines
     return s[:80]
+
+# --- helpers ---
+def _as_bases(position: PositionType) -> Tuple[str, ...]:
+    return position if isinstance(position, tuple) else (position,)
+
+def _slot_list_for_player_classic(p: FieldPlayer) -> List[str]:
+    bases = _as_bases(p.position)
+    allowed = set(_CLASSIC_SLOT_COUNTS.keys())
+    slots = [s for s in bases if s in allowed]
+    if any(bp in _FLEX_ELIGIBLE for bp in bases) and "FLEX" in allowed:
+        slots.append("FLEX")
+    return slots
+
+def _eligible_slots_for_player(
+    p: FieldPlayer,
+    fmt: str,
+    roster_slot_by_id: Optional[Dict[int, int]] = None
+) -> List[str]:
+    """
+    Classic → derive from positions (+FLEX if eligible).
+    Showdown → use DK roster_slot_id: 511 → CPT, 512 → FLEX.
+    """
+    if fmt == "classic":
+        return _slot_list_for_player_classic(p)
+    if fmt == "showdown":
+        if not roster_slot_by_id:
+            return []
+        rs = int(roster_slot_by_id.get(p.id, 0) or 0)
+        if rs == 511:
+            return ["CPT"]
+        if rs == 512:
+            return ["FLEX"]
+        return []
+    return []
 
 
 
@@ -43,10 +78,14 @@ class FieldPlayer:
     fpts_projection: Optional[float]  # used only for optional min-projection constraint
 
 
-class NFLConstraints:
+
+class Constraints:
     """
-    Mirror of your MLB Constraints class, adapted for NFL + FLEX.
-    Builds constraints over binary variables keyed by (player, slot).
+    Shared constraints for Classic & Showdown.
+    Build vars as (player, slot) → x_{p,slot} in your solver code, then call:
+        Constraints(...).add_constraints("classic", ...)
+    or:
+        Constraints(...).add_constraints("showdown", ...)
     """
     def __init__(
         self,
@@ -62,11 +101,9 @@ class NFLConstraints:
         self.config  = config
         self.verbose = verbose
 
-    # ---- helpers to collect var lists ----
+    # ---- common helpers ----
     def _vars_for_slot(self, slot: str) -> List[plp.LpVariable]:
-        return [self.vars[(p, slot)]
-                for p in self.players
-                if (p, slot) in self.vars]
+        return [self.vars[(p, slot)] for p in self.players if (p, slot) in self.vars]
 
     def _vars_for_team(self, team: str) -> List[plp.LpVariable]:
         return [v for (p, slot), v in self.vars.items() if p.team == team]
@@ -84,64 +121,62 @@ class NFLConstraints:
                     out.append(self.vars[(p, slot)])
         return out
 
-    # ---- constraints ----
-    def _add_salary_cap(self) -> None:
-        max_sal = 50000
-        min_sal = get_config_value(self.config, "lineup.min_salary", 0)
+    # ---- atomic constraints (format-agnostic) ----
+    def _add_salary_cap(self, *, cap: int, min_salary: int = 0, min_spend: Optional[int] = None) -> None:
         expr = plp.lpSum(
             p.salary * self.vars[(p, slot)]
             for p in self.players
-            for slot in _slot_list_for_player(p)
+            for slot in list({s for (_, s) in self.vars.keys()})
             if (p, slot) in self.vars
         )
-        self.problem += (expr <= max_sal), "Max_Salary"
-        self.problem += (expr >= min_sal), "Min_Salary"
+        self.problem += (expr <= cap), "Max_Salary"
+        floor = min_spend if (min_spend is not None) else min_salary
+        if floor and floor > 0:
+            self.problem += (expr >= floor), "Min_Salary"
 
-    def _add_roster_counts(self) -> None:
-        # exact count per required slot type
-        for slot, need in _DK_SLOT_COUNTS.items():
+    def _add_exact_slot_counts(self, slot_counts: Dict[str, int]) -> None:
+        for slot, need in slot_counts.items():
             self.problem += (plp.lpSum(self._vars_for_slot(slot)) == need, f"Slot_{slot}")
+        total_slots = sum(slot_counts.values())
+        self.problem += (plp.lpSum(v for v in self.vars.values()) == total_slots, "TotalRosterSize")
 
-        # total roster size
-        total_slots = sum(_DK_SLOT_COUNTS.values())
-        self.problem += (
-            plp.lpSum(v for v in self.vars.values()) == total_slots,
-            "TotalRosterSize"
-        )
-
-    def _add_single_use(self) -> None:
-        # Each player can be used in at most one slot (QB/RB/WR/TE/DST/FLEX).
+    def _add_single_use_by_player_id(self) -> None:
+        # Each (real) classic player used in at most one slot (QB/RB/WR/TE/DST/FLEX).
         by_player: Dict[int, List[plp.LpVariable]] = {}
         for (p, slot), v in self.vars.items():
             by_player.setdefault(p.id, []).append(v)
         for pid, vs in by_player.items():
             self.problem += (plp.lpSum(vs) <= 1, f"SingleUse_{pid}")
 
-    def _add_max_players_per_team(self) -> None:
-        limit = get_config_value(self.config, "lineup.max_players_per_team", None)
+    def _add_no_duplicate_real_player(self) -> None:
+        """
+        For Showdown: prevent picking both (Captain row) and (Flex row) for same real person.
+        Group by (name, team).
+        """
+        groups: Dict[Tuple[str, str], List[plp.LpVariable]] = {}
+        for (p, slot), v in self.vars.items():
+            groups.setdefault((p.name, p.team or ""), []).append(v)
+        for key, vs in groups.items():
+            if len(vs) > 1:
+                tag = _safe_var_name(f"{key[0]}_{key[1]}")
+                self.problem += (plp.lpSum(vs) <= 1, f"NoDupRealPlayer_{tag}")
+
+    def _add_max_players_per_team(self, limit: Optional[int]) -> None:
         if not limit:
             return
         teams = {p.team for p in self.players if p.team}
         for t in teams:
-            self.problem += (
-                plp.lpSum(self._vars_for_team(t)) <= int(limit),
-                f"MaxPlayers_{t}"
-            )
+            self.problem += (plp.lpSum(self._vars_for_team(t)) <= int(limit), f"MaxPlayers_{t}")
 
-    def _add_qb_stack_constraint(self) -> None:
+    def _add_qb_stack_constraint(self, need: int) -> None:
         """
-        Require at least N WR/TE (including FLEX) from the QB's team.
-        Enabled when lineup.qb_stack_min >= 1.
+        Classic only: at least `need` WR/TE (incl. FLEX) from the QB’s team.
         """
-        need = int(get_config_value(self.config, "lineup.qb_stack_min", 0) or 0)
         if need <= 0:
             return
-
         teams = {p.team for p in self.players if p.team}
-        # y_t = 1 iff the QB from team t is selected.
         y = plp.LpVariable.dicts("QBTeam", list(teams), lowBound=0, upBound=1, cat=plp.LpBinary)
-
-        # Link y_t to all QB vars from team t: y_t >= x_qb for each QB x_qb in t
+        # Link: y_t >= any QB from t
         for t in teams:
             qb_vars_t = [self.vars[(p, "QB")] for p in self.players if (p, "QB") in self.vars and p.team == t]
             if not qb_vars_t:
@@ -149,27 +184,42 @@ class NFLConstraints:
                 continue
             for x in qb_vars_t:
                 self.problem += (y[t] >= x, f"LinkQB_{t}_{x.name}")
-
-        # Exactly one QB overall → exactly one y_t will be 1
+        # Exactly one QB team
         self.problem += (plp.lpSum(y[t] for t in teams) == 1, "ExactlyOneQBTeam")
-
-        # Stack: receivers on the QB's team >= need * y_t
+        # Receivers on that team >= need * y_t
         for t in teams:
             rec_vars_t = self._receiver_vars_for_team(t)
             if rec_vars_t:
-                self.problem += (
-                    plp.lpSum(rec_vars_t) >= need * y[t],
-                    f"QBStack_{t}"
-                )
+                self.problem += (plp.lpSum(rec_vars_t) >= need * y[t], f"QBStack_{t}")
 
-    def add_all(self) -> None:
-        self._add_salary_cap()
-        self._add_roster_counts()
-        self._add_single_use()
-        # self._add_max_players_per_team()
-        # self._add_qb_stack_constraint()
+    # ---- public entrypoint ----
+    def add_constraints(
+        self,
+        fmt: str,
+        *,
+        slot_counts: Dict[str, int],
+        cap: int = 50000,
+        min_salary: int = 0,
+        min_spend: Optional[int] = None,
+        max_players_per_team: Optional[int] = None,
+        qb_stack_min: int = 0,
+        dedupe_real_players: bool = True,
+    ) -> None:
+        """Dispatch + compose shared constraints."""
+        # Shared
+        self._add_salary_cap(cap=cap, min_salary=min_salary, min_spend=min_spend)
+        self._add_exact_slot_counts(slot_counts)
+        self._add_max_players_per_team(max_players_per_team)
 
-
+        if fmt == "classic":
+            self._add_single_use_by_player_id()
+            self._add_qb_stack_constraint(qb_stack_min)
+        elif fmt == "showdown":
+            # Showdown rows are separate CPT/FLEX IDs → guard duplicates of same real player.
+            if dedupe_real_players:
+                self._add_no_duplicate_real_player()
+        else:
+            raise ValueError(f"Unknown format: {fmt}")
 # ---- helpers ----
 
 def _coerce_positions(pos: Iterable[str] | str) -> PositionType:
@@ -192,225 +242,152 @@ def _coerce_positions(pos: Iterable[str] | str) -> PositionType:
         return uniq[0]  # <-- single position returns string
     return tuple(uniq)
 
-def _as_bases(position: PositionType) -> Tuple[str, ...]:
-    return position if isinstance(position, tuple) else (position,)
-
-def _slot_list_for_player(p: FieldPlayer) -> List[str]:
-    bases = _as_bases(p.position)
-    allowed = set(_DK_SLOT_COUNTS.keys())
-    slots = [s for s in bases if s in allowed]
-    if any(bp in _FLEX_ELIGIBLE for bp in bases) and "FLEX" in allowed:
-        slots.append("FLEX")
-    return slots
-
-
-
-# ---- public API ----
-
 def generate_single_lineup_from_samples(
     players: List[FieldPlayer],
     sample_values: Dict[int, float],
     config: dict | None = None,
     debug_lp_path: Optional[str] = None,
 ) -> Optional[List[int]]:
-    """
-    Build & solve a single DK Classic lineup using per-player sampled fpts.
-
-    Returns list of selected player IDs (length 9) or None if infeasible.
-    """
     config  = config or {}
     verbose = bool(get_config_value(config, "verbose", False))
     prob    = plp.LpProblem("nfl_field_lineup", plp.LpMaximize)
 
-    # Create binary decision variables for each (player, eligible_slot).
+    # (player, slot) vars
     lp_vars: Dict[Tuple[FieldPlayer, str], plp.LpVariable] = {}
     for p in players:
         base = _safe_var_name(p.name)
-        for slot in _slot_list_for_player(p):
-            var_name = f"{base}_{slot}_{p.id}"
-            lp_vars[(p, slot)] = plp.LpVariable(var_name, cat=plp.LpBinary)
+        for slot in _eligible_slots_for_player(p, "classic"):
+            lp_vars[(p, slot)] = plp.LpVariable(f"{base}_{slot}_{p.id}", cat=plp.LpBinary)
 
-    # Objective: maximize sum of sampled fpts
+    # objective = sum of sampled fpts
     prob += plp.lpSum(
         sample_values.get(p.id, 0.0) * lp_vars[(p, slot)]
         for p in players
-        for slot in _slot_list_for_player(p)
+        for slot in _eligible_slots_for_player(p, "classic")
+        if (p, slot) in lp_vars
     ), "TotalSampledFPTS"
 
-    # Optional: minimum projection guard (uses p.fpts_projection, not sample)
+    # optional min-projection guard (uses p.fpts_projection)
     min_proj = get_config_value(config, "lineup.min_fpts_threshold", None)
     if min_proj is not None:
-        proj_expr = plp.lpSum(
+        prob += plp.lpSum(
             (p.fpts_projection or 0.0) * lp_vars[(p, slot)]
             for p in players
-            for slot in _slot_list_for_player(p)
-        )
-        prob += (proj_expr >= float(min_proj)), "MinProjectionSum"
+            for slot in _eligible_slots_for_player(p, "classic")
+            if (p, slot) in lp_vars
+        ) >= float(min_proj), "MinProjectionSum"
 
-    # Constraints
-    NFLConstraints(prob, players, lp_vars, config, verbose).add_all()
+    # constraints (shared)
+    Constraints(prob, players, lp_vars, config, verbose).add_constraints(
+        "classic",
+        slot_counts=_CLASSIC_SLOT_COUNTS,
+        cap=int(get_config_value(config, "lineup.salary_cap", 50000)),
+        min_salary=int(get_config_value(config, "lineup.min_salary", 0)),
+        max_players_per_team=get_config_value(config, "lineup.max_players_per_team", None),
+        qb_stack_min=int(get_config_value(config, "lineup.qb_stack_min", 0) or 0),
+    )
 
-    # Solve with GLPK
     solver = plp.GLPK_CMD(
-    path=r"D:\ivan\glpk-4.65\w64\glpsol.exe",  # adjust if your exe lives elsewhere
-    keepFiles=True,                             # keep the .lp/.sol temp files
-    options=["--log", r"data\nfl/logs/glpsol.log"]  # write a GLPK log file
+        path=r"D:\ivan\glpk-4.65\w64\glpsol.exe",
+        keepFiles=True,
+        options=["--log", r"data\nfl/logs/glpsol.log"]
     )
-    status_code = prob.solve(solver)
-    status = plp.LpStatus[status_code]
-
-    if status != "Optimal":
-        if debug_lp_path:
-            prob.writeLP(debug_lp_path)
-        return None
-
-    chosen_ids = [
-        p.id for (p, slot), var in lp_vars.items()
-        if var.varValue == 1
-    ]
-    # De-duplicate in case multiple slots could theoretically turn on (shouldn't happen with SingleUse)
-    chosen_ids = list(dict.fromkeys(chosen_ids))
-    return chosen_ids if len(chosen_ids) == sum(_DK_SLOT_COUNTS.values()) else None
-
-def generate_single_lineup_from_scores(
-    players: List[FieldPlayer],
-    scores: Dict[int, float],
-    config: dict | None = None,
-    debug_lp_path: Optional[str] = None,
-) -> Optional[List[int]]:
-    """
-    Classic lineup with a deterministic score vector (e.g., medians).
-    """
-    config  = config or {}
-    verbose = bool(get_config_value(config, "verbose", False))
-    prob    = plp.LpProblem("nfl_field_lineup_median", plp.LpMaximize)
-
-    lp_vars: Dict[Tuple[FieldPlayer, str], plp.LpVariable] = {}
-    for p in players:
-        base = _safe_var_name(p.name)
-        for slot in _slot_list_for_player(p):
-            lp_vars[(p, slot)] = plp.LpVariable(f"{base}_{slot}_{p.id}", cat=plp.LpBinary)
-
-    # Objective: maximize sum of medians + tiny salary tiebreak (keeps builds near cap)
-    salary_expr = plp.lpSum(
-        p.salary * lp_vars[(p, slot)]
-        for p in players for slot in _slot_list_for_player(p)
-    )
-    score_expr = plp.lpSum(
-        (scores.get(p.id, 0.0)) * lp_vars[(p, slot)]
-        for p in players for slot in _slot_list_for_player(p)
-    )
-    prob += score_expr + 1e-4 * (salary_expr / 50000.0), "MedianPlusSalaryTiebreak"
-
-    # Optional: min projection guard
-    min_proj = get_config_value(config, "lineup.min_fpts_threshold", None)
-    if min_proj is not None:
-        proj_expr = plp.lpSum(
-            (p.fpts_projection or 0.0) * lp_vars[(p, slot)]
-            for p in players for slot in _slot_list_for_player(p)
-        )
-        prob += (proj_expr >= float(min_proj)), "MinProjectionSum"
-
-    NFLConstraints(prob, players, lp_vars, config, verbose).add_all()
-
-    solver = plp.GLPK_CMD(path=r"D:\ivan\glpk-4.65\w64\glpsol.exe", keepFiles=True,
-                          options=["--log", r"data\nfl/logs/glpsol.log"])
     status_code = prob.solve(solver)
     if plp.LpStatus[status_code] != "Optimal":
         if debug_lp_path:
             prob.writeLP(debug_lp_path)
         return None
+
     chosen_ids = [p.id for (p, slot), var in lp_vars.items() if var.varValue == 1]
     chosen_ids = list(dict.fromkeys(chosen_ids))
-    return chosen_ids if len(chosen_ids) == sum(_DK_SLOT_COUNTS.values()) else None
+    return chosen_ids if len(chosen_ids) == sum(_CLASSIC_SLOT_COUNTS.values()) else None
+
 
 def generate_single_showdown_lineup(
     players: List[FieldPlayer],
     roster_slot_by_id: Dict[int, int],
     base_scores: Dict[int, float],
     *,
-    jitter: float = 0.10,           # ±10% randomization to "un-optimize"
+    jitter: float = 0.10,
     cap: int = 50000,
-    min_cap_drop: int = 0,          # random salary floor distance from cap (inclusive)
-    max_cap_drop: int = 1200,       # (e.g., uniform 0..1200)
+    min_cap_drop: int = 0,
+    max_cap_drop: int = 1200,
     debug_lp_path: Optional[str] = None,
 ) -> Optional[List[int]]:
-    """
-    Build one DK Showdown lineup with 1 CPT (511) + 5 FLEX (512).
-    """
     prob  = plp.LpProblem("dk_showdown", plp.LpMaximize)
 
-    # Partition pool by slot id (from DK payload)
-    CPT, FLEX = 511, 512
-    cpt_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == CPT]
-    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == FLEX]
+    # sanity: make sure we have at least 1 CPT id and 5 FLEX ids
+    cpt_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == 511]
+    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == 512]
     if not cpt_ids or len(flex_ids) < 5:
         return None
 
-    xC = plp.LpVariable.dicts("xC", cpt_ids, 0, 1, plp.LpBinary)
-    xF = plp.LpVariable.dicts("xF", flex_ids, 0, 1, plp.LpBinary)
-
-    # Exactly one CPT, exactly five FLEX
-    prob += plp.lpSum(xC[i] for i in cpt_ids) == 1, "ExactlyOneCaptain"
-    prob += plp.lpSum(xF[i] for i in flex_ids) == 5, "ExactlyFiveFlex"
-
-    # Mutually exclusive per real player: same name+team cannot appear twice
-    by_key: Dict[tuple, Dict[str, int]] = {}
+    # (player, slot) vars (CPT or FLEX per row id)
+    lp_vars: Dict[Tuple[FieldPlayer, str], plp.LpVariable] = {}
     for p in players:
-        key = (p.name, p.team)
-        rs  = roster_slot_by_id.get(p.id)
-        if rs == CPT:
-            by_key.setdefault(key, {})["cpt"] = p.id
-        elif rs == FLEX:
-            by_key.setdefault(key, {})["flex"] = p.id
-    for key, ids in by_key.items():
-        if "cpt" in ids and "flex" in ids:
-            prob += xC[ids["cpt"]] + xF[ids["flex"]] <= 1, f"NoDup_{_safe_var_name(key[0])}_{key[1]}"
+        for slot in _eligible_slots_for_player(p, "showdown", roster_slot_by_id):
+            lp_vars[(p, slot)] = plp.LpVariable(f"{_safe_var_name(p.name)}_{slot}_{p.id}", cat=plp.LpBinary)
 
-    # Salary: captain rows already have the DK-boosted salary in NFLPlayer
-    salary = {p.id: p.salary for p in players}
-    spend  = plp.lpSum(salary[i] * xC[i] for i in cpt_ids) + plp.lpSum(salary[i] * xF[i] for i in flex_ids)
-    # Near-cap floor randomized per lineup
+    # salaries already DK-boosted for CPT rows in your DB
+    # Objective: lightly jittered base scores
     import random as _rnd
+    prob += (
+        plp.lpSum((base_scores.get(p.id, 0.0) * (1.0 + _rnd.uniform(-jitter, jitter))) * lp_vars[(p, slot)]
+                  for p in players
+                  for slot in _eligible_slots_for_player(p, "showdown", roster_slot_by_id)
+                  if (p, slot) in lp_vars)
+    ), "NoisyPoints"
+
+    # randomized near-cap floor for THIS lineup
     min_spend = cap - _rnd.randint(min_cap_drop, max_cap_drop)
-    prob += spend <= cap,        "Cap"
-    prob += spend >= min_spend,  "NearCapFloor"
 
-    # Objective: lightly randomized points to avoid concentration
-    # (CPT rows already include the 1.5x DK CPT projection effect via their salary; points use same base)
-    # If you prefer, multiply base_scores for CPT by 1.5 here; or keep them equal and let jitter explore.
-    obj = (
-        plp.lpSum((base_scores.get(i, 0.0) * (1.0 + _rnd.uniform(-jitter, jitter))) * xC[i] for i in cpt_ids) +
-        plp.lpSum((base_scores.get(i, 0.0) * (1.0 + _rnd.uniform(-jitter, jitter))) * xF[i] for i in flex_ids)
+    # constraints (shared)
+    Constraints(prob, players, lp_vars, config={}, verbose=False).add_constraints(
+        "showdown",
+        slot_counts=_SHOWDOWN_SLOT_COUNTS,  # Exactly one CPT & five FLEX
+        cap=cap,
+        min_spend=min_spend,                # randomized floor
+        dedupe_real_players=True,           # no dup of same (name, team)
     )
-    prob += obj, "NoisyPoints"
 
-    solver = plp.GLPK_CMD(path=r"D:\ivan\glpk-4.65\w64\glpsol.exe", keepFiles=True,
-                          options=["--log", r"data\nfl/logs/glpsol.log"])
+    solver = plp.GLPK_CMD(
+        path=r"D:\ivan\glpk-4.65\w64\glpsol.exe",
+        keepFiles=True,
+        options=["--log", r"data\nfl/logs/glpsol.log"]
+    )
     status = prob.solve(solver)
     if plp.LpStatus[status] != "Optimal":
         if debug_lp_path:
             prob.writeLP(debug_lp_path)
         return None
 
-    lineup = [i for i in cpt_ids if plp.value(xC[i]) > 0.5]
-    lineup += [i for i in flex_ids if plp.value(xF[i]) > 0.5]
-    return lineup if len(lineup) == 6 else None
+    chosen_ids = [p.id for (p, slot), var in lp_vars.items() if var.varValue == 1]
+    return chosen_ids if len(chosen_ids) == 6 else None
+
+
+def _infer_slate_type(roster_slot_by_id: Dict[int, int]) -> str:
+    """Return 'showdown' if any DK Showdown roster slots (511/512) exist; else 'classic'."""
+    vals = set(roster_slot_by_id.values())
+    return "showdown" if (511 in vals or 512 in vals) else "classic"
+
 
 def generate_and_store_field_lineups(
     session: Session,
     samples: Dict[int, np.ndarray],
     config: dict | None = None,
     num_lineups: int = 1000,
-    batch_size: int = 100,
+    workers: int = 1,
 ) -> int:
     """
     Build up to `num_lineups` lineups by sweeping sample indices.
-    Saves rows to ivan.sports.nfl.models.Lineup(player_ids_list, created_at).
+    - `workers` only influences commit batching: batch_size = max(1, num_lineups // workers)
+    - Slate type is inferred from roster_slot_id to choose Classic vs Showdown builder.
+    Saves ivan.sports.nfl.models.Lineup(player_ids_list, created_at) rows.
     Returns the count created.
     """
     config = config or {}
-
+    # compute batch size from workers (guard for small num_lineups/workers)
+    batch_size = max(1, num_lineups // max(1, workers))
 
     # 1) Load just the players referenced by samples
     ids = list(samples.keys())
@@ -422,11 +399,10 @@ def generate_and_store_field_lineups(
                .filter(NFLPlayer.id.in_(ids))
                .all()
     )
-
     if not raw_players:
         return 0
 
-    # 2) Wrap into FieldPlayer and capture roster_slot_id by id (for Showdown)
+    # 2) Wrap into FieldPlayer and capture roster_slot_id by id (for Showdown inference)
     players: List[FieldPlayer] = []
     roster_slot_by_id: Dict[int, int] = {}
     for rp in raw_players:
@@ -443,18 +419,27 @@ def generate_and_store_field_lineups(
         ))
         roster_slot_by_id[rp.id] = int(getattr(rp, "roster_slot_id", 0) or 0)
 
-    # 3) Prepare iterate over sample indices
+    # 2b) Infer slate type
+    slate_type = _infer_slate_type(roster_slot_by_id)
+
+    # 3) Prepare to iterate over sample indices
     n_samples = len(next(iter(samples.values())))
     idx_order = list(range(n_samples))
     random.shuffle(idx_order)
 
     created = 0
     batch   = 0
-    seen_lineups = set()  # prevent duplicates
+    seen_lineups: set[tuple[int, ...]] = set()  # prevent duplicates
+
+    # showdown config knobs (used only if slate_type == 'showdown')
+    jitter       = float(get_config_value(config, "showdown.jitter", 0.10))
+    cap          = int(get_config_value(config, "lineup.salary_cap", 50000))
+    min_cap_drop = int(get_config_value(config, "showdown.min_cap_drop", 0))
+    max_cap_drop = int(get_config_value(config, "showdown.max_cap_drop", 1200))
 
     # 4) Sweep sample indices, build & save lineups
     attempts = 0
-    max_attempts = max(num_lineups * 10, num_lineups + 50)
+    max_attempts = max(num_lineups * 1.2, num_lineups + 50)
 
     while created < num_lineups and attempts < max_attempts:
         sample_idx = idx_order[attempts % n_samples]
@@ -463,13 +448,25 @@ def generate_and_store_field_lineups(
         # materialize this round's sampled fpts
         per_player_sample = {pid: float(vec[sample_idx]) for pid, vec in samples.items()}
 
-        ids_selected = generate_single_lineup_from_samples(
-            players=players,
-            sample_values=per_player_sample,
-            config=config,
-            debug_lp_path=f"data/nfl/logs/debug_lineup_{attempts}.lp",  # or f"debug_lineup_{attempts}.lp"
-        )
-        print(ids_selected)
+        if slate_type == "showdown":
+            ids_selected = generate_single_showdown_lineup(
+                players=players,
+                roster_slot_by_id=roster_slot_by_id,
+                base_scores=per_player_sample,  # use this sample as the base score signal
+                jitter=jitter,
+                cap=cap,
+                min_cap_drop=min_cap_drop,
+                max_cap_drop=max_cap_drop,
+                debug_lp_path=f"data/nfl/logs/debug_showdown_{attempts}.lp",
+            )
+        else:
+            ids_selected = generate_single_lineup_from_samples(
+                players=players,
+                sample_values=per_player_sample,
+                config=config,
+                debug_lp_path=f"data/nfl/logs/debug_classic_{attempts}.lp",
+            )
+
         if not ids_selected:
             continue
 
