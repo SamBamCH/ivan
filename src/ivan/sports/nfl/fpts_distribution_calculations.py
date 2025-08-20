@@ -1,6 +1,9 @@
 from pathlib import Path
 import joblib
+import json
 from typing import Optional, Dict, Tuple
+from collections import defaultdict
+from math import isfinite
 import numpy as np
 from scipy.stats import rv_continuous, rv_discrete
 import scipy.stats as st
@@ -23,6 +26,9 @@ from ivan.sports.nfl.models import NFLPlayer, NFLStat
 DST_POS = {"DST", "D/ST", "DEF"}
 KICKER_DEFAULT_SHAPE = 5.5
 KICKER_DEFAULT_SCALE = 1.2
+DEFAULT_ONE_SIDE_VIG = 0.05  # 7.5% haircut if the opposing side is missing
+DEFAULT_MARKET_WEIGHTS_PATH = Path(r"D:\ivan\data\nfl\models\market_weights.json")
+_MARKET_WEIGHTS_CACHE: dict | None = None
 
 from sqlalchemy import and_, desc
 from ivan.core.utils import normalize_name
@@ -33,6 +39,141 @@ import numpy as np
 from scipy.stats import skew, kurtosis
 
 
+def _load_market_weights(path: Path = DEFAULT_MARKET_WEIGHTS_PATH) -> dict:
+    global _MARKET_WEIGHTS_CACHE
+    if _MARKET_WEIGHTS_CACHE is None:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                _MARKET_WEIGHTS_CACHE = json.load(f)
+        except Exception:
+            _MARKET_WEIGHTS_CACHE = {}
+    return _MARKET_WEIGHTS_CACHE
+
+def _norm_side(s: str) -> str:
+    s = (s or "").strip().lower()
+    if s in {"o", "over"}:  return "over"
+    if s in {"u", "under"}: return "under"
+    if s in {"y", "yes"}:   return "yes"
+    if s in {"n", "no"}:    return "no"
+    return s
+
+def _devig_two_sided(p_a: float, p_b: float) -> tuple[float, float]:
+    # Normalize so p_a + p_b = 1
+    denom = max(p_a + p_b, 1e-12)
+    return p_a/denom, p_b/denom
+
+def _haircut_one_sided(p_raw: float, haircut: float = DEFAULT_ONE_SIDE_VIG) -> float:
+    # Simple “fair” proxy if only one side is visible
+    p = p_raw * (1.0 - haircut)
+    return float(np.clip(p, 1e-6, 1 - 1e-6))
+
+def _gather_quotes(session: Session, player_name: str, api_keys: tuple[str, ...]):
+    """Get the latest odds rows for all keys; return list of NFLOdds rows."""
+    return (session.query(NFLOdds)
+            .filter(NFLOdds.player == player_name, NFLOdds.market.in_(api_keys))
+            .order_by(desc(NFLOdds.last_update))
+            .all())
+
+def _pick_latest_per_book_point(rows):
+    """
+    Keep the latest row per (sportsbook, market, side, point).
+    Returns dict[(book, point, side)]=(row, ts_rank)
+    """
+    out = {}
+    rank = 0
+    for r in rows:
+        key = (r.sportsbook, float(r.point) if r.point is not None else 0.5, _norm_side(r.side))
+        if key not in out:  # rows ordered desc already, first is latest
+            out[key] = (r, rank)
+            rank += 1
+    return out
+
+def _consensus_prob_for_side(
+    session: Session,
+    player_name: str,
+    market_key: str,
+    *, target_side: str,          # "over"/"under" or "yes"/"no"
+    default_one_side_vig: float = DEFAULT_ONE_SIDE_VIG
+) -> tuple[float | None, float | None]:
+    """
+    Book-weighted, de-vigged consensus for a side. Returns (consensus_point, p_fair).
+    - Uses only books present; re-normalizes provided market weights.
+    - For O/U: pairs Over/Under at the same book+point if possible (clean de-vig).
+    - If only one side exists for that book+point, apply a haircut (7.5% default).
+    - Points may differ across books; we compute a weight-average point as well.
+    """
+    weights_cfg = _load_market_weights()
+    book_weights = (weights_cfg.get(market_key) or {}).copy()
+
+    api_keys = (market_key,)  # allow passing an API key directly
+    # If you passed an internal stat, expand to its API keys
+    if market_key in _MARKET_KEYS:
+        api_keys = _MARKET_KEYS[market_key]
+
+    rows = _gather_quotes(session, player_name, api_keys)
+    if not rows:
+        return None, None
+
+    latest = _pick_latest_per_book_point(rows)
+
+    # group by book (choose the most recent point for that book)
+    by_book: dict[str, dict] = defaultdict(dict)  # book -> {point: {"over":row, "under":row, "yes":row, "no":row, "rank":min}}
+    for (book, point, side), (row, rnk) in latest.items():
+        d = by_book[book].setdefault(point, {"rank": rnk})
+        d[side] = row
+        d["rank"] = min(d["rank"], rnk)
+
+    # Per book, choose the freshest point (min rank), then compute fair p for target_side
+    per_book = []
+    for book, pts in by_book.items():
+        # pick freshest point for that book
+        point, bundle = min(pts.items(), key=lambda kv: kv[1]["rank"])
+        sideA = "over" if target_side in {"over", "under"} else "yes"
+        sideB = "under" if sideA == "over" else "no"
+        rowA = bundle.get(sideA)
+        rowB = bundle.get(sideB)
+
+        if rowA is None and rowB is None:
+            continue
+
+        pA_raw = american_to_prob(float(rowA.price)) if rowA is not None else None
+        pB_raw = american_to_prob(float(rowB.price)) if rowB is not None else None
+
+        if pA_raw is not None and pB_raw is not None:
+            pA_fair, _ = _devig_two_sided(pA_raw, pB_raw)
+        elif pA_raw is not None:
+            pA_fair = _haircut_one_sided(pA_raw, default_one_side_vig)
+        elif pB_raw is not None:
+            # want fair prob for target_side but only opposite side exists
+            pB_fair = _haircut_one_sided(pB_raw, default_one_side_vig)
+            pA_fair = 1.0 - pB_fair
+        else:
+            continue
+
+        # weight for this book
+        w = book_weights.get(book, None)
+        per_book.append((book, float(point), float(pA_fair), float(w) if w is not None else None))
+
+    if not per_book:
+        return None, None
+
+    # re-normalize weights to books we actually have; unknown books => equal small weight
+    known = [(pt, p, w) for _, pt, p, w in per_book if (w is not None and isfinite(w) and w > 0)]
+    unknown = [(pt, p) for _, pt, p, w in per_book if (w is None or not isfinite(w) or w <= 0)]
+
+    if known:
+        total_w = sum(w for _, _, w in known)
+        known = [(pt, p, w/total_w) for pt, p, w in known]
+    if unknown:
+        # give equal mass among unknowns, scaled to (remaining) 0 if known else 1
+        remaining = 0.0 if known else 1.0
+        w_eq = remaining / len(unknown)
+        known += [(pt, p, w_eq) for (pt, p) in unknown]
+
+    # consensus
+    point_cons = sum(pt * w for pt, _, w in known)
+    p_cons = sum(p * w for _, p, w in known)
+    return float(point_cons), float(np.clip(p_cons, 1e-6, 1 - 1e-6))
 
 def _finite(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float).reshape(-1)
@@ -111,44 +252,39 @@ def _save_fpts_summary_on_player(session, player, summary: dict, verbose: bool =
         session.commit()
 
 # --- TD odds → Poisson mean helpers ------------------------------------------
-def _poisson_mu_for_threshold(point: float, side: str, price: float) -> float:
-    """
-    Convert a 0.5-style TD line (or k+0.5) and price to a Poisson rate mu.
-    For 'over/yes': want P(X >= k+1) = p ; for 'under/no': P(X <= k) = p.
-    Solves for mu via monotone bisection on Poisson CDF/SF.
-    """
-    p = float(np.clip(american_to_prob(price), 1e-6, 1 - 1e-6))
-    k = int(np.floor(float(point if point is not None else 0.5)))
-    side_norm = str(side).lower().strip()
+def _poisson_mu_for_threshold(point: float, side: str, p_fair: float) -> float:
+    side = _norm_side(side)
+    if side in {"yes", "over"}:
+        k_min = int(np.floor(point)) + 1   # Over t => >= floor(t)+1
+        return _invert_poisson_for_over(p_fair, k_min)
+    else:
+        k_max = int(np.floor(point))       # Under t => <= floor(t)
+        return _invert_poisson_for_under(p_fair, k_max)
 
-    # choose target function
-    greater = side_norm in {"over", "yes"}
-    target = p
 
-    # expand hi until we bracket the target
-    lo, hi = 0.0, 1.0
-    for _ in range(40):
-        val = (st.poisson.sf(k, hi) if greater else st.poisson.cdf(k, hi))
-        if (val >= target and greater) or (val <= target and not greater):
-            break
-        hi *= 2.0
-    # bisection
+def _poisson_mu_from_prob_at_least_one(p: float) -> float:
+    # P(X >= 1) = 1 - e^{-mu}  =>  mu = -ln(1-p)
+    return float(-np.log(max(1.0 - p, 1e-9)))
+
+def _invert_poisson_for_over(p_over: float, k_min: int) -> float:
+    # find mu s.t. P[X >= k_min] = p_over
+    lo, hi = 1e-9, 20.0
     for _ in range(60):
-        mid = 0.5 * (lo + hi)
-        val = (st.poisson.sf(k, mid) if greater else st.poisson.cdf(k, mid))
-        if (val > target and greater) or (val < target and not greater):
-            lo = mid
-        else:
-            hi = mid
-    return 0.5 * (lo + hi)
+        mid = 0.5*(lo+hi)
+        val = st.poisson.sf(k_min-1, mid)  # sf(k-1) = P[X >= k]
+        if val > p_over: lo = mid
+        else:            hi = mid
+    return 0.5*(lo+hi)
 
-
-def _poisson_mu_from_prob_at_least_one(prob_at_least_one: float) -> float:
-    """
-    If a market implies P(X>=1) = p for a Poisson X, then mu = -ln(1-p).
-    """
-    p = float(np.clip(prob_at_least_one, 1e-9, 1-1e-9))
-    return float(-np.log(1.0 - p))
+def _invert_poisson_for_under(p_under: float, k_max: int) -> float:
+    # find mu s.t. P[X <= k_max] = p_under
+    lo, hi = 1e-9, 20.0
+    for _ in range(60):
+        mid = 0.5*(lo+hi)
+        val = st.poisson.cdf(k_max, mid)
+        if val < p_under: lo = mid
+        else:             hi = mid
+    return 0.5*(lo+hi)
 
 def _player_has_any_odds(session: Session, player_name: str) -> bool:
     """Fast existence check: does ANY odds row exist for this player name?"""
@@ -278,18 +414,92 @@ def _role_factor_from_calibrated(base_name, base_params, adj_name, adj_params, *
     except Exception:
         return 1.0
     
-_MISSING_STAT_EXP = {}
+def _is_count_dist(name: str) -> bool:
+    return name in {"poisson", "nbinom"}
 
-def _apply_role_to_params(dist_name: str, base_params, role: float, stat: str):
+def _poisson_get_mu(params: tuple) -> float:
+    # SciPy poisson params: (mu,) [loc implicit via _split_params]
+    return float(params[0])
+
+def _poisson_set_mu(mu: float) -> tuple:
+    return (float(max(mu, 1e-9)),)
+
+def _nbinom_get_mean(params: tuple) -> tuple[float, float, float]:
+    # SciPy nbinom: (n, p), mean = n*(1-p)/p
+    n, p = float(params[0]), float(params[1])
+    m = n*(1.0 - p)/p
+    return m, n, p
+
+def _nbinom_set_mean_keep_p(m: float, p: float) -> tuple:
+    # n = m*p/(1-p)
+    n = float(max(m*p/max(1e-9, (1.0-p)), 1e-9))
+    return (n, p)
+
+def _calibrate_count_mean_from_ou(dist_name: str, base_params, point: float, side: str, p_fair: float) -> tuple[str, tuple]:
+    side = _norm_side(side)
+    if dist_name == "poisson":
+        # solve for mu s.t. P(X > t) or P(X <= t) matches p_fair
+        if side in {"over", "yes"}:
+            k_min = int(np.floor(point)) + 1
+            mu_new = _invert_poisson_for_over(p_fair, k_min)
+        else:
+            k_max = int(np.floor(point))
+            mu_new = _invert_poisson_for_under(p_fair, k_max)
+        return "poisson", _poisson_set_mu(mu_new)
+
+    if dist_name == "nbinom":
+        m0, _, p = _nbinom_get_mean(base_params)
+        # binary search over mean m; keep p fixed, update n accordingly
+        k_thr = int(np.floor(point))
+        over = (side in {"over", "yes"})
+        lo, hi = 1e-6, max(20.0, 5.0*m0 + 5.0)  # wide enough bracket
+        for _ in range(60):
+            mid = 0.5*(lo+hi)
+            n_mid, p_mid = _nbinom_set_mean_keep_p(mid, p)
+            if over:
+                val = st.nbinom.sf(k_thr, n_mid, p_mid)  # P[X > k_thr]
+                if val > p_fair: lo = mid
+                else:            hi = mid
+            else:
+                val = st.nbinom.cdf(k_thr, n_mid, p_mid) # P[X <= k_thr]
+                if val < p_fair: lo = mid
+                else:            hi = mid
+        m_new = 0.5*(lo+hi)
+        return "nbinom", _nbinom_set_mean_keep_p(m_new, p)
+
+    # Fallback: leave as-is (rare)
+    return dist_name, tuple(base_params)
+    
+_MISSING_STAT_EXP = {
+    # yards / receptions need strong shrink for fringe roles
+    "receiving_yards": 0.9, "receptions": 0.3, "receiving_tds": 1.0,
+    "rushing_yards": 0.8,  "rushing_tds": 1.0,
+    "passing_yards": 0.0,  "passing_tds": 0.0,
+    "interceptions": 0.0,
+}
+
+def _apply_role_to_params(dist_name: str, base_params, role: float, stat: str, verbose: bool = False):
+    beta = _MISSING_STAT_EXP.get(stat, 0.9)
+    rpow = float(np.clip(role, 1e-4, 1.0)) ** beta
+
+    if _is_count_dist(dist_name):
+        # scale the *mean* of count dists
+        if dist_name == "poisson":
+            mu = _poisson_get_mu(base_params)
+            return "poisson", _poisson_set_mu(mu * rpow)
+        if dist_name == "nbinom":
+            m, _, p = _nbinom_get_mean(base_params)
+            return "nbinom", _nbinom_set_mean_keep_p(m * rpow, p)
+        return dist_name, tuple(base_params)
+
+    # continuous dists: shrink scale ~ role, and shrink loc if nonzero
     dist_fn = getattr(st, dist_name)
     shapes, loc, scale = _split_params(dist_fn, base_params)
-    beta = _MISSING_STAT_EXP.get(stat, 0.8)
-    rpow = role ** beta
-    new_loc = loc * rpow
-    if scale is None:  # discrete => no scale kw
-        return dist_name, (shapes + (new_loc,))
-    new_scale = scale * (0.5 + 0.5 * rpow)
-    return dist_name, (shapes + (new_loc, new_scale))
+    new_loc   = loc * rpow
+    new_scale = scale * rpow
+    if verbose:
+        print(f"[role] {stat}: r={role:.3f} β={beta:.2f} → loc {loc:.3g}->{new_loc:.3g}, scale {scale:.3g}->{new_scale:.3g}")
+    return dist_name, (shapes + (new_loc, new_scale)) if scale is not None else (shapes + (new_loc,))
 
 def _split_params(dist_fn, params):
     """
@@ -329,54 +539,62 @@ def _mean_of(dist_name: str, params) -> float:
     return float(m) if np.isfinite(m) else np.nan
 
 def _role_factor_from_calibrated(base_name: str, base_params, adj_name: str, adj_params,
-                                 *, lo: float = 0.2, hi: float = 1.0) -> float:
+                                 *, lo: float = 0.02, hi: float = 0.8, verbose: bool = False) -> float:
     try:
         e_base = _mean_of(base_name, base_params)
         e_adj  = _mean_of(adj_name,  adj_params)
         if not np.isfinite(e_base) or e_base == 0:
+            if verbose:
+                print(f'set role_factor to 1 due to infinite/0 e_base')
             return 1.0
-        return float(np.clip(e_adj / e_base, lo, hi))
+        role_factor = float(np.clip(e_adj / e_base, lo, hi))
+        if verbose:
+            print(f'role_factor: {role_factor}')
+            
+        return role_factor
     except Exception:
         return 1.0
 
-def _calibrate_loc(dist_name: str, base_params, point: float, side: str, price: float, verbose: bool = False):
+def _calibrate_loc(
+    dist_name: str,
+    base_params,
+    point: float,
+    side: str,
+    price: float | None = None,
+    *,
+    p_fair: float | None = None,
+    verbose: bool = False
+):
     """
-    Shift only 'loc' so that:
-      side in {'over','yes'}  -> P(X > point) = p
-      side in {'under','no'}  -> P(X < point) = p
+    If p_fair is provided, use that directly; otherwise use 'price' to build p_fair.
+    side in {'over','under','yes','no'}.
     """
-    p = float(np.clip(american_to_prob(price), 1e-6, 1 - 1e-6))
-    side_norm = str(side).lower().strip()
-    is_over_like = side_norm in {"over", "yes"}
-    target_cdf = 1.0 - p if is_over_like else p
+    side_norm = _norm_side(side)
+    if p_fair is None:
+        if price is None:
+            return dist_name, tuple(base_params)
+        p = float(np.clip(american_to_prob(price), 1e-6, 1 - 1e-6))
+        p_fair = p  # you'll usually pass de-vigged here from consensus
 
+    target_cdf = (1.0 - p_fair) if side_norm in {"over","yes"} else p_fair
     if verbose:
-        print(f"odds->prob: point={point} side={side} price={price} -> target_cdf={target_cdf}")
+        print(f"calibrate: point={point} side={side_norm} p_fair={p_fair} -> target_cdf={target_cdf}")
 
     dist_fn = getattr(st, dist_name)
     shapes, loc, scale = _split_params(dist_fn, base_params)
 
-    # compute quantile at 'standard loc' to solve for the new loc
     try:
-        if scale is None:
-            q0 = dist_fn.ppf(target_cdf, *shapes, loc=0.0)
-        else:
-            q0 = dist_fn.ppf(target_cdf, *shapes, loc=0.0, scale=scale)
+        q0 = dist_fn.ppf(target_cdf, *shapes, loc=0.0) if scale is None \
+            else dist_fn.ppf(target_cdf, *shapes, loc=0.0, scale=scale)
     except TypeError:
-        # fallback: compute around current loc then subtract it
-        if scale is None:
-            q0 = dist_fn.ppf(target_cdf, *shapes, loc=loc) - loc
-        else:
-            q0 = dist_fn.ppf(target_cdf, *shapes, loc=loc, scale=scale) - loc
+        q0 = (dist_fn.ppf(target_cdf, *shapes, loc=loc) if scale is None
+              else dist_fn.ppf(target_cdf, *shapes, loc=loc, scale=scale)) - loc
 
     if not np.isfinite(q0):
-        return dist_name, tuple(base_params)  # give up: keep base
+        return dist_name, tuple(base_params)
 
     new_loc = float(point) - float(q0)
-    if scale is None:
-        new_params = shapes + (new_loc,)
-    else:
-        new_params = shapes + (new_loc, scale)
+    new_params = (shapes + (new_loc,)) if scale is None else (shapes + (new_loc, scale))
     return dist_name, new_params
 
 def _fetch_dst_points(session: Session, team: str | None, opponent: str | None) -> np.ndarray:
@@ -462,12 +680,12 @@ def simulate_player_fpts(
     if verbose:
         print(f'matched {player_id} to DB player {player.name}')
     raw_pos = player.position
-
     pos = 'DST' if raw_pos in DST_POS else raw_pos
 
     if verbose:
         print(f'position: {pos}')
 
+    # Keep K/DST behavior
     if pos == 'K':
         return st.gamma.rvs(KICKER_DEFAULT_SHAPE, scale=KICKER_DEFAULT_SCALE, size=n_samples).astype(float)
     if pos == 'DST':
@@ -478,106 +696,121 @@ def simulate_player_fpts(
 
     Z = np.random.multivariate_normal(np.zeros(len(stats)), corr, size=n_samples)
     U = st.norm.cdf(Z)
-
     X = np.zeros_like(U)
 
-    # 1) Try to gather a single role signal from any known market for this player.
-    #    Priority: if we have a market for THIS stat, we will calibrate it directly.
-    #    Otherwise, we’ll derive a role factor from any available calibrated stat (e.g., Anytime TD).
-    role_factor: float | None = None
+    # --- 0) Build ONE combined scrimmage TD signal (rush+rec), then split; no double counting
+    td_overrides: dict[str, tuple[str, tuple]] = {}
+    base_mu_rush = base_mu_rec = 0.0
+    if "rushing_tds" in stats:
+        info = marginals[pos]["rushing_tds"]; 
+        base_mu_rush = max(_mean_of(info["dist"], info["params"]), 0.0) if info["dist"] else 0.0
+    if "receiving_tds" in stats:
+        info = marginals[pos]["receiving_tds"]; 
+        base_mu_rec  = max(_mean_of(info["dist"], info["params"]), 0.0) if info["dist"] else 0.0
 
-    # Probe a few “role-ish” markets up front to get role_factor early.
-    # You can add others, e.g., "receptions", "rushing_yards", etc.
-    role_probe_markets = [
-        "player_anytime_td",                 # Yes/No
-        "player_tds_over",                   # Over-only touchdowns
-        "player_pass_rush_reception_tds",    # combined
-        "player_rush_reception_tds",         # combined (no passing)
-        # Fallback to position-specific TDs if those exist:
-        "player_rush_tds",
-        "player_reception_tds",
-    ]
-    for probe in role_probe_markets:
+    mu_total = None
+    scrim_point, scrim_p = _consensus_prob_for_side(session, player.name, "scrim_tds_combined", target_side="over")
+    if scrim_p is not None:
+        if abs((scrim_point or 0.5) - 0.5) < 1e-6:
+            mu_total = _poisson_mu_from_prob_at_least_one(scrim_p)     # P(TD>=1)
+        else:
+            mu_total = _poisson_mu_for_threshold(scrim_point, "over", scrim_p)
+
+    if mu_total is not None and ("rushing_tds" in stats or "receiving_tds" in stats):
+        denom = base_mu_rush + base_mu_rec
+        if denom <= 1e-12:
+            if pos in ("WR","TE"): alpha_rush = 0.02
+            elif pos in ("RB",):   alpha_rush = 0.75
+            else:                  alpha_rush = 0.80
+        else:
+            alpha_rush = base_mu_rush / denom
+
+        mu_rush = mu_total * alpha_rush if "rushing_tds"    in stats else 0.0
+        mu_rec  = mu_total * (1.0 - alpha_rush) if "receiving_tds" in stats else 0.0
+
+        # If a per-stat O/U exists at 0.5, pin that mean (de-vigged)
+        if "rushing_tds" in stats:
+            pt_r, p_r = _consensus_prob_for_side(session, player.name, "player_rush_tds", target_side="over")
+            if p_r is not None and abs((pt_r or 0.5) - 0.5) < 1e-6:
+                mu_rush = _poisson_mu_from_prob_at_least_one(p_r)
+        if "receiving_tds" in stats:
+            pt_c, p_c = _consensus_prob_for_side(session, player.name, "player_reception_tds", target_side="over")
+            if p_c is not None and abs((pt_c or 0.5) - 0.5) < 1e-6:
+                mu_rec = _poisson_mu_from_prob_at_least_one(p_c)
+
+        # Renormalize back to the combined mean
+        total = mu_rush + mu_rec
+        if total > 1e-12 and "rushing_tds" in stats and "receiving_tds" in stats:
+            s = mu_total / total
+            mu_rush *= s; mu_rec *= s
+        elif "rushing_tds" in stats and "receiving_tds" not in stats:
+            mu_rush = mu_total
+        elif "receiving_tds" in stats and "rushing_tds" not in stats:
+            mu_rec = mu_total
+
+        if "rushing_tds" in stats:
+            td_overrides["rushing_tds"] = ("poisson", (max(mu_rush, 0.0),))
+        if "receiving_tds" in stats:
+            td_overrides["receiving_tds"] = ("poisson", (max(mu_rec, 0.0),))
+
+    # --- 1) Optional role factor (unchanged: probe some markets)
+    role_factor: float | None = None
+    for probe in ["player_anytime_td", "player_tds_over", "player_pass_rush_reception_tds",
+                  "player_rush_reception_tds", "player_rush_tds", "player_reception_tds"]:
         odds_row = _latest_odds_by_name_and_stat(session, player.name, probe)
         if not odds_row:
             continue
-
-        # Decide which stat to calibrate from a combined/anytime TD signal
         probe_stat = None
-        if probe in {"player_anytime_td", "player_tds_over", "player_pass_rush_reception_tds", "player_rush_reception_tds"}:
-            if pos in ("WR", "TE"):
-                probe_stat = "receiving_tds"
-            elif pos in ("RB",):
-                probe_stat = "rushing_tds"
-            else:
-                probe_stat = "rushing_tds"  # QB: sparse rushing TDs; still usable for role
-        elif probe == "player_rush_tds":
-            probe_stat = "rushing_tds"
-        elif probe == "player_reception_tds":
-            probe_stat = "receiving_tds"
+        if probe in {"player_anytime_td","player_tds_over","player_pass_rush_reception_tds","player_rush_reception_tds"}:
+            probe_stat = "receiving_tds" if pos in ("WR","TE") else "rushing_tds"
+        elif probe == "player_rush_tds": probe_stat = "rushing_tds"
+        elif probe == "player_reception_tds": probe_stat = "receiving_tds"
 
         if probe_stat and probe_stat in position_configs.get(pos, {}).get("stats", []):
             base_info = marginals[pos][probe_stat]
             dn, bp = base_info["dist"], base_info["params"]
-            # when probing role markets
             pt = float(odds_row.point) if odds_row.point is not None else 0.5
             dn2, ap = _calibrate_loc(dn, bp, pt, str(odds_row.side), float(odds_row.price), verbose=verbose)
-            role_factor = _role_factor_from_calibrated(dn, bp, dn2, ap, lo=0.2, hi=1.0)
-            if verbose:
-                print(f'role_factor: {role_factor}')
+            role_factor = _role_factor_from_calibrated(dn, bp, dn2, ap, lo=0.10, hi=0.8, verbose=verbose)
             break
-    # 2) Now handle every required stat
+
+    # --- 2) Calibrate every required stat from de-vigged, weighted consensus
     for j, stat in enumerate(stats):
-        if verbose:
-            print(f'searching for stat: {stat}')
-        odds_row = _latest_odds_by_name_and_stat(session, player.name, stat, verbose=verbose)
-
-        if verbose:
-            print(f'found odds row: {odds_row}')
-
         base_info = marginals[pos][stat]
         dist_name, params = base_info["dist"], base_info["params"]
 
-        if odds_row is not None:
-            if verbose:
-                print(f'base marginals for pos={pos} stat={stat}: {dist_name, params}')
-            dist_name, params = _calibrate_loc(
-                dist_name=dist_name,
-                base_params=params,
-                point=float(odds_row.point if odds_row.point is not None else 0.5),
-                side=str(odds_row.side),   # over/under or yes/no
-                price=float(odds_row.price),
-                verbose=verbose,
-            )
-            if verbose:
-                print(f'adjusted params (odds): {dist_name, params}')
+        # Use the combined TD overrides if present
+        if stat in td_overrides:
+            dist_name, params = td_overrides[stat]
+            X[:, j] = _ppf(dist_name, params, U[:, j])
+            continue
+
+        pt_cons, p_cons = _consensus_prob_for_side(session, player.name, stat, target_side="over")
+        if (pt_cons is not None) and (p_cons is not None):
+            if _is_count_dist(dist_name):
+                dist_name, params = _calibrate_count_mean_from_ou(dist_name, params, float(pt_cons), "over", float(p_cons))
+            else:
+                dist_name, params = _calibrate_loc(dist_name, params, point=float(pt_cons), side="over", p_fair=float(p_cons), verbose=verbose)
             if role_factor is None:
-                role_factor = _role_factor_from_calibrated(
-                    base_info["dist"], base_info["params"], dist_name, params, lo=0.2, hi=1.0
-                )
+                role_factor = _role_factor_from_calibrated(base_info["dist"], base_info["params"], dist_name, params, lo=0.10, hi=0.8, verbose=verbose)
         else:
-            # No odds → try season average anchor; then optionally apply role shrink.
+            # season anchor → role shrink (now stronger and hits means for counts)
             mu_season = _season_stat_mean(session, player.name, stat)
-            if mu_season is not None:
+            if mu_season is not None and not _is_count_dist(dist_name):
                 dist_name, params = _shift_loc_to_mean(dist_name, params, mu_season)
-                if verbose:
-                    print(f'adjusted params (season mean {stat}={mu_season}): {dist_name, params}')
             if role_factor is not None:
-                dist_name, params = _apply_role_to_params(dist_name, params, role_factor, stat)
-                if verbose:
-                    print(f'adjusted params (role): {dist_name, params}')
+                dist_name, params = _apply_role_to_params(dist_name, params, role_factor, stat, verbose=verbose)
 
         X[:, j] = _ppf(dist_name, params, U[:, j])
 
-    # === Combine to FPTS and RETURN ===
+    # === Combine to FPTS ===
     fpts_weights = {
         'passing_yards': 0.04, 'passing_tds': 4, 'interceptions': -2,
         'rushing_yards': 0.1,  'rushing_tds': 6,
         'receptions': 1,       'receiving_yards': 0.1, 'receiving_tds': 6,
     }
     weights = np.array([fpts_weights.get(stat, 0.0) for stat in stats], dtype=float)
-    fpts = X.dot(weights).astype(float)
-    return fpts
+    return X.dot(weights).astype(float)
 
 
 def fit_and_store_fpts_distribution(
