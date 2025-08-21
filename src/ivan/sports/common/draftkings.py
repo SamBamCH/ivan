@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 
 import requests
 import pandas as pd
+from pandas.errors import EmptyDataError
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from http.client import RemoteDisconnected
@@ -241,13 +242,25 @@ def download_contest_dataframe(sess: requests.Session, contest_id: int,
 
             # Some DK exports return raw CSV (no zip); handle both
             if "csv" in ctype and "zip" not in ctype:
-                return pd.read_csv(io.StringIO(r2.text))
+                text = r2.text or ""
+                if not text.strip():
+                    print(f"[warn] Contest {contest_id} returned an empty CSV body.")
+                    raise EmptyDataError("empty CSV body")
+                try:
+                    return pd.read_csv(io.StringIO(text))
+                except EmptyDataError as e:
+                    print(f"[warn] Contest {contest_id} CSV parse failed: {e}")
+                    raise
 
             z = zipfile.ZipFile(io.BytesIO(r2.content))
             csv_name = next(f for f in z.namelist() if f.endswith(".csv"))
-            return pd.read_csv(z.open(csv_name))
+            try:
+                return pd.read_csv(z.open(csv_name))
+            except EmptyDataError as e:
+                print(f"[warn] Contest {contest_id} ZIP CSV is empty: {e}")
+                raise
 
-        except (RemoteDisconnected, zipfile.BadZipFile, RequestException) as e:
+        except (RemoteDisconnected, zipfile.BadZipFile, RequestException, EmptyDataError) as e:
             print(f"[warn] Contest {contest_id} attempt {attempt}/{max_retries} failed: {e}")
             time.sleep(1.5)
 

@@ -247,37 +247,48 @@ def fit_slate_kde(
     if not projs:
         return
 
-    # --- slate-level summary stats
+# --- slate-level summary stats
     owner_vals.sort(reverse=True)
-    top_owned    = owner_vals[0]
+    top_owned    = owner_vals[0] if owner_vals else 0.0
     top_5_owned  = np.mean(owner_vals[:5])   if len(owner_vals)>=5  else top_owned
     top_10_owned = np.mean(owner_vals[:10])  if len(owner_vals)>=10 else top_owned
 
     # payout % for 1st & top 5
-    pool = entry_fee * total_entries
-    sum_payout = lambda lo, hi: (
-        session.query(func.sum(ContestPayout.payout_amount))
-               .filter(ContestPayout.contest_id==cid,
-                       ContestPayout.min_position.between(lo, hi))
-               .scalar() or 0.0
-    )
-    first_pct = sum_payout(1, 1) / pool
-    top5_pct  = sum_payout(1, 5) / pool
+    pool = float(entry_fee) * float(total_entries)
+    def sum_payout(lo, hi):
+        return (session.query(func.sum(ContestPayout.payout_amount))
+                      .filter(ContestPayout.contest_id==cid,
+                              ContestPayout.min_position.between(lo, hi))
+                      .scalar() or 0.0)
+    if pool <= 0:
+        first_pct = 0.0
+        top5_pct  = 0.0
+    else:
+        first_pct = sum_payout(1, 1) / pool
+        top5_pct  = sum_payout(1, 5) / pool
 
     # --- floor at 70, min-max scale projections to [0,1]
     MIN_PROJ = 70.0
-    bounded = [max(p, MIN_PROJ) for p in projs]
+    bounded  = [max(p, MIN_PROJ) for p in projs]
     max_proj = float(max(bounded))
-    projs_norm = [(p - MIN_PROJ) / (max_proj - MIN_PROJ) for p in bounded]
+    den = max_proj - MIN_PROJ
+    projs_norm = [(p - MIN_PROJ) / den if den > 1e-9 else 0.0 for p in bounded]
 
-    # --- KDE bandwidths
-    kde_own  = gaussian_kde(np.array(ownerships))
-    kde_proj = gaussian_kde(np.array(projs_norm))
+    # --- KDE bandwidths (safe when n<2 or zero variance)
+    def _safe_kde(arr):
+        arr = np.asarray(arr, dtype=float)
+        if arr.size < 2 or np.allclose(np.var(arr), 0.0):
+            return None, 0.1  # fallback bandwidth factor
+        kde = gaussian_kde(arr)
+        return kde, float(kde.factor)
+
+    kde_own,  bw_own  = _safe_kde(ownerships)
+    kde_proj, bw_proj = _safe_kde(projs_norm)
 
     # --- fixed-bin histograms (counts only)
-    fixed_bins = np.linspace(0, 1, 21)  # 0.00,0.05,…,1.00
-    hist_own_counts, _  = np.histogram(ownerships, bins=fixed_bins)
-    hist_proj_counts, _ = np.histogram(projs_norm,   bins=fixed_bins)
+    fixed_bins = np.linspace(0, 1, 21)
+    hist_own_counts,  _ = np.histogram(ownerships, bins=fixed_bins)
+    hist_proj_counts, _ = np.histogram(projs_norm, bins=fixed_bins)
 
     num_games = max(len(teams)//2, 1)
 
@@ -293,10 +304,9 @@ def fit_slate_kde(
         top_10_owned     = top_10_owned,
         first_pct        = first_pct,
         top5_pct         = top5_pct,
-        bw_own           = float(kde_own.factor),
-        bw_proj          = float(kde_proj.factor),
+        bw_own           = bw_own,
+        bw_proj          = bw_proj,
         max_proj         = max_proj,
-        # only counts now:
         hist_own_counts  = hist_own_counts.tolist(),
         hist_proj_counts = hist_proj_counts.tolist(),
         hist_stack_types = list(Counter(stack_types).keys()),
