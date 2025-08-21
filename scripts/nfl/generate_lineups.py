@@ -23,7 +23,7 @@ created = generate_and_store_field_lineups(
         },
         "verbose": False
     },
-    num_lineups=10,
+    num_lineups=1000,
     workers=4,
 )
 print(f"created {created} NFL lineups")

@@ -203,5 +203,4 @@ class NFLDSTGame(NFLBase):
     opponent = Column(String)
     dst_points = Column(Float)
 
-
    

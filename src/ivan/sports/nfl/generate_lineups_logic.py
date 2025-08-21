@@ -385,8 +385,7 @@ def generate_single_showdown_lineup(
     )
     prob += obj, "NoisyPoints"
 
-    solver = plp.GLPK_CMD(path=r"D:\ivan\glpk-4.65\w64\glpsol.exe", keepFiles=True,
-                          options=["--log", r"data\nfl/logs/glpsol.log"])
+    solver = plp.PULP_CBC_CMD()
     status = prob.solve(solver)
     if plp.LpStatus[status] != "Optimal":
         if debug_lp_path:
