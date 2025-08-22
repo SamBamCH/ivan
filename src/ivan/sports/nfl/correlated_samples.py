@@ -34,9 +34,9 @@ _VINE_POSITIONS = ["QB", "RB", "WR", "TE", "OppDST"]  # 5D vine
 class SamplingConfig:
     n_samples: int = 100
     alpha: float = 0.85  # strength of team-position dependence (1.0 = full, 0 = iid)
-    jitter: float = 0.0  # tiny Gaussian jitter on uniforms to avoid ties
+    jitter: float = 0.05  # tiny Gaussian jitter on uniforms to avoid ties
     seed: int | None = None
-    kicker_rho: float = 0.60 # how tightly K follows team offense uniforms
+    kicker_rho: float = 0.40 # how tightly K follows team offense uniforms
     kicker_shape: float = 5.5 # Gamma shapy 'k' (mean = k*scale)
     kicker_scale: float = 1.2 # Gamma scale 'θ' (default mean ~ 6.6)
 

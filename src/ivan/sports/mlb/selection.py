@@ -8,6 +8,103 @@ from sqlalchemy.orm import Session
 from ivan.sports.mlb.models import LineupSimulationResult, MLBPlayer
 from ivan.core.utils import show_player_exposures, show_team_exposures
 
+# put near your imports
+import os
+import numpy as np
+from scipy.spatial.distance import pdist, squareform
+
+def _plot_lineup_space(
+    fpts_matrix: np.ndarray,
+    selected: list[int],
+    avg_roi: np.ndarray,
+    out_dir: str = "mlb_debug_plots",
+    max_points: int = 1500,
+):
+    """
+    Save three debug plots:
+      1) PCA 2D scatter of all (subsampled) lineups with selected highlighted
+      2) Explained variance (top 10 PCs)
+      3) Pairwise-distance heatmap among selected lineups
+    """
+    import matplotlib
+    matplotlib.use("Agg")  # headless-safe
+    import matplotlib.pyplot as plt
+
+    os.makedirs(out_dir, exist_ok=True)
+    N, T = fpts_matrix.shape
+
+    # --- Subsample (keep all selected, plus random others) to keep plots light
+    keep = np.arange(N)
+    if N > max_points:
+        mask_sel = np.zeros(N, dtype=bool)
+        mask_sel[selected] = True
+        pool = keep[~mask_sel]
+        np.random.seed(0)
+        extra = np.random.choice(pool, size=max(0, max_points - len(selected)), replace=False)
+        keep = np.concatenate([np.array(selected, dtype=int), extra])
+    X = fpts_matrix[keep]
+    sel_mask = np.isin(keep, selected)
+
+    # --- PCA via SVD on column-centered data
+    Xc = X - X.mean(axis=0, keepdims=True)
+    # full_matrices=False gives thin SVD; efficient and plenty for PCA
+    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    coords2 = U[:, :2] * S[:2]  # 2D PCA coordinates
+    evr = (S**2) / np.sum(S**2)  # explained variance ratio
+
+    # 1) PCA scatter
+    plt.figure(figsize=(7, 6))
+    plt.scatter(coords2[~sel_mask, 0], coords2[~sel_mask, 1], s=8, alpha=0.35)
+    plt.scatter(coords2[sel_mask, 0], coords2[sel_mask, 1], s=60, marker='x')
+    plt.title("PCA of lineup fpts traces (X = selected)")
+    plt.xlabel("PC1"); plt.ylabel("PC2")
+    plt.tight_layout()
+    p1 = os.path.join(out_dir, "pca_scatter.png")
+    plt.savefig(p1, dpi=140); plt.close()
+
+    # 2) Explained variance (top 10 PCs)
+    k = min(10, len(evr))
+    plt.figure(figsize=(7, 3.2))
+    plt.plot(np.arange(1, k+1), evr[:k], marker='o')
+    plt.title("Explained variance ratio (top PCs)")
+    plt.xlabel("PC index"); plt.ylabel("EVR")
+    plt.tight_layout()
+    p2 = os.path.join(out_dir, "pca_evr.png")
+    plt.savefig(p2, dpi=140); plt.close()
+
+    # 3) Distance heatmap among selected
+    if len(selected) >= 2:
+        Dsel = squareform(pdist(fpts_matrix[selected], metric="euclidean"))
+        plt.figure(figsize=(5, 4))
+        plt.imshow(Dsel, aspect='auto', interpolation='nearest')
+        plt.title("Pairwise distance among SELECTED lineups")
+        plt.colorbar()
+        plt.tight_layout()
+        p3 = os.path.join(out_dir, "selected_distance_heatmap.png")
+        plt.savefig(p3, dpi=160); plt.close()
+    else:
+        p3 = None
+
+    # Optional: ROI vs PC1 to see quality gradient
+    if avg_roi is not None:
+        roi_keep = avg_roi[keep]
+        plt.figure(figsize=(7, 3.2))
+        plt.scatter(coords2[:, 0], roi_keep, s=10, alpha=0.5)
+        plt.scatter(coords2[sel_mask, 0], roi_keep[sel_mask], s=50, marker='x')
+        plt.title("Avg ROI vs PC1 (X = selected)")
+        plt.xlabel("PC1"); plt.ylabel("avg ROI")
+        plt.tight_layout()
+        p4 = os.path.join(out_dir, "roi_vs_pc1.png")
+        plt.savefig(p4, dpi=140); plt.close()
+    else:
+        p4 = None
+
+    print("\n[debug plots]")
+    print("  PCA scatter:", p1)
+    print("  PCA EVR:    ", p2)
+    if p3: print("  Sel heatmap:", p3)
+    if p4: print("  ROI vs PC1: ", p4)
+
 def choose_lineup_ids(
     session: Session,
     weights: dict[str, float],
@@ -73,8 +170,8 @@ def choose_lineup_ids(
     for i, res in enumerate(sims):
         payouts = np.array(res.payout, dtype=float)
         rois    = np.array(res.roi,    dtype=float)
-        raw[i, 0] = (payouts > 0).mean() if payouts.size else 0.0
-        raw[i, 1] = rois.mean()            if rois.size   else 0.0
+        raw[i, 0] = (payouts > 0).mean() if payouts.size else 0.0  # cash%
+        raw[i, 1] = rois.mean()            if rois.size   else 0.0  # avg ROI
         roi_rows.append(rois)
     roi_matrix = np.vstack(roi_rows)
 
@@ -82,39 +179,100 @@ def choose_lineup_ids(
     fpts_rows = [np.array(res.fpts, dtype=float) for res in sims]
     fpts_matrix = np.vstack(fpts_rows)
 
-    # 7) normalize & weigh cash%/ROI
+    # Normalize features to [0,1]
     mins, maxs = raw.min(axis=0), raw.max(axis=0)
-    norm       = (raw - mins) / (maxs - mins + 1e-6)
-    w          = np.array([weights["cash_pct"], weights["avg_roi_win"]])
-    comp       = (norm * w)[:, 1]  # ROI component for ranking
+    norm = (raw - mins) / (maxs - mins + 1e-6)
 
-    # 8) compute diversity distances
+    # Blend into a single quality score q in [0,1]
+    # (Use your existing weights; works even if cash weight is 0.)
+    w_feat = np.array([weights.get("cash_pct", 0),
+                       weights.get("avg_roi_win", 1)], dtype=float)
+    q = (norm * w_feat).sum(axis=1)  # quality score in [0,1]
+
+    # Diversity distances on fpts traces
     dist_mat = squareform(pdist(fpts_matrix, metric="euclidean"))
 
-    # 9) greedy select
-    remaining = set(range(N))
-    selected  = []
+    # --- quality-aware diversity + continuous penalty params ---
+    lam = float(weights.get("diversity_lambda", 0.0))         # λ
+    gamma = float(weights.get("quality_gamma", 0.0))           # γ
+    p = float(weights.get("quality_penalty_p", 1))           # p ≥ 1
+    alpha = float(weights.get("diversity_quality_alpha", 1.0)) # α ≥ 1
 
-    first = int(np.argmax(comp))
+    # Optional soft floor (completely optional; set eta=0 to disable)
+    q_target = float(weights.get("quality_target", 0.0))       # e.g. 0.6
+    eta = float(weights.get("quality_target_eta", 0.0))        # e.g. 0.5
+
+    # Greedy selection
+    remaining = set(range(N))
+    selected = []
+
+    # anchor with the best quality item
+    first = int(np.argmax(q))
     selected.append(first)
     remaining.remove(first)
 
-    λ = weights.get("diversity_lambda", 0.0)
-    while len(selected) < num_lineups and remaining:
-        best_score, best_idx = -np.inf, None
-        for j in remaining:
-            score = comp[j] + λ * dist_mat[j, selected].sum()
-            if score > best_score:
-                best_score, best_idx = score, j
-        selected.append(best_idx)
-        remaining.remove(best_idx)
+    def lineup_score(j: int, S: list[int]) -> float:
+        # continuous penalty for straying from top
+        penalty = gamma * (1.0 - q[j])**p
+        # optional soft floor around a target quality
+        hinge = eta * max(0.0, q_target - q[j])**2
+        # quality-aware diversity gain
+        if S:
+            qa_div = (q[j]**alpha) * np.sum((q[S]**alpha) * dist_mat[j, S])
+        else:
+            qa_div = 0.0
+        # total score
+        return q[j] - penalty - hinge + lam * qa_div
 
-    # 10) fill by pure ROI if still short
+    while len(selected) < num_lineups and remaining:
+        # pick item with max *quality-aware* marginal gain
+        best_j = max(remaining, key=lambda j: lineup_score(j, selected))
+        selected.append(best_j)
+        remaining.remove(best_j)
+
+    # if we still need to fill, do it by descending q (quality), not raw ROI
     if len(selected) < num_lineups:
-        for j in np.argsort(-comp):
+        for j in np.argsort(-q):
             if j not in selected:
                 selected.append(j)
             if len(selected) >= num_lineups:
                 break
 
-    return [sims[i].lineup_id for i in selected]
+    chosen_ids = [sims[i].lineup_id for i in selected]
+
+    # === Verification printout: ROIs and cash% for chosen lineups ===
+    print("\n=== Selected lineup verification ===")
+    print(f"diversity_lambda = {lam}")
+    per_lineup_stats = []
+    for k, idx in enumerate(selected):
+        res = sims[idx]
+        rois = np.array(res.roi, dtype=float)
+        payouts = np.array(res.payout, dtype=float)
+        avg_roi = rois.mean() if rois.size else 0.0
+        cash_pct = (payouts > 0).mean() if payouts.size else 0.0
+        per_lineup_stats.append((avg_roi, cash_pct))
+        print(f"{k+1:2d}. lineup_id={res.lineup_id:>8} | avg_roi={avg_roi: .4f} | cash%={cash_pct: .3f} | sims={rois.size}")
+
+    if per_lineup_stats:
+        avg_roi_all = float(np.mean([r for r, _ in per_lineup_stats]))
+        cash_all = float(np.mean([c for _, c in per_lineup_stats]))
+        print(f"\nSummary over {len(selected)} selected lineups:")
+        print(f"  mean(avg_roi) = {avg_roi_all: .4f}")
+        print(f"  mean(cash%)   = {cash_all: .3f}")
+
+
+
+    # build avg ROI vector to annotate plots
+    avg_roi = np.array([np.array(res.roi, dtype=float).mean() for res in sims], dtype=float)
+
+    # OPTIONAL: turn on plotting via a weight flag
+    if weights.get("debug_plots", True):
+        _plot_lineup_space(
+            fpts_matrix=fpts_matrix,
+            selected=selected,
+            avg_roi=avg_roi,
+            out_dir='data/mlb/debug',
+            max_points=int(weights.get("debug_plots_max_points", 1500)),
+        )
+
+    return chosen_ids

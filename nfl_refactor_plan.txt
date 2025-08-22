@@ -1,13 +1,10 @@
 #TODO:
-add back DST/Kicker
-devig
-check stat distributions more closely if still issues with fpts distributions
+
 BUILD ENTIRE PROCESS FLOW
     INGEST
     ODDS
     PROJECTIONS
     GENERATE_LINEUPS
-        dedupe lineup pool
     SIM
         sample lineups
         generate_correlated_samples
@@ -33,33 +30,6 @@ DIAGNOSTICS
 
 
 YES WE CAN AND WE SHOULD -can we clean up the structure of build_models.py? Seems like we could just remove the build_player_models container and have all the models fit on the same level.
-
-
-###################overall flow: 
-
-historical model building
-    independent stat distributions
-    dependencies of stats for a single player
-    copulas model by team
-        generalized by position
-ingest
-    get dk ids
-    get odds
-    calculate fpts distributions
-generate_lineups
-    group players by game
-    generate correlated samples
-    build lp problem
-    solve
-    store lineup in DB
-sim_all
-    sample generated lineups from DB
-    generate_correlated_samples
-    rank lineups
-    store sim results
-choose_all
-    euclidian distance
-
 
 
 'fears
