@@ -1,5 +1,8 @@
 #TODO:
 
+classic lineup generation parallelization
+
+
 BUILD ENTIRE PROCESS FLOW
     INGEST
     ODDS
@@ -35,4 +38,3 @@ YES WE CAN AND WE SHOULD -can we clean up the structure of build_models.py? Seem
 'fears
 
 *not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
-*all copulas/marginal diagnostic testing point toward issues with fits as of 8/13/2025. I think this will correct once we start adjusting for known odds. We just don't have any odds yet. 
