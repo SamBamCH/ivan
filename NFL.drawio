@@ -571,6 +571,45 @@
         <mxCell id="XhVtjYjoBM9odPF42UOc-51" value="" style="whiteSpace=wrap;html=1;" parent="XhVtjYjoBM9odPF42UOc-2" vertex="1">
           <mxGeometry x="820" y="640" width="120" height="60" as="geometry" />
         </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-2" value="sim" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="180" y="1590" width="1000" height="950" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="RdRSQ1KIuHNo71vfLRfh-2" source="RdRSQ1KIuHNo71vfLRfh-3" target="RdRSQ1KIuHNo71vfLRfh-4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-3" value="connect to DB" style="whiteSpace=wrap;html=1;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-2">
+          <mxGeometry x="30" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="RdRSQ1KIuHNo71vfLRfh-2" source="RdRSQ1KIuHNo71vfLRfh-4" target="RdRSQ1KIuHNo71vfLRfh-6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-4" value="read entries_csv" style="whiteSpace=wrap;html=1;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-2">
+          <mxGeometry x="30" y="120" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="RdRSQ1KIuHNo71vfLRfh-2" source="RdRSQ1KIuHNo71vfLRfh-6" target="RdRSQ1KIuHNo71vfLRfh-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="RdRSQ1KIuHNo71vfLRfh-2" source="RdRSQ1KIuHNo71vfLRfh-6" target="RdRSQ1KIuHNo71vfLRfh-10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-6" value="for contest_id in entries_csv:" style="rhombus;whiteSpace=wrap;html=1;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-2">
+          <mxGeometry x="50" y="200" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-10" value="END" style="whiteSpace=wrap;html=1;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-2">
+          <mxGeometry x="30" y="370" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-14" value="simulat_one_contest" style="swimlane;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-2">
+          <mxGeometry x="240" y="170" width="590" height="470" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-8" value="sample field" style="whiteSpace=wrap;html=1;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-14">
+          <mxGeometry x="10" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-12" value="load/scale payouts from DB" style="whiteSpace=wrap;html=1;fillColor=#a20025;strokeColor=#6F0000;fontColor=#ffffff;" vertex="1" parent="RdRSQ1KIuHNo71vfLRfh-14">
+          <mxGeometry x="10" y="130" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="RdRSQ1KIuHNo71vfLRfh-13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=none;endFill=0;" edge="1" parent="RdRSQ1KIuHNo71vfLRfh-14" source="RdRSQ1KIuHNo71vfLRfh-8" target="RdRSQ1KIuHNo71vfLRfh-12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>

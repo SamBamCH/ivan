@@ -1,6 +1,10 @@
 #TODO:
+granularly check that payout and ranks are being assigned correctly for duped lineups in SD sim
+    specifically that dupes are being counted correctly
+classic lineup generation
+classic sim
+    classic lineup sampling
 
-classic lineup generation parallelization
 
 
 BUILD ENTIRE PROCESS FLOW
@@ -9,11 +13,6 @@ BUILD ENTIRE PROCESS FLOW
     PROJECTIONS
     GENERATE_LINEUPS
     SIM
-        sample lineups
-        generate_correlated_samples
-        rank lineups
-        payouts
-        store results
     CHOOSE
 
 ONCE WE HAVE ODDS:
