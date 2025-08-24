@@ -147,7 +147,7 @@ def build_player_samples(session: Session, pid_to_col: Dict[int, int], n_sims: i
 def sample_sd_field(
     session: Session,
     n_sims: int = 100,
-    field_size: int = 160000,
+    field_size: int = 10000,
 ):
     """
     Simple two-stage mixture:
@@ -156,6 +156,7 @@ def sample_sd_field(
     Aggregates counts across sims. Returns (counts_by_lineup, meta)
     """
     # Lineup matrix & metadata
+    print(f'sampling field of size {field_size}')
     L, lineup_ids, spends, pid_to_col = build_lineup_matrix(session)
     n_lineups = L.shape[0]
     remaining = (SALARY_CAP - spends).astype(np.int32)
@@ -170,9 +171,9 @@ def sample_sd_field(
     # Player samples
     P = build_player_samples(session, pid_to_col, n_sims=n_sims)
 
-    counts = np.zeros(n_lineups, dtype=np.int64)
-    sum_proj = np.zeros(n_lineups, dtype=np.float64)  # <-- NEW
+    mean_proj = np.asarray(L @ P.T, dtype=np.float32).mean(axis=1) # [n_lineups]
 
+    counts = np.zeros(n_lineups, dtype=np.int64)
 
     # Normalize prior over bins that actually have lineups
     weights = np.array([w for _, _, w in bins], dtype=np.float64)
@@ -188,39 +189,32 @@ def sample_sd_field(
     # Convenience: precompute indices per bin
     idx_per_bin = [np.where(m)[0] for m in bin_masks]
 
-    # Main loop over sims
-    for s in range(P.shape[0]):
-        p = P[s]                               # [n_players]
-        proj = np.asarray(L @ p, dtype=np.float32)  # [n_lineups]
-        sum_proj += proj
+    draws_per_bin = np.random.multinomial(int(field_size), w_avail)
 
-        # Bin-wise draws for this sim
-        draws_per_bin = np.random.multinomial(field_size, w_avail)
 
-        for b, n_draws in enumerate(draws_per_bin):
-            if n_draws <= 0:
-                continue
-            idxs = idx_per_bin[b]
-            if idxs.size == 0:
-                continue
+    for b, n_draws in enumerate(draws_per_bin):
+        if n_draws <= 0:
+            continue
+        idxs = idx_per_bin[b]
+        if idxs.size == 0:
+            continue
 
-            bin_proj = proj[idxs]
-            # Shift in a numerically safe way (handles all-negative or flat cases)
-            shifted = bin_proj - np.nanmin(bin_proj) + 1e-9
-            probs = _normalize_probs(shifted, idxs.size)
-            if probs is None:
-                probs = np.full(idxs.size, 1.0 / idxs.size, dtype=np.float64)
+        # weights within bin ∝ mean projections
+        bin_proj = mean_proj[idxs]
+        shifted  = bin_proj - np.nanmin(bin_proj) + 1e-9
+        probs    = _normalize_probs(shifted, idxs.size)
+        if probs is None:
+            probs = np.full(idxs.size, 1.0/idxs.size, dtype=np.float64)
 
-            picks = np.random.choice(idxs.size, size=int(n_draws), replace=True, p=probs)
-            np.add.at(counts, idxs[picks], 1)
+        picks = np.random.choice(idxs.size, size=int(n_draws), replace=True, p=probs)
+        np.add.at(counts, idxs[picks], 1)
 
     counts_by_lineup = {int(lineup_ids[i]): int(counts[i]) for i in range(n_lineups)}
-    mean_proj = (sum_proj / max(1, P.shape[0])).astype(np.float32)
     meta = {
         "lineup_ids": lineup_ids,
         "spend": spends,
-        "remaining": remaining,
-        "mean_proj": mean_proj
+        "remaining": (SALARY_CAP - spends).astype(np.int32),
+        "mean_proj": mean_proj,
     }
     return counts_by_lineup, meta
 

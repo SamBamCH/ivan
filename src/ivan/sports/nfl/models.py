@@ -203,4 +203,31 @@ class NFLDSTGame(NFLBase):
     opponent = Column(String)
     dst_points = Column(Float)
 
+class LineupSimulationResult(NFLBase):
+    __tablename__ = "lineup_simulation_results"
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    lineup_id  = Column(Integer, ForeignKey("lineup.id"), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # store per-simulation arrays; each JSON list has length = num_simulations
+    fpts    = Column(JSON, nullable=False)
+    payout  = Column(JSON, nullable=False)
+    roi     = Column(JSON, nullable=False)
+    rank    = Column(JSON, nullable=False)
+
+    # attach each sim‐result row to exactly one contest
+    contest_id = Column(
+        Integer,
+        ForeignKey("historical_contest_information.contest_id"),
+        nullable=False,
+        index=True
+    )
+    contest_name = Column(
+        String, 
+        ForeignKey("historical_contest_information.name"),
+        nullable=False,
+        index=True
+    )
+
    

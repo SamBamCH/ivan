@@ -36,5 +36,6 @@ YES WE CAN AND WE SHOULD -can we clean up the structure of build_models.py? Seem
 
 
 'fears
-
+*contests are too large for NFL, need to cap field size, and scale payouts (25,000? 50,000? 100,000? test different memory allocations)
 *not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
+

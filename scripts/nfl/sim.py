@@ -1,36 +1,54 @@
-from ivan.database.session import init_db, get_session
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples
-import os
-import json
+#!/usr/bin/env python3
+# scripts/nfl/sim_all.py
+import os, json, argparse
 import pandas as pd
 
-here   = os.path.dirname(__file__)
-cfg_fp = os.path.abspath(os.path.join(here, "../../config/nfl.json"))
-cfg    = json.load(open(cfg_fp, encoding="utf-8"))
+from ivan.database.session import init_db, get_session, Base
+from ivan.sports.nfl.simulate_contest import simulate_one_contest  # this file
 
-engine = init_db('nfl')
-session = get_session(engine)
+def parse_args():
+    p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
+    p.add_argument("-n", "--num_sims", type=int, required=True,
+                   help="Number of Monte Carlo simulations per lineup (e.g., 100, 500, 1000).")
+    p.add_argument("--config", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../config/nfl.json")))
+    return p.parse_args()
 
-df = pd.read_csv(
-    cfg["paths"]["entries_csv"],
-    engine="python",
-    usecols=["Contest ID", "Contest Name"],
-    dtype={"Contest ID": str, "Contest Name": str}
-)
+def main():
+    args = parse_args()
+    cfg   = json.load(open(args.config, encoding="utf-8"))
 
-# Trim whitespace
-df["Contest ID"]   = df["Contest ID"].str.strip()
-df["Contest Name"] = df["Contest Name"].str.strip()
+    engine  = init_db("nfl", cfg.get("database_url"))
+    Base.metadata.create_all(engine)
+    session = get_session(engine)
 
-# Drop rows missing either column
-df = df.dropna(subset=["Contest ID", "Contest Name"]).copy()
+    df = pd.read_csv(
+        cfg["paths"]["entries_csv"],
+        engine="python",
+        usecols=["Contest ID", "Contest Name"],
+        dtype={"Contest ID": str, "Contest Name": str},
+    )
+    df["Contest ID"]   = df["Contest ID"].str.strip()
+    df["Contest Name"] = df["Contest Name"].str.strip()
+    df = df.dropna(subset=["Contest ID", "Contest Name"]).copy()
+    df["Contest ID"] = df["Contest ID"].astype(int)
+    df = df.sort_values("Contest ID")
+    unique_df = df.drop_duplicates(subset=["Contest Name"], keep="last")
 
-# Convert Contest ID → int
-df["Contest ID"] = df["Contest ID"].astype(int)
+    for _, row in unique_df.iterrows():
+        cid  = int(row["Contest ID"])
+        name = row["Contest Name"]
+        print(f"→ Starting contest {cid} ('{name}')")
+        try:
+            simulate_one_contest(
+                session      = session,
+                contest_id   = cid,
+                contest_name = name,
+                num_sims     = args.num_sims,
+                config_path  = args.config,
+                field_cap    = 25000
+            )
+        except Exception as e:
+            print(f"⚠️  Skipped contest {cid} ('{name}') due to error: {e}\n")
 
-# 3) Only keep unique (Contest ID, Contest Name) pairs
-df = df.sort_values("Contest ID")
-unique_df = df.drop_duplicates(subset=["Contest Name"], keep="last")
-
-samples = generate_correlated_samples(session)
-
+if __name__ == "__main__":
+    main()
