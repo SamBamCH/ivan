@@ -156,33 +156,105 @@ def _simulate_chunk(
     entry_fee: float,
     scaled_payouts: Dict[int, float],
 ) -> Dict[str, np.ndarray]:
-    
+
     slice_len = end - start
     M = len(lineup_ix)
-    scores = np.zeros((slice_len, M), dtype=np.float32)
+
+    # work in float64 for stability at scale
+    scores  = np.zeros((slice_len, M), dtype=np.float64)
     payouts = np.zeros_like(scores)
     rois    = np.zeros_like(scores)
-    ranks   = np.zeros((slice_len, M), dtype=np.float32)
+    ranks   = np.zeros((slice_len, M), dtype=np.int32)
+
+    # zero-based payout array: index 0 -> rank 1
+    pay_arr = np.zeros(M, dtype=np.float64)
+    for r, a in scaled_payouts.items():
+        if 1 <= r <= M:
+            pay_arr[r - 1] = float(a)
+    pay_csum = np.cumsum(pay_arr, dtype=np.float64)
+
+    atol = 1e-8  # tighter since float64
 
     for local_i in range(slice_len):
-        row = P_chunk[local_i]
+        row = P_chunk[local_i]  # [nP]
+
+        # 1) score each entry for THIS sim
         for m in range(M):
             idxs = lineup_ix[m]
-            if idxs:
-                scores[local_i, m] = float(row[idxs].sum())
+            if idxs:  # list truthiness is fine
+                scores[local_i, m] = row[idxs].sum(dtype=np.float64)
 
-        order = np.argsort(-scores[local_i])
-        rank_positions = np.empty(M, dtype=int)
-        for rpos, lid in enumerate(order, start=1):
-            rank_positions[lid] = rpos
-        ranks[local_i] = rank_positions
+        # 2) sort by score desc
+        order = np.argsort(-scores[local_i], kind="stable")
+        sc_sorted = scores[local_i][order]
 
-        for ridx in range(M):
-            pay = float(scaled_payouts.get(int(rank_positions[ridx]), 0.0))
-            payouts[local_i, ridx] = pay
-            rois[local_i, ridx]    = (pay - entry_fee) / entry_fee
+        # 3) tie groups via explicit boundaries
+        diffs = np.abs(np.diff(sc_sorted))
+        edges = np.concatenate(([0], np.nonzero(diffs > atol)[0] + 1, [M]))
 
-    return {"start": start, "end": end, "scores": scores, "payouts": payouts, "rois": rois, "ranks": ranks}
+        start_rank = edges[:-1] + 1                  # 1-indexed
+        end_rank   = edges[1:]                       # 1-indexed
+        sizes      = end_rank - (start_rank - 1)     # == edges[1:] - edges[:-1]
+
+        # --- FIXED: vectorized pool sums with prefix sums (no array "if") ---
+        j2   = end_rank - 1                          # 0-based inclusive end
+        j1m1 = start_rank - 2                        # one before start (can be -1)
+        pools = pay_csum[j2] - np.where(j1m1 >= 0, pay_csum[j1m1], 0.0)
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            per_entry = np.divide(
+                pools, sizes,
+                out=np.zeros_like(pools, dtype=np.float64),
+                where=sizes > 0
+            )
+
+        # write per group
+        for g in range(len(start_rank)):
+            i0, i1 = edges[g], edges[g+1]
+            idx_in_field = order[i0:i1]
+            if idx_in_field.size == 0:
+                continue
+            payouts[local_i, idx_in_field] = per_entry[g]
+            ranks[local_i, idx_in_field] = int(start_rank[g])
+
+        # 5) ROI
+        rois[local_i] = (payouts[local_i] - entry_fee) / entry_fee
+
+        # ======= invariants / anomaly prints =======
+        total_payout_this_sim = float(payouts[local_i].sum())
+        expected_pool = float(pay_arr.sum())
+        if not np.isfinite(total_payout_this_sim) or abs(total_payout_this_sim - expected_pool) > 1e-4:
+            print(f"[WARN sim {start + local_i}] payout conservation: got={total_payout_this_sim:.6f}, "
+                  f"expected={expected_pool:.6f}")
+
+        for g in range(len(start_rank)):
+            r1, r2, sz = int(start_rank[g]), int(end_rank[g]), int(sizes[g])
+            if sz <= 0:
+                print(f"[WARN sim {start + local_i}] non-positive group size at ranks {r1}..{r2}")
+                continue
+            sl = pay_arr[r1-1:r2]
+            if sl.size == 0:
+                print(f"[WARN sim {start + local_i}] empty pay slice {r1}..{r2} (size={sz})")
+                continue
+            pe = float(per_entry[g])
+            lo, hi = float(sl.min()), float(sl.max())
+            if (pe < lo - 1e-8 or pe > hi + 1e-8) and (lo != hi):
+                print(f"[WARN sim {start + local_i}] per-entry {pe:.6f} outside [{lo:.6f},{hi:.6f}] "
+                      f"for tie ranks {r1}..{r2} (size={sz})")
+
+        mx = float(payouts[local_i].max())
+        top = float(pay_arr[0]) if M else 0.0
+        if mx > top + 1e-8:
+            print(f"[WARN sim {start + local_i}] max payout {mx:.6f} > top prize {top:.6f}")
+
+    return {
+        "start": start,
+        "end": end,
+        "scores": scores.astype(np.float32, copy=False),
+        "payouts": payouts.astype(np.float32, copy=False),
+        "rois": rois.astype(np.float32, copy=False),
+        "ranks": ranks,
+    }
 
 
 
@@ -269,7 +341,7 @@ def simulate_one_contest(
     full_rois    = np.zeros_like(full_scores)
     full_ranks   = np.zeros((num_sims, M), dtype=int)
 
-    with ProcessPoolExecutor(max_workers=min(8, num_sims)) as exe:
+    with ProcessPoolExecutor(max_workers=1) as exe:
         futures = []
         for start in range(0, num_sims, chunk_size):
             end = min(start + chunk_size, num_sims)
