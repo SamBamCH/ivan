@@ -1,11 +1,10 @@
 #TODO:
-granularly check that payout and ranks are being assigned correctly for duped lineups in SD sim
-    specifically that dupes are being counted correctly
+
 classic lineup generation
 classic sim
     classic lineup sampling
 
-
+write sampled player_id exposure back to the player class as 'ownership'. Can just append it to the list, and take the average of that list as our projected ownership?
 
 BUILD ENTIRE PROCESS FLOW
     INGEST
