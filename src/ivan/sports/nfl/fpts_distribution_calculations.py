@@ -645,7 +645,7 @@ def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n
 
     # fallback if the table is empty for a new DB
     rng = np.random.default_rng()
-    fpts = rng.normal(loc=5.0, scale=4.0, size=n_samples)
+    fpts = rng.normal(loc=4.0, scale=4.0, size=n_samples)
     return np.clip(fpts, -6.0, None)
 
 

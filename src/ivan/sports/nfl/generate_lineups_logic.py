@@ -471,10 +471,10 @@ def generate_and_store_field_lineups(
     seen_lineups: set[tuple[int, ...]] = set()  # per-worker dedupe
 
     # ==== 3) Config knobs (quiet defaults) ====
-    jitter       = float(_cfg(config, "showdown.jitter", 0.10))
+    jitter       = float(_cfg(config, "showdown.jitter", 0.30))
     cap          = int(_cfg(config, "lineup.salary_cap", 50000))
     min_cap_drop = int(_cfg(config, "showdown.min_cap_drop", 0))
-    max_cap_drop = int(_cfg(config, "showdown.max_cap_drop", 2000))
+    max_cap_drop = int(_cfg(config, "showdown.max_cap_drop", 3000))
 
     # ==== 4) Showdown fast path (no solver) ====
     if slate_type == "showdown":
