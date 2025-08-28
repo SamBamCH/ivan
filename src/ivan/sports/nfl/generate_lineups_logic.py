@@ -214,6 +214,12 @@ def _slot_list_for_player(p: FieldPlayer) -> List[str]:
         slots.append("FLEX")
     return slots
 
+def _is_kicker(p: FieldPlayer) -> bool:
+    return "K" in _as_bases(p.position)
+
+def _is_dst(p: FieldPlayer) -> bool:
+    return "DST" in _as_bases(p.position)
+
 
 
 # ---- public API ----
@@ -335,74 +341,97 @@ def generate_single_lineup_from_scores(
     chosen_ids = list(dict.fromkeys(chosen_ids))
     return chosen_ids if len(chosen_ids) == sum(_DK_SLOT_COUNTS.values()) else None
 
-def generate_single_showdown_lineup(
+def generate_single_showdown_lineup_ilp(
     players: List[FieldPlayer],
     roster_slot_by_id: Dict[int, int],
     base_scores: Dict[int, float],
     *,
     cap: int = 50000,
     min_cap_drop: int = 0,
-    max_cap_drop: int = 1200,
-    tries: int = 500,
-    weight_power: float = 1.0,   # raise scores to bias sampling (1.0 = linear)
+    max_cap_drop: int = 2000,
+    min_k: int = 0,            # per-lineup minimum Kickers
+    min_dst: int = 0,          # per-lineup minimum DST
+    min_k_or_dst: int = 0,     # per-lineup minimum from {K,DST} combined
+    config: dict | None = None,
+    debug_lp_path: Optional[str] = None,
 ) -> Optional[List[int]]:
     """
-    FAST SAMPLER for DK Showdown:
-      - Samples 1 CPT (511) and 5 FLEX (512) with score-weighted sampling
-      - Ensures no duplicate player across CPT/FLEX (same name+team)
-      - Accepts lineup if total salary is within [cap - U(min..max), cap]
-
-    No solver; ~O(1) per attempt. Use `tries` to control effort per lineup.
+    Small ILP for DK Showdown:
+      - exactly 1 CPT (slot 511) and 5 FLEX (slot 512)
+      - no player appears twice (CPT+FLEX)
+      - salary within [cap - U(min_cap_drop..max_cap_drop), cap]
+      - optional per-lineup min counts for K and/or DST
+      - objective: maximize 1.5x score at CPT + score at FLEX (+ tiny salary tiebreak)
     """
-    import numpy as np, random as _rnd
-
+    config = config or {}
     CPT, FLEX = 511, 512
-    cpt_ids  = np.array([p.id for p in players if roster_slot_by_id.get(p.id) == CPT], dtype=np.int64)
-    flex_ids = np.array([p.id for p in players if roster_slot_by_id.get(p.id) == FLEX], dtype=np.int64)
-    if cpt_ids.size == 0 or flex_ids.size < 5:
+
+    # Partition ids by slot and map identity for "no-dup" constraint
+    players_by_id: Dict[int, FieldPlayer] = {p.id: p for p in players}
+    cpt_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == CPT]
+    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == FLEX]
+    if not cpt_ids or len(flex_ids) < 5:
         return None
 
-    # Precompute salary + sampling weights
-    salary = {p.id: int(p.salary) for p in players}
-    key_by_id = {p.id: (p.name, p.team) for p in players}
+    # group roster entries by real-player identity (name,team)
+    ident_to_ids: Dict[Tuple[str,str], List[int]] = {}
+    for p in players:
+        ident_to_ids.setdefault((p.name, p.team), []).append(p.id)
 
-    wc = np.array([max(0.0, base_scores.get(i, 0.0)) for i in cpt_ids], dtype=float)
-    wf = np.array([max(0.0, base_scores.get(i, 0.0)) for i in flex_ids], dtype=float)
-    if weight_power != 1.0:
-        wc = np.power(wc, weight_power)
-        wf = np.power(wf, weight_power)
-    if wc.sum() == 0: wc[:] = 1.0
-    if wf.sum() == 0: wf[:] = 1.0
-    wc /= wc.sum()
-    wf /= wf.sum()
+    # Sets for K / DST
+    k_ids   = [p.id for p in players if _is_kicker(p)]
+    dst_ids = [p.id for p in players if _is_dst(p)]
+    k_dst_ids = list(set(k_ids) | set(dst_ids))
 
-    for _ in range(int(tries)):
-        # draw CPT
-        cpt = int(cpt_ids[np.random.choice(len(cpt_ids), p=wc)])
-        c_key = key_by_id[cpt]
+    # Random near-cap floor for variety
+    near_cap_floor = cap - random.randint(int(min_cap_drop), int(max_cap_drop))
 
-        # FLEX candidate pool excluding the same real player
-        mask = np.array([key_by_id[i] != c_key for i in flex_ids], dtype=bool)
-        cand_ids = flex_ids[mask]
-        cand_w   = wf[mask]
-        if cand_ids.size < 5:
-            continue
-        cand_w = cand_w / cand_w.sum()
+    # Build ILP
+    prob = plp.LpProblem("nfl_showdown_lineup", plp.LpMaximize)
+    x: Dict[int, plp.LpVariable] = {pid: plp.LpVariable(f"x_{_safe_var_name(players_by_id[pid].name)}_{pid}", 0, 1, plp.LpBinary)
+                                    for pid in players_by_id}
 
-        # draw 5 FLEX without replacement (weighted)
-        try:
-            sel_idx = np.random.choice(cand_ids.size, size=5, replace=False, p=cand_w)
-        except ValueError:
-            sel_idx = np.random.choice(cand_ids.size, size=5, replace=False)
+    # Counts per slot
+    prob += plp.lpSum(x[i] for i in cpt_ids)  == 1,  "ExactlyOneCPT"
+    prob += plp.lpSum(x[i] for i in flex_ids) == 5,  "ExactlyFiveFLEX"
 
-        picks = [cpt] + [int(cand_ids[i]) for i in sel_idx]
-        spend = sum(salary[i] for i in picks)
+    # No CPT+FLEX for same real player
+    for (name, team), ids in ident_to_ids.items():
+        prob += plp.lpSum(x[i] for i in ids) <= 1, f"NoDup_{_safe_var_name(name)}_{_safe_var_name(team)}"
 
-        near_cap_floor = cap - _rnd.randint(min_cap_drop, max_cap_drop)
-        if near_cap_floor <= spend <= cap:
-            return picks
+    # Salary window
+    salary_expr = plp.lpSum(players_by_id[i].salary * x[i] for i in players_by_id)
+    prob += salary_expr <= cap,             "MaxSalary"
+    prob += salary_expr >= near_cap_floor,  "MinSalaryWindow"
 
-    return None
+    # Optional per-lineup K/DST requirements (only add if candidates exist)
+    if min_k > 0 and k_ids:
+        prob += plp.lpSum(x[i] for i in k_ids) >= min_k, "MinKicker"
+    if min_dst > 0 and dst_ids:
+        prob += plp.lpSum(x[i] for i in dst_ids) >= min_dst, "MinDST"
+    if min_k_or_dst > 0 and k_dst_ids:
+        prob += plp.lpSum(x[i] for i in k_dst_ids) >= min_k_or_dst, "MinK_or_DST"
+
+    # Objective: 1.5x for CPT rows; add tiny salary tiebreak to stay near cap
+    score = plp.lpSum(
+        (1.5 if roster_slot_by_id.get(i) == CPT else 1.0) * float(base_scores.get(i, 0.0)) * x[i]
+        for i in players_by_id
+    )
+    prob += score + 1e-4 * (salary_expr / float(cap)), "ScorePlusSalaryTiebreak"
+
+    solver = plp.GLPK_CMD(
+        path=r"D:\ivan\glpk-4.65\w64\glpsol.exe",
+        keepFiles=True,
+        options=["--log", r"data\nfl/logs/glpsol.log"]
+    )
+    status_code = prob.solve(solver)
+    if plp.LpStatus[status_code] != "Optimal":
+        if debug_lp_path:
+            prob.writeLP(debug_lp_path)
+        return None
+
+    sel = [i for i, var in x.items() if var.varValue == 1]
+    return sel if len(sel) == 6 else None
 
 def _infer_slate_type(roster_slot_by_id: Dict[int, int]) -> str:
     """Return 'showdown' if any DK Showdown roster slots (511/512) exist; else 'classic'."""
@@ -478,45 +507,94 @@ def generate_and_store_field_lineups(
 
     # ==== 4) Showdown fast path (no solver) ====
     if slate_type == "showdown":
-        # Build a base score vector from one sample; jitter per attempt for variety
-        samp_idx = idx_order[0] if idx_order else 0
-        base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
+            # Base scores from one sample; per-attempt jitter for variety
+            samp_idx = idx_order[0] if idx_order else 0
+            base_scores0 = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
 
-        attempts = 0
-        max_attempts = max(num_lineups * 50, num_lineups + 200)
+            # Config knobs (with gentle defaults)
+            jitter         = float(_cfg(config, "showdown.jitter", 0.10))
+            cap            = int(_cfg(config, "lineup.salary_cap", 50000))
+            min_cap_drop   = int(_cfg(config, "showdown.min_cap_drop", 0))
+            max_cap_drop   = int(_cfg(config, "showdown.max_cap_drop", 2000))
+            target_k_ratio   = float(_cfg(config, "showdown.targets.kicker_ratio", 0.40))  # % of lineups with ≥1 K
+            target_dst_ratio = float(_cfg(config, "showdown.targets.dst_ratio",    0.35))  # % of lineups with ≥1 DST
 
-        while created < num_lineups and attempts < max_attempts:
-            attempts += 1
-            # per-attempt jitter
-            jittered = {pid: s * (1.0 + random.uniform(-jitter, jitter)) for pid, s in base_scores.items()}
-            ids_selected = generate_single_showdown_lineup(
-                players=players,
-                roster_slot_by_id=roster_slot_by_id,
-                base_scores=jittered,
-                cap=cap,
-                min_cap_drop=min_cap_drop,
-                max_cap_drop=max_cap_drop,
-                tries=200,
-            )
-            if not ids_selected:
-                continue
+            # Fast access maps
+            players_by_id = {p.id: p for p in players}
 
-            key = tuple(sorted(ids_selected))
-            if key in seen_lineups:
-                continue
-            seen_lineups.add(key)
+            # Exposure tallies over *lineups*
+            lineups_with_k   = 0
+            lineups_with_dst = 0
 
-            session.add(Lineup(player_ids_list=list(ids_selected), created_at=datetime.utcnow()))
-            created += 1
-            batch   += 1
+            attempts     = 0
+            max_attempts = max(num_lineups * 50, num_lineups + 400)
 
-            if batch >= batch_size:
+            while created < num_lineups and attempts < max_attempts:
+                attempts += 1
+
+                # jitter scores a bit to diversify optimal solutions
+                jittered = {pid: s * (1.0 + random.uniform(-jitter, jitter)) for pid, s in base_scores0.items()}
+
+                # Exposure steering: if we’re behind target, require that position in this lineup
+                need_k   = (created == 0) or (lineups_with_k   / max(created, 1) < target_k_ratio)
+                need_dst = (created == 0) or (lineups_with_dst / max(created, 1) < target_dst_ratio)
+
+                # Try strict needs first; if infeasible, relax to "at least one of {K,DST}"
+                ids_selected = generate_single_showdown_lineup_ilp(
+                    players=players,
+                    roster_slot_by_id=roster_slot_by_id,
+                    base_scores=jittered,
+                    cap=cap,
+                    min_cap_drop=min_cap_drop,
+                    max_cap_drop=max_cap_drop,
+                    min_k=1 if need_k else 0,
+                    min_dst=1 if need_dst else 0,
+                    min_k_or_dst=0,
+                    config=config,
+                    debug_lp_path=f"data/nfl/logs/debug_showdown_{attempts}.lp",
+                )
+
+                if not ids_selected and (need_k or need_dst):
+                    # Relax: accept either K or DST if behind on at least one
+                    ids_selected = generate_single_showdown_lineup_ilp(
+                        players=players,
+                        roster_slot_by_id=roster_slot_by_id,
+                        base_scores=jittered,
+                        cap=cap,
+                        min_cap_drop=min_cap_drop,
+                        max_cap_drop=max_cap_drop,
+                        min_k=0,
+                        min_dst=0,
+                        min_k_or_dst=1,
+                        config=config,
+                        debug_lp_path=f"data/nfl/logs/debug_showdown_relaxed_{attempts}.lp",
+                    )
+
+                if not ids_selected:
+                    continue
+
+                key = tuple(sorted(ids_selected))
+                if key in seen_lineups:
+                    continue
+                seen_lineups.add(key)
+
+                # Update exposure tallies
+                has_k   = any(_is_kicker(players_by_id[i]) for i in ids_selected)
+                has_dst = any(_is_dst(players_by_id[i])    for i in ids_selected)
+                if has_k:   lineups_with_k   += 1
+                if has_dst: lineups_with_dst += 1
+
+                session.add(Lineup(player_ids_list=list(ids_selected), created_at=datetime.utcnow()))
+                created += 1
+                batch   += 1
+
+                if batch >= batch_size:
+                    session.commit()
+                    batch = 0
+
+            if batch > 0:
                 session.commit()
-                batch = 0
-
-        if batch > 0:
-            session.commit()
-        return created
+            return created
 
     # ==== 5) Classic ILP path ====
     attempts = 0
