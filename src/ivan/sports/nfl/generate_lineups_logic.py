@@ -420,7 +420,7 @@ def generate_single_showdown_lineup_ilp(
     prob += score + 1e-4 * (salary_expr / float(cap)), "ScorePlusSalaryTiebreak"
 
     solver = plp.GLPK_CMD(
-        path=r"D:\ivan\glpk-4.65\w64\glpsol.exe",
+        path=r"C:\Users\samba\ivan\glpk-4.65\w64\glpsol.exe",
         keepFiles=True,
         options=["--log", r"data\nfl/logs/glpsol.log"]
     )
