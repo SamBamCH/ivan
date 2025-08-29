@@ -19,6 +19,212 @@ from ivan.sports.nfl.correlated_samples import generate_correlated_samples, Samp
 # Reuse your MLB payout scaler (sport-agnostic)
 from ivan.sports.mlb.payouts import scale_payouts_correctly
 
+# --- DIAGNOSTICS: recap, CSVs, and plots for the sampled field ----------------
+import matplotlib.pyplot as plt
+from collections import Counter
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+def _safe_getattr(obj, *names, default=None):
+    for n in names:
+        if hasattr(obj, n):
+            v = getattr(obj, n)
+            if v is not None:
+                return v
+    return default
+
+def _fetch_player_meta(session, pids: list[int]) -> dict[int, dict]:
+    from ivan.sports.nfl.models import NFLPlayer  # adjust if path differs
+    rows = (
+        session.query(NFLPlayer)
+        .filter(NFLPlayer.id.in_(pids))
+        .all()
+    )
+    meta = {}
+    for r in rows:
+        name = _safe_getattr(r, "player_display_name", "display_name", "name", default=str(r.id))
+        team = _safe_getattr(r, "team", "team_abbrev", "team_abbr", "defteam", default=None)
+        pos  = _safe_getattr(r, "position", "pos", default=None)
+        slot = _safe_getattr(r, "roster_slot", default=None)
+        meta[int(r.id)] = {
+            "name": name,
+            "team": team,
+            "pos": pos,
+            "roster_slot": slot,
+            "slot_label": ("CPT" if slot == 511 else "FLEX" if slot == 512 else str(slot) if slot is not None else None),
+        }
+    return meta
+
+def _lineup_player_names_for(lid: int, session, pid_to_meta: dict[int, dict]) -> list[str]:
+    from ivan.sports.nfl.models import Lineup
+    row = session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.id == lid).one()
+    pids = _coerce_player_ids(row.player_ids_list)
+    names = []
+    for pid in pids:
+        m = pid_to_meta.get(pid, {})
+        nm = m.get("name", str(pid))
+        slot = m.get("slot_label")
+        if slot:
+            names.append(f"{nm} ({slot})")
+        else:
+            names.append(nm)
+    return names
+
+def _plot_bar(x_labels: list[str], values: np.ndarray, title: str, out_path: Path):
+    plt.figure()
+    plt.bar(range(len(values)), values)  # no specific colors/styles per policy
+    plt.xticks(range(len(values)), x_labels, rotation=90)
+    plt.title(title)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+def _plot_hist(int_values: np.ndarray, title: str, out_path: Path):
+    if int_values.size == 0:
+        return
+    bins = np.arange(int(int_values.min()), int(int_values.max()) + 2) - 0.5  # center on integers
+    plt.figure()
+    plt.hist(int_values, bins=bins)
+    plt.title(title)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+def recap_and_plots_for_sampled_field(
+    session,
+    contest_id: int,
+    counts_by_lineup: dict[int, int],
+    lineup_ix: list[list[int]],
+    unique_pids: list[int],
+    outdir: str | Path = "data/nfl/diagnostics",
+    top_n_print: int = 10,
+    top_n_plot: int = 30,
+):
+    """
+    Prints a recap, saves CSVs, and writes a few PNG plots:
+      - field_dupes.csv                    (lineup_id, dupes)
+      - exposures_by_pid.csv               (per (pid, CPT/FLEX))
+      - exposures_by_player_merged.csv     (CPT+FLEX merged by name)
+      - dupes_hist.png
+      - exposures_topN_overall.png
+      - exposures_topN_CPT.png
+      - exposures_topN_FLEX.png
+    """
+    outdir = Path(outdir) / f"contest_{contest_id}"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # ---------- basic dupe recap ----------
+    u_lids = sorted([lid for lid, c in counts_by_lineup.items() if c > 0])
+    dupe_counts = np.array([int(counts_by_lineup[l]) for l in u_lids], dtype=np.int64)
+    M = int(dupe_counts.sum())
+    unique_lineups = int((dupe_counts > 0).sum())
+    solo = int((dupe_counts == 1).sum())
+    dupe_rate = 1.0 - (unique_lineups / max(1, M))
+
+    print("\n=== Sampled Field Recap ===")
+    print(f"Total entries (M):        {M:,}")
+    print(f"Unique lineups:           {unique_lineups:,}  ({unique_lineups / max(1, M):.1%} of field)")
+    print(f"Solo lineups (no dupes):  {solo:,}  ({solo / max(1, M):.1%} of field)")
+    print(f"Dupe rate:                {dupe_rate:.1%}")
+    if dupe_counts.size:
+        print(f"Max dupes of a single lineup: {dupe_counts.max():,}")
+        qs = np.quantile(dupe_counts, [0.50, 0.75, 0.90, 0.95, 0.99])
+        print("Dupes quantiles (50/75/90/95/99%):", " / ".join(f"{int(x)}" for x in qs))
+
+    # Save dupes table
+    dupes_df = pd.DataFrame({"lineup_id": u_lids, "dupes": dupe_counts})
+    dupes_df.sort_values("dupes", ascending=False).to_csv(outdir / "field_dupes.csv", index=False)
+
+    # Print top-N duped with player names
+    pid_meta = _fetch_player_meta(session, unique_pids)
+    print(f"\nTop {min(top_n_print, len(u_lids))} most-duped lineups:")
+    for lid, c in dupes_df.sort_values("dupes", ascending=False).head(top_n_print).values:
+        names = _lineup_player_names_for(int(lid), session, pid_meta)
+        print(f"  lineup {int(lid)}  dupes={int(c):>4}  ->  " + ", ".join(names))
+
+    # Histogram of dupes
+    _plot_hist(dupe_counts, f"Lineup dupes distribution (M={M:,})", outdir / "dupes_hist.png")
+
+    # ---------- player exposures ----------
+    nP = len(unique_pids)
+    counts_per_pid_idx = np.zeros(nP, dtype=np.int64)
+    for idxs in lineup_ix:
+        if not idxs:  # None or empty
+            continue
+        # vectorized bump for all players in this entry
+        counts_per_pid_idx[np.array(idxs, dtype=int)] += 1
+
+    exposures_rows = []
+    for j, pid in enumerate(unique_pids):
+        cnt = int(counts_per_pid_idx[j])
+        exp = cnt / max(1, M)
+        meta = pid_meta.get(pid, {})
+        exposures_rows.append({
+            "pid": int(pid),
+            "name": meta.get("name", str(pid)),
+            "team": meta.get("team"),
+            "pos": meta.get("pos"),
+            "roster_slot": meta.get("roster_slot"),
+            "slot_label": meta.get("slot_label"),
+            "picked_count": cnt,
+            "exposure_pct": exp,
+        })
+    exposures_df = pd.DataFrame(exposures_rows).sort_values(["exposure_pct", "picked_count"], ascending=False)
+    exposures_df.to_csv(outdir / "exposures_by_pid.csv", index=False)
+
+    # merged by player name (CPT+FLEX combined)
+    merged = (
+        exposures_df
+        .groupby(["name", "team", "pos"], dropna=False, as_index=False)
+        .agg(picked_count=("picked_count", "sum"))
+    )
+    merged["exposure_pct"] = merged["picked_count"] / max(1, M)
+    merged.sort_values(["exposure_pct", "picked_count"], ascending=False, inplace=True)
+    merged.to_csv(outdir / "exposures_by_player_merged.csv", index=False)
+
+    # Print quick top-10
+    print("\nTop 10 player exposures (merged CPT+FLEX):")
+    for _, row in merged.head(10).iterrows():
+        nm = row["name"]
+        tm = row.get("team", None)
+        pct = row["exposure_pct"]
+        cnt = int(row["picked_count"])
+        print(f"  {nm:<24} {tm or '—':<4}  {pct:6.2%}  ({cnt:,}/{M:,})")
+
+    # ---------- plots for exposures ----------
+    # overall (merged) top N
+    top = merged.head(top_n_plot)
+    _plot_bar(
+        x_labels=top["name"].tolist(),
+        values=top["exposure_pct"].to_numpy(),
+        title=f"Top {len(top)} player exposures (merged) — M={M:,}",
+        out_path=outdir / "exposures_topN_overall.png",
+    )
+
+    # CPT-only
+    cpt = exposures_df[exposures_df["slot_label"] == "CPT"].sort_values("exposure_pct", ascending=False).head(top_n_plot)
+    _plot_bar(
+        x_labels=cpt["name"].tolist(),
+        values=cpt["exposure_pct"].to_numpy(),
+        title=f"Top {len(cpt)} CPT exposures — M={M:,}",
+        out_path=outdir / "exposures_topN_CPT.png",
+    )
+
+    # FLEX-only
+    flex = exposures_df[exposures_df["slot_label"] == "FLEX"].sort_values("exposure_pct", ascending=False).head(top_n_plot)
+    _plot_bar(
+        x_labels=flex["name"].tolist(),
+        values=flex["exposure_pct"].to_numpy(),
+        title=f"Top {len(flex)} FLEX exposures — M={M:,}",
+        out_path=outdir / "exposures_topN_FLEX.png",
+    )
+
+    print(f"\nDiagnostics saved to: {outdir}")
+
+
 def _coerce_player_ids(val) -> List[int]:
     import json as _json
     if val is None:
@@ -277,7 +483,7 @@ def simulate_one_contest(
     counts_by_lineup, meta = sample_sd_field(
         session,
         field_size=capped_field_sz,
-        n_sims=min(100, num_sims)
+        n_sims=min(1000, num_sims)
     )
     total = sum(counts_by_lineup.values())
     assert total == capped_field_sz, (total, capped_field_sz)
@@ -286,6 +492,17 @@ def simulate_one_contest(
     #TODO: add a quick sanity check and print the top duped lineups in the sample along with their sample chacteristics (i.e. salary remaining, proj/max([projs]))
     # Expand counts into entry-level arrays + compact player universe
     entry_lids, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(session, counts_by_lineup)
+
+    recap_and_plots_for_sampled_field(
+        session=session,
+        contest_id=contest_id,
+        counts_by_lineup=counts_by_lineup,
+        lineup_ix=lineup_ix,
+        unique_pids=unique_pids,
+        outdir="data/nfl/diagnostics",
+        top_n_print=10,
+        top_n_plot=30,
+    )
 
     M = len(entry_lids)
     if M == 0:

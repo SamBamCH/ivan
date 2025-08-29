@@ -45,7 +45,7 @@ def main():
                 contest_name = name,
                 num_sims     = args.num_sims,
                 config_path  = args.config,
-                field_cap    = 10000
+                field_cap    = 25000
             )
         except Exception as e:
             print(f"⚠️  Skipped contest {cid} ('{name}') due to error: {e}\n")

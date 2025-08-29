@@ -1,0 +1,253 @@
+Problem:    
+Rows:       41
+Columns:    74 (74 integer, 74 binary)
+Non-zeros:  296
+Status:     INTEGER OPTIMAL
+Objective:  ScorePlusSalaryTiebreak = 76.41686701 (MAXimum)
+
+   No.   Row name        Activity     Lower bound   Upper bound
+------ ------------    ------------- ------------- -------------
+     1 ExactlyFiveFLEX
+                                   5             5             = 
+     2 ExactlyOneCPT
+                                   1             1             = 
+     3 MaxSalary               50000                       50000 
+     4 MinSalaryWindow
+                               50000         50000               
+     5 NoDup_ainias_smith_PHI
+                                   0                           1 
+     6 NoDup_aj_brown_PHI
+                                   1                           1 
+     7 NoDup_aj_dillon_PHI
+                                   0                           1 
+     8 NoDup_avery_williams_PHI
+                                   0                           1 
+     9 NoDup_brandon_aubrey_DAL
+                                   0                           1 
+    10 NoDup_brevyn_spannford_DAL
+                                   0                           1 
+    11 NoDup_ceedee_lamb_DAL
+                                   0                           1 
+    12 NoDup_cowboys_DAL
+                                   1                           1 
+    13 NoDup_dak_prescott_DAL
+                                   1                           1 
+    14 NoDup_dallas_goedert_PHI
+                                   0                           1 
+    15 NoDup_deuce_vaughn_DAL
+                                   0                           1 
+    16 NoDup_devonta_smith_PHI
+                                   1                           1 
+    17 NoDup_eagles_PHI
+                                   0                           1 
+    18 NoDup_elijah_cooks_PHI
+                                   0                           1 
+    19 NoDup_george_pickens_DAL
+                                   0                           1 
+    20 NoDup_grant_calcaterra_PHI
+                                   0                           1 
+    21 NoDup_hunter_luepke_DAL
+                                   0                           1 
+    22 NoDup_jahan_dotson_PHI
+                                   0                           1 
+    23 NoDup_jake_elliott_PHI
+                                   1                           1 
+    24 NoDup_jake_ferguson_DAL
+                                   0                           1 
+    25 NoDup_jalen_brooks_DAL
+                                   0                           1 
+    26 NoDup_jalen_hurts_PHI
+                                   1                           1 
+    27 NoDup_jalen_tolbert_DAL
+                                   0                           1 
+    28 NoDup_javonte_williams_DAL
+                                   0                           1 
+    29 NoDup_jaydon_blue_DAL
+                                   0                           1 
+    30 NoDup_john_stephens_jr_DAL
+                                   0                           1 
+    31 NoDup_johnny_wilson_PHI
+                                   0                           1 
+    32 NoDup_jonathan_mingo_DAL
+                                   0                           1 
+    33 NoDup_kavontae_turpin_DAL
+                                   0                           1 
+    34 NoDup_kylen_granson_PHI
+                                   0                           1 
+    35 NoDup_luke_schoonmaker_DAL
+                                   0                           1 
+    36 NoDup_miles_sanders_DAL
+                                   0                           1 
+    37 NoDup_nick_muse_PHI
+                                   0                           1 
+    38 NoDup_phil_mafah_DAL
+                                   0                           1 
+    39 NoDup_ryan_flournoy_DAL
+                                   0                           1 
+    40 NoDup_saquon_barkley_PHI
+                                   0                           1 
+    41 NoDup_will_shipley_PHI
+                                   0                           1 
+
+   No. Column name       Activity     Lower bound   Upper bound
+------ ------------    ------------- ------------- -------------
+     1 x_ainias_smith_39560012
+                    *              0             0             1 
+     2 x_ainias_smith_39560074
+                    *              0             0             1 
+     3 x_aj_brown_39559983
+                    *              1             0             1 
+     4 x_aj_brown_39560045
+                    *              0             0             1 
+     5 x_aj_dillon_39560003
+                    *              0             0             1 
+     6 x_aj_dillon_39560065
+                    *              0             0             1 
+     7 x_avery_williams_39560039
+                    *              0             0             1 
+     8 x_avery_williams_39560101
+                    *              0             0             1 
+     9 x_brandon_aubrey_39559996
+                    *              0             0             1 
+    10 x_brandon_aubrey_39560058
+                    *              0             0             1 
+    11 x_brevyn_spannford_39560019
+                    *              0             0             1 
+    12 x_brevyn_spannford_39560081
+                    *              0             0             1 
+    13 x_ceedee_lamb_39559982
+                    *              0             0             1 
+    14 x_ceedee_lamb_39560044
+                    *              0             0             1 
+    15 x_cowboys_39560000
+                    *              1             0             1 
+    16 x_cowboys_39560062
+                    *              0             0             1 
+    17 x_dak_prescott_39559984
+                    *              1             0             1 
+    18 x_dak_prescott_39560046
+                    *              0             0             1 
+    19 x_dallas_goedert_39559989
+                    *              0             0             1 
+    20 x_dallas_goedert_39560051
+                    *              0             0             1 
+    21 x_deuce_vaughn_39560011
+                    *              0             0             1 
+    22 x_deuce_vaughn_39560073
+                    *              0             0             1 
+    23 x_devonta_smith_39559985
+                    *              0             0             1 
+    24 x_devonta_smith_39560047
+                    *              1             0             1 
+    25 x_eagles_39559997
+                    *              0             0             1 
+    26 x_eagles_39560059
+                    *              0             0             1 
+    27 x_elijah_cooks_39560031
+                    *              0             0             1 
+    28 x_elijah_cooks_39560093
+                    *              0             0             1 
+    29 x_george_pickens_39559986
+                    *              0             0             1 
+    30 x_george_pickens_39560048
+                    *              0             0             1 
+    31 x_grant_calcaterra_39560006
+                    *              0             0             1 
+    32 x_grant_calcaterra_39560068
+                    *              0             0             1 
+    33 x_hunter_luepke_39560013
+                    *              0             0             1 
+    34 x_hunter_luepke_39560075
+                    *              0             0             1 
+    35 x_jahan_dotson_39560002
+                    *              0             0             1 
+    36 x_jahan_dotson_39560064
+                    *              0             0             1 
+    37 x_jake_elliott_39559998
+                    *              1             0             1 
+    38 x_jake_elliott_39560060
+                    *              0             0             1 
+    39 x_jake_ferguson_39559994
+                    *              0             0             1 
+    40 x_jake_ferguson_39560056
+                    *              0             0             1 
+    41 x_jalen_brooks_39560014
+                    *              0             0             1 
+    42 x_jalen_brooks_39560076
+                    *              0             0             1 
+    43 x_jalen_hurts_39559981
+                    *              1             0             1 
+    44 x_jalen_hurts_39560043
+                    *              0             0             1 
+    45 x_jalen_tolbert_39560001
+                    *              0             0             1 
+    46 x_jalen_tolbert_39560063
+                    *              0             0             1 
+    47 x_javonte_williams_39559993
+                    *              0             0             1 
+    48 x_javonte_williams_39560055
+                    *              0             0             1 
+    49 x_jaydon_blue_39559995
+                    *              0             0             1 
+    50 x_jaydon_blue_39560057
+                    *              0             0             1 
+    51 x_john_stephens_jr_39560040
+                    *              0             0             1 
+    52 x_john_stephens_jr_39560102
+                    *              0             0             1 
+    53 x_johnny_wilson_39560020
+                    *              0             0             1 
+    54 x_johnny_wilson_39560082
+                    *              0             0             1 
+    55 x_jonathan_mingo_39560009
+                    *              0             0             1 
+    56 x_jonathan_mingo_39560071
+                    *              0             0             1 
+    57 x_kavontae_turpin_39560004
+                    *              0             0             1 
+    58 x_kavontae_turpin_39560066
+                    *              0             0             1 
+    59 x_kylen_granson_39560016
+                    *              0             0             1 
+    60 x_kylen_granson_39560078
+                    *              0             0             1 
+    61 x_luke_schoonmaker_39560008
+                    *              0             0             1 
+    62 x_luke_schoonmaker_39560070
+                    *              0             0             1 
+    63 x_miles_sanders_39559999
+                    *              0             0             1 
+    64 x_miles_sanders_39560061
+                    *              0             0             1 
+    65 x_nick_muse_39560032
+                    *              0             0             1 
+    66 x_nick_muse_39560094
+                    *              0             0             1 
+    67 x_phil_mafah_39560010
+                    *              0             0             1 
+    68 x_phil_mafah_39560072
+                    *              0             0             1 
+    69 x_ryan_flournoy_39560017
+                    *              0             0             1 
+    70 x_ryan_flournoy_39560079
+                    *              0             0             1 
+    71 x_saquon_barkley_39559980
+                    *              0             0             1 
+    72 x_saquon_barkley_39560042
+                    *              0             0             1 
+    73 x_will_shipley_39560007
+                    *              0             0             1 
+    74 x_will_shipley_39560069
+                    *              0             0             1 
+
+Integer feasibility conditions:
+
+KKT.PE: max.abs.err = 0.00e+00 on row 0
+        max.rel.err = 0.00e+00 on row 0
+        High quality
+
+KKT.PB: max.abs.err = 0.00e+00 on row 0
+        max.rel.err = 0.00e+00 on row 0
+        High quality
+
+End of output
