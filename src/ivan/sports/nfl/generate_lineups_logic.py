@@ -230,6 +230,89 @@ def generate_single_showdown_lineup_ilp(
     sel = [i for i, var in x.items() if var.varValue == 1]
     return sel if len(sel) == 6 else None
 
+def generate_single_classic_lineup(
+        players: List[FieldPlayer],
+        roster_slot_by_id: Dict[int, int],
+        base_scores: Dict[int, float],
+        cap: int = 50000,
+        min_salary: int = 49000,
+        config: dict | None = None,
+        debug_lp_path: Optional[str] = None
+) -> Optional[List[int]]:
+    
+    config = config or {}
+    QB, RB, WR, TE, DST = 66, 67, 68, 69, 71
+
+    players_by_id: Dict[int, FieldPlayer] = {p.id: p for p in players}
+    qb_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == QB]
+    rb_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == RB]
+    wr_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == WR]
+    te_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == TE]
+    dst_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == DST]
+    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) in {RB, WR, TE}]
+
+    if not qb_ids:
+        raise ValueError("No QB ids matched. check filtering conditions")
+    
+    ident_to_ids: Dict[Tuple[str, str], List[int]] = {}
+    for p in players:
+        ident_to_ids.setdefault((p.name, p.team), []).append(p.id)
+
+    # create the LP problem
+    prob = plp.LpProblem(_unique_problem_name("nfl_classic_lineup"), plp.LpMaximize)
+    # create binary variables for players
+    x: Dict[int, plp.LpVariable] = {
+        pid: plp.LpVariable(f"x_{_safe_var_name(players_by_id[pid].name)}_{pid}", 0, 1, plp.LpBinary)
+        for pid in players_by_id
+    }
+
+    # --- Position/roster constraints ---
+    prob += plp.lpSum(x[i] for i in qb_ids)  == 1, "ExactlyOneQB"
+    prob += plp.lpSum(x[i] for i in dst_ids) == 1, "ExactlyOneDST"
+
+    # Minimums for skill spots
+    prob += plp.lpSum(x[i] for i in rb_ids) >= 2, "AtLeastTwoRB"
+    prob += plp.lpSum(x[i] for i in wr_ids) >= 3, "AtLeastThreeWR"
+    prob += plp.lpSum(x[i] for i in te_ids) >= 1, "AtLeastOneTE"
+
+    # Exactly one FLEX among RB/WR/TE, achieved by enforcing totals:
+    skill_ids = list(set(rb_ids) | set(wr_ids) | set(te_ids))
+    prob += plp.lpSum(x[i] for i in skill_ids) == 7, "ExactlySevenSkill"
+    prob += plp.lpSum(x[i] for i in players_by_id) == 9, "ExactlyNinePlayers"
+
+    #no duplicate player in the same lineup
+    for (name, team), ids in ident_to_ids.items():
+        prob += plp.lpSum(x[i] for i in ids) <= 1, f"NoDup_{_safe_var_name(name)}_{_safe_var_name(team)}"
+
+    #salary constraint
+    salary_expr = plp.lpSum(players_by_id[i].salary * x[i] for i in players_by_id)
+    prob += salary_expr <= int(cap),        "MaxSalary"
+    prob += salary_expr >= int(min_salary), "MinSalary"
+
+    #objective function (simple max fpts objective)
+    score = plp.lpSum(
+        float(base_scores.get(i, 0.0)) * x[i] for i in players_by_id
+    )
+    prob += score
+
+    solver = _make_glpk_solver(config)
+    try:
+        status_code = prob.solve(solver)
+    except PulpSolverError:
+        if debug_lp_path:
+            Path(debug_lp_path).parent.mkdir(parents=True, exist_ok=True)
+            prob.writeLP(debug_lp_path)
+        raise
+    if plp.LpStatus[status_code] != "Optimal": 
+        if debug_lp_path:
+            Path(debug_lp_path).parent.mkdir(parents=True, exist_ok=True)
+            prob.writeLP(debug_lp_path)
+        return None
+    
+    sel = [i for i, var in x.items() if var.varValue == 1]
+    return sel if len(sel) == 9 else None
+
+
 
 def _infer_slate_type(roster_slot_by_id: Dict[int, int]) -> str:
     """Return 'showdown' if any DK Showdown roster slots (511/512) exist; else 'classic'."""
@@ -238,7 +321,7 @@ def _infer_slate_type(roster_slot_by_id: Dict[int, int]) -> str:
 
 
 # =======================
-# Generation (showdown)
+# Generation loop
 # =======================
 
 def generate_and_store_field_lineups(
@@ -294,80 +377,140 @@ def generate_and_store_field_lineups(
         ))
         roster_slot_by_id[rp.id] = int(getattr(rp, "roster_slot_id", 0) or 0)
 
-    # ---- 2) Only proceed for showdown ----
+    # ---- 2) infer slate type, and choose branch ----
     slate_type = _infer_slate_type(roster_slot_by_id)
-    if slate_type != "showdown":
-        # Classic path intentionally removed per request; return without creating lineups.
-        return 0
+    if slate_type == "classic":
+        n_samples = len(next(iter(samples.values())))
+        idx_order = list(range(n_samples))
+        random.shuffle(idx_order)
 
-    # ---- 3) Precompute iteration order over sample indices ----
-    n_samples = len(next(iter(samples.values())))
-    idx_order = list(range(n_samples))
-    random.shuffle(idx_order)
+        created = 0
+        batch   = 0
+        seen_lineups: set[tuple[int, ...]] = set() #per-worker dedupe
 
-    created = 0
-    batch   = 0
-    seen_lineups: set[tuple[int, ...]] = set()  # per-worker dedupe
+        #---------- config knobs ----------------------------------------
+        jitter            = float(_cfg(config, "classic.jitter", 0.10))
+        salary_cap        = int(_cfg(config, "classic.salary_cap", 50000))
+        min_salary        = int(_cfg(config, "classic.min_salary", 49000))
+        debug_lp_dir      = _cfg(config, "lineup.debug_lp_dir", None)
 
-    # ---- 4) Config knobs (showdown ONLY; defined once) ----
-    jitter            = float(_cfg(config, "showdown.jitter", 0.10))
-    salary_cap        = int(_cfg(config, "showdown.salary_cap", _cfg(config, "lineup.salary_cap", 50000)))
-    min_cap_drop      = int(_cfg(config, "showdown.min_cap_drop", 0))
-    max_cap_drop      = int(_cfg(config, "showdown.max_cap_drop", 2000))
-    cap_drop_exponent = float(_cfg(config, "showdown.cap_drop_exponent", 2.0))
-    debug_lp_dir      = _cfg(config, "showdown.debug_lp_dir", None)
+        sample_cursor = 0
+        while created < num_lineups:
+            samp_idx = idx_order[sample_cursor % n_samples]
+            sample_cursor += 1
 
-    # ---- 5) Generate lineups (no exposure forcing; no max_attempts cap) ----
-    sample_cursor = 0
-    while created < num_lineups:
-        # Rotate through samples for variety
-        samp_idx = idx_order[sample_cursor % n_samples]
-        sample_cursor += 1
+            base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
 
-        base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
+            jittered = {pid: s * (1.0 + random.uniform(-jitter, jitter)) for pid, s in base_scores.items()}
 
-        # Jitter scores (Uniform; keep this simple & fast)
-        jittered = {pid: s * (1.0 + random.uniform(-jitter, jitter)) for pid, s in base_scores.items()}
+            debug_path = None
+            if debug_lp_dir:
+                debug_path = str(Path(debug_lp_dir) / f"debug_classic_{os.getpid()}_{created+1}.lp")
 
-        # Optional LP dump; include PID to avoid MP collisions
-        debug_path = None
-        if debug_lp_dir:
-            debug_path = str(Path(debug_lp_dir) / f"debug_showdown_{os.getpid()}_{created+1}.lp")
+            ids_selected = generate_single_classic_lineup(
+                players=players,
+                roster_slot_by_id=roster_slot_by_id,
+                base_scores=jittered,
+                cap=salary_cap,
+                min_salary=min_salary,
+                config=config,
+                debug_lp_path=debug_path
+            )
 
-        ids_selected = generate_single_showdown_lineup_ilp(
-            players=players,
-            roster_slot_by_id=roster_slot_by_id,
-            base_scores=jittered,
-            cap=salary_cap,
-            min_cap_drop=min_cap_drop,
-            max_cap_drop=max_cap_drop,
-            cap_drop_exponent=cap_drop_exponent,
-            # No forced position mins; rely on projections/upstream instead.
-            min_k=0,
-            min_dst=0,
-            min_k_or_dst=0,
-            config=config,
-            debug_lp_path=debug_path,
-        )
+            if not ids_selected:
+                continue
 
-        if not ids_selected:
-            # Nothing stored; continue trying.
-            continue
+            key = tuple(sorted(ids_selected))
+            if key in seen_lineups:
+                continue
+            seen_lineups.add(key)
 
-        key = tuple(sorted(ids_selected))
-        if key in seen_lineups:
-            continue
-        seen_lineups.add(key)
+            session.add(Lineup(player_ids_list=list(ids_selected), created_at=datetime.utcnow()))
+            created += 1
+            batch   += 1
 
-        session.add(Lineup(player_ids_list=list(ids_selected), created_at=datetime.utcnow()))
-        created += 1
-        batch   += 1
+            if batch >= batch_size:
+                session.commit()
+                batch = 0
 
-        if batch >= batch_size:
+        if batch > 0:
             session.commit()
-            batch = 0
+        
+        return created
+    
 
-    if batch > 0:
-        session.commit()
+    elif slate_type == "showdown":
+        # ---- 3) Precompute iteration order over sample indices ----
+        n_samples = len(next(iter(samples.values())))
+        idx_order = list(range(n_samples))
+        random.shuffle(idx_order)
 
-    return created
+        created = 0
+        batch   = 0
+        seen_lineups: set[tuple[int, ...]] = set()  # per-worker dedupe
+
+        # ---- 4) Config knobs (showdown ONLY; defined once) ----
+        jitter            = float(_cfg(config, "showdown.jitter", 0.10))
+        salary_cap        = int(_cfg(config, "showdown.salary_cap", 50000))
+        min_cap_drop      = int(_cfg(config, "showdown.min_cap_drop", 0))
+        max_cap_drop      = int(_cfg(config, "showdown.max_cap_drop", 2000))
+        cap_drop_exponent = float(_cfg(config, "showdown.cap_drop_exponent", 2.0))
+        debug_lp_dir      = _cfg(config, "showdown.debug_lp_dir", None)
+
+        # ---- 5) Generate lineups (no exposure forcing; no max_attempts cap) ----
+        sample_cursor = 0
+        while created < num_lineups:
+            # Rotate through samples for variety
+            samp_idx = idx_order[sample_cursor % n_samples]
+            sample_cursor += 1
+
+            base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
+
+            # Jitter scores (Uniform; keep this simple & fast)
+            jittered = {pid: s * (1.0 + random.uniform(-jitter, jitter)) for pid, s in base_scores.items()}
+
+            # Optional LP dump; include PID to avoid MP collisions
+            debug_path = None
+            if debug_lp_dir:
+                debug_path = str(Path(debug_lp_dir) / f"debug_showdown_{os.getpid()}_{created+1}.lp")
+
+            ids_selected = generate_single_showdown_lineup_ilp(
+                players=players,
+                roster_slot_by_id=roster_slot_by_id,
+                base_scores=jittered,
+                cap=salary_cap,
+                min_cap_drop=min_cap_drop,
+                max_cap_drop=max_cap_drop,
+                cap_drop_exponent=cap_drop_exponent,
+                # No forced position mins; rely on projections/upstream instead.
+                min_k=0,
+                min_dst=0,
+                min_k_or_dst=0,
+                config=config,
+                debug_lp_path=debug_path,
+            )
+
+            if not ids_selected:
+                # Nothing stored; continue trying.
+                continue
+
+            key = tuple(sorted(ids_selected))
+            if key in seen_lineups:
+                continue
+            seen_lineups.add(key)
+
+            session.add(Lineup(player_ids_list=list(ids_selected), created_at=datetime.utcnow()))
+            created += 1
+            batch   += 1
+
+            if batch >= batch_size:
+                session.commit()
+                batch = 0
+
+        if batch > 0:
+            session.commit()
+
+        return created
+    
+    else:
+        raise ValueError("couldn't infer slate type based on payload from draftkings")

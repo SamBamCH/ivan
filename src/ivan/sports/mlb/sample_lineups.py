@@ -45,14 +45,20 @@ def sample_lineups_fast(
     n_lineups: int,
     config: dict,
     stack_dist: dict[str, float],
-    proj_bin_probs: np.ndarray
+    proj_bin_probs: np.ndarray,
+    allowed_player_ids: set[int] | None = None,   # NEW: valid pool filter
 ) -> list[Lineup]:
     """
-    Fast approximate sampler: one‐shot weighted draw (no per‐draw penalties).
-    Matches:
-      • normalized projection‐sum distribution (proj_bin_probs over [0,1])
-      • stack‐type distribution (stack_dist)
-    Then prints exposures & deviations and plots projection histogram.
+    Fast sampler that:
+      • Matches a target projection-sum distribution by filling each bin's target count,
+        sampling WITH replacement inside the bin (enables top-end duplication).
+      • Optionally filters OUT lineups that include players not in `allowed_player_ids`.
+        If none provided, no filtering is applied.
+
+    Config (optional):
+      - field.proj_exponent: float (default 1.5). Scales per-lineup weights inside bins.
+      - field.strict_player_pool: bool (default True). If True, exclude invalid lineups entirely.
+      - field.invalid_lineup_penalty: float (default 1e-6). If strict=False, weight penalty for invalid lineups.
     """
     # 1) fetch recent lineups
     cutoff   = datetime.utcnow() - timedelta(hours=24)
@@ -74,6 +80,15 @@ def sample_lineups_fast(
     proj_vals = np.zeros(N, dtype=float)
     stacks    = [None]*N
 
+    # NEW: valid lineup mask (all players in allowed pool)
+    if allowed_player_ids is not None:
+        allowed_player_ids = set(allowed_player_ids)
+        def _is_valid_lineup(pids: list[int]) -> bool:
+            return all((pid in allowed_player_ids) for pid in pids)
+        valid_mask = np.array([_is_valid_lineup(pids) for _, pids in pool], dtype=bool)
+    else:
+        valid_mask = np.ones(N, dtype=bool)
+
     for i, (_, pids) in enumerate(pool):
         players      = [latest_map.get(pid, DummyPlayer(pid)) for pid in pids]
         proj_vals[i] = sum(p.fpts_projection for p in players)
@@ -88,28 +103,100 @@ def sample_lineups_fast(
     else:
         norm_proj = np.zeros_like(proj_vals)
 
-    # 5) build one‐shot weight vector
+    # 5) assign bins
     alpha_proj = get_config_value(config, "field.proj_exponent") or 1.5
-    B          = len(proj_bin_probs)
-    bin_edges  = np.linspace(0,1,B+1)
-    proj_bins  = np.clip(np.digitize(norm_proj, bin_edges)-1, 0, B-1)
-    w_proj     = proj_bin_probs[proj_bins] ** alpha_proj
-    w_stack    = np.array([stack_dist.get(s,1e-6) for s in stacks])
-    w          = w_proj * w_stack
-    w          = np.clip(w, 1e-12, None)
-    w         /= w.sum()
+    strict_pool = bool(get_config_value(config, "field.strict_player_pool"))
+    invalid_pen = float(get_config_value(config, "field.invalid_lineup_penalty") or 1e-6)
 
-    # 6) sample all at once (with replacement)
-    chosen_idx = np.random.choice(N, size=n_lineups, replace=True, p=w)
+    B         = len(proj_bin_probs)
+    bin_edges = np.linspace(0,1,B+1)
+    proj_bins = np.clip(np.digitize(norm_proj, bin_edges)-1, 0, B-1)
 
-    # 7) attach players and collect chosen lineups
-    chosen = []
+    # 6) stack weights and pool weights (independent of projection bin)
+    w_stack = np.array([stack_dist.get(s, 1e-6) for s in stacks], dtype=float)
+
+    # If not strict, give invalid a tiny weight; if strict, exclude them later.
+    pool_penalty = np.where(valid_mask, 1.0, (0.0 if strict_pool else invalid_pen))
+
+    # 7) compute integer target counts per bin that sum to n_lineups
+    raw_counts = proj_bin_probs * float(n_lineups)
+    base = np.floor(raw_counts).astype(int)
+    remainder = n_lineups - base.sum()
+    if remainder != 0:
+        # distribute remainder by largest fractional parts
+        frac = raw_counts - base
+        order = np.argsort(frac)[::-1] if remainder > 0 else np.argsort(frac)
+        for b in order[:abs(remainder)]:
+            base[b] += 1 if remainder > 0 else -1
+    targets = base  # length B, sums to n_lineups
+
+    # Pre-index lineups by bin for fast sampling
+    idx_by_bin = [np.where(proj_bins == b)[0] for b in range(B)]
+    valid_idx_by_bin = [idx[valid_mask[idx]] for idx in idx_by_bin]
+
+    # 8) sample per bin WITH replacement (enables duplication when bin is thin)
+    chosen_idx_list: list[int] = []
+    for b in range(B):
+        k = int(targets[b])
+        if k <= 0:
+            continue
+
+        # Prefer valid lineups in this bin
+        cand_idx = valid_idx_by_bin[b]
+        if len(cand_idx) == 0:
+            # Fall back: if strict, expand search to any other bin that has valid;
+            # otherwise, allow invalid in this bin with penalty weight.
+            if strict_pool:
+                # nearest non-empty valid bin search
+                found = None
+                for d in range(1, B):
+                    for nb in (b-d, b+d):
+                        if 0 <= nb < B and len(valid_idx_by_bin[nb]) > 0:
+                            found = valid_idx_by_bin[nb]
+                            break
+                    if found is not None:
+                        break
+                cand_idx = found if found is not None else np.where(valid_mask)[0]
+            else:
+                cand_idx = idx_by_bin[b]  # include invalid with small penalty
+
+        # Build weights inside candidate set:
+        #   - projection bin alignment (sharpen via alpha_proj)
+        #   - stack weights
+        #   - pool penalty (0 if strict & invalid, tiny if soft)
+        bin_center_weight = (proj_bin_probs[b] ** alpha_proj)
+        w = (w_stack[cand_idx].clip(min=1e-12)) * bin_center_weight * pool_penalty[cand_idx]
+        if not np.isfinite(w).any() or w.sum() <= 0:
+            # fallback uniform if pathological
+            w = np.ones_like(cand_idx, dtype=float)
+        w = w / w.sum()
+
+        # WITH replacement sampling so duplication is possible
+        picks = np.random.choice(cand_idx, size=k, replace=True, p=w)
+        chosen_idx_list.extend(picks.tolist())
+
+    # (Paranoia) if rounding issues left us short/long, adjust
+    if len(chosen_idx_list) < n_lineups:
+        # top off from global valid pool (or full pool)
+        surplus = n_lineups - len(chosen_idx_list)
+        global_cand = np.where(valid_mask)[0] if strict_pool else np.arange(N)
+        gw = (w_stack[global_cand].clip(min=1e-12)) * pool_penalty[global_cand]
+        gw = gw / gw.sum()
+        extra = np.random.choice(global_cand, size=surplus, replace=True, p=gw)
+        chosen_idx_list.extend(extra.tolist())
+    elif len(chosen_idx_list) > n_lineups:
+        chosen_idx_list = chosen_idx_list[:n_lineups]
+
+    chosen_idx = np.array(chosen_idx_list, dtype=int)
+
+    # 9) attach players and collect chosen lineups
+    chosen: list[Lineup] = []
     for idx in chosen_idx:
         lup, pids = pool[idx]
         lup.players = [latest_map.get(pid, DummyPlayer(pid)) for pid in pids]
         chosen.append(lup)
 
-    # 8) compute exposures & deviations
+    # 10) compute exposures & deviations (unchanged)
     exposures = Counter(p.id for lup in chosen for p in lup.players)
     total     = len(chosen)
     pid2player = {p.id:p for lup in chosen for p in lup.players}
@@ -145,7 +232,7 @@ def sample_lineups_fast(
     print_deviators("Top 5 Pitcher Deviations", pitchers)
     print_deviators("Top 5 Batter Deviations",  batters)
 
-    # 9) plot projection histogram vs target
+    # 11) plot projection histogram vs target (same as before)
     chosen_proj = np.array([sum(p.fpts_projection for p in lup.players) for lup in chosen])
     if pmax>pmin:
         chosen_norm = (chosen_proj - pmin)/(pmax - pmin)
@@ -163,3 +250,4 @@ def sample_lineups_fast(
     plt.show()
 
     return chosen
+

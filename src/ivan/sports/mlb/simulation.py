@@ -201,6 +201,8 @@ def simulate_one_contest(
         bin_md['stack_model'].predict(Xs_new)[0]
     ))
 
+    allowed = set(p.id for p in players)
+
     # 4) sample lineups
     chosen = sample_lineups_fast(
         session=session,
@@ -208,6 +210,7 @@ def simulate_one_contest(
         config=cfg,
         stack_dist=stack_dist,
         proj_bin_probs=proj_bin_probs,
+        allowed_player_ids=allowed
     )
 
     # 5) load scaled payouts
