@@ -117,7 +117,8 @@ def fit_best_distribution(
     dist_names: list[str],
     bins: int = 50,
     plot: bool = False,
-    plot_path: Path | None = None
+    plot_path: Path | None = None,
+    positive_only: bool = True
 ) -> tuple[str | None, tuple | None, dict]:
     """
     Fit candidate distributions; select best via KS.
@@ -147,13 +148,16 @@ def fit_best_distribution(
     for name in dist_names:
         if name in continuous_dists:
             dist = getattr(st, name)
-            pos_data = data[data>0]
-            if pos_data.size < 2:
+            data_for_fit = data if (not positive_only or name == "norm") else data[data > 0]
+            if data_for_fit.size < 2:
                 continue
             try:
-                params = dist.fit(pos_data, floc=0)
-                D, _ = st.kstest(pos_data, name, args=params)
-                fit_info[name] = {'params': params, 'ks_stat': float(D)}
+                if (not positive_only) or name == "norm":
+                    params = dist.fit(data_for_fit)            # allow negative loc
+                else:
+                    params = dist.fit(data_for_fit, floc=0)    # old behavior for positive-only stats
+                D, _ = st.kstest(data_for_fit, name, args=params)
+                fit_info[name] = {"params": params, "ks_stat": float(D)}
             except Exception:
                 continue
     if not fit_info:

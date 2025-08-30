@@ -204,7 +204,7 @@ def simulate_one_contest(
     # 4) sample lineups
     chosen = sample_lineups_fast(
         session=session,
-        n_lineups=min(contest.total_entries, 50000), #TODO: wrap this lower for worse systems. 35000 lineups x 1000 sims uses like 16 gb of RAM, 10000 x1000 should be able to run on any system i would think. 
+        n_lineups=min(contest.total_entries, 25000), #TODO: wrap this lower for worse systems. 35000 lineups x 1000 sims uses like 16 gb of RAM, 10000 x1000 should be able to run on any system i would think. 
         config=cfg,
         stack_dist=stack_dist,
         proj_bin_probs=proj_bin_probs,
@@ -237,13 +237,13 @@ def simulate_one_contest(
     ]
 
     # 7) run simulations in parallel
-    chunk_size = math.ceil(num_sims / min(8, num_sims)) #TODO: pull this out to config file
+    chunk_size = math.ceil(num_sims / min(6, num_sims)) #TODO: pull this out to config file
     full_scores  = np.zeros((num_sims, M))
     full_payouts = np.zeros_like(full_scores)
     full_rois    = np.zeros_like(full_scores)
     full_ranks   = np.zeros((num_sims, M), dtype=int)
 
-    with ProcessPoolExecutor(max_workers=min(8, num_sims)) as exe: #TODO: pull this out to config file
+    with ProcessPoolExecutor(max_workers=min(6, num_sims)) as exe: #TODO: pull this out to config file
         futures = []
         copulas = load_copulas()
         for start in range(0, num_sims, chunk_size):

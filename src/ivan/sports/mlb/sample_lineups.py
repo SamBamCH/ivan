@@ -141,7 +141,7 @@ def sample_lineups_fast(
             print(f"{nm:<20}  {tm:<5}  {expf:>9.2%}  {projf:>9.2%}  {dev:>7.2%}")
 
     print_exposures("ALL Pitcher Exposures",   pitchers)
-    print_exposures("Top 20 Batter Exposures",  batters, top_n=100)
+    print_exposures("Top 20 Batter Exposures",  batters, top_n=5)
     print_deviators("Top 5 Pitcher Deviations", pitchers)
     print_deviators("Top 5 Batter Deviations",  batters)
 
