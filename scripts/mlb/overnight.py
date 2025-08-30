@@ -56,7 +56,7 @@ def main() -> None:
     print(f"🧹 Purge: {purge_counts}")
     # 1) parse & model contest data (kept as-is; it can leverage ingest-status if present)
     get_contest_data(
-        user_data_dir=r"C:\selenium\chrome-profile",
+        user_data_dir=r"C:\Users\samba\chrome-selenium\dk-profile",
         profile_directory="Default",  # or "Profile 1", etc.
         headless=False,
     )
