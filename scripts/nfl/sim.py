@@ -8,7 +8,7 @@ from ivan.sports.nfl.simulate_contest import simulate_one_contest  # this file
 
 def parse_args():
     p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
-    p.add_argument("-n", "--num_sims", type=int, required=True,
+    p.add_argument("-n", "--num_sims", type=int, required=False, default=None,
                    help="Number of Monte Carlo simulations per lineup (e.g., 100, 500, 1000).")
     p.add_argument("--config", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../config/nfl.json")))
     return p.parse_args()

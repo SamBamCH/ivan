@@ -3,6 +3,7 @@ import os
 import json
 import pandas as pd
 from collections import Counter
+from datetime import datetime
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.choose import choose_lineup_ids
@@ -110,7 +111,7 @@ def main():
     parser.add_argument(
         "--output_csv", "-o",
         type=str,
-        default="chosen_entries.csv",
+        default="data/nfl/output/chosen_entries.csv",
         help="Filename for the combined output (default: chosen_entries.csv)."
     )
     args = parser.parse_args()
@@ -182,6 +183,8 @@ def main():
     player_exposures_map: dict[int, dict[str, float]] = {}
     num_lineups_map: dict[int, int] = {}
 
+    observed_lineup_sizes: set[int] = set()
+
     # ────────────────────────────────────────────
     # 6) Loop over each unique Contest ID
     # ────────────────────────────────────────────
@@ -236,8 +239,10 @@ def main():
 
             # Exactly 6 player IDs (unique)
             pids = lineup.player_ids_list
-            if len(pids) != 6 or len(set(pids)) != 6: #TODO: remove this, or open it up for classic
+            if len(pids) != 6 or len(set(pids)) != 6:  # TODO: open up for classic (len == 9)
                 raise ValueError(f"Lineup {lid} must have exactly 6 unique players")
+
+            observed_lineup_sizes.add(len(pids))
 
             # Convert IDs → MLBPlayer objects
             objs = [players_map[pid] for pid in pids]
@@ -302,11 +307,31 @@ def main():
         print(df_final)
 
     # ────────────────────────────────────────────
-    # 7) Write out the combined CSV with EXACT headers (14 columns total)
+    # 7) Write out the combined CSV with timestamp + format in filename
     # ────────────────────────────────────────────
-    out_fp = args.output_csv
+    # Infer format label from observed lineup sizes
+    if observed_lineup_sizes == {6}:
+        format_label = "showdown"
+    elif observed_lineup_sizes == {9}:
+        format_label = "classic"
+    elif not observed_lineup_sizes:
+        format_label = "unknown"
+    else:
+        format_label = "mixed"
+
+    # Build timestamp (local machine time)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    # Insert ".<format>.<timestamp>" before extension
+    base_out = args.output_csv  # e.g., data/nfl/output/chosen_entries.csv
+    root, ext = os.path.splitext(base_out)
+    out_fp = f"{root}.{format_label}.{ts}{ext}"
+
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(out_fp) or ".", exist_ok=True)
+
     df_out.to_csv(out_fp, index=False)
-    print(f"\n✅ Wrote {len(df_out)} chosen‐lineup rows → {out_fp}")
+    print(f"\n✅ Wrote {len(df_out)} chosen-lineup rows → {out_fp}")
 
 
 if __name__ == "__main__":

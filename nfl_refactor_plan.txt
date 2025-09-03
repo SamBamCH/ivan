@@ -1,39 +1,20 @@
 #TODO:
 
-classic lineup generation
-classic sim
-    classic lineup sampling
-
+we aren't prioritizing the correct captains in dupe calculations. Low owned captains won't be duped regardless of the rest of the lineup most likely. 
 write sampled player_id exposure back to the player class as 'ownership'. Can just append it to the list, and take the average of that list as our projected ownership?
+work on DST and K projections based on odds. could just use score of game and anytime_td odds? maybe interceptions of opposing QB, sacks? 
+push 'setup' scripts into a new directory within scripts/nfl to clean it up? 
+    build_models,create_db, etc.
 
-BUILD ENTIRE PROCESS FLOW
-    INGEST
-    ODDS
-    PROJECTIONS
-    GENERATE_LINEUPS
-    SIM
-    CHOOSE
-
-ONCE WE HAVE ODDS:
-    see what's available for DST/K
-
-CORRECT/FINE-TUNE
-    pull all config values out of correlation/lineup generation
-    make sure LP constraints are correct. 
-    copula sampled value diagnostics for both lp generation and sim
 
     
 
 DIAGNOSTICS
-    test generate_correlated_fpts
-    test field sampling
-    test choosing algorithm
 
 
 YES WE CAN AND WE SHOULD -can we clean up the structure of build_models.py? Seems like we could just remove the build_player_models container and have all the models fit on the same level.
 
 
 'fears
-*contests are too large for NFL, need to cap field size, and scale payouts (25,000? 50,000? 100,000? test different memory allocations)
 *not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
 

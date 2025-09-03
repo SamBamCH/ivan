@@ -124,19 +124,18 @@ def build_lineup_matrix(session: Session):
     return L, lineup_ids, spends, pid_to_col
 
 
-def build_player_samples(session: Session, pid_to_col: Dict[int, int], n_sims: int) -> np.ndarray:
+def build_player_samples(session: Session, pid_to_col: Dict[int, int], config, mode, process) -> np.ndarray:
     """
     Returns P [n_sims x n_players]; if the generator has fewer sims, resample with replacement.
     """
-    raw = generate_correlated_samples(session)  # {pid: np.ndarray}
+    raw = generate_correlated_samples(session, config=config, mode=mode, process=process)  # {pid: np.ndarray}
     sizes = [len(x) for x in raw.values() if isinstance(x, np.ndarray)]
     if not sizes:
         raise RuntimeError("generate_correlated_samples returned no vectors.")
     have = min(sizes)
-    use = n_sims
-    idx = np.arange(use) if have >= use else np.random.choice(have, size=use, replace=True)
+    idx = np.arange(have)
 
-    P = np.zeros((use, len(pid_to_col)), dtype=np.float32)
+    P = np.zeros((have, len(pid_to_col)), dtype=np.float32)
     for pid, col in pid_to_col.items():
         vec = raw.get(pid)
         if isinstance(vec, np.ndarray) and vec.ndim == 1 and len(vec) >= have:
@@ -146,8 +145,9 @@ def build_player_samples(session: Session, pid_to_col: Dict[int, int], n_sims: i
 
 def sample_sd_field(
     session: Session,
-    n_sims: int = 100,
     field_size: int = 10000,
+    config: dict = None,
+    mode = "showdown"
 ):
     """
     Simple two-stage mixture:
@@ -155,8 +155,6 @@ def sample_sd_field(
       2) For each bin, sample that many lineups WITH REPLACEMENT, weights ∝ projection (per sim)
     Aggregates counts across sims. Returns (counts_by_lineup, meta)
     """
-    # Lineup matrix & metadata
-    print(f'sampling field of size {field_size}')
     L, lineup_ids, spends, pid_to_col = build_lineup_matrix(session)
     n_lineups = L.shape[0]
     remaining = (SALARY_CAP - spends).astype(np.int32)
@@ -169,7 +167,7 @@ def sample_sd_field(
         bin_masks.append(mask)
 
     # Player samples
-    P = build_player_samples(session, pid_to_col, n_sims=n_sims)
+    P = build_player_samples(session, pid_to_col, config=config, mode=mode, process='sampling')
 
     mean_proj = np.asarray(L @ P.T, dtype=np.float32).mean(axis=1) # [n_lineups]
 

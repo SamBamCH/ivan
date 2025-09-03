@@ -82,7 +82,8 @@ _NAME_OVERRIDES = {
     'joey cantillo': 'joseph cantillo',
     'alexander freeland': 'alex freeland',
     'andrew gilbert': 'drew gilbert',
-    'collin kayfus': 'cj kayfus'
+    'collin kayfus': 'cj kayfus',
+    'james crooks': 'jimmy crooks'
     # add more mappings as needed...
 }
 

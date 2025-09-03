@@ -600,7 +600,7 @@ def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n
         samples = np.random.choice(vals, size=n_samples, replace=True).astype(float)
         return samples
     rng = np.random.default_rng()
-    fpts = rng.normal(loc=4.0, scale=4.0, size=n_samples)
+    fpts = rng.normal(loc=6.0, scale=4.0, size=n_samples)
     return np.clip(fpts, -6.0, None)
 
 def _fpts_summary(samples: np.ndarray,

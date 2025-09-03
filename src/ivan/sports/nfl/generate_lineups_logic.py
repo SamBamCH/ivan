@@ -342,13 +342,7 @@ def generate_and_store_field_lineups(
 
     # ---- 0) Generate per-player samples (pid -> np.ndarray) ----
     # Try to pass optional sampling config (if supported) so caller can control num samples, etc.
-    sampling_kwargs = _cfg(config, "sampling", {})
-    try:
-        samples: Dict[int, np.ndarray] = generate_correlated_samples(session, **(sampling_kwargs if isinstance(sampling_kwargs, dict) else {}))
-    except TypeError:
-        samples: Dict[int, np.ndarray] = generate_correlated_samples(session)
-    if not samples:
-        return 0
+    samples = generate_correlated_samples(session, config=config, process="lineup_generation")
 
     # ---- 1) Load only players referenced by samples ----
     ids = list(samples.keys())
@@ -389,10 +383,10 @@ def generate_and_store_field_lineups(
         seen_lineups: set[tuple[int, ...]] = set() #per-worker dedupe
 
         #---------- config knobs ----------------------------------------
-        jitter            = float(_cfg(config, "classic.jitter", 0.10))
-        salary_cap        = int(_cfg(config, "classic.salary_cap", 50000))
-        min_salary        = int(_cfg(config, "classic.min_salary", 49000))
-        debug_lp_dir      = _cfg(config, "lineup.debug_lp_dir", None)
+        jitter            = float(_cfg(config, "lineup_generation.jitter", 0.10))
+        salary_cap        = int(_cfg(config, "lineup_generation.salary_cap", 50000))
+        min_salary        = int(_cfg(config, "lineup_generation.min_salary", 49000))
+        debug_lp_dir      = _cfg(config, "lineup_generation.debug_lp_dir", None)
 
         sample_cursor = 0
         while created < num_lineups:
@@ -450,12 +444,12 @@ def generate_and_store_field_lineups(
         seen_lineups: set[tuple[int, ...]] = set()  # per-worker dedupe
 
         # ---- 4) Config knobs (showdown ONLY; defined once) ----
-        jitter            = float(_cfg(config, "showdown.jitter", 0.10))
-        salary_cap        = int(_cfg(config, "showdown.salary_cap", 50000))
-        min_cap_drop      = int(_cfg(config, "showdown.min_cap_drop", 0))
-        max_cap_drop      = int(_cfg(config, "showdown.max_cap_drop", 2000))
-        cap_drop_exponent = float(_cfg(config, "showdown.cap_drop_exponent", 2.0))
-        debug_lp_dir      = _cfg(config, "showdown.debug_lp_dir", None)
+        jitter            = float(_cfg(config, "showdown.lineup_generation.jitter", 0.10))
+        salary_cap        = int(_cfg(config, "showdown.lineup_generation.salary_cap", 50000))
+        min_cap_drop      = int(_cfg(config, "showdown.lineup_generation.min_cap_drop", 0))
+        max_cap_drop      = int(_cfg(config, "showdown.lineup_generation.max_cap_drop", 2000))
+        cap_drop_exponent = float(_cfg(config, "showdown.lineup_generation.cap_drop_exponent", 2.0))
+        debug_lp_dir      = _cfg(config, "showdown.lineup_generation.debug_lp_dir", None)
 
         # ---- 5) Generate lineups (no exposure forcing; no max_attempts cap) ----
         sample_cursor = 0

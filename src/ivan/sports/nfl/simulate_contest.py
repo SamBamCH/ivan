@@ -15,7 +15,7 @@ from ivan.sports.nfl.sample_field import (
     build_lineup_matrix,
     build_player_samples,
 )
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples, SamplingConfig
+from ivan.sports.nfl.correlated_samples import generate_correlated_samples
 # Reuse your MLB payout scaler (sport-agnostic)
 from ivan.sports.mlb.payouts import scale_payouts_correctly
 
@@ -25,6 +25,16 @@ from collections import Counter
 from pathlib import Path
 import numpy as np
 import pandas as pd
+
+# --- force headless, non-interactive backend before importing pyplot ---
+import os
+os.environ["MPLBACKEND"] = "Agg"   # global hammer in case other modules import pyplot
+
+import matplotlib
+matplotlib.use("Agg", force=True)  # ensure Agg backend
+import matplotlib.pyplot as plt
+plt.ioff()  # extra safety: disable interactive mode
+# ----------------------------------------------------------------------
 
 def _safe_getattr(obj, *names, default=None):
     for n in names:
@@ -46,7 +56,7 @@ def _fetch_player_meta(session, pids: list[int]) -> dict[int, dict]:
         name = _safe_getattr(r, "player_display_name", "display_name", "name", default=str(r.id))
         team = _safe_getattr(r, "team", "team_abbrev", "team_abbr", "defteam", default=None)
         pos  = _safe_getattr(r, "position", "pos", default=None)
-        slot = _safe_getattr(r, "roster_slot", default=None)
+        slot = _safe_getattr(r, "roster_slot_id", default=None)
         meta[int(r.id)] = {
             "name": name,
             "team": team,
@@ -321,38 +331,63 @@ def _load_and_scale_payouts_from_db(
         original_field_size=original_field_size,
         entry_fee=entry_fee
     )
-
 def _build_player_samples_matrix(
         session: Session,
         pid_to_idx: Dict[int, int],
-        sampling_cfg: SamplingConfig | None = None,
-        model_dir: str | Path = "data/nfl/models"
+        config: dict = None,
+        mode = None,
+        model_dir: str | Path = "data/nfl/models",
+        num_sims: int | None = None,  # NEW
 ) -> np.ndarray:
     """
     NFL scoring matrix P: [num_sims x num_players] aligned to 'pid_to_idx'.
+    Ensures every column has exactly 'num_sims' rows by slicing/tiling as needed.
     """
-    cfg = sampling_cfg or SamplingConfig(n_samples=100)
-    raw = generate_correlated_samples(session, model_dir=model_dir, cfg=cfg)
-    use = int(cfg.n_samples)
-    nP  = len(pid_to_idx)
-    P   = np.zeros((use, nP), dtype=np.float32)
+    # If the caller specified num_sims, force the sampler to produce that many:
+    overrides = {"n_samples": int(num_sims)} if num_sims is not None else None
+
+    raw = generate_correlated_samples(
+        session,
+        model_dir=model_dir,
+        config=config,
+        mode=mode,
+        process="simulation",
+        overrides=overrides,   # <— ensures per-player vectors length == num_sims
+    )
+
+    # Decide row count (= number of sims)
+    if num_sims is not None:
+        ns = int(num_sims)
+    else:
+        # fall back to the first vector length in raw
+        ns = 0
+        for v in raw.values():
+            if isinstance(v, np.ndarray):
+                ns = int(v.shape[0])
+                break
+        if ns == 0:
+            return np.zeros((0, len(pid_to_idx)), dtype=np.float32)
+
+    nP = len(pid_to_idx)
+    P  = np.zeros((ns, nP), dtype=np.float32)
 
     for pid, col in pid_to_idx.items():
         v = raw.get(pid)
         if not isinstance(v, np.ndarray):
             continue
-        
-        if v.shape[0] != use:
-            if v.shape[0] > use:
-                v = v[:use]
+        vv = v.astype(np.float32, copy=False)
 
-            else:
-                reps = int(np.ceil(use / v.shape[0]))
-                v = np.tile(v, reps)[:use]
-            
-        P[:, col] = v.astype(np.float32, copy=False)
+        # Normalize length to ns
+        if vv.shape[0] < ns:
+            reps = int(np.ceil(ns / vv.shape[0]))
+            vv = np.tile(vv, reps)[:ns]
+        elif vv.shape[0] > ns:
+            vv = vv[:ns]
+
+        P[:, col] = vv
 
     return P
+
 
 def _simulate_chunk(
     start: int, 
@@ -475,6 +510,7 @@ def simulate_one_contest(
     # 1) contest info
     cfg      = json.load(open(config_path, encoding="utf-8"))
     contest  = session.query(HistoricalContest).filter_by(contest_id=contest_id).one()
+    mode     = str('showdown' if contest.contest_type == 'Showdown Captain Mode' else 'classic')
     field_sz = int(contest.total_entries)
     capped_field_sz = min(field_cap, field_sz)
     entry_fee = float(contest.entry_fee)
@@ -483,7 +519,8 @@ def simulate_one_contest(
     counts_by_lineup, meta = sample_sd_field(
         session,
         field_size=capped_field_sz,
-        n_sims=min(1000, num_sims)
+        config=cfg,
+        mode=mode
     )
     total = sum(counts_by_lineup.values())
     assert total == capped_field_sz, (total, capped_field_sz)
@@ -537,19 +574,17 @@ def simulate_one_contest(
     # (optional) how many places are paid and what percent of the field that is
     paid_count = sum(1 for r in range(1, M + 1) if scaled.get(r, 0.0) > 0.0)
     print(f"Paid places: {paid_count}/{M} ({paid_count / max(1, M):.1%})\n")
-
-    sim_cfg = SamplingConfig(
-        n_samples   = num_sims,
-        alpha       = 0.85,
-        jitter      = 0.05     
-    )
     # 3) correlated NFL projections for the compact player set
 
     P = _build_player_samples_matrix(
         session=session,
         pid_to_idx=pid_to_idx,
-        sampling_cfg=sim_cfg
+        mode=mode,
+        config=cfg,
+        num_sims=num_sims
     )
+
+    print(P)
 
     # 4) run simulations in parallel (same “chunk” pattern as MLB)
     chunk_size   = math.ceil(num_sims / min(8, num_sims))   # mirror MLB limiter
