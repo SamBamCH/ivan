@@ -4,13 +4,14 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Iterable, Optional
 
 import os
+import math
 import numpy as np
 import pandas as pd
 import joblib
 import scipy.stats as st
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from sqlalchemy import text, and_
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from ivan.sports.nfl.models import NFLPlayer
 from ivan.sports.nfl.fpts_distribution_calculations import (
@@ -18,8 +19,7 @@ from ivan.sports.nfl.fpts_distribution_calculations import (
     simulate_player_fpts,
 )
 
-try:
-    # pip install copulas
+try:  # pragma: no cover (optional)
     from copulas.multivariate import VineCopula
 except Exception:  # pragma: no cover
     VineCopula = object  # type: ignore
@@ -27,18 +27,25 @@ except Exception:  # pragma: no cover
 from types import SimpleNamespace
 from typing import Any, Literal, Mapping
 
+# =====================================================================================
+#                                      CONFIG
+# =====================================================================================
+
 _DEFAULTS: dict[str, Any] = {
     "n_samples": 2000,
     "alpha": 0.95,
     "jitter": 0.01,
-    "seed": None,
+    "seed": None,               # global seed for reproducibility
     "rho_game": 0.60,
     "kicker_rho": 0.45,
     "kicker_shape": 5.5,
     "kicker_scale": 1.2,
-    "n_jobs": 0,           # 0 = auto threads across teams; 1 = single-thread
+    "n_jobs": 0,                # 0 = cpu_count (auto); 1 = single worker
+    "parallel": "threads",     # "threads" | "processes"
     "print_sanity": True,
+    "min_fpts": None,
 }
+
 
 def _merge_dicts(*layers: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
@@ -46,6 +53,7 @@ def _merge_dicts(*layers: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         if isinstance(layer, Mapping):
             out.update(layer)
     return out
+
 # ---- Canonical roster slots ----
 QB_SLOT, RB_SLOT, WR_SLOT, TE_SLOT, DST_SLOT = 66, 67, 68, 69, 71
 _VINE_POSITIONS = ["QB", "RB", "WR", "TE", "OppDST"]
@@ -57,11 +65,12 @@ _POS_FROM_SLOT = {
     DST_SLOT: "DST",
 }
 
-
-# ---------- utilities ----------
+# =====================================================================================
+#                                     UTILITIES
+# =====================================================================================
 
 def _load_team_vines(model_dir: Path) -> Dict[str, VineCopula]:
-    """Load per-team vine copulas trained on (QB, RB, WR, TE, OppDST) uniforms."""
+    """Load per-team vine copulas trained on (QB,RB,WR,TE,OppDST) uniforms."""
     vines: Dict[str, VineCopula] = {}
     vine_dir = Path(model_dir) / "team_vines"
     if not vine_dir.exists():
@@ -85,20 +94,20 @@ def _coerce_str(x: Optional[str]) -> Optional[str]:
     s = str(x).strip().upper()
     return s or None
 
+
 def _cfg_from_dict(
     config: Mapping[str, Any] | None,
     mode: Literal["showdown", "classic", "default"] = "showdown",
     process: Literal["lineup_generation", "sampling", "simulation", "sampling_field", "default"] = "sampling",
     overrides: Mapping[str, Any] | None = None,
 ) -> SimpleNamespace:
-    """
-    Merge precedence (lowest → highest):
+    """Merge precedence (lowest → highest):
       1) _DEFAULTS
       2) config.get("global", {})
       3) legacy flat section config.get(process, {})         # optional old style
       4) mode section       config.get(mode, {})
       5) mode+process       config.get(mode, {}).get(process, {})
-      6) overrides          (per-call hot swaps)
+      6) overrides          (per-call)
     Returns attr-accessible namespace.
     """
     d_global  = (config or {}).get("global", {})
@@ -114,11 +123,8 @@ def _cfg_from_dict(
         d_mode_p,
         overrides,
     )
-
-    # Ensure every default exists
     for k, v in _DEFAULTS.items():
         merged.setdefault(k, v)
-
     return SimpleNamespace(**merged)
 
 
@@ -130,31 +136,38 @@ def _pos_label_from_slot(slot_id: Optional[int], fallback_pos: Optional[str]) ->
         return fb
     return None
 
-# Lightweight player meta to avoid getattr in hot loops
+
 class _PM:
+    """Lightweight player meta to avoid getattr in hot loops."""
     __slots__ = ("id","team","opp","slot","pos","dist","params")
     def __init__(self, id:int, team:str|None, opp:str|None, slot:int|None, pos:str|None, dist:str|None, params:tuple|None):
         self.id=id; self.team=team; self.opp=opp; self.slot=slot; self.pos=pos
         self.dist=dist; self.params=params
 
 
-def _build_player_index(session: Session) -> Tuple[Dict[int,_PM], Dict[str, Dict[str, List[_PM]]]]:
+def _build_player_index(session: Session, min_fpts: Optional[float] = None) -> Tuple[Dict[int,_PM], Dict[str, Dict[str, List[_PM]]]]:
     idx: Dict[int,_PM] = {}
     by_team: Dict[str, Dict[str, List[_PM]]] = {}
-    for p in session.query(NFLPlayer).all():
+
+    q = session.query(NFLPlayer)
+    if min_fpts is not None:
+        q = q.filter(and_(NFLPlayer.fpts_mean.isnot(None), NFLPlayer.fpts_mean >= float(min_fpts)))
+
+    for p in q.all():
         team = _coerce_str(getattr(p, "team", None))
         if not team:
             continue
         slot = getattr(p, "roster_slot_id", None)
-        pos = _pos_label_from_slot(int(slot) if slot is not None else None, getattr(p, "position", None))
+        pos  = _pos_label_from_slot(int(slot) if slot is not None else None, getattr(p, "position", None))
         if pos not in {"QB", "RB", "WR", "TE", "DST", "K"}:
             continue
-        opp = _coerce_str(getattr(p, "opponent", None))
-        dname = getattr(p, "fpts_dist_name", None)
+        opp    = _coerce_str(getattr(p, "opponent", None))
+        dname  = getattr(p, "fpts_dist_name", None)
         dparam = getattr(p, "fpts_dist_params", None)
         if isinstance(dparam, list):
             dparam = tuple(dparam)
-        meta = _PM(p.id, team, opp, int(slot) if slot is not None else None, pos, str(dname) if dname else None, dparam if dname else None)
+        meta = _PM(p.id, team, opp, int(slot) if slot is not None else None, pos,
+                   str(dname) if dname else None, dparam if dname else None)
         idx[p.id] = meta
         by_team.setdefault(team, {}).setdefault(pos, []).append(meta)
     return idx, by_team
@@ -178,14 +191,9 @@ def _bulk_dst_histories(session: Session) -> Tuple[Dict[str,np.ndarray], np.ndar
     return per, league
 
 
-def _player_ppf(dist_name: Optional[str], params: Optional[tuple], u: np.ndarray) -> Optional[np.ndarray]:
-    if not dist_name or params is None:
-        return None
-    dist = getattr(st, str(dist_name))
-    x = dist.ppf(u, *params).astype(np.float32)
-    return x
-
-# ---------- correlation engines ----------
+# =====================================================================================
+#                                  CORRELATION CORE
+# =====================================================================================
 
 def _nearest_psd(A: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     B = (A + A.T) / 2
@@ -212,30 +220,39 @@ def _sample_team_uniforms(rng: np.random.Generator, vine: Optional[VineCopula], 
     if isinstance(vine, VineCopula):
         U = np.asarray(vine.sample(n), dtype=np.float32)
         return np.clip(U, 1e-6, 1 - 1e-6)
+    # Gaussian fallback
     Z = rng.multivariate_normal(mean=np.zeros(len(_VINE_POSITIONS), dtype=np.float32), cov=_DEF_CORR, size=n)
     U = _norm_to_uniform(Z)
     return np.clip(U, 1e-6, 1 - 1e-6)
 
-# ---------- main sampler ----------
+
+# =====================================================================================
+#                                   MAIN SAMPLER
+# =====================================================================================
 
 def generate_correlated_samples(
     session: Session,
     model_dir: Path | str = "data/nfl/models",
     config: dict | None = None,
-    mode: Literal["showdown", "classic"] = "showdown", 
+    mode: Literal["showdown", "classic"] = "showdown",
     process: Literal["lineup_generation", "sampling", "simulation", "default"] = "default",
     overrides: dict | None = None
 ) -> Dict[int, np.ndarray]:
 
     model_dir = Path(model_dir)
     cfg = _cfg_from_dict(config, mode=mode, process=process, overrides=overrides)
-    rng = np.random.default_rng()
 
-    print(f"[generate_correlated_samples] process='{process}' using cfg: "
+    # ---------- stable RNG setup (fast & reproducible) ----------
+    ss = np.random.SeedSequence(cfg.seed)
+    rng_master = np.random.default_rng(ss)
+
+    print(
+        f"[generate_correlated_samples] process='{process}' cfg: "
         f"n_samples={cfg.n_samples}, alpha={cfg.alpha}, jitter={cfg.jitter}, "
         f"rho_game={cfg.rho_game}, kicker_rho={cfg.kicker_rho}, "
         f"kicker_shape={cfg.kicker_shape}, kicker_scale={cfg.kicker_scale}, "
-        f"n_jobs={cfg.n_jobs}, print_sanity={cfg.print_sanity}")
+        f"n_jobs={cfg.n_jobs}, parallel={cfg.parallel}, print_sanity={cfg.print_sanity}"
+    )
 
     vines = _load_team_vines(model_dir)
     try:
@@ -243,15 +260,28 @@ def generate_correlated_samples(
     except Exception:
         player_models = None
 
-    # Build player index and team groupings (fast attr access later)
-    pidx, teams = _build_player_index(session)
+    # <<< only players meeting the global threshold are loaded >>>
+    pidx, teams = _build_player_index(session, min_fpts=getattr(cfg, "min_fpts", None))
 
-    # Team -> opponent map
-    team_to_opp: Dict[str, Optional[str]] = {t: (teams[t].get("QB") or teams[t].get("WR") or teams[t].get("RB") or teams[t].get("TE") or [None])[0].opp if any(teams[t].get(k) for k in ("QB","WR","RB","TE")) else None for t in teams}
+    if cfg.print_sanity:
+        print(f"[min_fpts] DB-filter: threshold={cfg.min_fpts} -> loaded {len(pidx)} players across {len(teams)} teams")
+    if not teams:
+        return {}
 
-    # Shared game factor per matchup
+    # ---------- Team -> opponent map ----------
+    team_to_opp: Dict[str, Optional[str]] = {}
+    for t, d in teams.items():
+        opp = None
+        for key in ("QB","WR","RB","TE"):
+            if d.get(key):
+                opp = d[key][0].opp
+                if opp:
+                    break
+        team_to_opp[t] = opp
+
+    # ---------- Shared game factor per matchup (uniform on [0,1]) ----------
     game_env_u: Dict[Tuple[str, str], np.ndarray] = {}
-    seen_pairs = set()
+    seen_pairs: set[Tuple[str,str]] = set()
     for t, opp in team_to_opp.items():
         if not opp:
             continue
@@ -259,137 +289,156 @@ def generate_correlated_samples(
         if key in seen_pairs:
             continue
         seen_pairs.add(key)
-        z = rng.standard_normal(cfg.n_samples).astype(np.float32)
+        z = rng_master.standard_normal(cfg.n_samples).astype(np.float32)
         game_env_u[key] = _norm_to_uniform(z)
 
-    # OppDST uniforms buffer populated by team workers
-    oppdst_uniforms: Dict[Tuple[str, str], np.ndarray] = {}
-
-    # Preload DST histories once
+    # ---------- Preload DST histories once ----------
     dst_hist, dst_league = _bulk_dst_histories(session)
 
     pos_to_col = {p: i for i, p in enumerate(_VINE_POSITIONS)}
 
-    # Optional: precompute fallback fpts sims ONCE per player missing dist (to avoid recomputation)
+    # ---------- Precompute fallback sims for players w/o closed-form PPF ----------
     fallback_cache: Dict[int, np.ndarray] = {}
     if player_models is not None:
         missing = [pm.id for pm in pidx.values() if (pm.pos not in {"DST","K"}) and (pm.dist is None)]
-        # If many missing, this is the slow leg. We compute once here.
         for pid in missing:
             sim = simulate_player_fpts(session, pid, player_models[0], player_models[1], n_samples=cfg.n_samples*2)
             s = np.asarray(sim, dtype=np.float32)
             s.sort()
             fallback_cache[pid] = s
 
-    def _team_worker(team: str) -> Tuple[str, Dict[int, np.ndarray]]:
+    # ---------- Worker (pure function, no shared writes) ----------
+    def _team_worker(team: str, seed: int) -> Tuple[str, Dict[int, np.ndarray]]:
+        rng = np.random.default_rng(seed)
         vine = vines.get(team)
-        U_team = _sample_team_uniforms(rng, vine, cfg.n_samples)
+        U_team = _sample_team_uniforms(rng, vine, cfg.n_samples)  # shape (n, 5)
 
         opponent = team_to_opp.get(team)
         if opponent:
             key = tuple(sorted((team, opponent)))
             z_shared = game_env_u.get(key)
             if z_shared is not None and cfg.rho_game > 0:
+                # Blend shared game factor into offense columns
                 for p in ("QB", "RB", "WR", "TE"):
                     c = pos_to_col.get(p)
                     if c is not None:
+                        # linear blend in uniform space (fast, stable)
                         U_team[:, c] = (1.0 - cfg.rho_game) * U_team[:, c] + cfg.rho_game * z_shared
-                c_od = pos_to_col.get("OppDST")
-                if c_od is not None:
-                    u_base = U_team[:, c_od]
-                    U_team[:, c_od] = 0.5 * (u_base + (1.0 - z_shared))
-                U_team = np.clip(U_team, 1e-6, 1 - 1e-6)
-
-        # Stash opponent DST uniforms (opponent's DST vs this offense)
-        if opponent and "OppDST" in pos_to_col:
-            opp_col = pos_to_col["OppDST"]
-            oppdst_uniforms[(opponent, team)] = U_team[:, opp_col].copy()
+                # keep in bounds
+                np.clip(U_team, 1e-6, 1-1e-6, out=U_team)
 
         out_local: Dict[int, np.ndarray] = {}
 
-        # Fan out uniforms to players on this team
-        def emit_player(pm: _PM, u_base: Optional[np.ndarray]) -> None:
-            # Build u for this player
-            if pm.pos == "DST":
-                # DST: use pre-stashed or anti-corr with shared game factor, then map via empirical dst history
-                u = oppdst_uniforms.get((pm.team, pm.opp))
-                if u is None:
-                    if pm.opp and pm.team:
-                        key = tuple(sorted((pm.team, pm.opp)))
-                        z = game_env_u.get(key)
-                    else:
-                        z = None
-                    u = (1.0 - z) if z is not None else np.random.random(cfg.n_samples).astype(np.float32)
-                # Map with team-specific or league fallback
-                vals = dst_hist.get(pm.team)
-                if vals is None or (isinstance(vals, np.ndarray) and vals.size == 0):
-                    vals = dst_league
-                idx = np.minimum((u * (len(vals) - 1)).astype(int), len(vals) - 1)
-                x = vals[idx]
-                out_local[pm.id] = x.astype(np.float32)
-                return
+        # Fast local helpers
+        n = cfg.n_samples
+        alpha = float(cfg.alpha)
+        jitter = float(cfg.jitter)
+        kicker_rho = float(cfg.kicker_rho)
+        k_shape = float(cfg.kicker_shape)
+        k_scale = float(cfg.kicker_scale)
 
-            if pm.pos == "K":
-                cols = [pos_to_col[p] for p in ("QB", "RB", "WR", "TE") if p in pos_to_col]
-                if cols:
-                    u_off = np.mean(U_team[:, cols], axis=1)
-                    u = cfg.kicker_rho * u_off + (1.0 - cfg.kicker_rho) * np.random.random(cfg.n_samples).astype(np.float32)
-                else:
-                    u = np.random.random(cfg.n_samples).astype(np.float32)
-                x = st.gamma.ppf(np.clip(u,1e-6,1-1e-6), cfg.kicker_shape, scale=cfg.kicker_scale).astype(np.float32)
-                out_local[pm.id] = x
-                return
+        # Precompute u-bases for each offense position once
+        u_base: Dict[str, Optional[np.ndarray]] = {}
+        for pos in ("QB","RB","WR","TE"):
+            c = pos_to_col.get(pos)
+            u_base[pos] = U_team[:, c].astype(np.float32, copy=False) if c is not None else None
 
-            # Offense positions
-            if u_base is None:
-                u = np.random.random(cfg.n_samples).astype(np.float32)
-            else:
-                u = cfg.alpha * u_base + (1.0 - cfg.alpha) * np.random.random(cfg.n_samples).astype(np.float32)
+        # Precompute a team-level offense aggregate for kickers
+        cols = [pos_to_col[p] for p in ("QB","RB","WR","TE") if p in pos_to_col]
+        u_off_mean = np.mean(U_team[:, cols], axis=1).astype(np.float32) if cols else None
 
-            if cfg.jitter > 0:
-                u = u + np.random.normal(0.0, cfg.jitter, size=u.shape).astype(np.float32)
-            u = np.clip(u, 1e-6, 1 - 1e-6)
+        def _dst_uniform_for_team_vs_opp(team_name: Optional[str], opp_name: Optional[str]) -> np.ndarray:
+            # Deterministic & process-safe: anti-correlate via shared game factor (no cross-worker dicts)
+            if not team_name or not opp_name:
+                return rng.random(n, dtype=np.float32)
+            key = tuple(sorted((team_name, opp_name)))
+            z = game_env_u.get(key)
+            if z is None:
+                return rng.random(n, dtype=np.float32)
+            # anti-correlate in uniform space
+            return (1.0 - z).astype(np.float32)
 
-            # Prefer closed-form PPF if available; else use cached fallback sims
-            x = _player_ppf(pm.dist, pm.params, u)
-            if x is None:
-                s = fallback_cache.get(pm.id)
-                if s is None:
-                    # Last resort (should be rare now)
-                    sim = simulate_player_fpts(session, pm.id, player_models[0], player_models[1], n_samples=cfg.n_samples*2)
-                    s = np.asarray(sim, dtype=np.float32)
-                    s.sort()
-                    fallback_cache[pm.id] = s
-                idx = np.minimum((u * (len(s) - 1)).astype(int), len(s) - 1)
-                x = s[idx]
-            out_local[pm.id] = x.astype(np.float32)
+        def _player_ppf_fast(dist_name: Optional[str], params: Optional[tuple], u: np.ndarray) -> Optional[np.ndarray]:
+            if not dist_name or params is None:
+                return None
+            # Note: keep generic SciPy path; vectorized and reasonably fast
+            dist = getattr(st, str(dist_name))
+            return dist.ppf(u, *params).astype(np.float32)
 
         # Emit per position
         for pos in ("QB","RB","WR","TE","DST","K"):
             lst = teams[team].get(pos)
             if not lst:
                 continue
-            col = pos_to_col.get(pos)
-            u_pos_base = U_team[:, col] if (pos in ("QB","RB","WR","TE") and col is not None) else None
-            for pm in lst:
-                emit_player(pm, u_pos_base)
+
+            if pos in ("QB","RB","WR","TE"):
+                u_pos_base = u_base[pos]
+                if u_pos_base is None:
+                    # fallback purely random uniforms if missing
+                    u_pos_base = rng.random(n, dtype=np.float32)
+                # build player-specific uniforms once then reuse per player
+                # jitter + alpha blend
+                noise = rng.random(n, dtype=np.float32)
+                u_common = (alpha * u_pos_base + (1.0 - alpha) * noise).astype(np.float32)
+                if jitter > 0:
+                    u_common += rng.normal(0.0, jitter, size=n).astype(np.float32)
+                    np.clip(u_common, 1e-6, 1-1e-6, out=u_common)
+
+                for pm in lst:
+                    x = _player_ppf_fast(pm.dist, pm.params, u_common)
+                    if x is None:
+                        s = fallback_cache.get(pm.id)
+                        if s is None:
+                            # Last resort (should be rare): simulate & cache locally
+                            if player_models is None:
+                                # without models, produce zeroes to preserve shape
+                                out_local[pm.id] = np.zeros(n, dtype=np.float32)
+                                continue
+                            sim = simulate_player_fpts(session, pm.id, player_models[0], player_models[1], n_samples=n*2)
+                            s = np.asarray(sim, dtype=np.float32)
+                            s.sort()
+                            fallback_cache[pm.id] = s
+                        idx = np.minimum((u_common * (len(s) - 1)).astype(np.int32), len(s) - 1)
+                        x = s[idx]
+                    out_local[pm.id] = x.astype(np.float32, copy=False)
+
+            elif pos == "DST":
+                u = _dst_uniform_for_team_vs_opp(team, teams[team].get("QB", [SimpleNamespace(opp=None)])[0].opp)
+                vals = dst_hist.get(team)
+                if vals is None or vals.size == 0:
+                    vals = dst_league
+                idx = np.minimum((u * (len(vals) - 1)).astype(np.int32), len(vals) - 1)
+                out_local.update({pm.id: vals[idx].astype(np.float32, copy=False) for pm in lst})
+
+            else:  # K
+                if u_off_mean is not None:
+                    u = (kicker_rho * u_off_mean + (1.0 - kicker_rho) * rng.random(n, dtype=np.float32)).astype(np.float32)
+                else:
+                    u = rng.random(n, dtype=np.float32)
+                # Gamma quantiles for scoring scale (vectorized)
+                x = st.gamma.ppf(np.clip(u, 1e-6, 1-1e-6), k_shape, scale=k_scale).astype(np.float32)
+                for pm in lst:
+                    out_local[pm.id] = x
 
         return team, out_local
 
-    # Decide threading
+    # ---------- Decide parallel backend ----------
+    team_list = sorted(teams.keys())  # stable ordering
     if cfg.n_jobs == 1:
-        results = [_team_worker(t) for t in teams.keys()]
+        results = [_team_worker(t, ss.generate_state(1)[0].item()) for t in team_list]
     else:
-        max_workers = (os.cpu_count() or 4) if cfg.n_jobs == 0 else cfg.n_jobs
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {ex.submit(_team_worker, t): t for t in teams.keys()}
+        max_workers = (os.cpu_count() or 4) if cfg.n_jobs == 0 else int(cfg.n_jobs)
+        child_seeds = np.random.SeedSequence(ss.entropy).spawn(len(team_list))
+        seeds = [int(cs.generate_state(1)[0]) for cs in child_seeds]
+        Exec = ThreadPoolExecutor if str(cfg.parallel).lower().startswith("thread") else ProcessPoolExecutor
+        with Exec(max_workers=max_workers) as ex:
+            futs = {ex.submit(_team_worker, t, s): t for t, s in zip(team_list, seeds)}
             results = [f.result() for f in as_completed(futs)]
 
     out: Dict[int, np.ndarray] = {}
     for _team, local in results:
         out.update(local)
 
-    # --- Optional sanity print ---
     if cfg.print_sanity:
         try:
             _print_sanity_checks(out, session)
@@ -398,10 +447,16 @@ def generate_correlated_samples(
 
     return out
 
-# ---------- diagnostics ----------
+
+# =====================================================================================
+#                                  DIAGNOSTICS
+# =====================================================================================
 
 def _print_sanity_checks(samples: Dict[int, np.ndarray], session: Session) -> None:
     from scipy.stats import spearmanr
+    if not samples:
+        print("[corr] no samples; skip checks")
+        return
     pids = list(samples.keys())
     players = {p.id: p for p in session.query(NFLPlayer).filter(NFLPlayer.id.in_(pids)).all()}
     by_team: Dict[str, Dict[str, List[int]]] = {}

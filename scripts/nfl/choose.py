@@ -1,20 +1,52 @@
+#!/usr/bin/env python3
+# scripts/nfl/choose.py
+"""
+Choose lineups for each contest and write CSVs in DraftKings format.
+- Supports BOTH Showdown (6-man) and Classic (9-man).
+- Output headers EXACTLY match DK upload order.
+- Uses your existing greedy chooser (choose_lineup_ids).
+"""
+
+from __future__ import annotations
 import argparse
 import os
 import json
 import pandas as pd
 from collections import Counter
 from datetime import datetime
+from typing import List, Dict
 
 from ivan.database.session import init_db, get_session
-from ivan.sports.nfl.choose import choose_lineup_ids
+# Robust import: prefer NFL impl, fall back to generic selector if needed.
+try:
+    from ivan.sports.nfl.choose import choose_lineup_ids  # type: ignore
+except Exception:
+    from ivan.sports.mlb.selection import choose_lineup_ids  # type: ignore
+
 from ivan.sports.nfl.models import Lineup, NFLPlayer
 
+# ------------------------------- DK SLOT DEFINITIONS -------------------------------
+# Showdown order (exactly 6): CPT + 5x FLEX
 POSITION_ORDER_SD = ["CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"]
-POSITION_ORDER_CLASSIC = []
 
-def prompt_int(prompt_text: str, default: int) -> int:
-    raw = input(f"{prompt_text} [{default}]: ").strip()
-    return int(raw) if raw else default
+# Classic order (exactly 9): QB,RB,RB,WR,WR,WR,TE,FLEX,DST
+POSITION_ORDER_CLASSIC = ["QB","RB","RB","WR","WR","WR","TE","FLEX","DST"]
+
+# DK roster_slot_id codes used for mapping
+SLOT_CODE = {
+    "CPT": 511,
+    "FLEX": 512,
+    "QB": 66,
+    "RB": 67,
+    "WR": 68,
+    "TE": 69,
+    "DST": 71,
+}
+
+BASE_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"]
+
+
+# ------------------------------- HELPERS -------------------------------
 
 def prompt_float(prompt_text: str, default: float) -> float:
     raw = input(f"{prompt_text} [{default}]: ").strip()
@@ -26,188 +58,165 @@ def prompt_weights_for_contest(
     contest_name: str,
     last_weights: dict[str, float]
 ) -> dict[str, float]:
-    """
-    Prompt once for this contest’s cash_pct, avg_roi_win, diversity_lambda.
-    Defaults = last_weights (press Enter to reuse).
-    """
-    print(f"\n▶ Contest {contest_id}: \"{contest_name}\"")
-    w_cash = prompt_float(
-        f"  Weight on cash_pct for contest {contest_id}? ",
-        last_weights["cash_pct"]
-    )
-    w_roi = prompt_float(
-        f"  Weight on avg_roi_win for contest {contest_id}? ",
-        last_weights["avg_roi_win"]
-    )
-    w_div = prompt_float(
-        f"  Diversity λ for contest {contest_id}? ",
-        last_weights["diversity_lambda"]
-    )
+    print(f"\\n▶ Contest {contest_id}: \"{contest_name}\"")
+    w_cash = prompt_float(f"  Weight on cash_pct? ", last_weights["cash_pct"])
+    w_roi  = prompt_float(f"  Weight on avg_roi_win? ", last_weights["avg_roi_win"])
+    w_div  = prompt_float(f"  Diversity λ? ", last_weights["diversity_lambda"])
     return {"cash_pct": w_cash, "avg_roi_win": w_roi, "diversity_lambda": w_div}
 
-def assign_player_order(player_objs: list[NFLPlayer], slots: list[str]) -> list[NFLPlayer]:
-    """
-    Assign players to the requested DK Showdown slots using NFLPlayer.roster_slot.
-    511 = CPT, 512 = FLEX.
-    We fill slots in the order provided, picking the first unused player that matches
-    the required roster_slot code. Raises a clear error if counts don't match.
-    """
-    SLOT_CODE = {"CPT": 511, "FLEX": 512}
 
-    def rs(p: NFLPlayer) -> int | None:
-        try:
-            return int(getattr(p, "roster_slot_id"))
-        except (TypeError, ValueError):
-            return None
+def _rs(p: NFLPlayer) -> int | None:
+    try:
+        return int(getattr(p, "roster_slot_id"))
+    except (TypeError, ValueError):
+        return None
 
+
+def _sal(p: NFLPlayer) -> int:
+    try:
+        return int(getattr(p, "salary") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def assign_player_order_showdown(player_objs: list[NFLPlayer], slots: list[str]) -> list[NFLPlayer]:
+    """Fill Showdown slots strictly by roster_slot_id (511 CPT, 512 FLEX)."""
     assigned: list[NFLPlayer | None] = [None] * len(slots)
     used: set[int] = set()
 
-    # sanity checks up front to surface data issues early
-    want_cpt = slots.count("CPT")
+    want_cpt  = slots.count("CPT")
     want_flex = slots.count("FLEX")
-    have_cpt = sum(1 for p in player_objs if rs(p) == 511)
-    have_flex = sum(1 for p in player_objs if rs(p) == 512)
-
+    have_cpt  = sum(1 for p in player_objs if _rs(p) == SLOT_CODE["CPT"])
+    have_flex = sum(1 for p in player_objs if _rs(p) == SLOT_CODE["FLEX"])
     if have_cpt < want_cpt:
-        raise ValueError(
-            f"Expected at least {want_cpt} CPT(511) in lineup but found {have_cpt}. "
-            f"Players roster_slot: {[(p.id, rs(p)) for p in player_objs]}"
-        )
+        raise ValueError(f"Expected at least {want_cpt} CPT(511) in lineup but found {have_cpt}.")
     if have_flex < want_flex:
-        raise ValueError(
-            f"Expected at least {want_flex} FLEX(512) in lineup but found {have_flex}. "
-            f"Players roster_slot: {[(p.id, rs(p)) for p in player_objs]}"
-        )
+        raise ValueError(f"Expected at least {want_flex} FLEX(512) in lineup but found {have_flex}.")
 
     for idx, slot_req in enumerate(slots):
-        if slot_req not in SLOT_CODE:
-            raise ValueError(f"Unknown slot '{slot_req}'. Expected 'CPT' or 'FLEX'.")
-        need_code = SLOT_CODE[slot_req]
-
-        placed = False
+        code = SLOT_CODE[slot_req]
         for p in player_objs:
-            if p.id in used:
-                continue
-            if rs(p) == need_code:
+            if p.id in used: continue
+            if _rs(p) == code:
                 assigned[idx] = p
                 used.add(p.id)
-                placed = True
                 break
-
-        if not placed:
-            remaining = [(p.id, rs(p)) for p in player_objs if p.id not in used]
-            raise ValueError(
-                f"Cannot fill slot '{slot_req}' (need roster_slot {need_code}). "
-                f"Remaining: {remaining}"
-            )
-
+        if assigned[idx] is None:
+            remain = [(p.id, _rs(p)) for p in player_objs if p.id not in used]
+            raise ValueError(f"Cannot fill {slot_req}; remaining {remain}")
     return assigned  # type: ignore
 
+
+def assign_player_order_classic(player_objs: list[NFLPlayer]) -> list[NFLPlayer]:
+    """
+    Assign players to classic slots in EXACT order:
+      QB,RB,RB,WR,WR,WR,TE,FLEX,DST
+    We use roster_slot_id codes when present; otherwise fall back to position.
+    FLEX picks the highest-salary remaining RB/WR/TE not already used.
+    """
+    qbs, rbs, wrs, tes, dsts, flex_eligible = [], [], [], [], [], []
+    for p in player_objs:
+        slot = _rs(p)
+        pos = (getattr(p, "position", None) or "").upper()
+        if slot == SLOT_CODE["QB"] or pos == "QB":
+            qbs.append(p)
+        elif slot == SLOT_CODE["RB"] or pos == "RB":
+            rbs.append(p); flex_eligible.append(p)
+        elif slot == SLOT_CODE["WR"] or pos == "WR":
+            wrs.append(p); flex_eligible.append(p)
+        elif slot == SLOT_CODE["TE"] or pos == "TE":
+            tes.append(p); flex_eligible.append(p)
+        elif slot == SLOT_CODE["DST"] or pos in {"DST","D/ST","DEF"}:
+            dsts.append(p)
+
+    key = lambda p: -_sal(p)
+    qbs.sort(key=key); rbs.sort(key=key); wrs.sort(key=key); tes.sort(key=key); dsts.sort(key=key)
+    flex_eligible = sorted(flex_eligible, key=key)
+
+    if not qbs:  raise ValueError("Classic lineup missing QB.")
+    if len(rbs) < 2: raise ValueError("Classic lineup requires 2 RB.")
+    if len(wrs) < 3: raise ValueError("Classic lineup requires 3 WR.")
+    if len(tes) < 1: raise ValueError("Classic lineup requires TE.")
+    if not dsts: raise ValueError("Classic lineup missing DST.")
+
+    order: list[NFLPlayer] = []
+    order.append(qbs[0])               # QB
+    order += rbs[:2]                   # RB, RB
+    order += wrs[:3]                   # WR, WR, WR
+    order.append(tes[0])               # TE
+    used_ids = {p.id for p in order}
+    flex_pick = next((p for p in flex_eligible if p.id not in used_ids), None)
+    if flex_pick is None:
+        raise ValueError("No remaining RB/WR/TE to fill FLEX.")
+    order.append(flex_pick)            # FLEX
+    order.append(dsts[0])              # DST
+
+    if len(order) != 9:
+        raise ValueError(f"Classic assignment produced {len(order)} players, expected 9.")
+    return order
+
+
+# ------------------------------- MAIN -------------------------------
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="For each entry in entries_csv, choose a new lineup and write out a combined CSV."
-    )
-    parser.add_argument(
-        "--output_csv", "-o",
-        type=str,
-        default="data/nfl/output/chosen_entries.csv",
-        help="Filename for the combined output (default: chosen_entries.csv)."
-    )
+    parser = argparse.ArgumentParser(description="Choose lineups and write DK-formatted CSVs (Classic & Showdown).")
+    parser.add_argument("-o", "--output_csv",
+                        type=str,
+                        default="data/nfl/output/chosen_entries.csv",
+                        help="Base filename for output CSV(s). We'll append .classic/.showdown and a timestamp.")
     args = parser.parse_args()
 
-    # ────────────────────────────────────────────
-    # 1) Load config + read only first 14 columns of entries_csv
-    # ────────────────────────────────────────────
     here = os.path.dirname(__file__)
     cfg_fp = os.path.abspath(os.path.join(here, "../../config/nfl.json"))
     cfg = json.load(open(cfg_fp, encoding="utf-8"))
 
+    # Entries CSV
     entries_fp = cfg["paths"]["entries_csv"]
-    print(f"Loading first 10 columns of entries from {entries_fp}…")
+    print(f"Loading entries from {entries_fp}…")
+    df_raw = pd.read_csv(entries_fp, engine="python", header=0, usecols=range(14), dtype=str, keep_default_na=False)
 
-    # Only read columns 0..13 (ignore everything after the third OF)
-    df_raw = pd.read_csv(
-        entries_fp,
-        engine="python",
-        usecols=range(10),
-        header=0,
-        dtype=str,
-        keep_default_na=False
-    )
-
-    # Ensure base columns exist
-    base_cols = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"]
-    for col in base_cols:
+    # Ensure required columns exist
+    for col in BASE_COLS:
         if col not in df_raw.columns:
             raise RuntimeError(f"Expected column '{col}' in entries CSV but not found.")
 
-    # Drop any row at or below the first blank "Entry ID"
+    # Cut off at first blank Entry ID
     blank_mask = df_raw["Entry ID"].str.strip() == ""
     if blank_mask.any():
         first_blank_idx = blank_mask.idxmax()
         df_raw = df_raw.loc[: first_blank_idx - 1].copy()
 
-    # Convert Contest ID to int and group by contest
+    # Normalize types
     df_raw["Contest ID"] = df_raw["Contest ID"].astype(int)
     contests_grouped = df_raw.groupby("Contest ID", sort=False)
 
-    # ────────────────────────────────────────────
-    # 2) Prompt once for default weights (press Enter to accept)
-    # ────────────────────────────────────────────
-    print("Enter default weights for any contest (press Enter to accept):")
+    # Default weights (prompted once per contest)
     last_weights = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1}
 
-    # ────────────────────────────────────────────
-    # 3) Initialize DB session
-    # ────────────────────────────────────────────
+    # DB session
     engine = init_db("nfl")
     session = get_session(engine)
 
-    # ────────────────────────────────────────────
-    # 4) Prepare empty DataFrame with headers:
-    #    base_cols + ["P","P","C","1B","2B","3B","SS","OF","OF","OF"]
-    # ────────────────────────────────────────────
-    desired_pos_cols = POSITION_ORDER_SD.copy()  # ["P","P","C","1B","2B","3B","SS","OF","OF","OF"] #TODO: open this up to both formats, can infer based on length of lineup lists?
-    final_header = base_cols + desired_pos_cols
-    df_out = pd.DataFrame(columns=final_header)
+    # Output frames (separate per format)
+    df_out_sd      = pd.DataFrame(columns=BASE_COLS + POSITION_ORDER_SD)
+    df_out_classic = pd.DataFrame(columns=BASE_COLS + POSITION_ORDER_CLASSIC)
 
-    # ────────────────────────────────────────────
-    # 5) Track which contests have been prompted
-    # ────────────────────────────────────────────
-    prompted_contests = set()
+    prompted_contests: set[int] = set()
 
-    # 6) Loop over each unique Contest ID, and accumulate exposures
-    # ────────────────────────────────────────────
-    # We'll keep a per-contest map of player exposures
-    player_exposures_map: dict[int, dict[str, float]] = {}
-    num_lineups_map: dict[int, int] = {}
-
-    observed_lineup_sizes: set[int] = set()
-
-    # ────────────────────────────────────────────
-    # 6) Loop over each unique Contest ID
-    # ────────────────────────────────────────────
     for cid, group in contests_grouped:
-        # 6b) Determine how many entries → number of lineups to select
         num_entries = len(group)
-        num_lineups_map[cid] = num_entries
         cname = group["Contest Name"].iloc[0]
-        print(f"\n=== Contest {cid} (\"{cname}\") → {num_entries} entries ===")
+        print(f"\\n=== Contest {cid} (\"{cname}\") → {num_entries} entries ===")
 
-        # 6c) Prompt per‐contest weights once
+        # Prompt weights once per contest
         if cid not in prompted_contests:
-            w = prompt_weights_for_contest(
-                contest_id=cid,
-                contest_name=cname,
-                last_weights=last_weights
-            )
+            w = prompt_weights_for_contest(cid, cname, last_weights)
             last_weights = w
             prompted_contests.add(cid)
         else:
             w = last_weights
 
-        # 6d) Run greedy‐selection logic (filters by contest_id internally)
+        # Choose lineup IDs
         chosen_ids = choose_lineup_ids(
             session=session,
             weights=w,
@@ -215,124 +224,60 @@ def main():
             contest_name=cname
         )
         if not chosen_ids:
-            print(f"⚠️  No lineups chosen for contest {cid}. Moving on.")
-            del num_lineups_map[cid]
+            print(f"⚠️  No lineups chosen for contest {cid}. Skipping.")
             continue
 
-        # Preload Lineup objects and all referenced MLBPlayer rows
+        # Load lineups and players
         lineups = session.query(Lineup).filter(Lineup.id.in_(chosen_ids)).all()
+        id_to_lineup = {L.id: L for L in lineups}
         all_pids = {pid for L in lineups for pid in L.player_ids_list}
-        players_map = {
+        players_map: Dict[int, NFLPlayer] = {
             p.id: p
             for p in session.query(NFLPlayer).filter(NFLPlayer.id.in_(all_pids)).all()
         }
 
-        # 6e) Build each chosen‐lineup row
+        # Build rows
         orig_rows = group.reset_index(drop=True)
-        lineup_counter = 0
-
-        for lid in chosen_ids:
-            # Fetch the Lineup directly by its primary key
-            lineup = session.query(Lineup).filter(Lineup.id == lid).one_or_none()
-            if lineup is None:
+        for i, lid in enumerate(chosen_ids):
+            lineup = id_to_lineup.get(lid)
+            if not lineup:
                 continue
+            pids: List[int] = lineup.player_ids_list
+            objs: List[NFLPlayer] = [players_map[pid] for pid in pids]
+            base_data = orig_rows.iloc[i % num_entries][BASE_COLS].to_list()
 
-            # Exactly 6 player IDs (unique)
-            pids = lineup.player_ids_list
-            if len(pids) != 6 or len(set(pids)) != 6:  # TODO: open up for classic (len == 9)
-                raise ValueError(f"Lineup {lid} must have exactly 6 unique players")
+            if len(pids) == 6:
+                assigned = assign_player_order_showdown(objs, POSITION_ORDER_SD)
+                slots = [f"{pl.name} ({pl.id})" for pl in assigned]
+                df_out_sd.loc[len(df_out_sd)] = base_data + slots
+            elif len(pids) == 9:
+                assigned = assign_player_order_classic(objs)
+                slots = [f"{pl.name} ({pl.id})" for pl in assigned]
+                df_out_classic.loc[len(df_out_classic)] = base_data + slots
+            else:
+                raise ValueError(f"Unsupported lineup size {len(pids)} for lineup {lid} (expected 6 or 9).")
 
-            observed_lineup_sizes.add(len(pids))
-
-            # Convert IDs → MLBPlayer objects
-            objs = [players_map[pid] for pid in pids]
-
-            # 1) Assign players to slots in POSITION_ORDER
-            assigned = assign_player_order(objs, POSITION_ORDER_SD)
-
-            # 2) Build "Name (ID)" strings in the same order
-            slots_str = [f"{pl.name} ({pl.id})" for pl in assigned]
-
-            # 3) Pick original entry row's base data (cycle through)
-            idx = lineup_counter % num_entries
-            base_data = orig_rows.iloc[idx][base_cols].to_list()
-
-            # 4) Create one combined row as a list of values,
-            #    matching final_header’s order exactly.
-            row_values = base_data + slots_str
-
-            # 5) Append the row by positional assignment
-            df_out.loc[len(df_out)] = row_values
-
-            lineup_counter += 1
-
-        # 6f) (Optional) Show exposures for this contest
-        id_lists = [session.query(Lineup).filter(Lineup.id == lid).one().player_ids_list
-                    for lid in chosen_ids]
-        # print(f"● Exposures for contest {cid}:")
-        # show_player_exposures(session, id_lists)
-        # show_team_exposures(session, id_lists, stack_size=3)
-
-        # --- now compute and store exposures for recap tables ---
-        num_lineups = len(id_lists)
-
-         # 1) Player exposures
-        p_counter = Counter(pid for lst in id_lists for pid in lst)
-        player_exposures_map[cid] = {f"{players_map[pid].name} ({pid})": p_counter[pid] / num_lineups for pid in p_counter}
-
-   # Player recap
-    if player_exposures_map:
-        df_p = pd.DataFrame(player_exposures_map).fillna(0)
-        total_lineups = sum(num_lineups_map.values())
-        overall = {pname: sum(df_p.at[pname, cid] * num_lineups_map[cid] for cid in num_lineups_map) / total_lineups for pname in df_p.index}
-        df_p["Overall Exposure"] = pd.Series(overall)
-
-        ids = df_p.index.to_series().str.extract(r"\((\d+)\)$")[0].astype(int)
-        players = session.query(NFLPlayer).filter(NFLPlayer.id.in_(ids.tolist())).all()
-        pmap = {p.id: p for p in players}
-
-        info = pd.DataFrame({
-            "Position": ids.map(lambda i: pmap[i].position),
-            "Team":     ids.map(lambda i: pmap[i].team),
-            "Salary":   ids.map(lambda i: pmap[i].salary),
-            "roster_slot": ids.map(lambda i: pmap[i].roster_slot_id),
-        }, index=df_p.index)
-
-        # reorder: info, Overall Exposure, then per-contest
-        contest_cols = [c for c in df_p.columns if c != "Overall Exposure"]
-        cols = info.columns.tolist() + ["Overall Exposure"] + contest_cols
-        df_final = pd.concat([info, df_p], axis=1)[cols]
-        df_final = df_final.sort_values("Overall Exposure", ascending=False)
-
-        print(df_final)
-
-    # ────────────────────────────────────────────
-    # 7) Write out the combined CSV with timestamp + format in filename
-    # ────────────────────────────────────────────
-    # Infer format label from observed lineup sizes
-    if observed_lineup_sizes == {6}:
-        format_label = "showdown"
-    elif observed_lineup_sizes == {9}:
-        format_label = "classic"
-    elif not observed_lineup_sizes:
-        format_label = "unknown"
-    else:
-        format_label = "mixed"
-
-    # Build timestamp (local machine time)
+    # Write outputs
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    root, ext = os.path.splitext(args.output_csv)
 
-    # Insert ".<format>.<timestamp>" before extension
-    base_out = args.output_csv  # e.g., data/nfl/output/chosen_entries.csv
-    root, ext = os.path.splitext(base_out)
-    out_fp = f"{root}.{format_label}.{ts}{ext}"
+    wrote = False
+    if not df_out_sd.empty:
+        out_sd = f"{root}.showdown.{ts}{ext}"
+        os.makedirs(os.path.dirname(out_sd) or ".", exist_ok=True)
+        df_out_sd.to_csv(out_sd, index=False)
+        print(f"✅ Wrote {len(df_out_sd)} showdown rows → {out_sd}")
+        wrote = True
 
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(out_fp) or ".", exist_ok=True)
+    if not df_out_classic.empty:
+        out_cl = f"{root}.classic.{ts}{ext}"
+        os.makedirs(os.path.dirname(out_cl) or ".", exist_ok=True)
+        df_out_classic.to_csv(out_cl, index=False)
+        print(f"✅ Wrote {len(df_out_classic)} classic rows → {out_cl}")
+        wrote = True
 
-    df_out.to_csv(out_fp, index=False)
-    print(f"\n✅ Wrote {len(df_out)} chosen-lineup rows → {out_fp}")
-
+    if not wrote:
+        print("⚠️  No rows written — no valid chosen lineups were found.")
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from ivan.sports.nfl.models import HistoricalContest, ContestPayout, Lineup, LineupSimulationResult
 from ivan.sports.nfl.sample_field import (
-    sample_sd_field,
+    sample_field,
     build_lineup_matrix,
     build_player_samples,
 )
@@ -336,15 +336,13 @@ def _build_player_samples_matrix(
         pid_to_idx: Dict[int, int],
         config: dict = None,
         mode = None,
-        model_dir: str | Path = "data/nfl/models",
-        num_sims: int | None = None,  # NEW
+        model_dir: str | Path = "data/nfl/models"
 ) -> np.ndarray:
     """
     NFL scoring matrix P: [num_sims x num_players] aligned to 'pid_to_idx'.
     Ensures every column has exactly 'num_sims' rows by slicing/tiling as needed.
     """
-    # If the caller specified num_sims, force the sampler to produce that many:
-    overrides = {"n_samples": int(num_sims)} if num_sims is not None else None
+    # If the caller specified num_sims, force the sampler to produce that many
 
     raw = generate_correlated_samples(
         session,
@@ -352,21 +350,16 @@ def _build_player_samples_matrix(
         config=config,
         mode=mode,
         process="simulation",
-        overrides=overrides,   # <— ensures per-player vectors length == num_sims
     )
-
-    # Decide row count (= number of sims)
-    if num_sims is not None:
-        ns = int(num_sims)
-    else:
-        # fall back to the first vector length in raw
-        ns = 0
-        for v in raw.values():
-            if isinstance(v, np.ndarray):
-                ns = int(v.shape[0])
-                break
-        if ns == 0:
-            return np.zeros((0, len(pid_to_idx)), dtype=np.float32)
+    # fall back to the first vector length in raw
+    ns = 0
+    for v in raw.values():
+        if isinstance(v, np.ndarray):
+            ns = int(v.shape[0])
+            print(f'n_sums = {ns}')
+            break
+    if ns == 0:
+        return np.zeros((0, len(pid_to_idx)), dtype=np.float32)
 
     nP = len(pid_to_idx)
     P  = np.zeros((ns, nP), dtype=np.float32)
@@ -386,7 +379,7 @@ def _build_player_samples_matrix(
 
         P[:, col] = vv
 
-    return P
+    return P, ns
 
 
 def _simulate_chunk(
@@ -503,7 +496,6 @@ def simulate_one_contest(
     session: Session,
     contest_id: int,
     contest_name: str,
-    num_sims: int,
     config_path: str,
     field_cap: int
 ) -> None:
@@ -516,8 +508,8 @@ def simulate_one_contest(
     entry_fee = float(contest.entry_fee)
 
     # 1) sample the field (WITH replacement). This returns counts per lineup_id.
-    counts_by_lineup, meta = sample_sd_field(
-        session,
+    counts_by_lineup, meta = sample_field(
+        session,             
         field_size=capped_field_sz,
         config=cfg,
         mode=mode
@@ -525,9 +517,8 @@ def simulate_one_contest(
     total = sum(counts_by_lineup.values())
     assert total == capped_field_sz, (total, capped_field_sz)
 
+    print('successfully sampled unique lineup field, expanding for dupes...')
 
-    #TODO: add a quick sanity check and print the top duped lineups in the sample along with their sample chacteristics (i.e. salary remaining, proj/max([projs]))
-    # Expand counts into entry-level arrays + compact player universe
     entry_lids, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(session, counts_by_lineup)
 
     recap_and_plots_for_sampled_field(
@@ -576,15 +567,12 @@ def simulate_one_contest(
     print(f"Paid places: {paid_count}/{M} ({paid_count / max(1, M):.1%})\n")
     # 3) correlated NFL projections for the compact player set
 
-    P = _build_player_samples_matrix(
+    P, num_sims = _build_player_samples_matrix(
         session=session,
         pid_to_idx=pid_to_idx,
         mode=mode,
-        config=cfg,
-        num_sims=num_sims
+        config=cfg
     )
-
-    print(P)
 
     # 4) run simulations in parallel (same “chunk” pattern as MLB)
     chunk_size   = math.ceil(num_sims / min(8, num_sims))   # mirror MLB limiter

@@ -32,7 +32,7 @@ KICKER_DEFAULT_SHAPE = 5.5
 KICKER_DEFAULT_SCALE = 1.2
 
 # Odds handling
-DEFAULT_ONE_SIDE_VIG = 0.05  # 5% haircut if the opposing side is missing
+DEFAULT_ONE_SIDE_VIG = 0.15  # 5% haircut if the opposing side is missing
 DEFAULT_MARKET_WEIGHTS_PATH = Path(r"D:\ivan\data\nfl\models\market_weights.json")
 _MARKET_WEIGHTS_CACHE: dict | None = None
 
@@ -43,9 +43,9 @@ def _simple_td_alpha(pos: str) -> float:
     return float(np.clip(SIMPLE_TD_ALPHA.get(pos, 0.0), 0.0, 1.0))
 
 # Role mapping from anytime TD
-ROLE_MIN = 0.08  # hard floor for ultra-fringe players
-ROLE_MAX = 1.00
-ROLE_BETA = 1.0  # 1.0 = linear; <1 softens mapping
+ROLE_MIN = 0.01
+ROLE_MAX = 0.50
+ROLE_BETA = 1.25
 
 BUCKET_STEP = 0.5   # most props are on .5 increments; change if needed
 
@@ -54,6 +54,18 @@ def _bucket_line(point: float | None, step: float = BUCKET_STEP) -> float | None
     if point is None:
         return None
     return round(float(point) / step) * step
+
+def _choose_td_kernel(p_any: float, role: float) -> str:
+    """
+    Decide how to sample scrimmage TD count K.
+    - If low role or modest anytime: 'bern' (0/1 only)
+    - Else: 'pois' (allow multi-TD tails)
+    """
+    if (role is None) or (p_any is None):
+        return "pois"  # fallback
+    if (role < 0.30) or (p_any < 0.33):
+        return "bern"
+    return "pois"
 
 # Mapping from internal stat keys to sportsbook API market keys
 _MARKET_KEYS = {
@@ -600,7 +612,7 @@ def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n
         samples = np.random.choice(vals, size=n_samples, replace=True).astype(float)
         return samples
     rng = np.random.default_rng()
-    fpts = rng.normal(loc=6.0, scale=4.0, size=n_samples)
+    fpts = rng.normal(loc=7.0, scale=4.0, size=n_samples)
     return np.clip(fpts, -6.0, None)
 
 def _fpts_summary(samples: np.ndarray,
@@ -824,21 +836,35 @@ def simulate_player_fpts(
     U = st.norm.cdf(Z)
     X = np.zeros_like(U)
 
-    # TDs from anytime market: Poisson μ from p_any, then binomial split
+        # TDs from anytime market: Bernoulli-or-Poisson based on role/p_any, then split
     tds_filled = False
     if SIMPLE_MODE and (td_indices["rushing_tds"] is not None or td_indices["receiving_tds"] is not None):
         _, p_any = _consensus_prob_for_side(session, player.name, 'player_anytime_td', target_side='yes', verbose=verbose)
         if p_any is not None:
-            mu_total = _poisson_mu_from_prob_at_least_one(p_any)
-            idx_any = td_indices["rushing_tds"] if td_indices["rushing_tds"] is not None else td_indices["receiving_tds"]
-            K = st.poisson.ppf(U[:, idx_any], mu_total).astype(int)
+            # decide kernel
+            kernel = _choose_td_kernel(float(p_any), float(role_factor if role_factor is not None else 1.0))
 
+            # choose which uniform column anchors count variability
+            idx_any = td_indices["rushing_tds"] if td_indices["rushing_tds"] is not None else td_indices["receiving_tds"]
+            U_any = U[:, idx_any]
+
+            if kernel == "bern":
+                # 0 or 1 TD only for backups / modest p_any
+                K = (U_any < float(p_any)).astype(int)
+                mu_total = float(p_any)  # for logging only
+            else:
+                # allow multi-TD tails for starters
+                mu_total = _poisson_mu_from_prob_at_least_one(float(p_any))
+                K = st.poisson.ppf(U_any, mu_total).astype(int)
+
+            # split scrimmage TDs into rush vs rec by position prior alpha
             alpha = _simple_td_alpha(pos)
-            # pick the "other" column to split, or reuse same
             if td_indices["rushing_tds"] is not None and td_indices["receiving_tds"] is not None:
+                # use the "other" column's uniforms to keep dependence
                 U_split = U[:, td_indices["receiving_tds"]] if idx_any == td_indices["rushing_tds"] else U[:, td_indices["rushing_tds"]]
             else:
-                U_split = U[:, idx_any]
+                U_split = U_any
+
             K_rush = st.binom.ppf(U_split, K, alpha).astype(int)
             K_rec  = (K - K_rush).astype(int)
 
@@ -849,8 +875,8 @@ def simulate_player_fpts(
 
             tds_filled = True
             if verbose:
-                print(f"[tds][simple] p_any={p_any:.4f} → mu_total={mu_total:.4f} α_rush={alpha:.2f}")
-                print(f"[tds][simple] E[K]={K.mean():.3f}  E[rush]={K_rush.mean():.3f}  E[rec]={K_rec.mean():.3f}")
+                print(f"[tds][simple] kernel={kernel} p_any={p_any:.4f} mu_total≈{mu_total:.4f} α_rush={alpha:.2f}  "
+                      f"E[K]={K.mean():.3f}  E[rush]={K_rush.mean():.3f}  E[rec]={K_rec.mean():.3f}")
         else:
             if verbose:
                 print("[tds][simple] no anytime market -> TDs fall back to base marginals")

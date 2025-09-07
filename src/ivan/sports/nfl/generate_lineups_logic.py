@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Iterable, Union
 from datetime import datetime
@@ -184,6 +184,19 @@ def generate_single_showdown_lineup_ilp(
         for pid in players_by_id
     }
 
+    team_counts = Counter(p.team for p in players if getattr(p, "team", None))
+    if len(team_counts) < 2:
+        # With fewer than 2 teams in the pool, this constraint would be infeasible
+        return None
+    # Take the two most common teams (robust to any stray/FA rows)
+    showdown_teams = [t for t, _ in team_counts.most_common(2)]
+
+    for t in showdown_teams:
+        team_ids = [p.id for p in players if p.team == t]
+        if not team_ids:
+            return None  # defensive: shouldn't happen, but avoids infeasible model
+        prob += plp.lpSum(x[i] for i in team_ids) >= 1, f"AtLeastOneFrom_{_safe_var_name(t)}" #TODO: this probably works, but if not: change logic to needing a min of 2 unique teams. that'll be more robust for sure. 
+
     # Counts per slot
     prob += plp.lpSum(x[i] for i in cpt_ids)  == 1,  "ExactlyOneCPT"
     prob += plp.lpSum(x[i] for i in flex_ids) == 5,  "ExactlyFiveFLEX"
@@ -239,9 +252,69 @@ def generate_single_classic_lineup(
         config: dict | None = None,
         debug_lp_path: Optional[str] = None
 ) -> Optional[List[int]]:
-    
+    """
+    Reads constraints from a nested config like:
+      config["classic"]["lineup_generation"][...]
+    with graceful fallbacks to flatter locations.
+    """
     config = config or {}
+
+    # -------------------------
+    # Config lookup helper(s)
+    # -------------------------
+    def _get_nested(d: dict, path: Tuple[str, ...], default=None):
+        cur = d
+        for k in path:
+            if not isinstance(cur, dict) or k not in cur:
+                return default
+            cur = cur[k]
+        return cur
+
+    def _cfg_val(key: str, default=None):
+        # Primary: classic -> lineup_generation
+        v = _get_nested(config, ("classic", "lineup_generation", key), None)
+        if v is not None:
+            return v
+        # Secondary fallbacks
+        for path in [
+            ("lineup_generation", key),
+            ("classic", key),
+            (key,),
+        ]:
+            v = _get_nested(config, path, None)
+            if v is not None:
+                return v
+        return default
+
+    def _as_int(x, default=None):
+        try:
+            return int(x) if x is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    def _as_opt_int(x):
+        try:
+            return int(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    # --- Keys you can pass in config ---
+    max_off_vs_dst   = _as_opt_int(_cfg_val("max_off_vs_dst", None))               # int or None
+    min_qb_stack     = _as_int(_cfg_val("min_qb_stack", _cfg_val("min_same_team_stack", 0)), 0)
+    min_qb_bringback = _as_int(_cfg_val("min_qb_bringback", _cfg_val("min_bringback", 0)), 0)
+    max_team_players = _as_opt_int(_cfg_val("max_team_players", None))             # int or None
+
+    # Allow config to override salary band too
+    cap_cfg        = _as_int(_cfg_val("salary_cap", None))
+    min_salary_cfg = _as_int(_cfg_val("min_salary", None))
+    if cap_cfg is not None:
+        cap = cap_cfg
+    if min_salary_cfg is not None:
+        min_salary = min_salary_cfg
+
     QB, RB, WR, TE, DST = 66, 67, 68, 69, 71
+    OFF_POS       = {QB, RB, WR, TE}
+    OFF_NO_QB_POS = {RB, WR, TE}
 
     players_by_id: Dict[int, FieldPlayer] = {p.id: p for p in players}
     qb_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == QB]
@@ -249,50 +322,99 @@ def generate_single_classic_lineup(
     wr_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == WR]
     te_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == TE]
     dst_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == DST]
-    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) in {RB, WR, TE}]
+    skill_ids = list(set(rb_ids) | set(wr_ids) | set(te_ids))
+    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) in OFF_NO_QB_POS]  # kept if you need it later
 
     if not qb_ids:
-        raise ValueError("No QB ids matched. check filtering conditions")
-    
+        raise ValueError("No QB ids matched. Check filtering conditions")
+
+    # Helper pools
+    offense_ids   = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in OFF_POS]
+    offense_no_qb = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in OFF_NO_QB_POS]
+
+    # Team maps (all positions)
+    teams = sorted({players_by_id[pid].team for pid in players_by_id if getattr(players_by_id[pid], "team", None)})
+    team_to_all_ids = {t: [pid for pid in players_by_id if getattr(players_by_id[pid], "team", None) == t] for t in teams}
+
+    # Group duplicate name+team
     ident_to_ids: Dict[Tuple[str, str], List[int]] = {}
     for p in players:
         ident_to_ids.setdefault((p.name, p.team), []).append(p.id)
 
-    # create the LP problem
+    # --- LP model ---
     prob = plp.LpProblem(_unique_problem_name("nfl_classic_lineup"), plp.LpMaximize)
-    # create binary variables for players
+
+    # Decision vars
     x: Dict[int, plp.LpVariable] = {
         pid: plp.LpVariable(f"x_{_safe_var_name(players_by_id[pid].name)}_{pid}", 0, 1, plp.LpBinary)
         for pid in players_by_id
     }
 
-    # --- Position/roster constraints ---
+    # --- Roster constraints ---
     prob += plp.lpSum(x[i] for i in qb_ids)  == 1, "ExactlyOneQB"
     prob += plp.lpSum(x[i] for i in dst_ids) == 1, "ExactlyOneDST"
 
-    # Minimums for skill spots
     prob += plp.lpSum(x[i] for i in rb_ids) >= 2, "AtLeastTwoRB"
     prob += plp.lpSum(x[i] for i in wr_ids) >= 3, "AtLeastThreeWR"
     prob += plp.lpSum(x[i] for i in te_ids) >= 1, "AtLeastOneTE"
 
-    # Exactly one FLEX among RB/WR/TE, achieved by enforcing totals:
-    skill_ids = list(set(rb_ids) | set(wr_ids) | set(te_ids))
+    # 7 total among RB/WR/TE (2 RB + 3 WR + 1 TE + 1 FLEX)
     prob += plp.lpSum(x[i] for i in skill_ids) == 7, "ExactlySevenSkill"
     prob += plp.lpSum(x[i] for i in players_by_id) == 9, "ExactlyNinePlayers"
 
-    #no duplicate player in the same lineup
+    # No duplicate same-name same-team
     for (name, team), ids in ident_to_ids.items():
         prob += plp.lpSum(x[i] for i in ids) <= 1, f"NoDup_{_safe_var_name(name)}_{_safe_var_name(team)}"
 
-    #salary constraint
+    # Salary band
     salary_expr = plp.lpSum(players_by_id[i].salary * x[i] for i in players_by_id)
     prob += salary_expr <= int(cap),        "MaxSalary"
     prob += salary_expr >= int(min_salary), "MinSalary"
 
-    #objective function (simple max fpts objective)
-    score = plp.lpSum(
-        float(base_scores.get(i, 0.0)) * x[i] for i in players_by_id
-    )
+    # --- Max players per single team (all positions count) ---
+    if isinstance(max_team_players, int):
+        for t in teams:
+            prob += plp.lpSum(x[i] for i in team_to_all_ids[t]) <= max_team_players, f"MaxPlayers_{_safe_var_name(t)}"
+
+    # --- QB same-team stacks (min RB/WR/TE from QB's team) ---
+    if int(min_qb_stack) > 0:
+        for q in qb_ids:
+            team_q = getattr(players_by_id[q], "team", None)
+            if not team_q:
+                continue
+            stack_pool = [i for i in offense_no_qb if getattr(players_by_id[i], "team", None) == team_q]
+            req = min(int(min_qb_stack), len(stack_pool))
+            if req > 0 and len(stack_pool) > 0:
+                prob += plp.lpSum(x[i] for i in stack_pool) >= req * x[q], f"QBStack_{q}"
+
+    # --- QB bring-backs (min RB/WR/TE from QB's opposing team) ---
+    if int(min_qb_bringback) > 0:
+        for q in qb_ids:
+            opp_q = getattr(players_by_id[q], "opponent", None)
+            if not opp_q:
+                continue
+            bb_pool = [i for i in offense_no_qb if getattr(players_by_id[i], "team", None) == opp_q]
+            req = min(int(min_qb_bringback), len(bb_pool))
+            if req > 0 and len(bb_pool) > 0:
+                prob += plp.lpSum(x[i] for i in bb_pool) >= req * x[q], f"QBBRingback_{q}"
+
+    # --- Limit offensive players vs the chosen DST ---
+    if isinstance(max_off_vs_dst, int):
+        BIG_M_OFF = 8  # max possible offense (QB + 7 skill)
+        for d in dst_ids:
+            opp_d = getattr(players_by_id[d], "opponent", None)
+            if not opp_d:
+                continue
+            off_vs_dst = [i for i in offense_ids if getattr(players_by_id[i], "team", None) == opp_d]
+            if not off_vs_dst:
+                continue
+            prob += (
+                plp.lpSum(x[i] for i in off_vs_dst)
+                <= int(max_off_vs_dst) + BIG_M_OFF * (1 - x[d])
+            ), f"MaxOffVsDST_{d}"
+
+    # Objective
+    score = plp.lpSum(float(base_scores.get(i, 0.0)) * x[i] for i in players_by_id)
     prob += score
 
     solver = _make_glpk_solver(config)
@@ -303,14 +425,16 @@ def generate_single_classic_lineup(
             Path(debug_lp_path).parent.mkdir(parents=True, exist_ok=True)
             prob.writeLP(debug_lp_path)
         raise
-    if plp.LpStatus[status_code] != "Optimal": 
+
+    if plp.LpStatus[status_code] != "Optimal":
         if debug_lp_path:
             Path(debug_lp_path).parent.mkdir(parents=True, exist_ok=True)
             prob.writeLP(debug_lp_path)
         return None
-    
+
     sel = [i for i, var in x.items() if var.varValue == 1]
     return sel if len(sel) == 9 else None
+
 
 
 
@@ -342,13 +466,9 @@ def generate_and_store_field_lineups(
 
     # ---- 0) Generate per-player samples (pid -> np.ndarray) ----
     # Try to pass optional sampling config (if supported) so caller can control num samples, etc.
-    samples = generate_correlated_samples(session, config=config, process="lineup_generation")
 
-    # ---- 1) Load only players referenced by samples ----
-    ids = list(samples.keys())
     raw_players = (
         session.query(NFLPlayer)
-               .filter(NFLPlayer.id.in_(ids))
                .all()
     )
     if not raw_players:
@@ -367,12 +487,17 @@ def generate_and_store_field_lineups(
             team=getattr(rp, "team", None) or "",
             opponent=getattr(rp, "opponent", None),
             position=pos_tuple,
-            fpts_projection=float(getattr(rp, "fpts_projection", 0.0) or 0.0),
+            fpts_projection=float(getattr(rp, "fpts_p50", 0.0) or 0.0),
         ))
         roster_slot_by_id[rp.id] = int(getattr(rp, "roster_slot_id", 0) or 0)
 
-    # ---- 2) infer slate type, and choose branch ----
+
     slate_type = _infer_slate_type(roster_slot_by_id)
+
+    print(slate_type)
+
+    samples = generate_correlated_samples(session, config=config, mode=slate_type, process="lineup_generation")
+    # ---- 2) infer slate type, and choose branch ----
     if slate_type == "classic":
         n_samples = len(next(iter(samples.values())))
         idx_order = list(range(n_samples))
@@ -383,9 +508,9 @@ def generate_and_store_field_lineups(
         seen_lineups: set[tuple[int, ...]] = set() #per-worker dedupe
 
         #---------- config knobs ----------------------------------------
-        jitter            = float(_cfg(config, "lineup_generation.jitter", 0.10))
-        salary_cap        = int(_cfg(config, "lineup_generation.salary_cap", 50000))
-        min_salary        = int(_cfg(config, "lineup_generation.min_salary", 49000))
+        jitter            = float(_cfg(config, "classic.lineup_generation.jitter", 0.10))
+        salary_cap        = int(_cfg(config, "classic.lineup_generation.salary_cap", 50000))
+        min_salary        = int(_cfg(config, "classic.lineup_generation.min_salary", 49000))
         debug_lp_dir      = _cfg(config, "lineup_generation.debug_lp_dir", None)
 
         sample_cursor = 0
