@@ -173,7 +173,7 @@ def main():
     # Entries CSV
     entries_fp = cfg["paths"]["entries_csv"]
     print(f"Loading entries from {entries_fp}…")
-    df_raw = pd.read_csv(entries_fp, engine="python", header=0, usecols=range(14), dtype=str, keep_default_na=False)
+    df_raw = pd.read_csv(entries_fp, engine="python", header=0, usecols=range(10), dtype=str, keep_default_na=False)
 
     # Ensure required columns exist
     for col in BASE_COLS:

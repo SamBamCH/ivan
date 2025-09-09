@@ -1,0 +1,74 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.0.6 Chrome/138.0.7204.100 Electron/37.2.3 Safari/537.36" version="28.0.6">
+  <diagram name="Page-1" id="7W0jgtFA5llCw8u5d155">
+    <mxGraphModel dx="1601" dy="783" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ZxRTR2L6TvYfJ9WlcBxA-2" target="ZxRTR2L6TvYfJ9WlcBxA-7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-2" value="TEAM" style="swimlane;startSize=20;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="380" width="170" height="840" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-16" value="parse data into game_corr friendly format" style="whiteSpace=wrap;html=1;" vertex="1" parent="ZxRTR2L6TvYfJ9WlcBxA-2">
+          <mxGeometry x="15" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-23" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="ZxRTR2L6TvYfJ9WlcBxA-2" source="ZxRTR2L6TvYfJ9WlcBxA-20" target="ZxRTR2L6TvYfJ9WlcBxA-24">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="75" y="430" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-20" value="build team copulas models" style="whiteSpace=wrap;html=1;" vertex="1" parent="ZxRTR2L6TvYfJ9WlcBxA-2">
+          <mxGeometry x="15" y="290.0000000000001" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-24" value="team copulas" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="ZxRTR2L6TvYfJ9WlcBxA-2">
+          <mxGeometry x="12.5" y="390" width="125" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-3" value="PLAYER" style="swimlane;startSize=20;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="220" width="160" height="840" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-5" value="STAT" style="swimlane;startSize=20;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="20" width="200" height="840" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="ZxRTR2L6TvYfJ9WlcBxA-5" source="ZxRTR2L6TvYfJ9WlcBxA-13" target="ZxRTR2L6TvYfJ9WlcBxA-14">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-13" value="get_historical_stats" style="whiteSpace=wrap;html=1;" vertex="1" parent="ZxRTR2L6TvYfJ9WlcBxA-5">
+          <mxGeometry x="40" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-14" value="NFLStats" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="ZxRTR2L6TvYfJ9WlcBxA-5">
+          <mxGeometry x="70" y="150" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ZxRTR2L6TvYfJ9WlcBxA-7" target="ZxRTR2L6TvYfJ9WlcBxA-9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-7" value="GAME" style="swimlane;startSize=20;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="600" width="160" height="840" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ZxRTR2L6TvYfJ9WlcBxA-9" target="ZxRTR2L6TvYfJ9WlcBxA-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-9" value="LINEUP" style="swimlane;startSize=20;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="840" width="150" height="840" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-11" value="SET of LINEUPS" style="swimlane;startSize=20;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1070" width="150" height="840" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ZxRTR2L6TvYfJ9WlcBxA-13" target="ZxRTR2L6TvYfJ9WlcBxA-16">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-21" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ZxRTR2L6TvYfJ9WlcBxA-19" target="ZxRTR2L6TvYfJ9WlcBxA-20">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-19" value="CORData" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="425" y="150.0000000000001" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ZxRTR2L6TvYfJ9WlcBxA-18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ZxRTR2L6TvYfJ9WlcBxA-16" target="ZxRTR2L6TvYfJ9WlcBxA-19">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="455" y="180.0000000000001" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
