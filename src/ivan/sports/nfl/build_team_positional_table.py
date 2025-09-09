@@ -161,6 +161,61 @@ def _load_dst_history(session: Session) -> pd.DataFrame:
     )
     return df
 
+# ----------------- K ingestion from nfl_data_py PBP -----------------
+def _load_k_weekly_from_pbp(years: List[int]) -> pd.DataFrame:
+    """
+    Build weekly team-level K fantasy points from nfl_data_py play-by-play.
+    Returns columns: season, season_type, week, team, opponent, K
+    """
+    try:
+        import nfl_data_py as nfl
+    except Exception as e:
+        raise RuntimeError("nfl_data_py is not installed. Run: pip install nfl_data_py") from e
+
+    cols = [
+        'season', 'season_type', 'week', 'game_id',
+        'posteam', 'defteam',
+        'field_goal_result', 'kick_distance',
+        'extra_point_result'
+    ]
+    # Pull PBP (cache speeds things up if you've run nfl.cache_pbp(years))
+    pbp = nfl.import_pbp_data(years=years, columns=cols, downcast=True)
+
+    df = pbp[cols].copy()
+
+    # Distance buckets and points
+    dist = pd.to_numeric(df['kick_distance'], errors='coerce').fillna(0.0)
+
+    fg_made = df['field_goal_result'].astype(str).str.lower() == 'made'
+
+    xp_good = df['extra_point_result'].astype(str).str.lower() == 'good'
+
+    k_pts = np.zeros(len(df), dtype=np.float32)
+
+    # Field goals made by distance
+    k_pts[fg_made & (dist < 40)] += 3.0
+    k_pts[fg_made & (40 <= dist) & (dist < 50)] += 4.0
+    k_pts[fg_made & (dist >= 50)] += 5.0
+
+    # Extra points
+    k_pts[xp_good] += 1.0
+
+    out = pd.DataFrame({
+        'season': df['season'].astype(int),
+        'season_type': df['season_type'].astype(str),
+        'week': df['week'].astype(int),
+        'team': df['posteam'].astype(str),
+        'opponent': df['defteam'].astype(str),
+        'K': k_pts
+    })
+
+    # Aggregate in case of multiple plays per game/week
+    out = (out
+           .groupby(['season','season_type','week','team','opponent'], as_index=False)
+           .agg({'K': 'sum'}))
+
+    return out
+
 # ------------------------------ main ---------------------------------
 
 def build_team_positional_table(db_url: str | None = None) -> int:
@@ -216,6 +271,25 @@ def build_team_positional_table(db_url: str | None = None) -> int:
             df_team = df_team.drop(columns=['DST_dst'])
     except Exception as e:
         print(f"[WARN] Could not backfill DST via ORM: {e}")
+
+    try:
+        years = sorted(pd.to_numeric(df_team['season'], errors='coerce').dropna().unique().astype(int).tolist())
+        if years:
+            k_hist = _load_k_weekly_from_pbp(years)
+            df_team = df_team.merge(
+                k_hist[['season','season_type','week','team','K']],
+                on=['season','season_type','week','team'],
+                how='left',
+                suffixes=('', '_k')
+            )
+            if 'K_k' in df_team.columns:
+                # Prefer nfl_data_py-derived K where available
+                df_team['K'] = df_team['K_k'].where(df_team['K_k'].notna(), df_team['K'])
+                df_team = df_team.drop(columns=['K_k'])
+        else:
+            print("[pos-table] No seasons found to pull K from nfl_data_py.")
+    except Exception as e:
+        print(f"[WARN] Could not backfill K via nfl_data_py: {e}")
 
     # Build opponent mirror and join
     idx_cols = ['season','season_type','week','team']

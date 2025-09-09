@@ -14,6 +14,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+warnings.simplefilter("ignore", pd.errors.SettingWithCopyWarning)
 from scipy.stats import kstest, anderson_ksamp
 from sqlalchemy.orm import Session
 
