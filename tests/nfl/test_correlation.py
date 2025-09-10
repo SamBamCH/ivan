@@ -1,14 +1,8 @@
-from ivan.sports.nfl.correlated_samples import SamplingConfig, generate_correlated_samples
+from pathlib import Path
+from sqlalchemy.orm import Session
 from ivan.database.session import init_db, get_session
+from ivan.sports.nfl.correlated_sampling_validation import run_end_to_end_and_validate
 
-engine = init_db('nfl')
-session = get_session(engine)
-
-cfg = SamplingConfig(
-    n_samples=500,   # plenty for variety
-    alpha=0.95,
-    rho_game=0.60,
-    jitter=0.01,
-    print_sanity=True
-)
-samples = generate_correlated_samples(session, cfg=cfg)
+engine = init_db("nfl")
+session: Session = get_session(engine)
+run_end_to_end_and_validate(session, model_dir=Path("data/nfl/models"), n_samples=10000, hist_max_rows=1000)

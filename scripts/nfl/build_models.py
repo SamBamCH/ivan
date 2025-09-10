@@ -2,7 +2,7 @@
 """
 scripts/nfl/build_models.py
 
-Build marginals + copulas and, if --plot, run diagnostics.
+Build marginals + copulas for NFL player and team data.
 """
 import warnings, numpy as _np
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -19,7 +19,8 @@ from scipy.stats import kstest, anderson_ksamp
 from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.player_level_calculations import build_models as build_player_models
-from ivan.sports.nfl.build_positional_team_vines import build_positional_team_vines
+from ivan.sports.nfl.build_team10_vine import build_team10_vine
+from ivan.sports.nfl.calibrate_game_factors import calibrate_game_factors
 from ivan.sports.nfl.dst_scoring import build_dst_game_table
 from ivan.sports.nfl.team_level_calculations   import build_team_models, _compute_fpts
 from ivan.sports.nfl.build_team_positional_table import build_team_positional_table
@@ -51,11 +52,20 @@ def main():
 
     # new: fixed-width team-week positional fpts table
     n_team_rows = build_team_positional_table(args.db_url)
-    print(f"   wrote {n_team_rows} rows to nfl_team_week_positional_fpts")
+    print(f"   wrote {n_team_rows} rows to nfl_team_week_positional_fpts") 
 
-    print("→ Building team‐level copulas")
-    build_team_models(args.db_url, model_dir)
-    build_positional_team_vines(model_dir, args.db_url) 
+    # === fit HGV-20 artifacts === 
+    print("→ Building team‐level models")
+    try: 
+        import pyvinecopulib
+    except ImportError:
+        raise SystemExit("pyvinecopulib is required for NFL team models; please install it and try again")
+    print("→ Fitting per-team 10D vine (QB..DST)")
+    build_team10_vine(model_dir, args.db_url)     # writes team10_vine.pkl
+
+    print("→ Calibrating game factors (cross-team 10×10 Spearman)")
+    calibrate_game_factors(model_dir)             # writes game_factors.json
+
 
 if __name__ == '__main__':
     main()

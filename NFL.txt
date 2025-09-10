@@ -1,5 +1,15 @@
 #TODO:
 
+make debugs print to CLI like this (use function names): 
+
+[process1]
+[process1][sub-process1] process complete, took {time} seconds to complete {task} for {n} {items}
+[process2][sub-process1][sub-subprocess1] some print
+
+this process would be better for determining bottlenecks in the process, and seeing where things go wrong exactly. 
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 we aren't prioritizing the correct captains in dupe calculations. Low owned captains won't be duped regardless of the rest of the lineup most likely. 
 write sampled player_id exposure back to the player class as 'ownership'. Can just append it to the list, and take the average of that list as our projected ownership?
 work on DST and K projections based on odds. could just use score of game and anytime_td odds? maybe interceptions of opposing QB, sacks? 
