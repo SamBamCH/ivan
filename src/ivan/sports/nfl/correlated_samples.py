@@ -199,69 +199,6 @@ def _emit_players_from_u(
                 x = s[idx]
             out_local[pm.id] = x.astype(np.float32, copy=False)
 
-def generate_correlated_samples(
-    session: Session,
-    model_dir: str | Path = "data/nfl/models",
-    n_samples: int = 2000,
-    seed: Optional[int] = None,
-    wr3_proj_max: float = 5.0,
-    print_sanity: bool = False,
-) -> Dict[int, np.ndarray]:
-    """HGV-20 only. Samples correlated FPTS for all players on the slate."""
-    model_dir = Path(model_dir)
-    rng = np.random.default_rng(seed)
-    player_models = load_player_models(model_dir)
-
-    _pidx, teams = _build_player_index(session, None)
-    if not teams: return {}
-
-    # team → opponent (best-effort from any position)
-    team_to_opp: Dict[str, Optional[str]] = {}
-    for t, d in teams.items():
-        opp = None
-        for key in ("QB","WR","RB","TE","DST","K"):
-            if d.get(key):
-                opp = d[key][0].opp
-                if opp: break
-        team_to_opp[t] = opp
-
-    # unique matchups
-    seen = set(); matchups: List[Tuple[str,str]] = []
-    for t, o in team_to_opp.items():
-        if not o: continue
-        a, b = sorted([t, o])
-        if (a, b) in seen: continue
-        seen.add((a, b)); matchups.append((a, b))
-
-    # slot groups per team
-    slot_groups = {t: _assign_slot_groups(bucket, wr3_threshold=float(wr3_proj_max)) for t, bucket in teams.items()}
-
-    vine10, order = _load_team10_vine(model_dir)
-    lam_off, lam_def, order_f = _load_game_factors(model_dir)
-    if order_f != order: order = order_f
-    idx_map = {s: order.index(s) for s in TEAM10}
-
-    out: Dict[int, np.ndarray] = {}
-    fallback_cache: Dict[int, np.ndarray] = {}
-
-    for a, b in matchups:
-        seed_i = int(rng.integers(0, 2**31-1))
-        rng_i = np.random.default_rng(seed_i)
-
-        UA0 = vine10.simulate(n_samples); UB0 = vine10.simulate(n_samples)
-        UA, UB = _apply_two_factors(UA0, UB0, lam_off, lam_def, rng_i)
-
-        uA = {s: UA[:, idx_map[s]].astype(np.float32, copy=False) for s in TEAM10}
-        uB = {s: UB[:, idx_map[s]].astype(np.float32, copy=False) for s in TEAM10}
-
-        _emit_players_from_u(rng_i, n_samples, a, slot_groups.get(a, {}), uA, teams, player_models, fallback_cache, out)
-        _emit_players_from_u(rng_i, n_samples, b, slot_groups.get(b, {}), uB, teams, player_models, fallback_cache, out)
-
-    if print_sanity:
-        print(f"[hgv20] games={len(matchups)} n={n_samples}")
-
-    return out
-
 # --- public: impose vine correlation onto independent samples ----------------
 def generate_correlated_samples_impose(
     session: Session,
