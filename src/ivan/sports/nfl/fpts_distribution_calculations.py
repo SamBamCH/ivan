@@ -28,7 +28,7 @@ from ivan.core.utils import normalize_name
 
 # K / DST handling
 DST_POS = {"DST", "D/ST", "DEF"}
-KICKER_DEFAULT_SHAPE = 5.5
+KICKER_DEFAULT_SHAPE = 8.3
 KICKER_DEFAULT_SCALE = 1.2
 
 # Odds handling
@@ -606,13 +606,9 @@ def _fetch_dst_points(session: Session, team: str | None, opponent: str | None) 
         vals = np.array([r[0] for r in res], dtype=float)
         return vals
 
-def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int) -> np.ndarray:
-    vals = _fetch_dst_points(session, team, opponent)
-    if vals.size > 0:
-        samples = np.random.choice(vals, size=n_samples, replace=True).astype(float)
-        return samples
+def _sample_dst_fpts(n_samples: int) -> np.ndarray:
     rng = np.random.default_rng()
-    fpts = rng.normal(loc=7.0, scale=4.0, size=n_samples)
+    fpts = rng.normal(loc=6.5, scale=5, size=n_samples)
     return np.clip(fpts, -6.0, None)
 
 def _fpts_summary(samples: np.ndarray,
@@ -765,7 +761,7 @@ def simulate_player_fpts(
     if pos == 'K':
         return st.gamma.rvs(KICKER_DEFAULT_SHAPE, scale=KICKER_DEFAULT_SCALE, size=n_samples).astype(float)
     if pos == 'DST':
-        return _sample_dst_fpts(session, getattr(player, "team", None), getattr(player, "opponent", None), n_samples)
+        return _sample_dst_fpts(n_samples)
 
     if verbose:
         print(f"[player] id={player_id} name={player.name} pos={pos}")

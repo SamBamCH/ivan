@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples
+from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose
 
 SALARY_CAP = 50000
 
@@ -41,11 +41,447 @@ SALARY_PRIOR: List[Tuple[int, int, float]] = [
     (1000, 10**9, 0.03),  # >= $1000 remaining
 ]
 
-# --- NEW CONFIG KNOBS (tune to taste) ----------------------------------------
-ALPHA = 1.0   # impact of lineup mean projection
-BETA  = 2.0   # how strongly captain projection percentile drives popularity/dupes
-GAMMA = 3.5   # penalty strength for chalky FLEX when CPT is weak
-TAU   = 0.85  # threshold (percentile) above which FLEX are considered "very chalky"
+DEFAULTS = {
+    "pool": {
+        "size": 10000,          # default computed later
+        "embed_dims": 24,      # dimensions for JL embedding (Lower = faster, slightly coarser diversity; higher = slower, crisper diversity.)
+        "beta_fpts": 0.5,      # tradeoff for quality vs distance
+        "seed": None           # RNG seed for reproducibility
+    },
+    "dupe_model": {
+        "theta0": -1.8,                 # base log-rate (theta0 shifts base level (think “global field density”).)
+        "theta_remain": -0.6,           # more remaining salary -> fewer dupes (is usually negative; more salary remaining → fewer dupes.)
+        "theta_cpt": 1.0,               # stronger CPT -> more dupes (strong CPTs duplicate more (Showdown-like behavior).)
+        "theta_fpts": 1.3,              # stronger lineup -> more dupes (high-projection lineups get allocated more often)
+        "link": "exp",                  # "exp" (Poisson-like) or "logit"
+        "min_count": 1,                 # at least one copy if chosen into pool
+        "mid_boost_strength": 0.6,      # ↑ to fatten mid more (0.4–0.9 typical)
+        "mid_boost_sigma": 0.18,        # widen/narrow the boosted band (0.12–0.25)
+        "lam_floor_frac": 0.06,         # adds a small uniform floor (0.03–0.10)
+        "stochastic_rounding": True     # turn on the +1 Bernoulli bump
+    },
+    "independent_draws": {
+        "n_sims": 64          # sims to build lineup-embedding; keep modest for performance
+    }
+}
+
+def _percentiles_01(x: np.ndarray) -> np.ndarray:
+    r = np.argsort(np.argsort(x))
+    return (r + 0.5) / float(x.size)
+
+def _smooth_lam(dupe_lambda: np.ndarray, *,
+                strength: float = 0.6,   # how much to flatten the mid (0..1.0+)
+                sigma: float = 0.18,     # width of the mid bump (0.10..0.30 works)
+                eps_frac: float = 0.06) -> np.ndarray:  # additive floor as % of mean
+    """
+    Flatten the **middle percentiles** of lambda while leaving the head/tail similar.
+    lam' = lam ** (1 / temp(p)) + eps_frac * mean(lam)
+    where temp(p) = 1 + strength * exp(-((p-0.5)^2)/(2*sigma^2)).
+    """
+    lam = np.clip(dupe_lambda.astype(np.float64), 1e-12, None)
+    p = _percentiles_01(lam)
+    s = max(1e-3, float(sigma))
+    temp = 1.0 + float(strength) * np.exp(-0.5 * ((p - 0.5) / s) ** 2)
+    lam = np.power(lam, 1.0 / temp)
+    lam += float(eps_frac) * lam.mean()
+    return np.clip(lam, 1e-12, None)
+
+
+def _minmax01(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    lo, hi = float(np.min(x)), float(np.max(x))
+    if hi - lo <= 1e-12:
+        return np.full_like(x, 0.5, dtype=np.float64)
+    return (x - lo) / (hi - lo)
+
+def _dupe_lambda_simple(mean_proj: np.ndarray,
+                        cpt_means: np.ndarray,
+                        remaining: np.ndarray,
+                        params: dict) -> np.ndarray:
+    """
+    Super-simple, fast model using [0,1] features + temperature (dup_sharpness).
+    More projection / stronger CPT / closer to cap -> more dupes.
+    """
+    a0   = float(params.get("a0", -1.5))
+    af   = float(params.get("a_fpts",  2.2))
+    ac   = float(params.get("a_cpt",   1.2))
+    ar   = float(params.get("a_remain",1.6))   # positive on (1 - remain01)
+
+    # features -> [0,1]
+    f01  = _minmax01(mean_proj)
+    c01  = _minmax01(cpt_means)
+    r01  = _minmax01(remaining)       # 0 -> low remaining, 1 -> high remaining
+    near_cap = 1.0 - r01              # near_cap = 1 when remaining is small
+
+    z = a0 + af * f01 + ac * c01 + ar * near_cap
+    lam = np.exp(np.clip(z, -20.0, 20.0))
+
+    # sharpness ("temperature") to concentrate mass on chalk
+    sharp = float(params.get("dup_sharpness", 1.75))
+    if sharp > 1.0:
+        lam = np.power(lam, sharp)
+
+    # small uniform floor to avoid starving tail
+    floor_frac = float(params.get("lam_floor_frac", 0.02))
+    lam = lam + floor_frac * lam.mean()
+
+    return np.clip(lam, 1e-12, None).astype(np.float64)
+
+def _counts_topup_proportional(indices: np.ndarray, weights: np.ndarray, total: int) -> np.ndarray:
+    """
+    Allocate `total` integer units over `indices` proportionally to `weights` (>=0).
+    Exact fill via floor + largest-fraction remainder.
+    """
+    w = np.clip(weights, 0.0, None).astype(np.float64)
+    if w.sum() <= 0 or total <= 0 or indices.size == 0:
+        return np.zeros(indices.size, dtype=int)
+    p = w / w.sum()
+    exp = p * int(total)
+    base = np.floor(exp).astype(int)
+    diff = int(total) - int(base.sum())
+    if diff != 0:
+        frac = exp - base
+        order = np.argsort(-frac)[:abs(diff)]
+        base[order] += 1
+    return base
+
+def _allocate_counts_two_phase(order_idx: np.ndarray,
+                               dupe_lambda: np.ndarray,
+                               total_M: int,
+                               *,
+                               max_unique: int | None = None,
+                               min_count: int = 1,
+                               stochastic_rounding: bool = True,
+                               seed: int | None = None) -> dict[int, int]:
+    """
+    Phase A: walk ORDER; accept a lineup only if its FULL integer need fits; stop after `max_unique` accepts.
+    Phase B: top-up remaining among ACCEPTED ONLY, proportionally to their dupe_lambda.
+    """
+    rng = np.random.default_rng(seed)
+    remaining = int(total_M)
+
+    accepted_positions: list[int] = []    # positions in ORDER we accepted
+    counts_by_pos: dict[int, int] = {}    # ORDER position -> count
+
+    # ----- Phase A: accept up to max_unique lineups -----
+    pos_to_idx = {pos: int(order_idx[pos]) for pos in range(order_idx.size)}
+    picked = np.zeros(order_idx.size, dtype=bool)
+
+    while remaining > 0:
+        # denom over still-available
+        avail = ~picked
+        if not avail.any():
+            break
+        denom = float(dupe_lambda[order_idx[avail]].sum())
+        if denom <= 0:
+            break
+
+        progressed = False
+        for pos in range(order_idx.size):
+            if remaining <= 0:
+                break
+            if picked[pos]:
+                continue
+            if max_unique is not None and len(accepted_positions) >= int(max_unique):
+                break
+
+            i = pos_to_idx[pos]
+            mu = remaining * (float(dupe_lambda[i]) / denom)
+            base = np.floor(mu)
+            frac = mu - base
+            bump = 1 if (stochastic_rounding and rng.random() < frac) else 0
+            need = int(max(min_count, base + bump))
+
+            if need <= remaining and need > 0:
+                counts_by_pos[pos] = need
+                accepted_positions.append(pos)
+                remaining -= need
+                picked[pos] = True
+                progressed = True
+
+        if not progressed:
+            # Either we reached max_unique or no item fit its FULL ask. Stop Phase A.
+            break
+
+    # ----- Phase B: top-up among ACCEPTED ONLY -----
+    if remaining > 0 and accepted_positions:
+        acc_idx = np.array([pos_to_idx[p] for p in accepted_positions], dtype=int)
+        acc_weights = dupe_lambda[acc_idx]
+        topup = _counts_topup_proportional(
+            indices=acc_idx,
+            weights=acc_weights,
+            total=remaining
+        )
+        for j, pos in enumerate(accepted_positions):
+            counts_by_pos[pos] = counts_by_pos.get(pos, 0) + int(topup[j])
+        remaining = 0
+
+    return counts_by_pos
+
+def _allocate_counts_greedy_capacity(order_idx: np.ndarray, dupe_lambda: np.ndarray,
+                                     total_M: int, *, min_count: int = 1,
+                                     stochastic_rounding: bool = True,
+                                     seed: int | None = None) -> dict[int, int]:
+    """
+    Walk the ORDER. For each lineup:
+      - compute expected copies against current remaining + current denom
+      - stochastically round (floor + Bernoulli(frac))
+      - accept only if it fits; else skip
+    """
+    rng = np.random.default_rng(seed)
+    remaining = int(total_M)
+    accepted: dict[int, int] = {}
+    picked = np.zeros(order_idx.shape[0], dtype=bool)
+
+    while remaining > 0:
+        changed = False
+        avail_mask = ~picked
+        if not avail_mask.any():
+            break
+
+        denom = float(dupe_lambda[order_idx[avail_mask]].sum())
+        if denom <= 0:
+            break
+
+        for t, idx in enumerate(order_idx):
+            if remaining <= 0:
+                break
+            if picked[t]:
+                continue
+
+            mu = remaining * (float(dupe_lambda[idx]) / denom)
+            base = np.floor(mu)
+            frac = mu - base
+            bump = 1 if (stochastic_rounding and rng.random() < frac) else 0
+            need = int(max(min_count, base + bump))
+
+            if need <= remaining:
+                accepted[t] = need
+                remaining -= need
+                picked[t] = True
+                changed = True
+
+        if not changed:
+            break
+    return accepted
+
+def _zscore(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    mu = float(np.mean(x))
+    sd = float(np.std(x))
+    if sd <= 1e-8:
+        return np.zeros_like(x, dtype=np.float64)
+    return (x - mu) / sd
+
+def _embed_lineups_fast(L, P_corr, d_embed: int = 24, *, seed: int | None = None):
+    """
+    Returns S_embed [n_lineups x d_embed] without forming S = L @ P_corr.T.
+    We compute S_embed = L @ (P_corr.T @ R), with JL random projection R.
+    """
+    rng = np.random.default_rng(seed)
+    D = int(P_corr.shape[0])            # n_sims
+    d = int(max(8, min(64, d_embed)))   # keep small
+    # JL random projection
+    R = rng.standard_normal((D, d)).astype(np.float32) / np.sqrt(d)
+    # [n_players x d]
+    G = (P_corr.T @ R).astype(np.float32)
+    # sparse @ dense -> [n_lineups x d]
+    if hasattr(L, "sort_indices"):
+        L.sort_indices()
+        if hasattr(L, "sum_duplicates"):
+            L.sum_duplicates()
+    S = (L @ G).astype(np.float32)
+    # z-score columns to make Euclidean distances well-conditioned
+    S -= S.mean(axis=0, keepdims=True)
+    std = S.std(axis=0, keepdims=True)
+    std[std < 1e-5] = 1.0
+    S /= std
+    return S
+
+def build_player_samples_independent(session, pid_to_col: dict[int, int], n_sims: int | None = None,
+                                     *, seed: int | None = None) -> np.ndarray:
+    """
+    Build an [n_sims x n_players] matrix of per-player **independent** fpts draws by
+    column-wise shuffling the marginal samples (breaks cross-player correlation,
+    preserves player marginals).
+    """
+    from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose  # reuse your source
+    raw = generate_correlated_samples_impose(session)  # {pid: np.ndarray}
+    sizes = [len(v) for v in raw.values() if isinstance(v, np.ndarray) and v.size]
+    if not sizes:
+        raise RuntimeError("No player samples available for independent draws.")
+    base_ns = int(min(sizes))
+    ns = int(n_sims or base_ns)
+
+    P = np.zeros((ns, len(pid_to_col)), dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    for pid, col in pid_to_col.items():
+        v = raw.get(pid)
+        if not isinstance(v, np.ndarray) or v.size == 0:
+            continue
+        w = v.astype(np.float32, copy=False)
+        # normalize to ns
+        if w.shape[0] < ns:
+            reps = int(np.ceil(ns / w.shape[0]))
+            w = np.tile(w, reps)[:ns]
+        else:
+            w = w[:ns]
+        # BREAK correlation by shuffling independently per player
+        rng.shuffle(w)
+        P[:, col] = w
+    return P
+
+def _lineup_core_stats(L, spends, cpt_col_by_row, P_indep: np.ndarray, P_corr: np.ndarray):
+    """
+    Returns: mean_proj, cpt_means, remaining, features_dict, S (lineup embeddings in correlated sample space)
+    - mean_proj uses independent draws (fair for 'popularity weights')
+    - S uses correlated draws to space lineups in realistic sample space
+    """
+    per_player_mean_indep = np.asarray(P_indep.mean(axis=0), dtype=np.float64)  # [n_players]
+    mean_proj = np.asarray(L @ per_player_mean_indep, dtype=np.float64)         # [n_lineups]
+
+    # CPT means for each lineup
+    n_lineups = L.shape[0]
+    cpt_means = np.zeros(n_lineups, dtype=np.float64)
+    mask = cpt_col_by_row >= 0
+    if mask.any():
+        cpt_means[mask] = per_player_mean_indep[cpt_col_by_row[mask]]
+
+    remaining = (SALARY_CAP - spends).astype(np.int32)
+
+    features = {
+        "remaining_z": _zscore(remaining),
+        "cpt_z": _zscore(cpt_means),
+        "fpts_z": _zscore(mean_proj),
+    }
+
+    # Embedding for diversity: lineup-by-sim scores under correlated space
+    # P_corr: [n_sims x n_players]  -> L @ P_corr.T == [n_lineups x n_sims]
+    S = L @ P_corr.T
+    # z-score each dimension for fair Euclidean distances
+    mu = S.mean(axis=0)
+    sd = S.std(axis=0)
+    sd[sd < 1e-6] = 1.0
+    S = (S - mu) / sd
+    return mean_proj, cpt_means, remaining, features, S
+
+def _lineup_core_features(L, spends, cpt_col_by_row, P_indep: np.ndarray):
+    """
+    Returns: mean_proj, cpt_means, remaining, features_dict
+    Uses INDEPENDENT per-player sims for popularity/dupe features.
+    """
+    per_player_mean_indep = np.asarray(P_indep.mean(axis=0), dtype=np.float64)  # [n_players]
+    mean_proj = np.asarray(L @ per_player_mean_indep, dtype=np.float64)         # [n_lineups]
+
+    # CPT mean per lineup
+    n_lineups = L.shape[0]
+    cpt_means = np.zeros(n_lineups, dtype=np.float64)
+    mask = cpt_col_by_row >= 0
+    if mask.any():
+        cpt_means[mask] = per_player_mean_indep[cpt_col_by_row[mask]]
+
+    remaining = (SALARY_CAP - spends).astype(np.int32)
+
+    features = {
+        "remaining_z": _zscore(remaining),
+        "cpt_z": _zscore(cpt_means),
+        "fpts_z": _zscore(mean_proj),
+    }
+    return mean_proj, cpt_means, remaining, features
+
+def _dupe_lambda_from_features(features: dict[str, np.ndarray], theta: dict) -> np.ndarray:
+    z = (
+        float(theta.get("theta0", -2.0))
+        + float(theta.get("theta_remain", -0.7)) * features["remaining_z"]
+        + float(theta.get("theta_cpt", 1.1))      * features["cpt_z"]
+        + float(theta.get("theta_fpts", 1.4))     * features["fpts_z"]
+    )
+    link = str(theta.get("link", "exp")).lower()
+    if link == "logit":
+        lam = 1.0 / (1.0 + np.exp(-z))
+        lam = np.clip(lam, 1e-9, 1.0)
+    else:
+        lam = np.exp(np.clip(z, -20.0, 20.0))  # positive rate
+    return lam.astype(np.float64)
+
+def _pick_diverse_pool(S: np.ndarray, mean_proj: np.ndarray, k: int, *,
+                       beta_fpts: float = 0.4, seed: int | None = None) -> np.ndarray:
+    """
+    Farthest-first with static scaling + dot-product distance updates.
+    Distances are squared L2 in float32. No per-iter min/max scans.
+    """
+    n, d = S.shape
+    k = int(min(max(1, k), n))
+    rng = np.random.default_rng(seed)
+
+    # precompute norms and fpts scale once
+    S = S.astype(np.float32, copy=False)
+    norms = np.einsum("ij,ij->i", S, S).astype(np.float32)
+
+    f = mean_proj.astype(np.float32, copy=False)
+    f_min, f_max = float(np.min(f)), float(np.max(f))
+    f_scaled = (f - f_min) / max(1e-8, (f_max - f_min))
+
+    # seed with best fpts
+    first = int(np.argmax(f))
+    selected = np.empty(k, dtype=np.int32)
+    selected[0] = first
+
+    # init dmin to distance from first
+    Sj = S[first]                                  # [d]
+    dot = S @ Sj                                   # [n]
+    dmin = norms + float(norms[first]) - 2.0 * dot
+    dmin[first] = -np.inf
+
+    # static denominator from initial state
+    denom = max(1e-8, float(np.nanmax(dmin)))
+
+    for t in range(1, k):
+        # one static rescale of distance + fpts bonus
+        score = (dmin / denom) + float(beta_fpts) * f_scaled
+        j = int(np.argmax(score))
+        selected[t] = j
+
+        # update distances with dot trick
+        Sj = S[j]
+        dot = S @ Sj
+        dj = norms + float(norms[j]) - 2.0 * dot
+        np.minimum(dmin, dj, out=dmin)
+        dmin[selected[:t+1]] = -np.inf
+
+    return selected
+
+
+def _counts_from_pool(pool_idx: np.ndarray, dupe_lambda: np.ndarray, total_M: int, *,
+                      min_count: int = 1) -> np.ndarray:
+    """
+    Convert dupe propensities into integer counts that sum to total_M.
+    Uses proportional allocation with rounding + remainder fixups. Ensures >= min_count.
+    """
+    r = np.clip(dupe_lambda[pool_idx].astype(np.float64), 1e-12, None)
+    p = r / r.sum()
+    expected = p * int(total_M)
+
+    counts = np.floor(expected).astype(int)
+    counts = np.maximum(counts, int(min_count))
+
+    diff = int(total_M) - int(counts.sum())
+    if diff != 0:
+        # greedily assign remainder by largest fractional parts
+        frac = expected - np.floor(expected)
+        order = np.argsort(-frac) if diff > 0 else np.argsort(frac)
+        i = 0
+        while diff != 0 and i < len(order):
+            t = order[i]
+            if diff > 0:
+                counts[t] += 1
+                diff -= 1
+            else:
+                if counts[t] > int(min_count):
+                    counts[t] -= 1
+                    diff += 1
+            i += 1
+    return counts
 
 CPT_SLOT = 511
 FLEX_SLOT = 512
@@ -165,11 +601,11 @@ def _percentile_rank(values: np.ndarray, ref: np.ndarray) -> np.ndarray:
     return np.clip(idx / ref_sorted.size, 0.0, 1.0).astype(np.float64)
 
 
-def build_player_samples(session: Session, pid_to_col: Dict[int, int], config, mode, process) -> np.ndarray:
+def build_player_samples(session: Session, pid_to_col: Dict[int, int]) -> np.ndarray:
     """
     Returns P [n_sims x n_players]; if the generator has fewer sims, resample with replacement.
     """
-    raw = generate_correlated_samples(session, config=config, mode=mode, process=process)  # {pid: np.ndarray}
+    raw = generate_correlated_samples_impose(session)  # {pid: np.ndarray}
     sizes = [len(x) for x in raw.values() if isinstance(x, np.ndarray)]
     if not sizes:
         raise RuntimeError("generate_correlated_samples returned no vectors.")
@@ -199,7 +635,7 @@ def sample_sd_field(
     bin_masks = [(remaining >= lo) & (remaining < hi) for lo, hi, _ in bins]
 
     # Player samples (sims x n_players)
-    P = build_player_samples(session, pid_to_col, config=config, mode=mode, process='sampling')
+    P = build_player_samples(session, pid_to_col)
 
     # Lineup and player means
     per_player_mean = np.asarray(P.mean(axis=0), dtype=np.float64)             # [n_players]
@@ -292,6 +728,89 @@ def sample_sd_field(
     }
     return counts_by_lineup, meta
 
+def sample_field_diverse_dupe(
+    session: Session,
+    *,
+    field_size: int,
+    config: dict | None = None,
+    mode: str = "classic",     # only one sampler now; we ignore mode semantics
+):
+    """
+    Capacity-aware sampler:
+      (1) build L/IDs and per-player sims
+      (2) JL embed for diversity geometry from CORRELATED sims
+      (3) features from INDEPENDENT sims -> dupe propensities
+      (4) farthest-first ORDER
+      (5) walk the ORDER, allocating FULL dupe counts only if they fit
+    """
+    cfg = config or {}
+
+    # 1) matrix + metadata
+    L, lineup_ids, spends, pid_to_col, cpt_col_by_row, _ = build_lineup_matrix(session)
+    n_lineups = L.shape[0]
+
+    # 2) correlated sims -> geometry via JL
+    P_corr = build_player_samples(session, pid_to_col)  # [n_sims x n_players]
+    pool_cfg  = {**DEFAULTS["pool"], **(cfg.get("pool") or {})}
+    seed      = pool_cfg.get("seed", None)
+    embed_dims = int(pool_cfg.get("embed_dims", 24))
+    S = _embed_lineups_fast(L, P_corr, d_embed=embed_dims, seed=seed)
+
+    # INDEPENDENT sims -> features for dupe weights
+    indep_cfg = {**DEFAULTS["independent_draws"], **(cfg.get("independent_draws") or {})}
+    P_indep   = build_player_samples_independent(session, pid_to_col,
+                                                 n_sims=int(indep_cfg["n_sims"]), seed=seed)
+    mean_proj, cpt_means, remaining_vec, _features = _lineup_core_features(L, spends, cpt_col_by_row, P_indep)
+
+    # === SIMPLE DUPE MODEL (default) =========================================
+    dm = {**DEFAULTS.get("dupe_model_simple", {}), **(cfg.get("dupe_model_simple") or {})}
+    dupe_lambda = _dupe_lambda_simple(mean_proj, cpt_means, remaining_vec, dm)
+
+    # 4) farthest-first ORDER (pool cap)
+    pool_size = int(pool_cfg.get("size") or min(n_lineups, max(3000, int(0.10 * field_size))))
+    beta      = float(pool_cfg.get("beta_fpts", 0.5))
+    order_idx = _pick_diverse_pool(S, mean_proj, k=pool_size, beta_fpts=beta, seed=seed)
+
+    # 5) capacity-aware, TWO-PHASE allocation with UNIQUE CAP
+    field_cfg = cfg.get("field", {}) or {}
+    max_unique = field_cfg.get("max_unique", None)
+    if max_unique is None:
+        tur = float(field_cfg.get("target_unique_ratio", 0.12))  # ~12% by default (e.g., 20k/190k ≈ 10.5%)
+        max_unique = int(max(1, min(pool_size, round(tur * field_size))))
+    min_count  = int(dm.get("min_count", 1))
+    accepted_local = _allocate_counts_two_phase(
+        order_idx=order_idx,
+        dupe_lambda=dupe_lambda,
+        total_M=field_size,
+        max_unique=max_unique,
+        min_count=min_count,
+        stochastic_rounding=bool(dm.get("stochastic_rounding", True)),
+        seed=seed,
+    )
+
+    # map local order positions -> lineup_ids and counts
+    counts_by_lineup = {int(lid): 0 for lid in lineup_ids}
+    for pos, need in accepted_local.items():
+        row_i = int(order_idx[pos])
+        lid = int(lineup_ids[row_i])
+        counts_by_lineup[lid] = int(need)
+        
+    # meta
+    used = sum(accepted_local.values())
+    meta = {
+        "sampler": "diverse_dupe_capacity",
+        "pool_size": int(len(order_idx)),
+        "accepted": int(len(accepted_local)),
+        "lineups_used": int(used),
+        "remaining": int(field_size - used),
+        "mean_proj": {"mean": float(mean_proj.mean()), "std": float(mean_proj.std())},
+        "dupe_lambda": {"min": float(dupe_lambda.min()),
+                        "max": float(dupe_lambda.max()),
+                        "mean": float(dupe_lambda.mean())}
+    }
+    return counts_by_lineup, meta
+
+
 def sample_field(
     session: Session,
     *,
@@ -307,7 +826,7 @@ def sample_field(
     """
     mode = (mode or "showdown").lower()
     if mode == "showdown":
-        return sample_sd_field(session, field_size=field_size, config=config, mode=mode)
+        return sample_field_diverse_dupe(session, field_size=field_size, config=config, mode=mode)
     return sample_classic_field(session, field_size=field_size, config=config, contest_id=contest_id)
 
 

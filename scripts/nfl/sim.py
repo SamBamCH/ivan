@@ -9,6 +9,7 @@ from ivan.sports.nfl.simulate_contest import simulate_one_contest  # this file
 def parse_args():
     p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
     p.add_argument("--config", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../config/nfl.json")))
+    p.add_argument("-n", type=int, default=1000, help="Number of simulation samples per contest (default: 1000)")
     return p.parse_args()
 
 def main():
@@ -42,7 +43,8 @@ def main():
                 contest_id   = cid,
                 contest_name = name,
                 config_path  = args.config,
-                field_cap    = 25000
+                field_cap    = 50000,
+                num_sims     = args.n,
             )
         except Exception as e:
             print(f"⚠️  Skipped contest {cid} ('{name}') due to error: {e}\n")

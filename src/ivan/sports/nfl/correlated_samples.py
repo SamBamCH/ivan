@@ -203,15 +203,40 @@ def _emit_players_from_u(
 def generate_correlated_samples_impose(
     session: Session,
     model_dir: str | Path = "data/nfl/models",
-    n_samples: int = 2000,
+    n_samples: int = 1000,
     seed: int | None = None,
     wr3_proj_max: float = 5.0,
+    # --- NEW: optional hard caps by slot/depth ---
+    caps: dict[str, float] | None = None,       # e.g., {"RB2": 25, "WR3": 22, "QB": 45, "*": 60}
 ) -> Dict[int, np.ndarray]:
     """
     1) draw independent samples per-player from their marginals,
     2) sample team10 vine + two game factors,
     3) impose the vine ranks onto the independent vectors (per slot).
+    4) (NEW) hard-cap samples by slot/depth if caps are provided.
     """
+    def _resolve_cap(slot_name: str) -> float | None:
+        if not caps:
+            return None
+        # Exact -> base (e.g., "RB") -> aliases (TE1<->TE) -> "*" fallback
+        if slot_name in caps: return float(caps[slot_name])
+        # split base + depth
+        base, num = None, None
+        for i, ch in enumerate(slot_name):
+            if ch.isdigit():
+                base, num = slot_name[:i], slot_name[i:]
+                break
+        base = base or slot_name
+        if base in caps: return float(caps[base])
+        # common aliases (treat TE/TE1, WR/WR1, RB/RB1 as synonyms)
+        if num is None:
+            alias1 = base + "1"
+            if alias1 in caps: return float(caps[alias1])
+        else:
+            if base in caps: return float(caps[base])
+        if "*" in caps: return float(caps["*"])
+        return None
+
     model_dir = Path(model_dir)
     rng = np.random.default_rng(seed)
 
@@ -244,8 +269,10 @@ def generate_correlated_samples_impose(
     idx_map = {s: order.index(s) for s in TEAM10}
 
     out: Dict[int, np.ndarray] = {}
-    # start from independent samples everywhere
     out.update(indep)
+
+    # (NEW) keep a mapping from player->slot for final safety pass
+    pid_to_slot: dict[int, str] = {}
 
     for a, b in matchups:
         UA0 = vine10.simulate(n_samples); UB0 = vine10.simulate(n_samples)
@@ -260,9 +287,33 @@ def generate_correlated_samples_impose(
                 if not pms: continue
                 u_slot = ucols.get(slot_name)
                 if u_slot is None: continue
+                cap_val = _resolve_cap(slot_name)  # may be None
                 for pm in pms:
                     v = indep.get(pm.id)
                     if v is None: continue
-                    out[pm.id] = _impose_rank(v, u_slot, pm.id)
+                    x = _impose_rank(v, u_slot, pm.id)
+                    if cap_val is not None:
+                        # HARD cap (loose by config): clip high outliers
+                        x = np.minimum(x, cap_val).astype(np.float32, copy=False)
+                    out[pm.id] = x
+                    pid_to_slot[pm.id] = slot_name
+
+    # (NEW) final safety pass for any leftover players
+    if caps:
+        for pid, arr in list(out.items()):
+            if pid not in pid_to_slot:
+                # try infer slot from teams dict if needed
+                # (safe no-op if we can't infer)
+                cap_val = None
+                # naive scan (cheap vs sample sizes)
+                for t, grouped in (slot_groups or {}).items():
+                    for slot_name, pms in (grouped or {}).items():
+                        if any(pm.id == pid for pm in pms):
+                            cap_val = _resolve_cap(slot_name)
+                            break
+                    if cap_val is not None: break
+                if cap_val is not None:
+                    out[pid] = np.minimum(arr, cap_val).astype(np.float32, copy=False)
 
     return out
+

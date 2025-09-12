@@ -12,8 +12,7 @@ engine = init_db("nfl", None)
 session = get_session(engine)
 
 
-api_key = '58699e4fe47856c9182db84884772536' #TODO: uncomment this when we want updated odds. removed it for now to save api calls
-
+api_key = '58699e4fe47856c9182db84884772536' 
 relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
 
 odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))

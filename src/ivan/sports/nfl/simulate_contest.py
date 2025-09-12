@@ -15,7 +15,7 @@ from ivan.sports.nfl.sample_field import (
     build_lineup_matrix,
     build_player_samples,
 )
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples
+from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose
 # Reuse your MLB payout scaler (sport-agnostic)
 from ivan.sports.mlb.payouts import scale_payouts_correctly
 
@@ -334,9 +334,8 @@ def _load_and_scale_payouts_from_db(
 def _build_player_samples_matrix(
         session: Session,
         pid_to_idx: Dict[int, int],
-        config: dict = None,
-        mode = None,
-        model_dir: str | Path = "data/nfl/models"
+        model_dir: str | Path = "data/nfl/models",
+        n_samples: int = 1000,
 ) -> np.ndarray:
     """
     NFL scoring matrix P: [num_sims x num_players] aligned to 'pid_to_idx'.
@@ -344,12 +343,10 @@ def _build_player_samples_matrix(
     """
     # If the caller specified num_sims, force the sampler to produce that many
 
-    raw = generate_correlated_samples(
+    raw = generate_correlated_samples_impose(
         session,
         model_dir=model_dir,
-        config=config,
-        mode=mode,
-        process="simulation",
+        n_samples=n_samples
     )
     # fall back to the first vector length in raw
     ns = 0
@@ -497,7 +494,8 @@ def simulate_one_contest(
     contest_id: int,
     contest_name: str,
     config_path: str,
-    field_cap: int
+    field_cap: int,
+    num_sims: int = 1000,
 ) -> None:
     # 1) contest info
     cfg      = json.load(open(config_path, encoding="utf-8"))
@@ -516,9 +514,6 @@ def simulate_one_contest(
     )
     total = sum(counts_by_lineup.values())
     assert total == capped_field_sz, (total, capped_field_sz)
-
-    print('successfully sampled unique lineup field, expanding for dupes...')
-
     entry_lids, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(session, counts_by_lineup)
 
     recap_and_plots_for_sampled_field(
@@ -535,8 +530,6 @@ def simulate_one_contest(
     M = len(entry_lids)
     if M == 0:
         print(f"[{contest_id}] no sampled entries; nothing to simulate.")
-
-    print(f'M = {M}')
     
     # 2) payouts scaled to M (simulated field size)
     scaled = _load_and_scale_payouts_from_db(
@@ -570,8 +563,8 @@ def simulate_one_contest(
     P, num_sims = _build_player_samples_matrix(
         session=session,
         pid_to_idx=pid_to_idx,
-        mode=mode,
-        config=cfg
+        model_dir="data/nfl/models",
+        n_samples=num_sims
     )
 
     # 4) run simulations in parallel (same “chunk” pattern as MLB)
