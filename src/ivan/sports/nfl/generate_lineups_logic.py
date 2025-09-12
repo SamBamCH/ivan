@@ -323,7 +323,6 @@ def generate_single_classic_lineup(
     te_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == TE]
     dst_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == DST]
     skill_ids = list(set(rb_ids) | set(wr_ids) | set(te_ids))
-    flex_ids = [p.id for p in players if roster_slot_by_id.get(p.id) in OFF_NO_QB_POS]  # kept if you need it later
 
     if not qb_ids:
         raise ValueError("No QB ids matched. Check filtering conditions")
@@ -496,7 +495,7 @@ def generate_and_store_field_lineups(
 
     print(slate_type)
 
-    samples = generate_correlated_samples_impose(session, n_samples=max(1000, num_lineups*2))
+    samples = generate_correlated_samples_impose(session, n_samples=max(1000, num_lineups*2), config=config)
     # ---- 2) infer slate type, and choose branch ----
     if slate_type == "classic":
         n_samples = len(next(iter(samples.values())))

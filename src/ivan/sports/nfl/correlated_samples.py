@@ -31,6 +31,17 @@ def _pos_label_from_slot(slot_id: Optional[int], fb: Optional[str]) -> Optional[
     fb = _coerce_str(fb)
     return fb if fb in {"QB","RB","WR","TE","DST","K"} else None
 
+def _shrink_u(u: np.ndarray, randomness: float) -> np.ndarray:
+    """
+    Linearly shrink quantiles toward the median (0.5).
+    randomness in [0,1]: 0 -> all 0.5 (pure median), 1 -> unchanged.
+    """
+    r = float(np.clip(randomness, 0.0, 1.0))
+    if r >= 1.0: 
+        return u
+    return 0.5 + r * (u - 0.5)
+
+
 @dataclass
 class _PM:
     id: int
@@ -68,7 +79,13 @@ def _build_player_index(session: Session, min_fpts: Optional[float]) -> tuple[Di
         by_team.setdefault(team, {}).setdefault(pos, []).append(meta)
     return idx, by_team
 
-def _independent_samples(session: Session, model_dir: Path, n: int, seed: int | None):
+def _independent_samples(
+    session: Session,
+    model_dir: Path,
+    n: int,
+    seed: int | None,
+    randomness: float = 1.0,   # NEW
+):
     rng = np.random.default_rng(seed)
     player_models = load_player_models(model_dir)
     _pidx, teams = _build_player_index(session, None)
@@ -77,15 +94,17 @@ def _independent_samples(session: Session, model_dir: Path, n: int, seed: int | 
         for pos, lst in bypos.items():
             for pm in lst:
                 u = rng.random(n, dtype=np.float32)
+                u = _shrink_u(u, randomness)  # NEW: tighten around median
+
                 x = _player_ppf_fast(pm.dist, pm.params, u)
                 if x is None:
                     sim = simulate_player_fpts(None, pm.id, player_models[0], player_models[1], n_samples=max(2*n, 64))
                     s = np.asarray(sim, dtype=np.float32)
-                    # use empirical quantile
                     s.sort()
-                    idx = np.minimum((u * (len(s)-1)).astype(np.int32), len(s)-1)
+                    idx = np.minimum((u * (len(s)-1)).astype(np.int32), len(s)-1)  # uses shrunk u
                     x = s[idx]
-                out[pm.id] = x.astype(np.float32, copy=False)
+                out[pm.id] = np.asarray(x, dtype=np.float32)
+
     return out, teams
 
 def _impose_rank(values: np.ndarray, target_u: np.ndarray, pid: int) -> np.ndarray:
@@ -207,7 +226,9 @@ def generate_correlated_samples_impose(
     seed: int | None = None,
     wr3_proj_max: float = 5.0,
     # --- NEW: optional hard caps by slot/depth ---
-    caps: dict[str, float] | None = None,       # e.g., {"RB2": 25, "WR3": 22, "QB": 45, "*": 60}
+    caps: dict[str, float] | None = None,       # e.g., {"RB2": 25, "WR3": 22, "QB": 45, "*": 60},
+    config: dict | None = None,        # optional config dict to pull "randomness" from
+    randomness: float | None = None,   # [0,1], 1=full spread, 0=median only
 ) -> Dict[int, np.ndarray]:
     """
     1) draw independent samples per-player from their marginals,
@@ -237,10 +258,20 @@ def generate_correlated_samples_impose(
         if "*" in caps: return float(caps["*"])
         return None
 
+    if randomness is None:
+        if config is not None and "randomness" in config:
+            randomness = float(config["randomness"])
+            print(f"Using 'randomness' from config {randomness}")
+        else:
+            print("WARNING: no 'randomness' provided; defaulting to 1.0")
+            randomness = 1.0
+    randomness = float(np.clip(randomness, 0.0, 1.0))
+
     model_dir = Path(model_dir)
     rng = np.random.default_rng(seed)
 
-    indep, teams = _independent_samples(session, model_dir, n_samples, seed)
+    # pass randomness into the independent sampler
+    indep, teams = _independent_samples(session, model_dir, n_samples, seed, randomness=randomness)
     if not teams:
         return {}
 
