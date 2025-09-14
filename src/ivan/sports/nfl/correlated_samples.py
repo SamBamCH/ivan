@@ -107,13 +107,10 @@ def _independent_samples(
 
     return out, teams
 
-def _impose_rank(values: np.ndarray, target_u: np.ndarray, pid: int) -> np.ndarray:
-    # map the order of 'values' to the rank order of 'target_u'
-    n = len(values)
-    v_sorted = np.sort(values, kind="mergesort")  # stable
-    # small per-player rotation so WR3 pools etc. aren't identical
-    k = (pid * 2654435761) % max(1, n)
-    order_u = np.argsort(np.argsort(np.roll(target_u, k)))
+def _impose_rank(values: np.ndarray, target_u: np.ndarray) -> np.ndarray:
+    """FIXED: No rotation, no pid parameter"""
+    v_sorted = np.sort(values, kind="mergesort")
+    order_u = np.argsort(np.argsort(target_u))  # NO ROLL!
     out = np.empty_like(values)
     out[order_u] = v_sorted
     return out
@@ -299,8 +296,8 @@ def generate_correlated_samples_impose(
     if order_f != order: order = order_f
     idx_map = {s: order.index(s) for s in TEAM10}
 
-    out: Dict[int, np.ndarray] = {}
-    out.update(indep)
+    out: Dict[int, np.ndarray] = {}  # Start empty!
+    processed_pids = set()
 
     # (NEW) keep a mapping from player->slot for final safety pass
     pid_to_slot: dict[int, str] = {}
@@ -312,39 +309,258 @@ def generate_correlated_samples_impose(
         uA = {s: UA[:, idx_map[s]].astype(np.float32, copy=False) for s in TEAM10}
         uB = {s: UB[:, idx_map[s]].astype(np.float32, copy=False) for s in TEAM10}
 
-        for side, team, ucols in (("A", a, uA), ("B", b, uB)):
+        for team, ucols in [(a, uA), (b, uB)]:
             grouped = slot_groups.get(team, {})
-            for slot_name, pms in (grouped or {}).items():
+            for slot_name, pms in grouped.items():
                 if not pms: continue
                 u_slot = ucols.get(slot_name)
                 if u_slot is None: continue
                 cap_val = _resolve_cap(slot_name)  # may be None
                 for pm in pms:
+                    if pm.id in processed_pids:
+                        continue
                     v = indep.get(pm.id)
-                    if v is None: continue
-                    x = _impose_rank(v, u_slot, pm.id)
-                    if cap_val is not None:
-                        # HARD cap (loose by config): clip high outliers
-                        x = np.minimum(x, cap_val).astype(np.float32, copy=False)
+                    if v is None:
+                        continue
+                    
+                    # FIXED: No pid parameter
+                    x = _impose_rank(v, u_slot)
+                    
+                    # ... apply caps ...
                     out[pm.id] = x
-                    pid_to_slot[pm.id] = slot_name
+                    processed_pids.add(pm.id)
 
-    # (NEW) final safety pass for any leftover players
-    if caps:
-        for pid, arr in list(out.items()):
-            if pid not in pid_to_slot:
-                # try infer slot from teams dict if needed
-                # (safe no-op if we can't infer)
-                cap_val = None
-                # naive scan (cheap vs sample sizes)
-                for t, grouped in (slot_groups or {}).items():
-                    for slot_name, pms in (grouped or {}).items():
-                        if any(pm.id == pid for pm in pms):
-                            cap_val = _resolve_cap(slot_name)
-                            break
-                    if cap_val is not None: break
-                if cap_val is not None:
-                    out[pid] = np.minimum(arr, cap_val).astype(np.float32, copy=False)
+    for pid, samples in indep.items():
+        if pid not in out:
+            out[pid] = samples
+    
+    return out
 
+def _assign_slot_groups_pooled(team_bucket: Dict[str, List[_PM]], *, wr3_threshold: float) -> Dict[str, List[_PM]]:
+    """
+    Assign ALL players to correlation slots, pooling depth players into the deepest available slot.
+    For example, WR3/WR4/WR5 all share WR3 correlation structure.
+    """
+    out = {s: [] for s in TEAM10}
+    
+    # Sort by projected points (highest first)
+    def sort_by_proj(lst: List[_PM]) -> List[_PM]:
+        return sorted(lst, key=lambda pm: (pm.proj if pm.proj is not None else -1e12), reverse=True)
+    
+    # QB - all QBs share QB correlation (usually just 1-2 per team)
+    qbs = sort_by_proj(team_bucket.get("QB", []))
+    out["QB"] = qbs  # ALL QBs get QB correlation
+    
+    # RB - split into RB1, RB2, rest get RB2 correlation
+    rbs = sort_by_proj(team_bucket.get("RB", []))
+    if len(rbs) >= 1:
+        out["RB1"] = [rbs[0]]  # Top RB gets RB1 correlation
+    if len(rbs) >= 2:
+        out["RB2"] = rbs[1:]   # RB2, RB3, RB4... all get RB2 correlation
+    
+    # WR - split by threshold and rank
+    wrs = sort_by_proj(team_bucket.get("WR", []))
+    if len(wrs) >= 1:
+        out["WR1"] = [wrs[0]]  # Top WR
+    if len(wrs) >= 2:
+        out["WR2"] = [wrs[1]]  # Second WR
+    if len(wrs) >= 3:
+        # WR3 slot gets all remaining WRs with proj < threshold
+        # If none meet threshold, just use WR3
+        wr3_candidates = [pm for pm in wrs[2:] if pm.proj is not None and pm.proj < wr3_threshold]
+        if wr3_candidates:
+            out["WR3"] = wr3_candidates  # All low-projection WRs
+        else:
+            out["WR3"] = wrs[2:]  # All remaining WRs
+    
+    # TE - split into TE1 and TE2 (rest)
+    tes = sort_by_proj(team_bucket.get("TE", []))
+    if len(tes) >= 1:
+        out["TE1"] = [tes[0]]  # Top TE
+    if len(tes) >= 2:
+        out["TE2"] = tes[1:]   # TE2, TE3... all get TE2 correlation
+    
+    # K - usually just one, but if multiple, all share K correlation
+    ks = sort_by_proj(team_bucket.get("K", []))
+    out["K"] = ks
+    
+    # DST - usually just one
+    dst = sort_by_proj(team_bucket.get("DST", []))
+    out["DST"] = dst
+    
+    return out
+
+
+def _impose_rank_with_noise(values: np.ndarray, target_u: np.ndarray, 
+                            rng: np.random.Generator, 
+                            noise_level: float = 0.1) -> np.ndarray:
+    """
+    Impose rank with optional noise for players sharing the same slot.
+    This helps differentiate players in the same correlation group.
+    """
+    n = len(values)
+    v_sorted = np.sort(values, kind="mergesort")
+    
+    # Add small noise to target_u to break ties for multiple players in same slot
+    if noise_level > 0:
+        noise = rng.normal(0, noise_level, size=n)
+        # Keep in [0,1] range
+        noisy_u = np.clip(target_u + noise, 0, 1)
+        order_u = np.argsort(np.argsort(noisy_u))
+    else:
+        order_u = np.argsort(np.argsort(target_u))
+    
+    out = np.empty_like(values)
+    out[order_u] = v_sorted
+    return out
+
+
+def generate_correlated_samples_impose_pooled(
+    session: Session,
+    model_dir: str | Path = "data/nfl/models",
+    n_samples: int = 1000,
+    seed: int | None = None,
+    wr3_proj_max: float = 5.0,
+    caps: dict[str, float] | None = None,
+    config: dict | None = None,
+    randomness: float | None = None,
+) -> Dict[int, np.ndarray]:
+    """
+    Version that assigns ALL players to correlation slots by pooling depth players.
+    """
+    def _resolve_cap(slot_name: str) -> float | None:
+        if not caps:
+            return None
+        # Exact -> base (e.g., "RB") -> aliases (TE1<->TE) -> "*" fallback
+        if slot_name in caps: return float(caps[slot_name])
+        # split base + depth
+        base, num = None, None
+        for i, ch in enumerate(slot_name):
+            if ch.isdigit():
+                base, num = slot_name[:i], slot_name[i:]
+                break
+        base = base or slot_name
+        if base in caps: return float(caps[base])
+        # common aliases (treat TE/TE1, WR/WR1, RB/RB1 as synonyms)
+        if num is None:
+            alias1 = base + "1"
+            if alias1 in caps: return float(caps[alias1])
+        else:
+            if base in caps: return float(caps[base])
+        if "*" in caps: return float(caps["*"])
+        return None
+
+    if randomness is None:
+        if config is not None and "randomness" in config:
+            randomness = float(config["randomness"])
+            print(f"Using 'randomness' from config {randomness}")
+        else:
+            print("WARNING: no 'randomness' provided; defaulting to 1.0")
+            randomness = 1.0
+    randomness = float(np.clip(randomness, 0.0, 1.0))
+    
+    model_dir = Path(model_dir)
+    rng = np.random.default_rng(seed)
+    
+    # Get independent samples
+    indep, teams = _independent_samples(session, model_dir, n_samples, seed, randomness=randomness)
+    if not teams:
+        return {}
+    
+    # Build team matchups
+    team_to_opp = {}
+    for t, d in teams.items():
+        opp = None
+        for key in ("QB","WR","RB","TE","DST","K"):
+            if d.get(key):
+                opp = d[key][0].opp
+                if opp: break
+        team_to_opp[t] = opp
+    
+    seen = set()
+    matchups = []
+    for t, o in team_to_opp.items():
+        if not o: continue
+        a, b = sorted([t, o])
+        if (a, b) in seen: continue
+        seen.add((a, b))
+        matchups.append((a, b))
+    
+    # Use pooled assignment
+    slot_groups = {t: _assign_slot_groups_pooled(bucket, wr3_threshold=float(wr3_proj_max)) 
+                   for t, bucket in teams.items()}
+    
+    # Load vine and factors
+    vine10, order = _load_team10_vine(model_dir)
+    lam_off, lam_def, order_f = _load_game_factors(model_dir)
+    if order_f != order: 
+        order = order_f
+    idx_map = {s: order.index(s) for s in TEAM10}
+    
+    # Start with independent samples
+    out: Dict[int, np.ndarray] = {}
+    pid_to_slot: dict[int, str] = {}
+    
+    for a, b in matchups:
+        # Generate correlated uniforms
+        UA0 = vine10.simulate(n_samples)
+        UB0 = vine10.simulate(n_samples)
+        UA, UB = _apply_two_factors(UA0, UB0, lam_off, lam_def, rng)
+        
+        # Extract uniforms for each slot
+        uA = {s: UA[:, idx_map[s]].astype(np.float32, copy=False) for s in TEAM10}
+        uB = {s: UB[:, idx_map[s]].astype(np.float32, copy=False) for s in TEAM10}
+        
+        for side, team, ucols in (("A", a, uA), ("B", b, uB)):
+            grouped = slot_groups.get(team, {})
+            
+            for slot_name, pms in grouped.items():
+                if not pms: 
+                    continue
+                    
+                u_slot = ucols.get(slot_name)
+                if u_slot is None: 
+                    continue
+                    
+                cap_val = _resolve_cap(slot_name) if caps else None
+                
+                # Handle multiple players in the same slot
+                if len(pms) == 1:
+                    # Single player - direct correlation
+                    pm = pms[0]
+                    v = indep.get(pm.id)
+                    if v is not None:
+                        x = _impose_rank(v, u_slot)
+                        if cap_val is not None:
+                            x = np.minimum(x, cap_val).astype(np.float32, copy=False)
+                        out[pm.id] = x
+                        pid_to_slot[pm.id] = slot_name
+                else:
+                    # Multiple players sharing the slot - add slight noise to differentiate
+                    for i, pm in enumerate(pms):
+                        v = indep.get(pm.id)
+                        if v is None:
+                            continue
+                        
+                        # Option 1: Add small noise to break perfect correlation
+                        noise_level = 0.05 * (i / max(1, len(pms)-1))  # Increasing noise for deeper players
+                        x = _impose_rank_with_noise(v, u_slot, rng, noise_level)
+                        
+                        # Option 2: Alternative - use slightly shifted quantiles
+                        # shift = i * 0.02  # Small shift per depth
+                        # shifted_u = np.clip(u_slot + shift * rng.standard_normal(n_samples), 0, 1)
+                        # x = _impose_rank(v, shifted_u)
+                        
+                        if cap_val is not None:
+                            x = np.minimum(x, cap_val).astype(np.float32, copy=False)
+                        out[pm.id] = x
+                        pid_to_slot[pm.id] = slot_name
+    
+    # Any players not assigned (shouldn't happen with pooled approach)
+    for pid in indep:
+        if pid not in out:
+            print(f"Warning: Player {pid} not assigned to any correlation slot")
+            out[pid] = indep[pid]  # Fallback to independent
+    
     return out
 

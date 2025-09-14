@@ -299,10 +299,14 @@ def generate_single_classic_lineup(
             return None
 
     # --- Keys you can pass in config ---
-    max_off_vs_dst   = _as_opt_int(_cfg_val("max_off_vs_dst", None))               # int or None
-    min_qb_stack     = _as_int(_cfg_val("min_qb_stack", _cfg_val("min_same_team_stack", 0)), 0)
-    min_qb_bringback = _as_int(_cfg_val("min_qb_bringback", _cfg_val("min_bringback", 0)), 0)
-    max_team_players = _as_opt_int(_cfg_val("max_team_players", None))             # int or None
+    max_off_vs_dst    = _as_opt_int(_cfg_val("max_off_vs_dst", None))               # int or None
+    # legacy: min_qb_stack = min RB/WR/TE from QB team (kept for backward compat)
+    min_qb_stack_legacy = _as_int(_cfg_val("min_qb_stack", _cfg_val("min_same_team_stack", 0)), 0)
+    min_qb_bringback    = _as_int(_cfg_val("min_qb_bringback", _cfg_val("min_bringback", 0)), 0)
+    max_team_players    = _as_opt_int(_cfg_val("max_team_players", None))           # int or None
+    # NEW:
+    min_qb_wrte_stack   = _as_int(_cfg_val("min_qb_wrte_stack", 0), 0)              # WR/TE from QB team
+    min_qb_skill_stack  = _as_int(_cfg_val("min_qb_skill_stack", 0), 0)             # RB/WR/TE from QB team (total)
 
     # Allow config to override salary band too
     cap_cfg        = _as_int(_cfg_val("salary_cap", None))
@@ -313,14 +317,16 @@ def generate_single_classic_lineup(
         min_salary = min_salary_cfg
 
     QB, RB, WR, TE, DST = 66, 67, 68, 69, 71
-    OFF_POS       = {QB, RB, WR, TE}
-    OFF_NO_QB_POS = {RB, WR, TE}
+    OFF_POS        = {QB, RB, WR, TE}
+    OFF_NO_QB_POS  = {RB, WR, TE}
+    WRTE_POS       = {WR, TE}
 
     players_by_id: Dict[int, FieldPlayer] = {p.id: p for p in players}
     qb_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == QB]
     rb_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == RB]
     wr_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == WR]
     te_ids  = [p.id for p in players if roster_slot_by_id.get(p.id) == TE]
+    wrte_ids = list(set(wr_ids) | set(te_ids))
     dst_ids = [p.id for p in players if roster_slot_by_id.get(p.id) == DST]
     skill_ids = list(set(rb_ids) | set(wr_ids) | set(te_ids))
 
@@ -328,8 +334,9 @@ def generate_single_classic_lineup(
         raise ValueError("No QB ids matched. Check filtering conditions")
 
     # Helper pools
-    offense_ids   = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in OFF_POS]
-    offense_no_qb = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in OFF_NO_QB_POS]
+    offense_ids    = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in OFF_POS]
+    offense_no_qb  = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in OFF_NO_QB_POS]
+    wrte_no_qb     = [pid for pid in players_by_id if roster_slot_by_id.get(pid) in WRTE_POS]
 
     # Team maps (all positions)
     teams = sorted({players_by_id[pid].team for pid in players_by_id if getattr(players_by_id[pid], "team", None)})
@@ -375,16 +382,27 @@ def generate_single_classic_lineup(
         for t in teams:
             prob += plp.lpSum(x[i] for i in team_to_all_ids[t]) <= max_team_players, f"MaxPlayers_{_safe_var_name(t)}"
 
-    # --- QB same-team stacks (min RB/WR/TE from QB's team) ---
-    if int(min_qb_stack) > 0:
+    # --- QB same-team stacks ---
+    # Effective total skill requirement (RB/WR/TE). Keep legacy key for back-compat.
+    eff_min_skill = max(int(min_qb_skill_stack), int(min_qb_stack_legacy))
+    if eff_min_skill > 0 or int(min_qb_wrte_stack) > 0:
         for q in qb_ids:
             team_q = getattr(players_by_id[q], "team", None)
             if not team_q:
                 continue
-            stack_pool = [i for i in offense_no_qb if getattr(players_by_id[i], "team", None) == team_q]
-            req = min(int(min_qb_stack), len(stack_pool))
-            if req > 0 and len(stack_pool) > 0:
-                prob += plp.lpSum(x[i] for i in stack_pool) >= req * x[q], f"QBStack_{q}"
+            # Pools from QB's team
+            skill_pool = [i for i in offense_no_qb if getattr(players_by_id[i], "team", None) == team_q]
+            wrte_pool  = [i for i in wrte_no_qb    if getattr(players_by_id[i], "team", None) == team_q]
+
+            # (1) WR/TE-only requirement (e.g., force at least one WR/TE with QB)
+            if int(min_qb_wrte_stack) > 0 and len(wrte_pool) > 0:
+                req_wrte = min(int(min_qb_wrte_stack), len(wrte_pool))
+                prob += plp.lpSum(x[i] for i in wrte_pool) >= req_wrte * x[q], f"QB_WRTE_Stack_{q}"
+
+            # (2) Total teammates from RB/WR/TE (e.g., QB + 2 total, second can be RB)
+            if eff_min_skill > 0 and len(skill_pool) > 0:
+                req_skill = min(eff_min_skill, len(skill_pool))
+                prob += plp.lpSum(x[i] for i in skill_pool) >= req_skill * x[q], f"QB_Skill_Stack_{q}"
 
     # --- QB bring-backs (min RB/WR/TE from QB's opposing team) ---
     if int(min_qb_bringback) > 0:

@@ -865,12 +865,10 @@ def sample_classic_field(
     n_lineups, n_players = L.shape
 
     # ---- 2) player simulations ----
-    samples_by_pid = generate_correlated_samples(
+    samples_by_pid = generate_correlated_samples_impose(
         session=session,
+        n_samples=100,
         config=config,
-        mode="classic",
-        process="sampling",
-        overrides=None,
     )  # {pid: np.ndarray}
 
     # ---- 3) reduce to per-player projection ----

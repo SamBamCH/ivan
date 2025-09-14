@@ -574,7 +574,7 @@ def simulate_one_contest(
     full_rois    = np.zeros_like(full_scores)
     full_ranks   = np.zeros((num_sims, M), dtype=int)
 
-    with ProcessPoolExecutor(max_workers=1) as exe:
+    with ProcessPoolExecutor(max_workers=8) as exe:
         futures = []
         for start in range(0, num_sims, chunk_size):
             end = min(start + chunk_size, num_sims)
