@@ -953,6 +953,36 @@ def _player_has_any_odds(session: Session, player_name: str) -> bool:
     q = session.query(exists().where(NFLOdds.player == player_name))
     return bool(q.scalar())
 
+SLOTS = {"QB":1, "RB":2, "WR":3, "TE":2, "K":1, "DST":1}  # max modeled depth per base position
+
+def assign_slots(session: Session) -> None:
+    # get all active players with a team
+    players = session.query(NFLPlayer).filter(NFLPlayer.team.isnot(None)).all()
+
+    print(f"Assigning slot_label for {len(players)} players with a team…")
+
+    # group by (team, base_pos)
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for p in players:
+        base = (p.position or "").upper()
+        if base not in ("QB","RB","WR","TE","K","DST"): 
+            continue
+        buckets[(p.team, base)].append(p)
+
+    for (team, base), group in buckets.items():
+        # sort by projected mean (desc); use something stable if missing
+        group.sort(key=lambda p: (p.fpts_mean if p.fpts_mean is not None else -1e9), reverse=True)
+        cap = SLOTS[base]
+        for i, p in enumerate(group, start=1):
+            depth = min(i, cap)  # pool deeper guys into the last modeled slot
+            if base in ("K","DST","QB"):
+                slot_label = base
+            else:
+                slot_label = f"{base}{depth}"  # RB1/RB2, WR1/WR2/WR3, TE1/TE2
+            p.slot_label = slot_label  # add this column once to NFLPlayer
+    session.commit()
+
 def _has_anytime_odds(session: Session, player_name: str) -> bool:
     q = session.query(exists().where(and_(NFLOdds.player == player_name, NFLOdds.market == "player_anytime_td")))
     return bool(q.scalar())
@@ -963,7 +993,8 @@ def generate_and_fit_all(
     n_samples: int = 10000,
     verbose: bool = False,
     delete_players_without_odds: bool = True,
-    save_fpts_sample: bool = True
+    save_fpts_sample: bool = True,
+    assign_slots_after_fit: bool = True,
 ) -> None:
     marginals, stacked_copulas = load_models(model_dir)
 
@@ -1012,3 +1043,8 @@ def generate_and_fit_all(
 
     if verbose and delete_players_without_odds:
         print(f"[SUMMARY] Deleted {deleted} players with no odds.")
+
+    if assign_slots_after_fit:
+        if verbose:
+            print("[slots] assigning slot_label for all players…")
+        assign_slots(session)

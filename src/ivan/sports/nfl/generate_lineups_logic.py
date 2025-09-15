@@ -14,7 +14,7 @@ import pulp as plp
 from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.models import NFLPlayer, Lineup
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose
+from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 
 # ------- Logging directory (used only if you enable solver logging) -------
 LOG_DIR = Path(__file__).resolve().parents[3] / "data" / "nfl" / "logs"
@@ -509,11 +509,9 @@ def generate_and_store_field_lineups(
         roster_slot_by_id[rp.id] = int(getattr(rp, "roster_slot_id", 0) or 0)
 
 
+    samples = generate_correlated_samples_gaussian(session, n_samples=max(5000, num_lineups*2))
     slate_type = _infer_slate_type(roster_slot_by_id)
 
-    print(slate_type)
-
-    samples = generate_correlated_samples_impose(session, n_samples=max(1000, num_lineups*2), config=config)
     # ---- 2) infer slate type, and choose branch ----
     if slate_type == "classic":
         n_samples = len(next(iter(samples.values())))

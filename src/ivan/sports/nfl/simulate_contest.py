@@ -15,7 +15,7 @@ from ivan.sports.nfl.sample_field import (
     build_lineup_matrix,
     build_player_samples,
 )
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose
+from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 # Reuse your MLB payout scaler (sport-agnostic)
 from ivan.sports.mlb.payouts import scale_payouts_correctly
 
@@ -343,10 +343,10 @@ def _build_player_samples_matrix(
     """
     # If the caller specified num_sims, force the sampler to produce that many
 
-    raw = generate_correlated_samples_impose(
+    raw = generate_correlated_samples_gaussian(
         session,
         model_dir=model_dir,
-        n_samples=n_samples
+        n_samples=n_samples,
     )
     # fall back to the first vector length in raw
     ns = 0
@@ -496,6 +496,7 @@ def simulate_one_contest(
     config_path: str,
     field_cap: int,
     num_sims: int = 1000,
+    use_classic_dupes: bool = True,
 ) -> None:
     # 1) contest info
     cfg      = json.load(open(config_path, encoding="utf-8"))
@@ -510,7 +511,8 @@ def simulate_one_contest(
         session,             
         field_size=capped_field_sz,
         config=cfg,
-        mode=mode
+        mode=mode,
+        use_classic_dupes=use_classic_dupes,  # always allow dupes in NFL
     )
     total = sum(counts_by_lineup.values())
     assert total == capped_field_sz, (total, capped_field_sz)
@@ -539,27 +541,7 @@ def simulate_one_contest(
         original_field_size=field_sz,   # scale from original → simulated
         entry_fee=entry_fee,
     )
-
-    # --- debug/inspection: top payouts + last paid position ---
-    paid_items = [(rank, amt) for rank, amt in scaled.items() if amt > 0]
-    top10 = sorted(paid_items, key=lambda x: (-x[1], x[0]))[:10]
-
-    print("\nTop 10 payouts (rank → payout):")
-    for r, a in top10:
-        print(f"  {r:>6} → ${a:,.2f}")
-
-    # last position that pays (max rank with payout > 0)
-    last_paid = max((r for r, a in scaled.items() if a > 0), default=None)
-    if last_paid is None:
-        print("No paid positions (all payouts are $0).")
-    else:
-        print(f"Last paid position: {last_paid}  (pays ${scaled[last_paid]:,.2f})")
-
-    # (optional) how many places are paid and what percent of the field that is
-    paid_count = sum(1 for r in range(1, M + 1) if scaled.get(r, 0.0) > 0.0)
-    print(f"Paid places: {paid_count}/{M} ({paid_count / max(1, M):.1%})\n")
-    # 3) correlated NFL projections for the compact player set
-
+    # 3) build player samples matrix
     P, num_sims = _build_player_samples_matrix(
         session=session,
         pid_to_idx=pid_to_idx,
@@ -601,8 +583,6 @@ def simulate_one_contest(
     # 5) persist per-UNIQUE-lineup aggregates (dupe-aware)
     #    We aggregate across an individual lineup’s duplicate entries using starts/ends.
     u_lids = sorted([lid for lid, c in counts_by_lineup.items() if c > 0])
-    counts_U = np.array([int(counts_by_lineup[l]) for l in u_lids], dtype=np.int64)
-
     for u, lid in enumerate(u_lids):
         a, b = int(starts[u]), int(ends[u])
         session.add(LineupSimulationResult(

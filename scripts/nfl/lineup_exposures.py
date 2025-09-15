@@ -50,7 +50,7 @@ ROSTER_SLOT_MAP = {
 }
 
 # Which slots should count as receivers for classic QB stacks
-CLASSIC_PASS_CATCHERS = {WR, TE}
+CLASSIC_PASS_CATCHERS = {RB, WR, TE}
 
 
 def _coerce_player_ids(val) -> List[int]:

@@ -1,0 +1,7 @@
+{
+    "database_url": "sqlite:///D:/ivan/data/lol/lol_history.sqlite",
+    "paths": {
+        "ids": "data/lol/input/player_ids.csv",
+        "odds": "data/lol/input/odds.json"
+    }
+}

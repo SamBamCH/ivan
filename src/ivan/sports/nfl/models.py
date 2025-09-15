@@ -64,6 +64,7 @@ class NFLPlayer(NFLBase, BasePlayer):
     team            = Column(String,    nullable=False)
     opponent        = Column(String,    nullable=True)
     position        = Column(String,    nullable=False)
+    slot_label      = Column(String,    nullable=True)  # e.g. 'RB1', 'WR2', 'FLEX', 'DST'
     roster_slot_id  = Column(Integer,   nullable=False)
     gametime        = Column(DateTime,  nullable=False) 
     salary          = Column(Integer,   nullable=False)

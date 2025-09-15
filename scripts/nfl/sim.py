@@ -43,8 +43,9 @@ def main():
                 contest_id   = cid,
                 contest_name = name,
                 config_path  = args.config,
-                field_cap    = 25000,
+                field_cap    = 50000,
                 num_sims     = args.n,
+                use_classic_dupes = True,  # allows dupes in smaller classic slates, flip to false for anything over probably like 3-4 games
             )
         except Exception as e:
             print(f"⚠️  Skipped contest {cid} ('{name}') due to error: {e}\n")

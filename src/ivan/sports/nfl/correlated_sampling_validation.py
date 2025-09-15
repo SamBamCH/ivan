@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 # use the new sampler (rank-impose or direct, whatever you aliased)
 from ivan.sports.nfl.correlated_samples import (
-    generate_correlated_samples_impose,
+    generate_correlated_samples_gaussian,
     TEAM10,
 )
 
@@ -41,12 +41,19 @@ def _load_team10(model_dir: Path):
     with open(model_dir / "game_factors.json", "r") as f:
         fac = json.load(f)
     vine = obj.vine
-    order = list(obj.cols)
-    if fac.get("order") and fac["order"] != order:
-        order = list(fac["order"])
+    order_vine = list(obj.cols)
+
     lam_off = np.asarray(fac["lam_off"], dtype=float)
     lam_def = np.asarray(fac["lam_def"], dtype=float)
-    return vine, order, lam_off, lam_def
+    order_fac = list(fac.get("order", order_vine))
+
+    # Align factors to the vine order; keep vine order authoritative
+    if order_fac != order_vine:
+        perm = [order_fac.index(s) for s in order_vine]
+        lam_off = lam_off[perm]
+        lam_def = lam_def[perm]
+
+    return vine, order_vine, lam_off, lam_def
 
 def _apply_two_factors(UA: np.ndarray, UB: np.ndarray, lam_off: np.ndarray, lam_def: np.ndarray, rng: np.random.Generator):
     zA = st.norm.ppf(UA); zB = st.norm.ppf(UB)
@@ -65,8 +72,8 @@ def _spearman_cols(U: np.ndarray) -> np.ndarray:
 def print_hgv20_spearman(model_dir: str | Path, n: int = 20000) -> Tuple[np.ndarray, np.ndarray]:
     """Simulate uniforms from HGV-20 and print within-team + cross-team Spearman."""
     model_dir = Path(model_dir)
-    vine, order, lam_off, lam_def = _load_team10(model_dir)
-    idx = {s: order.index(s) for s in TEAM10}
+    vine, order_vine, lam_off, lam_def = _load_team10(model_dir)
+    idx = {s: order_vine.index(s) for s in TEAM10}
 
     UA0 = vine.simulate(n); UB0 = vine.simulate(n)
     UA, UB = _apply_two_factors(UA0, UB0, lam_off, lam_def, np.random.default_rng(7))
@@ -424,7 +431,7 @@ def run_end_to_end_and_validate(
     print("\n" + "="*80)
     print("GENERATING CORRELATED SAMPLES")
     print("="*80)
-    samples = generate_correlated_samples_impose(session, model_dir=model_dir, n_samples=n_samples, seed=seed)
+    samples = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples, seed=seed)
     print(f"Generated {len(samples)} player samples with n={n_samples}")
 
     # 2) independent reference for the same players

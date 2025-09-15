@@ -1,0 +1,29 @@
+{
+    "database_url": "sqlite:///C:/Users/samba/ivan/data/mlb/mlb_history.sqlite",
+    "paths": {
+        "projections_dir": "C:/Users/samba/ivan/data/mlb/input",
+        "ids": "C:/Users/samba/ivan/data/mlb/input/player_ids.csv",
+        "entries_csv": "C:/Users/samba/ivan/data/mlb/input/entries.csv"
+    },
+    "verbose": false,
+    "lineup": {
+        "min_fpts_threshold": 100,
+        "pitcher_dispersion": 1,
+        "hitter_dispersion": 1,
+        "min_salary": 48000,
+        "max_salary": 50000,
+        "max_opposing_batters": 0,
+        "stack_probabilities": {
+            "5-3": 0.20,
+            "5-2": 0.40,
+            "5-x": 0.20,
+            "4-4": 0.20,
+            "4-3": 0.20,
+            "4-x": 0.20
+        }
+    },
+    "field": {
+        "proj_exponent": 1,
+        "strict_player_pool": true
+    }
+}

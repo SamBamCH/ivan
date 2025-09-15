@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
-from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose
+from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 
 SALARY_CAP = 50000
 
@@ -305,8 +305,8 @@ def build_player_samples_independent(session, pid_to_col: dict[int, int], n_sims
     column-wise shuffling the marginal samples (breaks cross-player correlation,
     preserves player marginals).
     """
-    from ivan.sports.nfl.correlated_samples import generate_correlated_samples_impose  # reuse your source
-    raw = generate_correlated_samples_impose(session)  # {pid: np.ndarray}
+    from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian  # reuse your source
+    raw = generate_correlated_samples_gaussian(session)  # {pid: np.ndarray}
     sizes = [len(v) for v in raw.values() if isinstance(v, np.ndarray) and v.size]
     if not sizes:
         raise RuntimeError("No player samples available for independent draws.")
@@ -605,7 +605,7 @@ def build_player_samples(session: Session, pid_to_col: Dict[int, int]) -> np.nda
     """
     Returns P [n_sims x n_players]; if the generator has fewer sims, resample with replacement.
     """
-    raw = generate_correlated_samples_impose(session)  # {pid: np.ndarray}
+    raw = generate_correlated_samples_gaussian(session)  # {pid: np.ndarray}
     sizes = [len(x) for x in raw.values() if isinstance(x, np.ndarray)]
     if not sizes:
         raise RuntimeError("generate_correlated_samples returned no vectors.")
@@ -818,6 +818,7 @@ def sample_field(
     config: dict,
     mode: str,
     contest_id: Optional[int] = None,
+    use_classic_dupes: bool = False,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Unified sampler:
@@ -827,8 +828,9 @@ def sample_field(
     mode = (mode or "showdown").lower()
     if mode == "showdown":
         return sample_field_diverse_dupe(session, field_size=field_size, config=config, mode=mode)
+    if use_classic_dupes:
+        return sample_field_diverse_dupe(session, field_size=field_size, config=config, mode=mode)
     return sample_classic_field(session, field_size=field_size, config=config, contest_id=contest_id)
-
 
 
 def sample_classic_field(
@@ -865,10 +867,9 @@ def sample_classic_field(
     n_lineups, n_players = L.shape
 
     # ---- 2) player simulations ----
-    samples_by_pid = generate_correlated_samples_impose(
+    samples_by_pid = generate_correlated_samples_gaussian(
         session=session,
-        n_samples=100,
-        config=config,
+        n_samples=100
     )  # {pid: np.ndarray}
 
     # ---- 3) reduce to per-player projection ----
@@ -942,4 +943,130 @@ def sample_classic_field(
     # optionally top up with replacement here — but default is no dupes.
     return counts, meta
 
+# --- NEW: Classic with-replacement sampler that blends projection + near-cap ---
+def sample_classic_field_dupe(
+    session: Session,
+    *,
+    field_size: int,
+    config: dict | None = None,
+    contest_id: Optional[int] = None,
+) -> Tuple[Dict[int, int], Dict]:
+    """
+    Classic field sampler (WITH replacement, i.e., allows dupes).
+
+    Strategy (small slates like 2-gamers):
+      - Use salary-remaining bins (like Showdown) to control coarse cap behavior.
+      - Within each bin, weight by:
+            proj_pct ** alpha_fpts  *  near_cap ** alpha_cap
+        where:
+            proj_pct  = percentile rank of lineup's projected points vs the full field
+            near_cap  = 1 - normalized(salary_remaining)
+      - Optional smoothing and sharpness let you fatten the middle or crank chalk.
+
+    Returns:
+      counts_by_lineup: {lineup_id: count}  (dupes allowed)
+      meta: diagnostics incl. num_unique and unique_ids (to "write unique after duping").
+    """
+    cfg = config or {}
+    # ---- knobs (under classic.dupe) ----
+    def _get(d: dict, path: List[str], default=None):
+        cur = d
+        for k in path:
+            if not isinstance(cur, dict) or k not in cur:
+                return default
+            cur = cur[k]
+        return cur
+
+    alpha_fpts  = float(_get(cfg, ["classic", "dupe", "alpha_fpts"], 1.25))  # ↑ -> more projection chalk
+    alpha_cap   = float(_get(cfg, ["classic", "dupe", "alpha_cap"],  0.90))  # ↑ -> more near-cap chalk
+    epsilon     = float(_get(cfg, ["classic", "dupe", "epsilon"],    1e-6))  # floor mass inside bins
+    sharpness   = float(_get(cfg, ["classic", "dupe", "dup_sharpness"], 1.0))# >1 to crank chalk
+    smooth_mid  = bool(_get(cfg, ["classic", "dupe", "smooth_mid"], True))
+    mid_strength= float(_get(cfg, ["classic", "dupe", "mid_boost_strength"], 0.5))
+    mid_sigma   = float(_get(cfg, ["classic", "dupe", "mid_boost_sigma"], 0.18))
+    lam_floor   = float(_get(cfg, ["classic", "dupe", "lam_floor_frac"], 0.02))
+    seed        = _get(cfg, ["classic", "dupe", "seed"], None)
+
+    rng = np.random.default_rng(seed)
+
+    # ---- lineup matrix, salaries, etc. ----
+    L, lineup_ids, spends, pid_to_col, _cpt_cols, _flex_cols = build_lineup_matrix(session)
+    n_lineups = L.shape[0]
+    remaining = (SALARY_CAP - spends).astype(np.int32)
+
+    # ---- per-player sims -> lineup projections (mean works well for popularity) ----
+    P = build_player_samples(session, pid_to_col)              # [n_sims x n_players]
+    per_player_mean = np.asarray(P.mean(axis=0), dtype=np.float64)
+    lineup_proj     = np.asarray(L @ per_player_mean, dtype=np.float64)  # [n_lineups]
+
+    # ---- normalized features ----
+    proj_pct  = _percentile_rank(lineup_proj, lineup_proj)                # [0,1]
+    rem01     = _minmax01(remaining)                                      # [0,1]
+    near_cap  = np.clip(1.0 - rem01, 0.0, 1.0)                            # 0 low spend, 1 near cap
+
+    # ---- global base lambda (before binning) ----
+    lam = np.power(np.clip(proj_pct, 1e-12, 1.0), alpha_fpts) * \
+          np.power(np.clip(near_cap,  1e-12, 1.0), alpha_cap)
+
+    if sharpness > 1.0:
+        lam = np.power(lam, sharpness)
+
+    if smooth_mid:
+        lam = _smooth_lam(lam, strength=mid_strength, sigma=mid_sigma, eps_frac=lam_floor)
+
+    lam = np.clip(lam, 1e-12, None)
+
+    # ---- salary-remaining bins (Showdown-like coarse prior) ----
+    bins = list(SALARY_PRIOR)
+    bin_masks = [(remaining >= lo) & (remaining < hi) for lo, hi, _ in bins]
+
+    weights = np.array([w for _, _, w in bins], dtype=np.float64)
+    has_any = np.array([m.any() for m in bin_masks], dtype=bool)
+    if not has_any.any():
+        raise RuntimeError("No lineups fall into any salary-remaining bin. Check SALARY_PRIOR.")
+    w_avail = weights * has_any.astype(np.float64)
+    if w_avail.sum() <= 0:
+        w_avail = has_any.astype(np.float64)
+    w_avail /= w_avail.sum()
+
+    draws_per_bin = rng.multinomial(int(field_size), w_avail)
+    idx_per_bin   = [np.where(m)[0] for m in bin_masks]
+
+    # ---- with-replacement sampling inside each bin ----
+    counts = np.zeros(n_lineups, dtype=np.int64)
+    for b, n_draws in enumerate(draws_per_bin):
+        if n_draws <= 0:
+            continue
+        idxs = idx_per_bin[b]
+        if idxs.size == 0:
+            continue
+        w = lam[idxs].astype(np.float64, copy=True)
+        # small floor so tails are reachable
+        w += epsilon * float(w.mean() if w.size else 1.0)
+        p = _normalize_probs(w, idxs.size)
+        if p is None:
+            p = np.full(idxs.size, 1.0 / idxs.size, dtype=np.float64)
+
+        picks = rng.choice(idxs.size, size=int(n_draws), replace=True, p=p)
+        np.add.at(counts, idxs[picks], 1)
+
+    counts_by_lineup: Dict[int, int] = {int(lineup_ids[i]): int(counts[i]) for i in range(n_lineups)}
+
+    # ---- meta (helps you “write unique after duping”) ----
+    used_mask  = counts > 0
+    unique_ids = lineup_ids[used_mask].astype(np.int64).tolist()
+    meta = {
+        "sampler": "classic_dupe_projection_x_nearcap",
+        "field_size": int(field_size),
+        "num_unique": int(used_mask.sum()),
+        "unique_ids": unique_ids,
+        "proj_pct": {"mean": float(proj_pct.mean()), "std": float(proj_pct.std())},
+        "near_cap": {"mean": float(near_cap.mean()), "std": float(near_cap.std())},
+        "lam": {"min": float(lam.min()), "max": float(lam.max()), "mean": float(lam.mean())},
+        "bins": {
+            "schema": [(int(lo), int(hi), float(w)) for (lo, hi, w) in bins],
+            "draws": [int(x) for x in draws_per_bin.tolist()],
+        },
+    }
+    return counts_by_lineup, meta
 
