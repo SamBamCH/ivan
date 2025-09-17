@@ -85,6 +85,9 @@ _NAME_OVERRIDES = {
     'collin kayfus': 'cj kayfus',
     'james crooks': 'jimmy crooks',
     'marquise brown': 'hollywood brown',
+    'bob seymour': 'robert seymour',
+    'zach cole': 'zachary cole',
+    'michael king': 'mike king',
     # add more mappings as needed...
 }
 

@@ -137,6 +137,18 @@ def main():
             logging.debug(f"Skipping {p.get('displayName')} (rosterSlotId=70)")
             continue
 
+        if p.get("status") == "OUT":
+            logging.debug(f"Skipping {p.get('displayName')} (status=OUT)")
+            continue
+
+        if p.get("status") == "IR":
+            logging.debug(f"Skipping {p.get('displayName')} (status=IR)")
+            continue
+
+        if p.get("status") == "D":
+            logging.debug(f"Skipping {p.get('displayName')} (status=D)")
+            continue
+
         team = p.get("teamAbbreviation")
         comp = p.get("competition") or {}
         opp  = _derive_opponent_for_player(team, comp)

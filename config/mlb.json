@@ -7,9 +7,9 @@
     },
     "verbose": false,
     "lineup": {
-        "min_fpts_threshold": 100,
-        "pitcher_dispersion": 1,
-        "hitter_dispersion": 1,
+        "min_fpts_threshold": 70,
+        "pitcher_dispersion": 0.15,
+        "hitter_dispersion": 0.15,
         "min_salary": 48000,
         "max_salary": 50000,
         "max_opposing_batters": 0,

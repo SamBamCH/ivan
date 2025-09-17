@@ -17,9 +17,9 @@
   },
 
   "pool": {
-    "size": 10000,                                
+    "size": 7500,                                
     "embed_dims": 32,                            
-    "beta_fpts": 0.1,                            
+    "beta_fpts": 0.5,                            
     "seed": 42
   },
 
