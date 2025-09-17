@@ -27,7 +27,7 @@ from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
 from ivan.sports.common.odds import get_odds, parse_odds  # ← import your odds function
 from ivan.core.utils import normalize_name
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
 
 _TEAM_RE = re.compile(r"\b[A-Z]{2,3}\b")
 
@@ -95,11 +95,16 @@ def main():
     # initialize database
     engine = init_db("nfl", None)
     session = get_session(engine)
+    logging.info("[ingest][1] ✔ Connected to database")
 
     session.execute(delete(NFLPlayer))
+    session.execute(delete(NFLOdds))
+    session.commit()
+    logging.info("[ingest][2] ✔ Cleared nfl_player and nfl_odds tables")
 
     # 1) fetch contests
     contests = fetch_all_contests("nfl")
+    logging.info(f"[ingest][3] ✔ Pulled {len(contests)} contests from lobby endpoint")
     if not contests:
         logging.error("No contests returned from lobby endpoint")
         sys.exit(1)
@@ -108,9 +113,9 @@ def main():
     slate_info = summarize_slates(contests)
 
     # 3) print menu for user
-    print("Available NFL Slates:")
+    print("             Available NFL Slates:")
     for i, (dg, info) in enumerate(slate_info.items(), start=1):
-        print(f"{i:2}. DG={dg} | {info['gameType']:8} | entries={info['count']:2} | at {info['sdstring']} | '{info['name']}'")
+        print(f"                {i:2}. DG={dg} | {info['gameType']:8} | entries={info['count']:2} | at {info['sdstring']} | '{info['name']}'")
     print()
 
     # 4) prompt user
@@ -126,7 +131,7 @@ def main():
 
     # 5) fetch & upsert players
     players = get_players_for_slate(dg)
-    logging.info(f"Pulled {len(players)} players for DG={dg}")
+    logging.info(f"[ingest][4] ✔ Pulled {len(players)} players for DG={dg}")
 
     # ← ADDED: track all teams we pulled
     relevant_teams = set()
@@ -170,8 +175,8 @@ def main():
         session.merge(dbp)
 
     session.commit()
-    logging.info("✔ Done ingesting players for selected slate.")
-    logging.info(f"Relevant teams to fetch odds for: {sorted(relevant_teams)} ({len(relevant_teams) // 2} games)")
+    logging.info(f"             Relevant teams to fetch odds for: {sorted(relevant_teams)} ({len(relevant_teams) // 2} games)")
+    logging.info("[ingest][5] ✔ Done ingesting players for selected slate.")
 
     
 

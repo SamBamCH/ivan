@@ -347,7 +347,7 @@ def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
 
     # dump the first one so you know all available keys
     if draftables:
-        logging.info("=== First draftable payload ===\n%s", json.dumps(draftables[0], indent=2))
+        logging.debug("=== First draftable payload ===\n%s", json.dumps(draftables[0], indent=2))
     else:
         logging.warning("No draftables for DG=%s", draft_group_id)
 
