@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func, exists, and_, desc
 from sqlalchemy.inspection import inspect
 import joblib
+from tqdm.auto import tqdm
+import logging
+logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
+
 
 # ivan imports
 from ivan.sports.nfl.player_level_calculations import (
@@ -181,7 +185,6 @@ def _consensus_prob_for_side(
     market_key: str,
     *, target_side: str,          # "over"/"under" or "yes"/"no"
     default_one_side_vig: float = DEFAULT_ONE_SIDE_VIG,
-    verbose: bool = False
 ) -> tuple[float | None, float | None]:
     """
     Book-weighted, de-vigged consensus for a side **at a single line**.
@@ -201,10 +204,14 @@ def _consensus_prob_for_side(
         api_keys = _MARKET_KEYS[market_key]
 
     rows = _gather_quotes(session, player_name, api_keys)
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][concensus_prob_for_side][1] player_id={player_name} market_key={market_key} fetched {len(rows)} rows")
     if not rows:
+        logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][concensus_prob_for_side][1] player_id={player_name} market_key={market_key} no rows found")
         return None, None
 
     latest = _pick_latest_per_book_point(rows)  # latest per (book,point,side)
+
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][concensus_prob_for_side][1] player_id={player_name} market_key={market_key} latest picks: {len(latest)} unique (book,point,side)")
 
     # Build {book: {point: bundle}} where bundle holds latest side rows and a freshness rank
     by_book: dict[str, dict] = defaultdict(dict)
@@ -247,6 +254,7 @@ def _consensus_prob_for_side(
 
     if not cluster_map:
         return None, None
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][concensus_prob_for_side][3] player_id={player_name} market_key={market_key} clustered into {len(cluster_map)} bucketed points")
 
     # For each cluster, normalize weights among books present and compute consensus
     cluster_scores = []  # (bucket_pt, p_cons, pt_cons, total_weight, n_books, best_rank, verbose_payload)
@@ -284,16 +292,8 @@ def _consensus_prob_for_side(
     # Pick cluster: 1) max total_weight; 2) max n_books; 3) freshest (min best_rank)
     cluster_scores.sort(key=lambda t: (t[3], t[4], -t[5]))  # total_weight asc, n_books asc, rank desc
     best = cluster_scores[-1]
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][concensus_prob_for_side][4] player_id={player_name} market_key={market_key} picked bucket_pt={best[0]} p_cons={best[1]:.4f} pt_cons={best[2]} total_weight={best[3]:.4f} n_books={best[4]} best_rank={best[5]}")
     bucket_pt, p_cons, pt_cons, total_weight, n_books, best_rank, weighted = best
-
-    if verbose:
-        print(f"[odds][clusters] {player_name} :: market={market_key} side={target_side}")
-        for (bp, p_c, pt_c, tw, nb, br, rows_in) in cluster_scores:
-            sig = "*" if bp == bucket_pt else " "
-            print(f"  {sig} line={bp:.2f}  p_cons≈{p_c:.4f}  books={nb}  total_w={tw:.3f}  freshest_rank={br}")
-            for (b, pt, p, r, w) in rows_in:
-                print(f"      book={b:>12} point={pt:6.2f}  p_fair≈{p:7.4f}  w={None if w is None else f'{w:.3f}'}  rank={r}")
-        print(f"    -> selected line={pt_cons:.2f}  p_fair={p_cons:.4f}")
 
     return pt_cons, float(np.clip(p_cons, 1e-6, 1-1e-6))
 
@@ -320,8 +320,7 @@ def _calibrate_loc(
     point: float,
     side: str,
     price: float | None = None,
-    p_fair: float | None = None,
-    verbose: bool = False,
+    p_fair: float | None = None
 ) -> tuple[str, tuple]:
     """
     Adjust ONLY the 'loc' so that the marginal passes through the quoted probability:
@@ -361,17 +360,6 @@ def _calibrate_loc(
                 return dist_name, tuple(base_params)
             new_loc = float(point) - float(q0)
             new_params = shapes + (new_loc, scale)
-
-        if verbose:
-            try:
-                m0 = _mean_of(dist_name, base_params)
-                m1 = _mean_of(dist_name, new_params)
-                print(f"[cal] {dist_name}: point={point:.3f} side={side} p_fair={p_fair:.4f} "
-                      f"→ target_cdf={target_cdf:.4f} q0={q0:.4f} loc {loc:.4f}->{new_loc:.4f} "
-                      f"mean {m0:.3f}->{m1:.3f}")
-            except Exception:
-                print(f"[cal] {dist_name}: point={point} side={side} p_fair={p_fair} "
-                      f"→ target_cdf={target_cdf} q0={q0} loc {loc}->{new_loc}")
 
         return dist_name, new_params
     except Exception:
@@ -543,7 +531,7 @@ def _calibrate_count_mean_from_ou(dist_name: str, base_params, point: float, sid
 
 # --- Role-based shrink when stat has no odds ---------------------------------
 
-def _apply_role_to_params(dist_name: str, base_params, role: float, stat: str, verbose: bool = False):
+def _apply_role_to_params(dist_name: str, base_params, role: float, stat: str):
     beta = _MISSING_STAT_EXP.get(stat, 0.9)
     rpow = float(np.clip(role, 1e-4, 1.0)) ** beta
 
@@ -551,14 +539,10 @@ def _apply_role_to_params(dist_name: str, base_params, role: float, stat: str, v
         if dist_name == "poisson":
             mu = float(base_params[0])
             new = ("poisson", (_poisson_set_mu(mu * rpow)))
-            if verbose:
-                print(f"[role] {stat}: poisson mu {mu:.3g} -> {(mu*rpow):.3g}")
             return new
         if dist_name == "nbinom":
             m, _, p = _nbinom_get_mean(base_params)
             new = ("nbinom", _nbinom_set_mean_keep_p(m * rpow, p))
-            if verbose:
-                print(f"[role] {stat}: nbinom mean {m:.3g} -> {(m*rpow):.3g} (p kept={p:.3g})")
             return new
         return dist_name, tuple(base_params)
 
@@ -567,9 +551,6 @@ def _apply_role_to_params(dist_name: str, base_params, role: float, stat: str, v
     shapes, loc, scale = _split_params(dist_fn, base_params, dist_name)
     new_loc   = loc * rpow
     new_scale = scale * rpow if scale is not None else None
-    if verbose:
-        print(f"[role] {stat}: r={role:.3f} β={beta:.2f} → loc {loc:.3g}->{new_loc:.3g}, "
-              f"scale {scale if scale is not None else 'NA'}->{new_scale if new_scale is not None else 'NA'}")
     return (dist_name, (shapes + (new_loc, new_scale))) if new_scale is not None else (dist_name, (shapes + (new_loc,)))
 
 # =====================================================================================
@@ -730,7 +711,7 @@ def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_s
         opp_tt = home_tt
 
     # just lazily estimate a mean and std based on odds. better than nothing, but still doesn't factor in interceptions or sacks/fumbles. 
-    mean = 11.0 - 0.25 * float(opp_tt) + 0.15 * max(-float(team_spread), 0.0) + 0.05 * (46.0 - float(total))
+    mean = 10.0 - 0.25 * float(opp_tt) + 0.15 * max(-float(team_spread), 0.0) + 0.05 * (46.0 - float(total))
     mean = float(np.clip(mean, -1.5, 14.0))
     std = 5.0
     return mean, std
@@ -738,14 +719,17 @@ def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_s
 def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int) -> np.ndarray:
     """Project DST points from NFLGameOdds when available; otherwise fall back to a generic distribution."""
     rng = np.random.default_rng()
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player pos-DST, trying to match {team} vs {opponent}")
 
     if team and opponent:
         total, home_spread, is_team_home = _latest_matchup_total_and_home_spread(session, team, opponent)
+        logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] got lines total={total} home_spread={home_spread} is_team_home={is_team_home}")
     else:
         total = home_spread = is_team_home = None
 
     if (total is not None) and (home_spread is not None) and (is_team_home is not None):
         mu, sigma = _dst_normal_params_from_lines(team, opponent, float(total), float(home_spread), bool(is_team_home))
+        logging.debug("[update_odds][generate_and_fit_all][simulate_player_fpts][2] dst normal params: mu=%.3f sigma=%.3f", mu, sigma)
         fpts = rng.normal(loc=mu, scale=sigma, size=n_samples)
     else:
         # Fallback: historical-ish shape
@@ -772,7 +756,7 @@ def _fpts_summary(samples: np.ndarray,
         s[f"p{int(p):02d}"] = float(v)
     return s
 
-def _save_fpts_summary_on_player(session, player, summary: dict, verbose: bool = False) -> None:
+def _save_fpts_summary_on_player(session, player, summary: dict) -> None:
     """
     Save summary onto NFLPlayer. If a JSON column like fpts_summary or
     fpts_summary_json exists, store the whole dict there too.
@@ -806,16 +790,11 @@ def _save_fpts_summary_on_player(session, player, summary: dict, verbose: bool =
             updates[col] = summary[key]
 
     if not updates:
-        if verbose:
-            print(f"[summary] No matching columns on NFLPlayer; nothing to persist for id={player.id}")
         return
 
     session.query(NFLPlayer).filter(NFLPlayer.id == player.id).update(
         updates, synchronize_session=False
     )
-    if verbose:
-        set_keys = ", ".join(f"{k}={updates[k]}" for k in sorted(updates.keys()))
-        print(f"[summary] Updated NFLPlayer id={player.id}: {set_keys}")
 
     if commit:
         session.commit()
@@ -840,7 +819,7 @@ def load_models(model_dir: Path):
             stacked_copulas[pos] = joblib.load(path)
     return marginals, stacked_copulas
 
-def _position_baseline_scrim_td_mu(marginals: dict, pos: str, verbose: bool=False) -> float:
+def _position_baseline_scrim_td_mu(marginals: dict, pos: str) -> float:
     """Sum baseline means for rushing_tds + receiving_tds for this position."""
     mu = 0.0
     for stat in ("rushing_tds", "receiving_tds"):
@@ -850,26 +829,20 @@ def _position_baseline_scrim_td_mu(marginals: dict, pos: str, verbose: bool=Fals
                 mu += float(_mean_of(info["dist"], info["params"]))
             except Exception:
                 pass
-    if verbose:
-        print(f"[role][base] pos={pos} baseline_scrim_mu={mu:.4f}")
     return mu
 
-def _role_from_anytime_td(session: Session, player_name: str, pos: str, marginals: dict, verbose: bool=False) -> float | None:
+def _role_from_anytime_td(session: Session, player_name: str, pos: str, marginals: dict) -> float | None:
     """Use player_anytime_td as the usage signal → role in [ROLE_MIN, ROLE_MAX]."""
-    _, p_any = _consensus_prob_for_side(session, player_name, "player_anytime_td", target_side="yes", verbose=verbose)
+    _, p_any = _consensus_prob_for_side(session, player_name, "player_anytime_td", target_side="yes")
     if p_any is None:
-        if verbose:
-            print("[role] no player_anytime_td market -> cannot compute role")
         return None
     mu_any = _poisson_mu_from_prob_at_least_one(float(p_any))   # intensity from P(TD>=1)
-    mu_base = _position_baseline_scrim_td_mu(marginals, pos, verbose=verbose)
+    mu_base = _position_baseline_scrim_td_mu(marginals, pos)
     if mu_base <= 0:
         role = ROLE_MIN
     else:
         ratio = mu_any / mu_base
         role = float(np.clip(ratio ** ROLE_BETA, ROLE_MIN, ROLE_MAX))
-    if verbose:
-        print(f"[role][anytime] p_any={p_any:.4f} -> mu_any={mu_any:.4f}; mu_base={mu_base:.4f} -> role≈{role:.3f}")
     return role
 
 def _has_anytime_odds(session: Session, player_name: str) -> bool:
@@ -881,11 +854,9 @@ def simulate_player_fpts(
     player_id: int,
     marginals: dict,
     stacked_copulas: dict,
-    n_samples: int = 10000,
-    verbose: bool = False,
+    n_samples: int = 10000
 ) -> np.ndarray:
     """
-    EXACT FLOW YOU REQUESTED:
       - For each stat in the position config:
           * If there are odds for that stat: calibrate the base marginal to pass through quoted prob
           * Else: derive role from player_anytime_td and shrink the base marginal accordingly
@@ -893,30 +864,26 @@ def simulate_player_fpts(
       - Convert to FPTS samples
     """
     player = session.get(NFLPlayer, player_id)
-    if verbose:
-        print(f"matched {player_id} to DB player {player.name}")
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][1] player_id={player_id} matched to database player name={player.name}")
     raw_pos = (player.position or "").upper()
     pos = 'DST' if raw_pos in DST_POS else raw_pos
 
-    if verbose:
-        print(f"position: {pos}")
     if pos == 'K':
+        logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} pos=K → using KICKER_DEFAULT_SHAPE/SCALE")
         return st.gamma.rvs(KICKER_DEFAULT_SHAPE, scale=KICKER_DEFAULT_SCALE, size=n_samples).astype(float)
     if pos == 'DST':
         return _sample_dst_fpts(session, player.team, player.opponent, n_samples)
 
 
-    if verbose:
-        print(f"[player] id={player_id} name={player.name} pos={pos}")
-
     stats = position_configs[pos]['stats']
+
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} pos={pos} stats={stats}")
     corr = stacked_copulas.get(pos, np.eye(len(stats)))
-    if verbose:
-        print(f"[copula] stats={stats}")
-        print(f"[copula] corr shape={getattr(corr, 'shape', None)}")
 
     # 0) Role comes from anytime TD. If missing, we will bail (skip/delete upstream).
-    role_factor = _role_from_anytime_td(session, player.name, pos, marginals, verbose=verbose)
+    role_factor = _role_from_anytime_td(session, player.name, pos, marginals)
+
+    logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} role_factor={role_factor}")
 
     # 1) Build per-stat adjusted distributions (either from odds or role shrink)
     adjusted = []  # list of (dist_name, params) per stat, in order
@@ -930,30 +897,20 @@ def simulate_player_fpts(
         base_info = marginals[pos][stat]
         dist_name, params = base_info["dist"], tuple(base_info["params"])
 
-        if verbose:
-            try:
-                print(f"[stat][base] {stat:16s} {dist_name} params={params} mean≈{_mean_of(dist_name, params):.3f}")
-            except Exception:
-                print(f"[stat][base] {stat:16s} {dist_name} params={params}")
-
+        logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} stat={stat} base_dist={dist_name} base_params={params}")
         # TD stats are filled via anytime split during sampling; store base to keep list aligned
         if stat in {"rushing_tds", "receiving_tds"} and SIMPLE_MODE:
             adjusted.append((dist_name, params))
             continue
 
         # Try stat-specific odds
-        pt_cons, p_cons = _consensus_prob_for_side(session, player.name, stat, target_side="over", verbose=verbose)
+        pt_cons, p_cons = _consensus_prob_for_side(session, player.name, stat, target_side="over")
         if (pt_cons is not None) and (p_cons is not None):
             before = (dist_name, params)
             if _is_count_dist(dist_name):
                 dist_name, params = _calibrate_count_mean_from_ou(dist_name, params, float(pt_cons), "over", float(p_cons))
             else:
-                dist_name, params = _calibrate_loc(dist_name, params, point=float(pt_cons), side="over", p_fair=float(p_cons), verbose=verbose)
-            if verbose:
-                try:
-                    print(f"[stat][odds] {stat:16s} point={pt_cons} p_fair={p_cons} {before} -> {(dist_name, params)} mean≈{_mean_of(dist_name, params):.3f}")
-                except Exception:
-                    print(f"[stat][odds] {stat:16s} point={pt_cons} p_fair={p_cons} {before} -> {(dist_name, params)}")
+                dist_name, params = _calibrate_loc(dist_name, params, point=float(pt_cons), side="over", p_fair=float(p_cons))
             adjusted.append((dist_name, params))
             continue
 
@@ -962,12 +919,7 @@ def simulate_player_fpts(
             raise RuntimeError(f"[role][MISSING] {player.name} has no player_anytime_td -> cannot derive role for {stat}")
 
         before = (dist_name, params)
-        dist_name, params = _apply_role_to_params(dist_name, params, role_factor, stat, verbose=verbose)
-        if verbose:
-            try:
-                print(f"[stat][role] {stat:16s} applied role={role_factor:.3f} {before} -> {(dist_name, params)} mean≈{_mean_of(dist_name, params):.3f}")
-            except Exception:
-                print(f"[stat][role] {stat:16s} applied role={role_factor:.3f} {before} -> {(dist_name, params)}")
+        dist_name, params = _apply_role_to_params(dist_name, params, role_factor, stat)
         adjusted.append((dist_name, params))
 
     # 2) Simulate dependent samples via Gaussian copula
@@ -978,7 +930,7 @@ def simulate_player_fpts(
         # TDs from anytime market: Bernoulli-or-Poisson based on role/p_any, then split
     tds_filled = False
     if SIMPLE_MODE and (td_indices["rushing_tds"] is not None or td_indices["receiving_tds"] is not None):
-        _, p_any = _consensus_prob_for_side(session, player.name, 'player_anytime_td', target_side='yes', verbose=verbose)
+        _, p_any = _consensus_prob_for_side(session, player.name, 'player_anytime_td', target_side='yes')
         if p_any is not None:
             # decide kernel
             kernel = _choose_td_kernel(float(p_any), float(role_factor if role_factor is not None else 1.0))
@@ -1013,18 +965,10 @@ def simulate_player_fpts(
                 X[:, td_indices["receiving_tds"]] = K_rec
 
             tds_filled = True
-            if verbose:
-                print(f"[tds][simple] kernel={kernel} p_any={p_any:.4f} mu_total≈{mu_total:.4f} α_rush={alpha:.2f}  "
-                      f"E[K]={K.mean():.3f}  E[rush]={K_rush.mean():.3f}  E[rec]={K_rec.mean():.3f}")
-        else:
-            if verbose:
-                print("[tds][simple] no anytime market -> TDs fall back to base marginals")
 
     # For non-TD stats, transform uniforms through each calibrated/shrunk marginal
     for j, stat in enumerate(stats):
         if tds_filled and stat in {"rushing_tds", "receiving_tds"}:
-            if verbose:
-                print(f"[stat] {stat:16s} filled from simple scrimmage TD split")
             continue
 
         dist_name, params = adjusted[j]
@@ -1033,10 +977,6 @@ def simulate_player_fpts(
     # 3) Combine to FPTS
     weights = np.array([FPTS_WEIGHTS.get(stat, 0.0) for stat in stats], dtype=float)
     fpts = X.dot(weights).astype(float)
-
-    if verbose:
-        s = _fpts_summary(fpts)
-        print(f"[fpts] n={s['n']} mean={s['mean']:.3f} std={s['std']:.3f} p05={s['p05']:.3f} p50={s['p50']:.3f} p95={s['p95']:.3f}")
 
     return fpts
 
@@ -1049,8 +989,7 @@ def fit_and_store_fpts_distribution(
     player_id: int,
     fpts_samples: np.ndarray,
     *,
-    save_summary: bool = True,
-    verbose: bool = False
+    save_summary: bool = True
 ) -> None:
     """
     Fit a marginal to simulated FPTS. We intentionally allow NEGATIVE support
@@ -1078,12 +1017,8 @@ def fit_and_store_fpts_distribution(
     player.fpts_dist_params = params
 
     if save_summary:
-        if verbose:
-            print("saving summary...")
         summary = _fpts_summary(xs)
-        if verbose:
-            print(f"fpts summary: {summary}")
-        _save_fpts_summary_on_player(session, player, summary, verbose=verbose)
+        _save_fpts_summary_on_player(session, player, summary)
 
     session.commit()
 
@@ -1101,9 +1036,6 @@ SLOTS = {"QB":1, "RB":2, "WR":3, "TE":2, "K":1, "DST":1}  # max modeled depth pe
 def assign_slots(session: Session) -> None:
     # get all active players with a team
     players = session.query(NFLPlayer).filter(NFLPlayer.team.isnot(None)).all()
-
-    print(f"Assigning slot_label for {len(players)} players with a team…")
-
     # group by (team, base_pos)
     from collections import defaultdict
     buckets = defaultdict(list)
@@ -1134,60 +1066,66 @@ def generate_and_fit_all(
     session: Session,
     model_dir: Path,
     n_samples: int = 10000,
-    verbose: bool = False,
-    delete_players_without_odds: bool = True,
-    save_fpts_sample: bool = True,
-    assign_slots_after_fit: bool = True,
 ) -> None:
+    
     marginals, stacked_copulas = load_models(model_dir)
+    logging.info(f"[update_odds][7][2] ✔ player models loaded from {model_dir}") 
 
     deleted = 0
 
-    for player in session.query(NFLPlayer).all():
+    # materialize players once so tqdm knows the total
+    players = session.query(NFLPlayer).all()
+    logger = logging.getLogger(__name__)
+
+    show_bar = logger.isEnabledFor(logging.INFO) and (tqdm is not None)
+
+    # make a single-line progress bar
+    iterator = players
+    if show_bar:
+        iterator = tqdm(
+            players,
+            desc="[update_odds][7][3]",
+            unit="player",
+            dynamic_ncols=True,
+            leave=False,
+            mininterval=0.2,
+        )
+
+    for player in iterator:
+        # (optional) show a tiny postfix with who we’re processing
+        if tqdm is not None:
+            try:
+                iterator.set_postfix_str(f"{player.name or 'unknown'} · {player.position or ''}")
+            except Exception:
+                pass
+
         pos_upper = (player.position or "").upper()
         keep_anyway = pos_upper in {"K", "DST", "D/ST", "DEF"}
 
         # Require at least ANY odds; and specifically require 'anytime_td' for role
-        if delete_players_without_odds and not keep_anyway:
+        if not keep_anyway:
             if not _player_has_any_odds(session, player.name):
-                if verbose:
-                    print(f"[NO ODDS] Deleting NFLPlayer id={player.id} name={player.name}")
+                logging.debug(f"[NO ODDS] Deleting NFLPlayer id={player.id} name={player.name}")
                 session.delete(player); session.commit(); deleted += 1
                 continue
             if not _has_anytime_odds(session, player.name):
-                if verbose:
-                    print(f"[NO ANYTIME] Deleting NFLPlayer id={player.id} name={player.name}")
+                logging.debug(f"[NO ANYTIME] Deleting NFLPlayer id={player.id} name={player.name}")
                 session.delete(player); session.commit(); deleted += 1
                 continue
 
         try:
+            logging.debug(f"[update_odds][generate_and_fit_all][2] Simulating fpts for NFLPlayer id={player.id} name={player.name} pos={player.position} team={player.team}...")
             fpts = simulate_player_fpts(
                 session,
                 player.id,
                 marginals,
                 stacked_copulas,
-                n_samples,
-                verbose=verbose,
+                n_samples=n_samples,
             )
         except RuntimeError as e:
-            msg = str(e).lower()
-            if "no player_anytime_td" in msg and delete_players_without_odds and not keep_anyway:
-                if verbose:
-                    print(f"[NO ANYTIME] Deleting NFLPlayer id={player.id} name={player.name} (no role)")
-                session.delete(player); session.commit(); deleted += 1
-                continue
-            else:
-                raise
+            logging.warning(f"[SKIP] id={player.id} name={player.name} :: {e}")
+            continue
 
-        if verbose:
-            print(f"FPTS FOR ID: {player.id} :: {fpts}")
+        fit_and_store_fpts_distribution(session, player.id, fpts)
 
-        fit_and_store_fpts_distribution(session, player.id, fpts, save_summary=save_fpts_sample, verbose=verbose)
-
-    if verbose and delete_players_without_odds:
-        print(f"[SUMMARY] Deleted {deleted} players with no odds.")
-
-    if assign_slots_after_fit:
-        if verbose:
-            print("[slots] assigning slot_label for all players…")
-        assign_slots(session)
+    assign_slots(session)

@@ -10,6 +10,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
     p.add_argument("--config", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../config/nfl.json")))
     p.add_argument("-n", type=int, default=1000, help="Number of simulation samples per contest (default: 1000)")
+    p.add_argument("-c", type=int, default=10000, help="Field cap (default: 100)")
+    p.add_argument("-d", type=bool, default=False, help="Allow duplicates in classic slates (default: False)")
     return p.parse_args()
 
 def main():
@@ -43,9 +45,9 @@ def main():
                 contest_id   = cid,
                 contest_name = name,
                 config_path  = args.config,
-                field_cap    = 50000,
+                field_cap    = args.c,
                 num_sims     = args.n,
-                use_classic_dupes = True,  # allows dupes in smaller classic slates, flip to false for anything over probably like 3-4 games
+                use_classic_dupes = args.d,
             )
         except Exception as e:
             print(f"⚠️  Skipped contest {cid} ('{name}') due to error: {e}\n")

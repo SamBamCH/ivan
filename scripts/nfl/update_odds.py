@@ -16,6 +16,11 @@ from sqlalchemy import select, distinct
 from ivan.core.utils import normalize_name
 from ivan.sports.nfl.models import NFLPlayer, NFLOdds, NFLGameOdds
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
+
+
 DIAG_DIR = Path("data/nfl/diagnostics")
 
 def write_odds_pool_mismatch_report(session, df_odds: pd.DataFrame, out_dir: Path = DIAG_DIR) -> None:
@@ -84,23 +89,34 @@ def write_odds_pool_mismatch_report(session, df_odds: pd.DataFrame, out_dir: Pat
             json.dump(suggestions, f, indent=2, ensure_ascii=False)
 
     # Small console ping so the run log highlights the files
-    print(f"[diagnostics] wrote mismatch reports to: {out_dir} (timestamp {ts})")
+    logging.info(f"[update_odds]    Wrote diagnostics to {out_dir}:\n"
+                 f"                 1) odds_not_in_pool_{ts}.csv ({len(odds_not_in_pool)})\n"
+                 f"                 2) dk_players_missing_odds_{ts}.csv ({len(at_risk)})\n"
+                 f"                 3) name_suggestions_{ts}.json ({len(suggestions)})")
 
 
 
 engine = init_db("nfl", None)
 session = get_session(engine)
 
+logging.info("[update_odds][1] ✔ Connected to database")
 
 api_key = '58699e4fe47856c9182db84884772536' 
 relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
 
+logging.debug(f"Teams to fetch odds for: {sorted(relevant_teams)} ({len(relevant_teams) // 2} games)")
+
 odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
+
+logging.debug("raw odds from api: " + str(odds))
 df_odds = parse_odds(odds)
+logging.debug("parsed odds: " + str(df_odds.head()))
+logging.info(f"[update_odds][2] ✔ Parsed {len(df_odds)} odds rows from API response")
 
 records = df_odds.to_dict(orient='records') 
 session.bulk_insert_mappings(NFLOdds, records)
 session.commit()
+logging.info(f"[update_odds][3] ✔ Inserted {len(records)} rows into nfl_odds table")
 
 game_odds_json, headers = get_game_odds(
     sport="americanfootball_nfl",
@@ -111,9 +127,12 @@ game_odds_json, headers = get_game_odds(
     dateFormat="iso",
     bookmakers="draftkings"
 )
+logging.debug("raw game odds from api: " + str(game_odds_json))
+logging.info(f"[update_odds][4] ✔ Fetched game odds from API")
 
 if game_odds_json:
     df_game_odds = parse_game_odds(game_odds_json)
+    logging.info(f"[update_odds][5] ✔ Parsed {len(df_game_odds)} game odds rows from API response")
 
     # Optional: drop duplicates created by books mirroring same snapshot
     if not df_game_odds.empty:
@@ -128,11 +147,14 @@ if game_odds_json:
         rem = headers.get("x-requests-remaining")
         used = headers.get("x-requests-used")
         last = headers.get("x-requests-last")
-        print(f"[odds-api] game_odds inserted: {len(df_game_odds)} rows | remaining={rem} used={used} last={last}")
+        logging.info(f"[update_odds][6] ✔ Inserted {len(df_game_odds)} rows into nfl_game_odds table")
+        logging.info(f"[update_odds]    the-odds-api quota used: {used} | remaining: {rem} | last request cost: {last}")
 else:
-    print("[odds-api] no game odds returned; nothing inserted.")
+    logging.error("[update_odds][5] No game odds returned from API")
 
 write_odds_pool_mismatch_report(session, df_odds)
 
 model_dir = 'data/nfl/models'
-generate_and_fit_all(session, Path(model_dir), n_samples=10000, verbose=False, delete_players_without_odds=True, save_fpts_sample=True)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
+
+logging.info(f"[update_odds][7][1] Generating and fitting player FPTS distributions from odds in {model_dir}")
+generate_and_fit_all(session, Path(model_dir), n_samples=10000)

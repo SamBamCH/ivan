@@ -505,6 +505,7 @@ def simulate_one_contest(
     field_sz = int(contest.total_entries)
     capped_field_sz = min(field_cap, field_sz)
     entry_fee = float(contest.entry_fee)
+    print(f"[{contest_id}] '{contest_name}' | type={mode} | entry_fee=${entry_fee:.2f} | field={field_sz:,} capped→{capped_field_sz:,} | num_sims={num_sims} | use_classic_dupes={use_classic_dupes}")
 
     # 1) sample the field (WITH replacement). This returns counts per lineup_id.
     counts_by_lineup, meta = sample_field(
