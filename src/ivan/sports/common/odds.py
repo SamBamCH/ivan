@@ -6,6 +6,112 @@ import pandas as pd
 
 from ivan.core.utils import map_team_name_to_abbreviation, normalize_name
 
+def get_game_odds(
+    sport: str,
+    api_key: str,
+    regions: str = "us",
+    markets: str = "h2h,spreads,totals",
+    oddsFormat: str = "american",
+    dateFormat: str = "iso",
+    eventIds: str | None = None,
+    bookmakers: str | None = None,
+    commenceTimeFrom: str | None = None,
+    commenceTimeTo: str | None = None,
+    includeLinks: str | None = None,
+    includeSids: str | None = None,
+    includeBetLimits: str | None = None,
+):
+    """
+    Calls /v4/sports/{sport}/odds with the provided params and returns JSON.
+    """
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": regions,
+        "markets": markets,
+        "oddsFormat": oddsFormat,
+        "dateFormat": dateFormat,
+    }
+    # Optional filters
+    if eventIds:          params["eventIds"] = eventIds
+    if bookmakers:        params["bookmakers"] = bookmakers
+    if commenceTimeFrom:  params["commenceTimeFrom"] = commenceTimeFrom
+    if commenceTimeTo:    params["commenceTimeTo"] = commenceTimeTo
+    if includeLinks:      params["includeLinks"] = includeLinks
+    if includeSids:       params["includeSids"] = includeSids
+    if includeBetLimits:  params["includeBetLimits"] = includeBetLimits
+
+    resp = requests.get(url, params=params)
+    if resp.status_code == 200:
+        # You can access quota: resp.headers.get('x-requests-remaining'), etc.
+        return resp.json(), resp.headers
+    else:
+        print(f"Error fetching game odds: {resp.status_code} - {resp.text}")
+        return None, resp.headers if hasattr(resp, "headers") else {}
+
+# --- NEW: flatten /odds response into per-outcome rows ---
+def parse_game_odds(odds_json: list[dict]) -> pd.DataFrame:
+    """
+    Returns columns:
+      game_id, sport_key, commence_time, home_team, away_team, home_abbr, away_abbr,
+      bookmaker, market, last_update, outcome_name, side, point, price
+    """
+    rows: list[dict] = []
+    if not odds_json:
+        return pd.DataFrame(rows)
+
+    for ev in odds_json:
+        game_id       = ev.get("id")
+        sport_key     = ev.get("sport_key")
+        commence_iso  = ev.get("commence_time")
+        commence_dt   = parser.isoparse(commence_iso) if commence_iso else None
+        home_team     = ev.get("home_team")
+        away_team     = ev.get("away_team")
+        home_abbr     = map_team_name_to_abbreviation(home_team) if home_team else None
+        away_abbr     = map_team_name_to_abbreviation(away_team) if away_team else None
+
+        for bm in ev.get("bookmakers", []):
+            bookmaker    = bm.get("key")
+            for mkt in bm.get("markets", []):
+                market       = mkt.get("key")     # 'h2h' | 'spreads' | 'totals' | ...
+                last_update  = mkt.get("last_update")
+                for out in mkt.get("outcomes", []):
+                    outcome_name = out.get("name") or out.get("description")  # team for h2h/spreads; 'Over'/'Under' for totals
+                    point        = out.get("point")
+                    price        = out.get("price")
+
+                    # helper side tag
+                    side = None
+                    if market == "totals":
+                        if isinstance(outcome_name, str):
+                            name_lc = outcome_name.lower()
+                            if "over" in name_lc:  side = "over"
+                            if "under" in name_lc: side = "under"
+                    elif market in ("h2h", "spreads"):
+                        if outcome_name == home_team:
+                            side = "home"
+                        elif outcome_name == away_team:
+                            side = "away"
+
+                    rows.append({
+                        "game_id": game_id,
+                        "sport_key": sport_key,
+                        "commence_time": commence_dt,
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "home_abbr": home_abbr,
+                        "away_abbr": away_abbr,
+                        "bookmaker": bookmaker,
+                        "market": market,
+                        "last_update": last_update,
+                        "outcome_name": outcome_name,
+                        "side": side,
+                        "point": point,
+                        "price": price,
+                    })
+
+    return pd.DataFrame(rows)
+
 def _get_upcoming_events(sport, api_key):
     """
     Fetches all upcoming events for the specified sport.

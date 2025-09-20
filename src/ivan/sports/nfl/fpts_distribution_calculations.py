@@ -19,7 +19,7 @@ from ivan.sports.nfl.player_level_calculations import (
     fit_best_distribution,  # imported (we fit FPTS as normal to allow negatives)
 )
 from ivan.sports.nfl.stat_distribution_calculations import build_player_stat_overrides
-from ivan.sports.nfl.models import NFLPlayer, NFLStat, NFLOdds
+from ivan.sports.nfl.models import NFLPlayer, NFLStat, NFLOdds, NFLGameOdds
 from ivan.core.utils import normalize_name
 
 # =====================================================================================
@@ -606,9 +606,151 @@ def _fetch_dst_points(session: Session, team: str | None, opponent: str | None) 
         vals = np.array([r[0] for r in res], dtype=float)
         return vals
 
-def _sample_dst_fpts(n_samples: int) -> np.ndarray:
+def _latest_matchup_total_and_home_spread_sql(conn, team: str, opponent: str) -> tuple[float | None, float | None, bool | None]:
+    """
+    Raw-SQL fallback for game totals and the HOME spread for a given matchup.
+    Returns (total, home_spread, is_team_home) where sportsbook convention is used:
+      home_spread < 0 => home favored | home_spread > 0 => home underdog
+    If no data found, returns (None, None, None).
+    Expects a table `game_odds` with columns like the sample you shared.
+    """
+    # Latest TOTAL in either orientation of the matchup
+    total_row = conn.execute(text("""
+        SELECT point, home_abbr, away_abbr, last_update
+        FROM game_odds
+        WHERE market='totals' AND (
+              (home_abbr=:t AND away_abbr=:o) OR
+              (home_abbr=:o AND away_abbr=:t)
+        )
+        ORDER BY last_update DESC
+        LIMIT 1
+    """), {"t": team, "o": opponent}).fetchone()
+
+    if not total_row:
+        return None, None, None
+
+    total = float(total_row[0]) if total_row[0] is not None else None
+    home_abbr = str(total_row[1])
+    away_abbr = str(total_row[2])
+    is_team_home = (home_abbr.upper() == (team or "").upper())
+
+    # Latest HOME spread for this exact orientation; if only AWAY row exists, invert it
+    spread_row = conn.execute(text("""
+        SELECT point
+        FROM game_odds
+        WHERE market='spreads' AND side='home' AND home_abbr=:h AND away_abbr=:a
+        ORDER BY last_update DESC
+        LIMIT 1
+    """), {"h": home_abbr, "a": away_abbr}).fetchone()
+
+    if not spread_row:
+        away_row = conn.execute(text("""
+            SELECT point
+            FROM game_odds
+            WHERE market='spreads' AND side='away' AND home_abbr=:h AND away_abbr=:a
+            ORDER BY last_update DESC
+            LIMIT 1
+        """), {"h": home_abbr, "a": away_abbr}).fetchone()
+        home_spread = -float(away_row[0]) if (away_row and away_row[0] is not None) else None
+    else:
+        home_spread = float(spread_row[0]) if spread_row[0] is not None else None
+
+    return total, home_spread, is_team_home
+
+
+def _latest_matchup_total_and_home_spread(session: Session, team: str, opponent: str) -> tuple[float | None, float | None, bool | None]:
+    """ORM-first resolver for (total, home_spread, is_team_home). Falls back to SQL if needed."""
+    if NFLGameOdds is not None:
+        try:
+            # Latest TOTAL for either orientation
+            row = (session.query(NFLGameOdds)
+                          .filter(
+                              NFLGameOdds.market == 'totals',
+                              ((NFLGameOdds.home_abbr == team) & (NFLGameOdds.away_abbr == opponent)) |
+                              ((NFLGameOdds.home_abbr == opponent) & (NFLGameOdds.away_abbr == team))
+                          )
+                          .order_by(desc(NFLGameOdds.last_update))
+                          .first())
+            if row is not None:
+                total = float(row.point) if row.point is not None else None
+                home_abbr = str(row.home_abbr)
+                away_abbr = str(row.away_abbr)
+                is_team_home = (home_abbr.upper() == (team or "").upper())
+
+                # Latest HOME spread for this exact orientation; if missing, invert latest AWAY spread
+                spr = (session.query(NFLGameOdds)
+                              .filter(
+                                  NFLGameOdds.market == 'spreads',
+                                  NFLGameOdds.side == 'home',
+                                  NFLGameOdds.home_abbr == home_abbr,
+                                  NFLGameOdds.away_abbr == away_abbr
+                              )
+                              .order_by(desc(NFLGameOdds.last_update))
+                              .first())
+                if spr is None:
+                    spr_away = (session.query(NFLGameOdds)
+                                        .filter(
+                                            NFLGameOdds.market == 'spreads',
+                                            NFLGameOdds.side == 'away',
+                                            NFLGameOdds.home_abbr == home_abbr,
+                                            NFLGameOdds.away_abbr == away_abbr
+                                        )
+                                        .order_by(desc(NFLGameOdds.last_update))
+                                        .first())
+                    home_spread = -float(spr_away.point) if (spr_away and spr_away.point is not None) else None
+                else:
+                    home_spread = float(spr.point) if spr.point is not None else None
+
+                return total, home_spread, is_team_home
+        except Exception:
+            pass
+
+    # Fallback to raw SQL
+    with session.bind.connect() as conn:
+        return _latest_matchup_total_and_home_spread_sql(conn, team, opponent)
+
+
+def _implied_team_totals(total: float, home_spread: float) -> tuple[float, float]:
+    """Return (home_total, away_total) using standard conversion."""
+    # Home total = T/2 - s_home/2, Away total = T/2 + s_home/2
+    home_tt = float(total) * 0.5 - float(home_spread) * 0.5
+    away_tt = float(total) - home_tt
+    return home_tt, away_tt
+
+
+def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_spread: float, is_team_home: bool) -> tuple[float, float]:
+    """Heuristic mapping from implied totals/spread to a DST Normal(mean, std)."""
+    home_tt, away_tt = _implied_team_totals(total, home_spread)
+
+    if is_team_home:
+        team_spread = home_spread           # negative if favored
+        opp_tt = away_tt
+    else:
+        team_spread = -home_spread          # away spread is negative of home spread
+        opp_tt = home_tt
+
+    # just lazily estimate a mean and std based on odds. better than nothing, but still doesn't factor in interceptions or sacks/fumbles. 
+    mean = 11.0 - 0.25 * float(opp_tt) + 0.15 * max(-float(team_spread), 0.0) + 0.05 * (46.0 - float(total))
+    mean = float(np.clip(mean, -1.5, 14.0))
+    std = 5.0
+    return mean, std
+
+def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int) -> np.ndarray:
+    """Project DST points from NFLGameOdds when available; otherwise fall back to a generic distribution."""
     rng = np.random.default_rng()
-    fpts = rng.normal(loc=6.5, scale=5, size=n_samples)
+
+    if team and opponent:
+        total, home_spread, is_team_home = _latest_matchup_total_and_home_spread(session, team, opponent)
+    else:
+        total = home_spread = is_team_home = None
+
+    if (total is not None) and (home_spread is not None) and (is_team_home is not None):
+        mu, sigma = _dst_normal_params_from_lines(team, opponent, float(total), float(home_spread), bool(is_team_home))
+        fpts = rng.normal(loc=mu, scale=sigma, size=n_samples)
+    else:
+        # Fallback: historical-ish shape
+        fpts = rng.normal(loc=6.5, scale=5.0, size=n_samples)
+
     return np.clip(fpts, -6.0, None)
 
 def _fpts_summary(samples: np.ndarray,
@@ -761,7 +903,8 @@ def simulate_player_fpts(
     if pos == 'K':
         return st.gamma.rvs(KICKER_DEFAULT_SHAPE, scale=KICKER_DEFAULT_SCALE, size=n_samples).astype(float)
     if pos == 'DST':
-        return _sample_dst_fpts(n_samples)
+        return _sample_dst_fpts(session, player.team, player.opponent, n_samples)
+
 
     if verbose:
         print(f"[player] id={player_id} name={player.name} pos={pos}")

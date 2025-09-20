@@ -3,6 +3,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from ivan.sports.common.odds import get_odds, parse_odds 
+from ivan.sports.common.odds import get_game_odds, parse_game_odds
 from ivan.sports.nfl.models import NFLOdds, NFLPlayer
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
@@ -13,7 +14,7 @@ import pandas as pd
 from sqlalchemy import select, distinct
 
 from ivan.core.utils import normalize_name
-from ivan.sports.nfl.models import NFLPlayer, NFLOdds
+from ivan.sports.nfl.models import NFLPlayer, NFLOdds, NFLGameOdds
 
 DIAG_DIR = Path("data/nfl/diagnostics")
 
@@ -101,7 +102,37 @@ records = df_odds.to_dict(orient='records')
 session.bulk_insert_mappings(NFLOdds, records)
 session.commit()
 
+game_odds_json, headers = get_game_odds(
+    sport="americanfootball_nfl",
+    api_key=api_key,
+    regions="us",
+    markets="h2h,spreads,totals",  # adjust to control quota/cost
+    oddsFormat="american",
+    dateFormat="iso",
+    bookmakers="draftkings"
+)
+
+if game_odds_json:
+    df_game_odds = parse_game_odds(game_odds_json)
+
+    # Optional: drop duplicates created by books mirroring same snapshot
+    if not df_game_odds.empty:
+        dedup_cols = ["game_id","bookmaker","market","outcome_name","point","last_update"]
+        df_game_odds = df_game_odds.drop_duplicates(subset=dedup_cols)
+
+        # bulk insert
+        session.bulk_insert_mappings(NFLGameOdds, df_game_odds.to_dict(orient="records"))
+        session.commit()
+
+        # Quick visibility on quota usage
+        rem = headers.get("x-requests-remaining")
+        used = headers.get("x-requests-used")
+        last = headers.get("x-requests-last")
+        print(f"[odds-api] game_odds inserted: {len(df_game_odds)} rows | remaining={rem} used={used} last={last}")
+else:
+    print("[odds-api] no game odds returned; nothing inserted.")
+
 write_odds_pool_mismatch_report(session, df_odds)
 
 model_dir = 'data/nfl/models'
-generate_and_fit_all(session, Path(model_dir), n_samples=10000, verbose=True, delete_players_without_odds=True, save_fpts_sample=True)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 
+generate_and_fit_all(session, Path(model_dir), n_samples=10000, verbose=False, delete_players_without_odds=True, save_fpts_sample=True)#TODO: add a plot arg to plot the actual distribution of sampled values against the fitted model. 

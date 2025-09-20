@@ -264,4 +264,40 @@ class NFLTeamWeekPositionalFPTS(NFLBase):
     OPPK    = Column(Float, nullable=True)  # placeholder
     OPPDST  = Column(Float, nullable=True)  # placeholder
 
+class NFLGameOdds(NFLBase):
+    __tablename__ = "game_odds"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Event-level identifiers
+    game_id          = Column(String,  nullable=False, index=True)   # odds API 'id'
+    sport_key        = Column(String,  nullable=False, index=True)
+    commence_time    = Column(DateTime, nullable=False)
+
+    # Teams (as full names from the API) + handy abbreviations
+    home_team        = Column(String,  nullable=False)
+    away_team        = Column(String,  nullable=False)
+    home_abbr        = Column(String,  nullable=True)
+    away_abbr        = Column(String,  nullable=True)
+
+    # Book & market
+    bookmaker        = Column(String,  nullable=False, index=True)   # e.g., 'draftkings'
+    market           = Column(String,  nullable=False, index=True)   # 'h2h' | 'spreads' | 'totals'
+    last_update      = Column(String,  nullable=True)                # ISO string from API
+
+    # Outcome (normalized)
+    outcome_name     = Column(String,  nullable=False)   # team name for h2h/spreads, 'Over'/'Under' for totals
+    side             = Column(String,  nullable=True)    # optional helper (e.g., 'home','away','over','under')
+    point            = Column(Float,   nullable=True)    # spread or total line (NULL for h2h)
+    price            = Column(Integer, nullable=False)   # american odds
+
+    # Helpful uniqueness to avoid dup rows on re-pulls at the same timestamp
+    __table_args__ = (
+        UniqueConstraint(
+            "game_id", "bookmaker", "market", "outcome_name", "point", "last_update",
+            name="uq_game_odds_snapshot"
+        ),
+    )
+
+
    
