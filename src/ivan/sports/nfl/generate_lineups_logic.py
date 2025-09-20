@@ -470,6 +470,7 @@ def generate_and_store_field_lineups(
     config: dict | None = None,
     num_lineups: int = 1000,
     batch_size: int = 100,
+    on_progress: callable | None = None,
 ) -> int:
     """
     Single-process generator for DK Showdown only (classic removed for now):
@@ -562,6 +563,9 @@ def generate_and_store_field_lineups(
             session.add(Lineup(player_ids_list=list(ids_selected), created_at=datetime.utcnow()))
             created += 1
             batch   += 1
+
+            if on_progress is not None:
+                on_progress(1, f"created={created}")
 
             if batch >= batch_size:
                 session.commit()

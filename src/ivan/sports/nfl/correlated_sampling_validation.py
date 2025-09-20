@@ -82,13 +82,11 @@ def print_hgv20_spearman(model_dir: str | Path, n: int = 20000) -> Tuple[np.ndar
     B = np.column_stack([UB[:, idx[s]] for s in TEAM10])
 
     Ra = _spearman_cols(A)
-    _print_corr_wide(Ra, TEAM10, TEAM10, title="HGV-20 within-team (A)")
 
     S = np.empty((len(TEAM10), len(TEAM10)), dtype=float)
     for i in range(len(TEAM10)):
         for j in range(len(TEAM10)):
             S[i, j] = float(pd.Series(A[:, i]).corr(pd.Series(B[:, j]), method="spearman"))
-    _print_corr_wide(S, TEAM10, [f"OPP{c}" for c in TEAM10], title="HGV-20 cross-team (A vs B)")
     return Ra, S
 
 # ---------- Historical Spearman (fast subset) ----------
