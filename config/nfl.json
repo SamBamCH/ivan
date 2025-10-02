@@ -6,10 +6,7 @@
   },
   "solver": {
     "glpk_path": "C:/Users/samba/ivan/glpk-4.65/w64/glpsol.exe"
-  },
-
-  "sampler": "diverse_dupe_capacity",
-  "randomness": 1,           
+  },         
 
   "field": {
     "target_unique_ratio": 0.20,                 
@@ -17,18 +14,18 @@
   },
 
   "pool": {
-    "size": 6000,                                
+    "size": 5000,                                
     "embed_dims": 32,                            
-    "beta_fpts": 0.1,                            
+    "beta_fpts": 0.2,                            
     "seed": 42
   },
 
   "dupe_model_simple": {
-    "a0": -1.8,                                  
+    "a0": -1.5,                                  
     "a_fpts": 2.4,                               
-    "a_cpt": 1.2,
-    "a_remain": 1.8,                             
-    "dup_sharpness": 1.9,                        
+    "a_cpt": 1.3,
+    "a_remain": 2,                             
+    "dup_sharpness": 1.6,                        
     "lam_floor_frac": 0.02,                      
     "min_count": 1,
     "stochastic_rounding": true
@@ -44,14 +41,14 @@
       "salary_cap": 50000,
       "max_cap_drop": 5000,
       "n_jobs": 8,
-      "cap_drop_exponent": 1.25,
+      "cap_drop_exponent": 1,
       "jitter": 0.03
     },
     "sampling": {
       "n_samples": 100,
       "alpha": 0.0,
       "n_jobs": 8,
-      "jitter": 0.50,
+      "jitter": 0.70,
       "rho_game": 0.0,
       "kicker_rho": 0.40,
       "kicker_shape": 6.5,

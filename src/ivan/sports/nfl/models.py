@@ -299,5 +299,172 @@ class NFLGameOdds(NFLBase):
         ),
     )
 
+class ShowdownPlayer(NFLBase):
+    """
+    One row per player per contest.
+    Stores player-level information for building correlation features.
+    """
+    __tablename__ = "showdown_player"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"), 
+                       nullable=False, index=True)
+    
+    # Player identification
+    player_name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False, index=True)
+    team = Column(String, nullable=True)  # Team abbreviation
+    position = Column(String, nullable=True)  # QB, RB, WR, TE, DST
+    roster_slot = Column(String, nullable=False)  # CPT or FLEX
+    
+    # DraftKings data
+    salary = Column(Integer, nullable=False)
+    ownership_pct = Column(Float, nullable=False)  # 0-100
+    fpts_actual = Column(Float, nullable=True)  # Actual points scored
+    
+    # For correlation analysis
+    game_id = Column(String, nullable=True)  # Links players in same game
+    opponent = Column(String, nullable=True)
+    
+    __table_args__ = (
+        UniqueConstraint('contest_id', 'player_name', 'roster_slot', 
+                        name='uq_showdown_player'),
+    )
+
+
+class ShowdownLineup(NFLBase):
+    """
+    One row per unique lineup in a contest.
+    This is your core training data for the 5-dimensional model.
+    """
+    __tablename__ = "showdown_lineup"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
+                       nullable=False, index=True)
+    
+    # Lineup composition
+    captain_name = Column(String, nullable=False)
+    flex_players = Column(JSON, nullable=False)  # List of player names
+    
+    # Core features for your 5-dimensional model
+    
+    # 1. Player correlations (quantified)
+    stack_pattern = Column(String, nullable=True)  # e.g., "QB-WR-WR", "RB-DST"
+    same_team_count = Column(Integer, nullable=True)  # Players from same team
+    game_stack_type = Column(String, nullable=True)  # e.g., "5-1", "4-2" (home-away split)
+    qb_wr_stack = Column(Boolean, default=False)  # Has QB+WR from same team
+    rb_dst_negative = Column(Boolean, default=False)  # RB facing own DST
+    correlation_score = Column(Float, nullable=True)  # Custom correlation metric
+    
+    # 2. Captain ownership
+    cpt_ownership_pct = Column(Float, nullable=False)  # 0-100
+    cpt_ownership_percentile = Column(Float, nullable=True)  # 0-1 within contest
+    
+    # 3. Lineup projection (normalized 0-1)
+    projection_raw = Column(Float, nullable=True)  # Raw projection sum
+    projection_normalized = Column(Float, nullable=True)  # 0-1 scaled within contest
+    projection_percentile = Column(Float, nullable=True)  # Percentile within contest
+    
+    # 4. Lineup ownership (normalized 0-1)
+    ownership_sum = Column(Float, nullable=False)  # Sum of all player ownership
+    ownership_normalized = Column(Float, nullable=True)  # 0-1 scaled within contest
+    ownership_percentile = Column(Float, nullable=True)  # Percentile within contest
+    
+    # 5. Salary remaining
+    total_salary = Column(Integer, nullable=False)
+    salary_remaining = Column(Integer, nullable=False)  # 50000 - total_salary
+    salary_remaining_pct = Column(Float, nullable=False)  # Percent of cap unused
+    
+    # Target variables
+    duplicate_count = Column(Integer, nullable=False, default=1)  # How many times this lineup appeared
+    unique_rank = Column(Integer, nullable=True)  # Rank among unique lineups
+    best_score = Column(Float, nullable=True)  # Best score this lineup achieved
+    best_rank = Column(Integer, nullable=True)  # Best rank this lineup achieved
+    
+    # Metadata
+    first_seen_rank = Column(Integer, nullable=True)  # First occurrence rank
+    
+    __table_args__ = (
+        UniqueConstraint('contest_id', 'captain_name', 'flex_players',
+                        name='uq_showdown_lineup'),
+    )
+
+
+class ShowdownContestMetadata(NFLBase):
+    """
+    Enhanced contest-level metadata for normalization and modeling context.
+    One row per contest.
+    """
+    __tablename__ = "showdown_contest_metadata"
+    
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
+                       primary_key=True)
+    
+    # Contest info (denormalized for convenience)
+    date = Column(DateTime, nullable=False)
+    total_entries = Column(Integer, nullable=False)
+    entry_fee = Column(Float, nullable=False)
+    
+    # Game information
+    home_team = Column(String, nullable=True)
+    away_team = Column(String, nullable=True)
+    game_time = Column(DateTime, nullable=True)
+    
+    # Normalization bounds for the 5 dimensions
+    min_projection = Column(Float, nullable=True)
+    max_projection = Column(Float, nullable=True)
+    median_projection = Column(Float, nullable=True)
+    
+    min_ownership = Column(Float, nullable=True)
+    max_ownership = Column(Float, nullable=True)
+    median_ownership = Column(Float, nullable=True)
+    
+    min_cpt_ownership = Column(Float, nullable=True)
+    max_cpt_ownership = Column(Float, nullable=True)
+    
+    # Aggregate patterns (for model training context)
+    unique_lineup_count = Column(Integer, nullable=False)
+    max_duplicate_count = Column(Integer, nullable=False)
+    median_duplicate_count = Column(Integer, nullable=False)
+    
+    # Popular correlation patterns in this contest
+    top_stack_patterns = Column(JSON, nullable=True)  # {"QB-WR-WR": 234, ...}
+    
+    # Distribution summaries
+    ownership_gini = Column(Float, nullable=True)  # Ownership concentration
+    projection_std = Column(Float, nullable=True)
+    
+    processed_at = Column(DateTime, default=datetime.utcnow)
+
+class ProjectionSnapshot(NFLBase):
+    """
+    Frozen snapshot of player projections at a specific time.
+    Simple design: just timestamp + player + projection.
+    """
+    __tablename__ = "projection_snapshot"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # When this snapshot was taken (UTC)
+    snapshot_date = Column(DateTime, nullable=False, index=True)
+    
+    # Player identification
+    player_name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False, index=True)
+    team = Column(String, nullable=False)
+    opponent = Column(String, nullable=True)
+    position = Column(String, nullable=False)
+    
+    # DraftKings data (from NFLPlayer at snapshot time)
+    salary = Column(Integer, nullable=False)
+    roster_slot_id = Column(Integer, nullable=False)
+    
+    # Projection (from your model)
+    fpts_mean = Column(Float, nullable=False)
+    fpts_median = Column(Float, nullable=True)
+    fpts_std = Column(Float, nullable=True)
+    
+
 
    

@@ -1,6 +1,6 @@
 from pathlib import Path
 import json
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 from collections import defaultdict
 from math import isfinite
 import numpy as np
@@ -32,7 +32,7 @@ from ivan.core.utils import normalize_name
 
 # K / DST handling
 DST_POS = {"DST", "D/ST", "DEF"}
-KICKER_DEFAULT_SHAPE = 8.3
+KICKER_DEFAULT_SHAPE = 7.3
 KICKER_DEFAULT_SCALE = 1.2
 
 # Odds handling
@@ -711,7 +711,7 @@ def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_s
         opp_tt = home_tt
 
     # just lazily estimate a mean and std based on odds. better than nothing, but still doesn't factor in interceptions or sacks/fumbles. 
-    mean = 10.0 - 0.25 * float(opp_tt) + 0.15 * max(-float(team_spread), 0.0) + 0.05 * (46.0 - float(total))
+    mean = 11.0 - 0.25 * float(opp_tt) + 0.15 * max(-float(team_spread), 0.0) + 0.05 * (46.0 - float(total))
     mean = float(np.clip(mean, -1.5, 14.0))
     std = 5.0
     return mean, std
@@ -1031,31 +1031,66 @@ def _player_has_any_odds(session: Session, player_name: str) -> bool:
     q = session.query(exists().where(NFLOdds.player == player_name))
     return bool(q.scalar())
 
-SLOTS = {"QB":1, "RB":2, "WR":3, "TE":2, "K":1, "DST":1}  # max modeled depth per base position
+# Example (assumed) slot caps; keep your existing SLOTS mapping if defined elsewhere.
+SLOTS = {
+    "QB": 1,
+    "RB": 2,
+    "WR": 3,
+    "TE": 2,
+    "K": 1,
+    "DST": 1,
+}
+
+def _base_pos(pos: str | None) -> str:
+    """Normalize to base position."""
+    if not pos:
+        return ""
+    pos_up = pos.upper()
+    # If your CPT row has position like 'WR' too, this is fine.
+    # If CPT shows as 'CPT' or similar, you may need to pull a separate field.
+    return pos_up
 
 def assign_slots(session: Session) -> None:
     # get all active players with a team
     players = session.query(NFLPlayer).filter(NFLPlayer.team.isnot(None)).all()
-    # group by (team, base_pos)
-    from collections import defaultdict
-    buckets = defaultdict(list)
-    for p in players:
-        base = (p.position or "").upper()
-        if base not in ("QB","RB","WR","TE","K","DST"): 
-            continue
-        buckets[(p.team, base)].append(p)
 
+    # 1) Group raw rows by (team, base_pos, player.name) so CPT+FLEX for same name stay together
+    name_groups: dict[Tuple[str, str, str], List[NFLPlayer]] = defaultdict(list)
+    for p in players:
+        base = _base_pos(p.position)
+        if base not in ("QB", "RB", "WR", "TE", "K", "DST"):
+            continue
+        if not p.name:
+            # If some rows are missing name, skip or handle however you prefer
+            continue
+        name_groups[(p.team, base, p.name)].append(p)
+
+    # 2) For each (team, base) bucket, build a unique-name list with a sort key
+    buckets: dict[Tuple[str, str], List[Tuple[str, float, List[NFLPlayer]]]] = defaultdict(list)
+    for (team, base, name), rows in name_groups.items():
+        # Sort key: projected mean. Use the best available projection among the two rows.
+        # If you need to prefer FLEX to avoid CPT multipliers, adjust here.
+        proj_candidates = [r.fpts_mean for r in rows if r.fpts_mean is not None]
+        sort_key = max(proj_candidates) if proj_candidates else float("-inf")
+        buckets[(team, base)].append((name, sort_key, rows))
+
+    # 3) Within each (team, base) bucket, sort by projection and assign depth slots
     for (team, base), group in buckets.items():
-        # sort by projected mean (desc); use something stable if missing
-        group.sort(key=lambda p: (p.fpts_mean if p.fpts_mean is not None else -1e9), reverse=True)
+        # sort by projected mean (desc)
+        group.sort(key=lambda t: t[1], reverse=True)
+
         cap = SLOTS[base]
-        for i, p in enumerate(group, start=1):
+        for i, (name, _, rows) in enumerate(group, start=1):
             depth = min(i, cap)  # pool deeper guys into the last modeled slot
-            if base in ("K","DST","QB"):
+            if base in ("K", "DST", "QB"):
                 slot_label = base
             else:
                 slot_label = f"{base}{depth}"  # RB1/RB2, WR1/WR2/WR3, TE1/TE2
-            p.slot_label = slot_label  # add this column once to NFLPlayer
+
+            # 4) Apply the same slot_label to ALL rows for this name (CPT + FLEX)
+            for r in rows:
+                r.slot_label = slot_label  # ensure NFLPlayer has this column
+
     session.commit()
 
 def _has_anytime_odds(session: Session, player_name: str) -> bool:

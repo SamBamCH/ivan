@@ -14,6 +14,12 @@ import json
 from collections import Counter
 from typing import Dict, List, Tuple, Optional
 
+import pickle
+from pathlib import Path
+from typing import Dict, Tuple, Optional
+import numpy as np
+from collections import Counter
+
 import numpy as np
 from scipy import sparse as sp
 from sqlalchemy.orm import Session
@@ -21,6 +27,279 @@ from sqlalchemy.orm import Session
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
+
+def load_showdown_models(model_dir: str | Path = "data/nfl/models"):
+    """Load trained showdown models from disk."""
+    model_dir = Path(model_dir)
+    
+    try:
+        with open(model_dir / 'showdown_duplication_model.pkl', 'rb') as f:
+            dupe_model = pickle.load(f)
+        
+        with open(model_dir / 'showdown_scaler.pkl', 'rb') as f:
+            scaler = pickle.load(f)
+        
+        with open(model_dir / 'showdown_feature_cols.pkl', 'rb') as f:
+            feature_cols = pickle.load(f)
+        
+        return dupe_model, scaler, feature_cols
+    
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Showdown models not found in {model_dir}. "
+            f"Run 'python scripts/nfl/train_showdown_model.py' first."
+        ) from e
+
+
+def compute_lineup_features_for_model(
+    lineup_ids: np.ndarray,
+    L,  # sparse lineup matrix [n_lineups x n_players]
+    spends: np.ndarray,
+    cpt_col_by_row: np.ndarray,
+    P_indep: np.ndarray,  # [n_sims x n_players] independent samples
+    total_entries: int,
+    entry_fee: float,
+    ownership_gini: float,
+) -> np.ndarray:
+    """
+    Compute the feature matrix matching the trained model's expectations.
+    
+    Since your actual lineups don't have these features computed yet,
+    we'll compute them on-the-fly from the lineup matrix.
+    
+    Returns: [n_lineups x n_features] array ready for model prediction.
+    """
+    
+    n_lineups = L.shape[0]
+    
+    # Per-player means from independent sims (proxy for projections)
+    per_player_mean = np.asarray(P_indep.mean(axis=0), dtype=np.float64)
+    
+    # 1. Lineup mean projections
+    mean_proj = np.asarray(L @ per_player_mean, dtype=np.float64)
+    
+    # 2. Captain means
+    cpt_means = np.zeros(n_lineups, dtype=np.float64)
+    mask = cpt_col_by_row >= 0
+    if mask.any():
+        cpt_means[mask] = per_player_mean[cpt_col_by_row[mask]]
+    
+    # 3. Salary remaining
+    remaining = (50000 - spends).astype(np.int32)
+    salary_remaining_pct = remaining / 50000.0
+    
+    # Normalize within this pool (percentile ranks)
+    def _percentile_rank(arr):
+        """Convert to percentile ranks [0, 1]."""
+        if arr.size <= 1:
+            return np.full_like(arr, 0.5, dtype=np.float64)
+        sorted_arr = np.sort(arr)
+        ranks = np.searchsorted(sorted_arr, arr, side='right')
+        return ranks / float(arr.size)
+    
+    cpt_percentile = _percentile_rank(cpt_means)
+    proj_percentile = _percentile_rank(mean_proj)
+    own_percentile = proj_percentile.copy()  # Use projection as proxy for ownership
+    
+    # Contest-level features
+    log_total_entries = np.log10(max(1, total_entries))
+    
+    # Build feature matrix (must match training order!)
+    features = []
+    for i in range(n_lineups):
+        # Placeholder correlation features (will be 0 until you compute them)
+        correlation_score = 0.0
+        same_team_count = 6  # Assume max stack as placeholder
+        qb_wr_stack = 0  # Conservative default
+        rb_dst_negative = 0
+        
+        row = [
+            # Contest features
+            log_total_entries,
+            entry_fee,
+            ownership_gini,
+            
+            # Dimension 1: Correlation (placeholders)
+            correlation_score,
+            same_team_count,
+            qb_wr_stack,
+            rb_dst_negative,
+            
+            # Dimension 2: Captain ownership
+            cpt_percentile[i],
+            
+            # Dimension 3: Projection
+            proj_percentile[i],
+            
+            # Dimension 4: Total ownership
+            own_percentile[i],
+            
+            # Dimension 5: Salary
+            salary_remaining_pct[i],
+            
+            # Interactions
+            cpt_percentile[i] * own_percentile[i],  # cpt_own_x_total_own
+            1.0 - salary_remaining_pct[i],  # near_cap
+            cpt_percentile[i] * own_percentile[i] * proj_percentile[i],  # chalk_score
+        ]
+        features.append(row)
+    
+    return np.array(features, dtype=np.float64)
+
+
+def sample_showdown_field_learned(
+    session,
+    *,
+    field_size: int,
+    config: dict,
+    contest_id: Optional[int] = None,
+    model_dir: str | Path = "data/nfl/models",
+) -> Tuple[Dict[int, int], Dict]:
+    """
+    Sample showdown field using trained duplication models.
+    
+    This uses historical patterns to predict how many times each lineup
+    will be selected based on contest parameters and lineup characteristics.
+    
+    Args:
+        session: Database session
+        field_size: Target number of entries
+        config: Configuration dict
+        contest_id: Optional contest ID to fetch parameters from DB
+        model_dir: Where models are stored
+    
+    Returns:
+        counts_by_lineup: {lineup_id: duplicate_count}
+        meta: Diagnostic info
+    """
+    
+    # 1. Load trained models
+    try:
+        dupe_model, scaler, feature_cols = load_showdown_models(model_dir)
+    except FileNotFoundError as e:
+        print(f"WARNING: {e}")
+        print("Falling back to heuristic sampler")
+        # Fall back to your existing sampler
+        return sample_field_diverse_dupe(session, field_size=field_size, config=config, mode='showdown')
+    
+    # 2. Get contest parameters
+    if contest_id:
+        from ivan.sports.nfl.models import HistoricalContest, ShowdownContestMetadata
+        contest = session.query(HistoricalContest).get(contest_id)
+        metadata = session.query(ShowdownContestMetadata).get(contest_id)
+        
+        if contest:
+            total_entries = contest.total_entries
+            entry_fee = contest.entry_fee
+            ownership_gini = metadata.ownership_gini if metadata else 0.5
+        else:
+            # Defaults if contest not found
+            total_entries = field_size
+            entry_fee = float(config.get('entry_fee', 3.0))
+            ownership_gini = 0.5
+    else:
+        # Use config or defaults
+        total_entries = config.get('total_entries', field_size)
+        entry_fee = float(config.get('entry_fee', 3.0))
+        ownership_gini = config.get('ownership_gini', 0.5)
+    
+    print(f"  Contest params: entries={total_entries:,}, fee=${entry_fee}, gini={ownership_gini:.3f}")
+    
+    # 3. Build lineup matrix
+    L, lineup_ids, spends, pid_to_col, cpt_col_by_row, _ = build_lineup_matrix(session)
+    n_lineups = L.shape[0]
+    
+    if n_lineups == 0:
+        print("  WARNING: No lineups found in database")
+        return {}, {'error': 'no_lineups'}
+    
+    print(f"  Candidate lineups: {n_lineups:,}")
+    
+    # 4. Get player samples (independent for popularity features)
+    P_indep = build_player_samples_independent(
+        session, pid_to_col, n_sims=64, seed=42
+    )
+    
+    # 5. Compute features for model
+    X = compute_lineup_features_for_model(
+        lineup_ids=lineup_ids,
+        L=L,
+        spends=spends,
+        cpt_col_by_row=cpt_col_by_row,
+        P_indep=P_indep,
+        total_entries=total_entries,
+        entry_fee=entry_fee,
+        ownership_gini=ownership_gini,
+    )
+    
+    # 6. Scale features
+    X_scaled = scaler.transform(X)
+    
+    # 7. Predict expected duplicates for each lineup
+    predicted_dupes = dupe_model.predict(X_scaled)
+    predicted_dupes = np.clip(predicted_dupes, 0.01, None)  # Floor at 0.01
+    
+    print(f"  Predicted duplicates: min={predicted_dupes.min():.2f}, "
+          f"mean={predicted_dupes.mean():.2f}, max={predicted_dupes.max():.2f}")
+    
+    # 8. Convert predictions to sampling weights
+    # Higher predicted duplicates = more likely to be selected
+    weights = predicted_dupes / predicted_dupes.sum()
+    
+    # 9. Sample field with replacement
+    rng = np.random.default_rng(42)
+    sampled_indices = rng.choice(
+        n_lineups,
+        size=field_size,
+        replace=True,
+        p=weights
+    )
+    
+    # 10. Count duplicates
+    counts = Counter(sampled_indices)
+    counts_by_lineup = {
+        int(lineup_ids[i]): int(count)
+        for i, count in counts.items()
+    }
+    
+    # 11. Meta diagnostics
+    unique_selected = len(counts)
+    actual_dupes = np.array(list(counts.values()))
+    
+    uniqueness_rate = unique_selected / field_size
+    
+    meta = {
+        'sampler': 'showdown_learned',
+        'model_path': str(model_dir),
+        'total_candidate_lineups': n_lineups,
+        'unique_selected': unique_selected,
+        'uniqueness_rate': uniqueness_rate,
+        'predicted_dupes': {
+            'min': float(predicted_dupes.min()),
+            'max': float(predicted_dupes.max()),
+            'mean': float(predicted_dupes.mean()),
+            'std': float(predicted_dupes.std()),
+        },
+        'actual_dupes': {
+            'min': int(actual_dupes.min()),
+            'max': int(actual_dupes.max()),
+            'mean': float(actual_dupes.mean()),
+            'median': float(np.median(actual_dupes)),
+            'p90': float(np.percentile(actual_dupes, 90)),
+            'p95': float(np.percentile(actual_dupes, 95)),
+        },
+        'contest_params': {
+            'total_entries': total_entries,
+            'entry_fee': entry_fee,
+            'ownership_gini': ownership_gini,
+        }
+    }
+    
+    print(f"  ✓ Sampled field: {unique_selected:,} unique lineups ({uniqueness_rate:.1%})")
+    print(f"  Duplicate range: {actual_dupes.min()}-{actual_dupes.max()} "
+          f"(mean={actual_dupes.mean():.1f})")
+    
+    return counts_by_lineup, meta
 
 SALARY_CAP = 50000
 
@@ -827,7 +1106,23 @@ def sample_field(
     """
     mode = (mode or "showdown").lower()
     if mode == "showdown":
-        return sample_field_diverse_dupe(session, field_size=field_size, config=config, mode=mode)
+        # Check if learned model is enabled
+        use_learned = config.get('showdown', {}).get('use_learned_model', True)
+        
+        if use_learned:
+            print("Using learned model for showdown sampling.")
+            return sample_showdown_field_learned(
+                session,
+                field_size=field_size,
+                config=config,
+                contest_id=contest_id,
+                model_dir=config.get('model_dir', 'data/nfl/models'),
+            )
+        else:
+            # Use your existing heuristic sampler
+            return sample_field_diverse_dupe(
+                session, field_size=field_size, config=config, mode=mode
+            )
     if use_classic_dupes:
         return sample_field_diverse_dupe(session, field_size=field_size, config=config, mode=mode)
     return sample_classic_field(session, field_size=field_size, config=config, contest_id=contest_id)

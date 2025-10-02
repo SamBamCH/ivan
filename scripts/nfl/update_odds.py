@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from ivan.sports.common.odds import get_odds, parse_odds 
 from ivan.sports.common.odds import get_game_odds, parse_game_odds
-from ivan.sports.nfl.models import NFLOdds, NFLPlayer
+from ivan.sports.nfl.models import NFLOdds, NFLPlayer, ProjectionSnapshot
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
 
@@ -22,6 +22,47 @@ logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefm
 
 
 DIAG_DIR = Path("data/nfl/diagnostics")
+
+def create_projection_snapshot(session):
+    """
+    Snapshot current NFLPlayer projections.
+    Run this AFTER generate_and_fit_all() updates projections.
+    """
+    from ivan.core.utils import normalize_name
+    from ivan.sports.nfl.models import NFLPlayer, ProjectionSnapshot
+    
+    # Use today's date at midnight UTC for consistent matching
+    snapshot_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Delete any existing snapshot for today (idempotent updates)
+    session.query(ProjectionSnapshot).filter(
+        ProjectionSnapshot.snapshot_date == snapshot_date
+    ).delete()
+    
+    # Get all current players
+    players = session.query(NFLPlayer).all()
+    
+    snapshot_records = []
+    for player in players:
+        snapshot_records.append({
+            'snapshot_date': snapshot_date,
+            'player_name': player.name,
+            'normalized_name': normalize_name(player.name),
+            'team': player.team,
+            'opponent': player.opponent,
+            'position': player.position,
+            'salary': player.salary,
+            'roster_slot_id': player.roster_slot_id,
+            'fpts_mean': player.fpts_mean or 0.0,
+            'fpts_median': player.fpts_p50 or 0.0,
+            'fpts_std': player.fpts_std or 0.0,
+        })
+    
+    if snapshot_records:
+        session.bulk_insert_mappings(ProjectionSnapshot, snapshot_records)
+        session.commit()
+        logging.info(f"[snapshot] Created projection snapshot for {snapshot_date.date()} "
+                    f"with {len(snapshot_records)} players")
 
 def write_odds_pool_mismatch_report(session, df_odds: pd.DataFrame, out_dir: Path = DIAG_DIR) -> None:
     """
@@ -156,5 +197,10 @@ write_odds_pool_mismatch_report(session, df_odds)
 
 model_dir = 'data/nfl/models'
 
-logging.info(f"[update_odds][7][1] Generating and fitting player FPTS distributions from odds in {model_dir}")
+logging.info(f"[update_odds][7][1] Generating and fitting player FPTS distributions")
 generate_and_fit_all(session, Path(model_dir), n_samples=10000)
+
+logging.info(f"[update_odds][7][2] Creating projection snapshot")
+create_projection_snapshot(session)
+
+logging.info(f"[update_odds][8] ✓ Complete")
