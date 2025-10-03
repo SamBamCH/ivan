@@ -10,7 +10,7 @@ from ivan.core.utils import PROJECT_ROOT
 
 # ── CONFIG ────────────────────────────────────────────────────────────────
 CONFIG_PATH = PROJECT_ROOT / "config" / "nfl.json"
-YEARS       = [2023, 2024]
+YEARS       = [2023, 2024, 2025]
 TABLE_NAME  = "nfl_stats"
 # ────────────────────────────────────────────────────────────────────────────
 

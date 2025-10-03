@@ -551,7 +551,7 @@ def simulate_one_contest(
     )
 
     # 4) run simulations in parallel (same “chunk” pattern as MLB)
-    chunk_size   = math.ceil(num_sims / min(8, num_sims))   # mirror MLB limiter
+    chunk_size   = math.ceil(num_sims / min(12, num_sims))   # mirror MLB limiter
     full_scores  = np.zeros((num_sims, M), dtype=np.float32)
     full_payouts = np.zeros_like(full_scores)
     full_rois    = np.zeros_like(full_scores)

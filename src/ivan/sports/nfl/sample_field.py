@@ -1107,7 +1107,7 @@ def sample_field(
     mode = (mode or "showdown").lower()
     if mode == "showdown":
         # Check if learned model is enabled
-        use_learned = config.get('showdown', {}).get('use_learned_model', True)
+        use_learned = config.get('showdown', {}).get('use_learned_model', False)
         
         if use_learned:
             print("Using learned model for showdown sampling.")
