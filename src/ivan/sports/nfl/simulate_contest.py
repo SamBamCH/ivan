@@ -36,6 +36,43 @@ import matplotlib.pyplot as plt
 plt.ioff()  # extra safety: disable interactive mode
 # ----------------------------------------------------------------------
 
+import shutil
+from datetime import datetime, timedelta
+import re
+
+# Add this function near the top (after imports):
+def clean_old_diagnostics(
+    diagnostics_root: str | Path = "data/nfl/diagnostics",
+    days_to_keep: int = 7
+):
+    """Remove diagnostic folders older than days_to_keep."""
+    diagnostics_root = Path(diagnostics_root)
+    if not diagnostics_root.exists():
+        return
+    
+    cutoff = datetime.now() - timedelta(days=days_to_keep)
+    removed = 0
+    
+    for folder in diagnostics_root.iterdir():
+        if not folder.is_dir():
+            continue
+        
+        folder_mtime = datetime.fromtimestamp(folder.stat().st_mtime)
+        
+        if folder_mtime < cutoff:
+            print(f"  Removing old diagnostics: {folder.name} (age: {(datetime.now() - folder_mtime).days} days)")
+            shutil.rmtree(folder)
+            removed += 1
+    
+    if removed:
+        print(f"  Cleaned up {removed} old diagnostic folder(s)")
+
+def sanitize_contest_name(name: str) -> str:
+    """Convert contest name to filesystem-safe string."""
+    safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+    safe = re.sub(r'_+', '_', safe)
+    return safe[:80].strip('_')
+
 def _safe_getattr(obj, *names, default=None):
     for n in names:
         if hasattr(obj, n):
@@ -106,6 +143,7 @@ def _plot_hist(int_values: np.ndarray, title: str, out_path: Path):
 def recap_and_plots_for_sampled_field(
     session,
     contest_id: int,
+    contest_name: str,
     counts_by_lineup: dict[int, int],
     lineup_ix: list[list[int]],
     unique_pids: list[int],
@@ -123,7 +161,8 @@ def recap_and_plots_for_sampled_field(
       - exposures_topN_CPT.png
       - exposures_topN_FLEX.png
     """
-    outdir = Path(outdir) / f"contest_{contest_id}"
+    safe_name = sanitize_contest_name(contest_name)
+    outdir = Path(outdir) / f"contest_{contest_id}_{safe_name}"
     outdir.mkdir(parents=True, exist_ok=True)
 
     # ---------- basic dupe recap ----------
@@ -254,15 +293,7 @@ def _expand_sampled_field(
         session: Session,
         counts_by_lineup: Dict[int, int],
 ) -> Tuple[List[int], List[List[int]], List[int], Dict[int, int], np.ndarray, np.ndarray]:
-    """
-    Turn sampled counts (with replacement) into: 
-      - entry_lineup_ids:   one per entry (length M)
-      - lineup_ix:          list of per-entry player-index lists (using pid_to_idx)
-      - unique_pids:        compact list of player IDs used across the sampled field
-      - pid_to_idx:         map pid -> [0..nP-1]
-      - starts, ends:       per-unique-lineup slices in the expanded entries (for aggregations)
-    """
-
+    
     if not counts_by_lineup:
         print('no counts_by_lineup returned from sampling algorithm.')
         return [], [], [], {}, np.array([], dtype=int), np.array([], dtype=int)
@@ -273,14 +304,19 @@ def _expand_sampled_field(
     ends   = starts + cnts
     M      = int(cnts.sum())
 
-    # fetch lineups
-
-    rows = (session.query(Lineup.id, Lineup.player_ids_list)
-                  .filter(Lineup.id.in_(u_lids))
-                  .all())
+    # FIXED: Fetch lineups in batches to avoid SQLite variable limit
+    BATCH_SIZE = 900  # Stay safely under SQLite's 999 limit
+    pid_lists_by_lid = {}
     
-    pid_lists_by_lid = {int(lid): _coerce_player_ids(j) for (lid, j) in rows}
+    for i in range(0, len(u_lids), BATCH_SIZE):
+        batch = u_lids[i:i + BATCH_SIZE]
+        rows = (session.query(Lineup.id, Lineup.player_ids_list)
+                      .filter(Lineup.id.in_(batch))
+                      .all())
+        for lid, j in rows:
+            pid_lists_by_lid[int(lid)] = _coerce_player_ids(j)
 
+    # Rest of the function remains the same...
     all_pids = set()
     for lid in u_lids:
         all_pids.update(pid_lists_by_lid.get(lid, []))
@@ -522,6 +558,7 @@ def simulate_one_contest(
     recap_and_plots_for_sampled_field(
         session=session,
         contest_id=contest_id,
+        contest_name=contest_name,
         counts_by_lineup=counts_by_lineup,
         lineup_ix=lineup_ix,
         unique_pids=unique_pids,

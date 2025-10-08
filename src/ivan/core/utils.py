@@ -94,6 +94,7 @@ _NAME_OVERRIDES = {
     'kyle pitts sr': 'kyle pitts',
     'scotty miller': 'scott miller',
     'russell gage jr': 'russell gage',
+    'chris godwin jr': 'chris godwin'
     # add more mappings as needed...
 }
 

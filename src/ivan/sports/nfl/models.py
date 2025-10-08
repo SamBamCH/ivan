@@ -90,6 +90,7 @@ class NFLPlayer(NFLBase, BasePlayer):
     fpts_p90        = Column(Float, nullable=True)
     fpts_p95        = Column(Float, nullable=True)
     fpts_p99        = Column(Float, nullable=True)    
+    ownership_proj  = Column(Float, nullable=True, default=0.0)
 
 @dataclass
 class FieldPlayer:

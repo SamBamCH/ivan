@@ -4,7 +4,7 @@ import os, json, argparse
 import pandas as pd
 
 from ivan.database.session import init_db, get_session, Base
-from ivan.sports.nfl.simulate_contest import simulate_one_contest  # this file
+from ivan.sports.nfl.simulate_contest import simulate_one_contest  
 
 def parse_args():
     p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
@@ -21,6 +21,12 @@ def main():
     engine  = init_db("nfl", cfg.get("database_url"))
     Base.metadata.create_all(engine)
     session = get_session(engine)
+
+    # *** NEW: Clean old diagnostics once at start of entire sim run ***
+    from ivan.sports.nfl.simulate_contest import clean_old_diagnostics
+    print("🧹 Cleaning old diagnostic folders...")
+    clean_old_diagnostics(days_to_keep=1)
+    print()
 
     df = pd.read_csv(
         cfg["paths"]["entries_csv"],

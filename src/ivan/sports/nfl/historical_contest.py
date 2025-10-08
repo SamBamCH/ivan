@@ -29,8 +29,8 @@ def get_snapshot_data_for_contest(
     player_names: List[str],
 ) -> Dict[str, Dict]:
     """
-    Get ALL historical prelock data for players in a contest.
-    Matches on contest date (truncated to day) + normalized player names.
+    Get historical FLEX data for players in a contest.
+    CPT values will be calculated as 1.5x the FLEX salary.
     
     Args:
         session: Database session
@@ -38,28 +38,34 @@ def get_snapshot_data_for_contest(
         player_names: List of player display names from contest
     
     Returns:
-        Dict mapping normalized_name -> {projection, salary, position, team, etc.}
+        Dict mapping normalized_name -> {projection, salary, position, team, opponent}
+        All values are for FLEX slot (roster_slot_id=512)
     """
     from ivan.sports.nfl.models import ProjectionSnapshot
     from ivan.core.utils import normalize_name
+    from zoneinfo import ZoneInfo
     
-    # Truncate contest date to day (midnight UTC)
-    contest_day = contest_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Convert UTC time to Central Time (assuming snapshots are in local time)
+    central_tz = ZoneInfo("America/Chicago")
+    contest_local = contest_date.replace(tzinfo=ZoneInfo("UTC")).astimezone(central_tz)
+    
+    # Truncate to day (midnight in local timezone)
+    contest_day = contest_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     
     # Normalize all player names
     norm_names = [normalize_name(name) for name in player_names]
     
-    # Query all snapshot data for this date + these players
+    # Query ONLY FLEX snapshot data (roster_slot_id=512)
     results = (
         session.query(ProjectionSnapshot)
         .filter(
             ProjectionSnapshot.snapshot_date == contest_day,
-            ProjectionSnapshot.normalized_name.in_(norm_names)
+            ProjectionSnapshot.normalized_name.in_(norm_names),
+            ProjectionSnapshot.roster_slot_id == 512  # FLEX only
         )
         .all()
-    )
-    
-    # Convert to dict keyed by normalized name
+    )  
+    # Convert to simple dict keyed by normalized name
     snapshot_data = {}
     for snap in results:
         snapshot_data[snap.normalized_name] = {
@@ -69,27 +75,41 @@ def get_snapshot_data_for_contest(
             'position': snap.position,
             'team': snap.team,
             'opponent': snap.opponent,
-            'roster_slot_id': snap.roster_slot_id,
         }
     
     return snapshot_data
 
-def parse_showdown_lineup_string(lineup_str: str) -> Tuple[str, List[str]]:
-    """Parse lineup string into (captain, [flex_players])."""
+def parse_showdown_lineup_string(lineup_str: str) -> Tuple[str, List[str], Dict[str, str]]:
+    """
+    Parse lineup string into (captain, [flex_players], position_map).
+    
+    Handles both formats:
+    - "CPT RB Kyren Williams FLEX WR Christian McCaffrey..."
+    - "CPT Kyren Williams FLEX Christian McCaffrey..."
+    
+    Returns:
+        captain: Captain player name
+        flex_players: List of flex player names
+        position_map: Dict mapping player_name -> position (e.g., 'QB', 'RB', 'WR')
+    """
     # Handle NaN, None, and other non-string types
     if pd.isna(lineup_str) or lineup_str is None or not isinstance(lineup_str, str):
-        return None, []
+        return None, [], {}
+    pattern_no_pos = r"(CPT|FLEX)\s+([A-Za-z\s\.''-]+?)(?=\s+(?:CPT|FLEX)|$)"
+    matches_no_pos = re.findall(pattern_no_pos, lineup_str)
     
-    matches = _SHOWDOWN_LINEUP_REGEX.findall(lineup_str)
     captain = None
     flex_players = []
-    for pos, name in matches:
+    position_map = {}
+    
+    for slot, name in matches_no_pos:
         name = name.strip()
-        if pos == "CPT":
+        if slot == "CPT":
             captain = name
         else:
             flex_players.append(name)
-    return captain, flex_players
+    
+    return captain, flex_players, position_map
 
 
 def extract_team_from_name(name: str, team_roster: Dict[str, str]) -> Optional[str]:
@@ -243,25 +263,45 @@ def process_showdown_contest(
         }
     
     # ===== STEP 1.5: Get HISTORICAL prelock data from snapshot =====
-    all_player_names = list(player_info.keys())  # Already normalized
+    all_player_names = [player_info[norm]['name'] for norm in player_info.keys()]
     snapshot_data = get_snapshot_data_for_contest(
         session,
         hc.date,
-        [player_info[norm]['name'] for norm in all_player_names]
+        all_player_names
     )
-    
-    # Merge snapshot data into player_info
-    for norm_name, snap in snapshot_data.items():
-        if norm_name in player_info:
-            player_info[norm_name].update({
-                'projection': snap['projection'],
-                'salary': snap['salary'],
-                'team': snap['team'],
-                'opponent': snap['opponent'],
+
+    # Merge snapshot data into player_info (NO 1.5x multiplication here)
+    missing_snapshots = []
+    for norm_name, info in player_info.items():
+        matching_snap = snapshot_data.get(norm_name)
+        
+        if matching_snap:
+            # Store base FLEX values only
+            info.update({
+                'projection': matching_snap['projection'],
+                'salary': matching_snap['salary'],
+                'team': matching_snap['team'],
+                'opponent': matching_snap['opponent'],
             })
+            
             # Update position if snapshot has it and DK doesn't
-            if not player_info[norm_name]['position'] and snap['position']:
-                player_info[norm_name]['position'] = snap['position']
+            if not info['position'] and matching_snap['position']:
+                info['position'] = matching_snap['position']
+        else:
+            # Track missing data for debugging
+            missing_snapshots.append(f"{info['name']} ({info['slot']})")
+            # Fallback: use a default salary to avoid breaking (but log it)
+            info.setdefault('salary', 0)
+            info.setdefault('projection', 0.0)
+            info.setdefault('team', '')
+            info.setdefault('opponent', '')
+
+    # Log if we have missing snapshot data
+    if missing_snapshots:
+        log.warning(
+            f"Contest {contest_id}: Missing snapshot data for {len(missing_snapshots)} players: "
+            f"{', '.join(missing_snapshots[:5])}{'...' if len(missing_snapshots) > 5 else ''}"
+        )
     
     # Create player records
     for norm_name, info in player_info.items():
@@ -282,6 +322,7 @@ def process_showdown_contest(
     lineup_data = defaultdict(lambda: {
         'captain': None,
         'flex': [],
+        'positions': {},  # Add position map
         'count': 0,
         'ranks': [],
         'scores': [],
@@ -292,7 +333,7 @@ def process_showdown_contest(
         rank = row.get("Rank")
         points = row.get("Points")
         
-        captain, flex_players = parse_showdown_lineup_string(lineup_str)
+        captain, flex_players, position_map = parse_showdown_lineup_string(lineup_str)
         
         if not captain:
             continue
@@ -302,6 +343,7 @@ def process_showdown_contest(
         
         lineup_data[lineup_key]['captain'] = captain
         lineup_data[lineup_key]['flex'] = flex_players
+        lineup_data[lineup_key]['positions'] = position_map  # Store positions
         lineup_data[lineup_key]['count'] += 1
         lineup_data[lineup_key]['ranks'].append(int(rank) if pd.notna(rank) else None)
         lineup_data[lineup_key]['scores'].append(float(points) if pd.notna(points) else None)
@@ -312,11 +354,25 @@ def process_showdown_contest(
     ownerships = []
     cpt_ownerships = []
     salaries = []
-    
+
+    skipped_lineups = 0
+
     for lineup_key, lu_data in lineup_data.items():
         captain = lu_data['captain']
         flex_players = lu_data['flex']
         all_players = [captain] + flex_players
+        
+        # Skip lineups with missing player data
+        skip_lineup = False
+        for p in all_players:
+            norm_p = normalize_name(p)
+            if norm_p not in player_info or player_info[norm_p].get('salary', 0) == 0:
+                skip_lineup = True
+                break
+        
+        if skip_lineup:
+            skipped_lineups += 1
+            continue
         
         # Calculate ACTUAL ownership sum (from DK results)
         ownership_sum = sum(
@@ -328,16 +384,27 @@ def process_showdown_contest(
         cpt_ownership = player_info.get(normalize_name(captain), {}).get('ownership', 0.0)
         
         # HISTORICAL projection (from snapshot at prelock)
-        projection_raw = sum(
+        # Apply 1.5x multiplier to captain projection
+        cpt_norm = normalize_name(captain)
+        cpt_projection = player_info.get(cpt_norm, {}).get('projection', 0.0) * 1.5
+        
+        flex_projection = sum(
             player_info.get(normalize_name(p), {}).get('projection', 0.0)
-            for p in all_players
+            for p in flex_players
         )
         
+        projection_raw = cpt_projection + flex_projection
+        
         # HISTORICAL salary (from snapshot at prelock)
-        total_salary = sum(
+        # Apply 1.5x multiplier to captain salary
+        cpt_salary = int(player_info.get(cpt_norm, {}).get('salary', 0) * 1.5)
+        
+        flex_salary = sum(
             player_info.get(normalize_name(p), {}).get('salary', 0)
-            for p in all_players
+            for p in flex_players
         )
+        
+        total_salary = cpt_salary + flex_salary
         salary_remaining = 50000 - total_salary
         salary_remaining_pct = (salary_remaining / 50000) * 100
         
@@ -473,11 +540,12 @@ def process_showdown_contest(
         
         session.commit()
         
-        # Log snapshot data availability
-        snapshot_match_rate = len(snapshot_data) / len(player_info) if player_info else 0
+        # Log snapshot data availability - count unique players matched
+        unique_matched = sum(1 for norm_name in player_info if norm_name in snapshot_data)
+        snapshot_match_rate = unique_matched / len(player_info) if player_info else 0
         log.info(
             f"✓ Processed contest {contest_id}: {len(final_lineup_records)} unique lineups | "
-            f"Snapshot match: {snapshot_match_rate:.1%} ({len(snapshot_data)}/{len(player_info)} players)"
+            f"Snapshot match: {snapshot_match_rate:.1%} ({unique_matched}/{len(player_info)} players)"
         )
         return True
         
@@ -501,7 +569,7 @@ def run_pipeline(
     user_data_dir: str = None,
     profile_directory: str = None,
     headless: bool = False,
-    days_back: int = 7,
+    days_back: int = 1,
 ):
     """
     Main pipeline to process showdown contests.

@@ -35,45 +35,75 @@ def _coerce_player_ids(val):
         
     return []
 
-def worker(worker_id: int, num_lineups: int, config_path: str, q: Queue):
-    # init db
+def worker(worker_id: int, num_lineups: int, config_path: str, total_workers: int, q: Queue):
+    """Updated worker with diversity strategy for parallel showdown generation."""
     engine = init_db('nfl')
     session = get_session(engine)
 
-    # load config
     with open(config_path, "r") as f:
         config = json.load(f)
+    
+    # *** NEW: Inject worker-specific diversity config ***
+    if "showdown" in config and "lineup_generation" in config["showdown"]:
+        sd_cfg = config["showdown"]["lineup_generation"]
+        
+        # Unique seed per worker
+        base_seed = sd_cfg.get("seed", 42)
+        sd_cfg["seed"] = base_seed + worker_id * 10000
+        
+        # Stratify salary targets across workers
+        if total_workers > 1:
+            min_global = sd_cfg.get("min_cap_drop", 0)
+            max_global = sd_cfg.get("max_cap_drop", 2000)
+            
+            strata_width = (max_global - min_global) / total_workers
+            sd_cfg["min_cap_drop"] = int(min_global + worker_id * strata_width)
+            sd_cfg["max_cap_drop"] = int(min_global + (worker_id + 1) * strata_width)
+            
+            # Vary jitter by worker (scale from 1.0x to 1.3x across workers)
+            base_jitter = sd_cfg.get("jitter", 0.10)
+            jitter_scale = 1.0 + (0.3 * worker_id / max(1, total_workers - 1))
+            sd_cfg["jitter"] = base_jitter * jitter_scale
+            
+            # Vary cap drop exponent (scale from 0.7x to 1.3x across workers)
+            base_exp = sd_cfg.get("cap_drop_exponent", 2.0)
+            exp_scale = 0.7 + (0.6 * worker_id / max(1, total_workers - 1))
+            sd_cfg["cap_drop_exponent"] = base_exp * exp_scale
+        
+        # REMOVED: Print statement here - causes messy output before Rich starts
+        # Progress bar will show worker config in its description instead
 
-    # tell parent our total target
-    q.put(("start", worker_id, num_lineups, f"target={num_lineups}"))
+    q.put(("start", worker_id, num_lineups, f"seed={sd_cfg.get('seed', 42)}"))
 
-    # progress callback from the generator
     def on_progress(delta: int, note: str | None = None):
         q.put(("advance", worker_id, delta, note or ""))
 
-    # run
     created = generate_and_store_field_lineups(
         session,
         config,
         num_lineups=num_lineups,
         batch_size=BATCH_COMMIT_SIZE,
-        on_progress=on_progress,   # <--- NEW
+        on_progress=on_progress,
     )
 
-    # final report
     q.put(("done", worker_id, created, f"created={created}"))
 
-def _run_with_progress(quotas, config_path):
+
+def _run_with_progress(quotas, config_path, total_workers):
+    """Updated to pass total_workers to each worker."""
     q = Queue()
     procs = []
     for proc_no, qnty in enumerate(quotas):
-        p = Process(target=worker, args=(proc_no, qnty, config_path, q))
+        p = Process(
+            target=worker, 
+            args=(proc_no, qnty, config_path, total_workers, q)  # Added total_workers
+        )
         p.start()
         procs.append(p)
 
     n_workers = len(procs)
 
-    # ---------- Fallback (no rich) ----------
+    # Fallback (no rich) - unchanged
     if Progress is None:
         totals = quotas[:]
         done = [0]*n_workers
@@ -83,24 +113,22 @@ def _run_with_progress(quotas, config_path):
             try:
                 kind, proc_no, val, note = q.get(timeout=0.25)
             except Empty:
-                # no message; continue polling / let workers progress
                 continue
 
             if kind == "start":
-                print(f"[{SCRIPT_NAME}][{proc_no}][1] starting… target={val}")
+                print(f"[{SCRIPT_NAME}][{proc_no}] starting ({note})")
             elif kind == "advance":
                 done[proc_no] += int(val)
                 print(
-                    f"[{SCRIPT_NAME}][{proc_no}][1] {done[proc_no]}/{totals[proc_no]} {note or ''}",
+                    f"[{SCRIPT_NAME}][{proc_no}] {done[proc_no]}/{totals[proc_no]} {note or ''}",
                     end="\r",
                     flush=True,
                 )
             elif kind == "done":
-                print()  # seal the carriage-returned line
-                print(f"[{SCRIPT_NAME}][{proc_no}][1] ✅ finished ({note})")
+                print()
+                print(f"[{SCRIPT_NAME}][{proc_no}] ✅ finished ({note})")
                 done_count += 1
 
-        # clean shutdown
         for p in procs:
             p.join(timeout=5)
             if p.is_alive():
@@ -108,7 +136,7 @@ def _run_with_progress(quotas, config_path):
         q.close(); q.join_thread()
         return
 
-    # ---------- Rich multi-bar ----------
+    # Rich multi-bar - IMPROVED
     console = Console()
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -119,7 +147,7 @@ def _run_with_progress(quotas, config_path):
         console=console,
         transient=False,
         expand=True,
-        refresh_per_second=20,
+        refresh_per_second=4,
     ) as progress:
         task_id = {}
         done_count = 0
@@ -128,46 +156,38 @@ def _run_with_progress(quotas, config_path):
             try:
                 kind, proc_no, val, note = q.get(timeout=0.25)
             except Empty:
-                # no message; keep the UI alive and loop
                 continue
 
             if kind == "start":
-                desc = f"[{SCRIPT_NAME}][{proc_no}][1] initializing…"
+                # Show worker config in initial description
+                desc = f"Worker {proc_no} ({note})"
                 task_id[proc_no] = progress.add_task(desc, total=int(val))
             elif kind == "advance":
                 tid = task_id.get(proc_no)
                 if tid is None:
                     tid = task_id[proc_no] = progress.add_task(
-                        f"[{SCRIPT_NAME}][{proc_no}][1] initializing…", total=int(val)
+                        f"Worker {proc_no}", total=int(val)
                     )
                 progress.advance(tid, int(val))
-                if note:
-                    progress.update(
-                        tid,
-                        description=f"[{SCRIPT_NAME}][{proc_no}][1] building lineups… {note}",
-                    )
+                # Don't update description on every advance - causes flicker
             elif kind == "done":
                 tid = task_id.get(proc_no)
                 if tid is not None:
-                    # snap to complete and print a nice final description
                     total = progress.tasks[tid].total or int(val)
                     progress.update(
                         tid,
                         completed=total,
-                        description=f"[{SCRIPT_NAME}][{proc_no}][1] ✅ finished ({note})",
+                        description=f"Worker {proc_no} ✅ {note}",
                     )
                 done_count += 1
 
-        # end of loop — make extra sure progress stops flushing
         progress.stop()
 
-    # clean shutdown
     for p in procs:
         p.join(timeout=5)
         if p.is_alive():
             p.terminate()
     q.close(); q.join_thread()
-
 
 def deduplicate_lineups():
     """
@@ -207,9 +227,10 @@ def main():
     remainder = args.num_lineups % args.num_jobs
     quotas = [base + (1 if i < remainder else 0) for i in range(args.num_jobs)]
 
-    _run_with_progress(quotas, args.config)
+    # Pass total_workers
+    _run_with_progress(quotas, args.config, total_workers=args.num_jobs)
 
-    print(f"{_prefix(SCRIPT_NAME, 'all', 0)} ✅ All done: generated a total of {args.num_lineups} lineups in {args.num_jobs} jobs.")
+    print(f"\n✅ Generated {args.num_lineups:,} lineups across {args.num_jobs} workers")
     return 0
 
 if __name__ == "__main__":

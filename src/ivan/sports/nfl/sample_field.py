@@ -28,6 +28,72 @@ from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 
+SALARY_CAP = 50000
+
+# ============================================================================
+# SHOWDOWN FIELD SAMPLING PARAMETERS (Greek letters)
+# ============================================================================
+# These parameters control the showdown field sampling weights in sample_sd_field()
+# 
+# The weighting formula inside each salary bin:
+#   weight = (base_projection ** ALPHA) * (cpt_percentile ** BETA) * template_penalty
+#   where template_penalty = exp(-GAMMA * max(0, flex_chalk - TAU) * (1 - cpt_pct))
+
+ALPHA = 1.6   # Projection power (1.0-2.0 typical)
+               # Higher = more projection-driven (chalkier)
+               # Lower = flatter distribution (more contrarian)
+               # 1.2 = moderate chalk bias
+
+BETA = 1.2     # Captain popularity power (0.5-1.5 typical)
+               # Higher = more captain chalk (popular captains get even more weight)
+               # Lower = less captain concentration
+               # 0.8 = balanced captain distribution
+
+GAMMA = 2.0    # Template penalty strength (1.0-4.0 typical)
+               # Higher = stronger punishment for chalky FLEX + weak CPT combos
+               # Lower = weaker penalty (allows more chalk templates)
+               # 2.0 = moderate anti-template bias
+
+TAU = 0.90     # Template chalk threshold (0.5-0.85 typical)
+               # Trigger point for template penalty (percentile of FLEX chalkiness)
+               # Higher = only penalize VERY chalky FLEX lineups
+               # Lower = penalize moderately chalky FLEX lineups
+               # 0.70 = penalty starts when avg FLEX > 70th percentile
+
+# ============================================================================
+# TUNING GUIDE:
+# ============================================================================
+# 
+# For MORE CHALK (closer to DK public):
+#   ALPHA = 1.5, BETA = 1.0, GAMMA = 1.0, TAU = 0.80
+# 
+# For MORE CONTRARIAN (leverage plays):
+#   ALPHA = 0.9, BETA = 0.6, GAMMA = 3.0, TAU = 0.60
+# 
+# For BALANCED (default):
+#   ALPHA = 1.2, BETA = 0.8, GAMMA = 2.0, TAU = 0.70
+# 
+# For CAPTAIN DIVERSITY (spread CPT ownership):
+#   ALPHA = 1.2, BETA = 0.5, GAMMA = 2.5, TAU = 0.70
+# 
+# For TEMPLATE DIVERSITY (avoid chalk stacks):
+#   ALPHA = 1.1, BETA = 0.8, GAMMA = 3.5, TAU = 0.65
+# ============================================================================
+
+# --- Your nearly-exponential prior over *salary remaining* in dollars ---
+SALARY_PRIOR: List[Tuple[int, int, float]] = [
+    (0,   200, 0.30),   # < $200 remaining
+    (200, 300, 0.20),   # $200–$299
+    (300, 400, 0.13),
+    (400, 500, 0.13),
+    (500, 600, 0.07),
+    (600, 700, 0.05),
+    (700, 800, 0.03),
+    (800, 900, 0.03),
+    (900, 1000, 0.03),
+    (1000, 10**9, 0.03),  # >= $1000 remaining
+]
+
 def load_showdown_models(model_dir: str | Path = "data/nfl/models"):
     """Load trained showdown models from disk."""
     model_dir = Path(model_dir)
@@ -902,9 +968,8 @@ def build_player_samples(session: Session, pid_to_col: Dict[int, int]) -> np.nda
 def sample_sd_field(
     session: Session,
     field_size: int = 10000,
-    config: dict = None,
-    mode = "showdown"
-):
+    config: dict = None
+    ):
     L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row = build_lineup_matrix(session)
     n_lineups = L.shape[0]
     remaining = (SALARY_CAP - spends).astype(np.int32)
@@ -1107,7 +1172,7 @@ def sample_field(
     mode = (mode or "showdown").lower()
     if mode == "showdown":
         # Check if learned model is enabled
-        use_learned = config.get('showdown', {}).get('use_learned_model', False)
+        use_learned = config.get('showdown', {}).get('use_learned_model', True)
         
         if use_learned:
             print("Using learned model for showdown sampling.")
@@ -1154,7 +1219,7 @@ def sample_classic_field(
         return cur
 
     statistic   = str(_get(config, ["classic", "sampling", "statistic"], "median")).lower()
-    temperature = float(_get(config, ["classic", "sampling", "temperature"], 1.3))  # lower = peakier
+    temperature = float(_get(config, ["classic", "sampling", "temperature"], 1.10))  # lower = peakier
     epsilon     = float(_get(config, ["classic", "sampling", "epsilon"], 0.02))     # floor mass
 
     # ---- 1) lineup matrix & metadata ----

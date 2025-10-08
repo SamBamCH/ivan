@@ -578,16 +578,14 @@ def generate_and_store_field_lineups(
     
 
     elif slate_type == "showdown":
-        # ---- 3) Precompute iteration order over sample indices ----
         n_samples = len(next(iter(samples.values())))
         idx_order = list(range(n_samples))
         random.shuffle(idx_order)
 
         created = 0
         batch   = 0
-        seen_lineups: set[tuple[int, ...]] = set()  # per-worker dedupe
+        seen_lineups: set[tuple[int, ...]] = set()
 
-        # ---- 4) Config knobs (showdown ONLY; defined once) ----
         jitter            = float(_cfg(config, "showdown.lineup_generation.jitter", 0.10))
         salary_cap        = int(_cfg(config, "showdown.lineup_generation.salary_cap", 50000))
         min_cap_drop      = int(_cfg(config, "showdown.lineup_generation.min_cap_drop", 0))
@@ -595,19 +593,19 @@ def generate_and_store_field_lineups(
         cap_drop_exponent = float(_cfg(config, "showdown.lineup_generation.cap_drop_exponent", 2.0))
         debug_lp_dir      = _cfg(config, "showdown.lineup_generation.debug_lp_dir", None)
 
-        # ---- 5) Generate lineups (no exposure forcing; no max_attempts cap) ----
         sample_cursor = 0
-        while created < num_lineups:
-            # Rotate through samples for variety
+        attempts = 0
+        max_attempts = num_lineups * 100
+        
+        while created < num_lineups and attempts < max_attempts:
+            attempts += 1
+            
             samp_idx = idx_order[sample_cursor % n_samples]
             sample_cursor += 1
 
             base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
-
-            # Jitter scores (Uniform; keep this simple & fast)
             jittered = {pid: s * (1.0 + random.uniform(-jitter, jitter)) for pid, s in base_scores.items()}
 
-            # Optional LP dump; include PID to avoid MP collisions
             debug_path = None
             if debug_lp_dir:
                 debug_path = str(Path(debug_lp_dir) / f"debug_showdown_{os.getpid()}_{created+1}.lp")
@@ -620,7 +618,6 @@ def generate_and_store_field_lineups(
                 min_cap_drop=min_cap_drop,
                 max_cap_drop=max_cap_drop,
                 cap_drop_exponent=cap_drop_exponent,
-                # No forced position mins; rely on projections/upstream instead.
                 min_k=0,
                 min_dst=0,
                 min_k_or_dst=0,
@@ -629,7 +626,6 @@ def generate_and_store_field_lineups(
             )
 
             if not ids_selected:
-                # Nothing stored; continue trying.
                 continue
 
             key = tuple(sorted(ids_selected))
@@ -641,6 +637,10 @@ def generate_and_store_field_lineups(
             created += 1
             batch   += 1
 
+            # *** FIXED: Report progress every time ***
+            if on_progress is not None:
+                on_progress(1, f"created={created}/{num_lineups}")
+
             if batch >= batch_size:
                 session.commit()
                 batch = 0
@@ -648,7 +648,11 @@ def generate_and_store_field_lineups(
         if batch > 0:
             session.commit()
 
+        if attempts >= max_attempts and created < num_lineups:
+            print(f"WARNING: Hit max_attempts ({max_attempts}) with only {created}/{num_lineups} lineups")
+
         return created
+
     
     else:
         raise ValueError("couldn't infer slate type based on payload from draftkings")
