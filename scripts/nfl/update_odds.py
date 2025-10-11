@@ -56,7 +56,7 @@ def create_projection_snapshot(session):
             'fpts_mean': player.fpts_mean or 0.0,
             'fpts_median': player.fpts_p50 or 0.0,
             'fpts_std': player.fpts_std or 0.0,
-            'ownership_proj': player.ownership_proj or 0.0,  # NEW
+            'ownership_proj': player.ownership_proj or 0.0,
         })
     
     if snapshot_records:
@@ -242,14 +242,12 @@ except Exception as e:
 
 # Get ownership projection settings from config
 ownership_config = config.get("ownership_projection", {})
-field_size = ownership_config.get("field_size", 10000)
-num_simulations = ownership_config.get("num_simulations", 10)
+num_simulations = ownership_config.get("num_simulations", 3)
 aggregate_method = ownership_config.get("aggregate_method", "mean")
 
 try:
     ownership_results = project_ownership(
         session,
-        field_size=field_size,
         config=config,
         num_simulations=num_simulations,
         aggregate_method=aggregate_method,

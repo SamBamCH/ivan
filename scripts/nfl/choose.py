@@ -203,8 +203,9 @@ def _print_exposures(df: pd.DataFrame, header: str, by_col: str):
                 continue
             # format exposure as percent
             sub["exposure"] = (sub["exposure"] * 100).round(2).astype(str) + "%"
+            sub["ownership"] = (sub["ownership"]).round(2).astype(str) + "%"
             print(f"\n[{g}]")
-            print(sub[["name", "team", "position", "salary", "exposure"]].to_string(index=False))
+            print(sub[["name", "team", "position", "salary", "exposure", "ownership", "projection"]].to_string(index=False))
 
 
 # ------------------------------- MAIN -------------------------------
@@ -326,6 +327,8 @@ def main():
                         "position": _pos(pl),
                         "salary": _sal(pl),
                         "roster_slot": slot_label,
+                        "ownership": pl.ownership_proj,
+                        "projection": pl.fpts_p50
                     }
 
             elif len(pids) == 9:
@@ -343,6 +346,8 @@ def main():
                         "team": _team(pl),
                         "position": _pos(pl),  # base position used for grouping
                         "salary": _sal(pl),
+                        "ownership": pl.ownership_proj,
+                        "projection": pl.fpts_p50
                     }
             else:
                 raise ValueError(f"Unsupported lineup size {len(pids)} for lineup {lid} (expected 6 or 9).")
@@ -383,6 +388,8 @@ def main():
                 "position": info["position"],
                 "salary": info["salary"],
                 "exposure": cnt / total_sd_entries,  # fraction of SD lineups
+                "ownership": info["ownership"],
+                "projection": info["projection"]
             })
         df_sd_expo = pd.DataFrame(sd_rows)
         _print_exposures(df_sd_expo, header=f"[Showdown exposures] (n={total_sd_entries} SD lineups)", by_col="roster_slot")

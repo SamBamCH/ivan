@@ -17,6 +17,7 @@ from ivan.sports.nfl.models import (
     ShowdownPlayer,
     ShowdownLineup,
     ShowdownContestMetadata,
+    ClassicContestMetadata
 )
 
 log = logging.getLogger(__name__)
@@ -27,55 +28,82 @@ def get_snapshot_data_for_contest(
     session: Session,
     contest_date: datetime,
     player_names: List[str],
+    player_slots: Dict[str, str],  # NEW: map normalized_name -> 'CPT' or 'FLEX'
 ) -> Dict[str, Dict]:
     """
-    Get historical FLEX data for players in a contest.
-    CPT values will be calculated as 1.5x the FLEX salary.
+    Get historical data for players in a contest.
+    
+    NOW CORRECTLY HANDLES CPT vs FLEX:
+    - Queries for BOTH roster_slot_id 511 (CPT) and 512 (FLEX)
+    - Returns correct salary/ownership based on actual slot
+    - CPT values are already 1.5x in the snapshot (if stored correctly)
     
     Args:
         session: Database session
-        contest_date: When the contest locked (in UTC from DraftKings)
-        player_names: List of player display names from contest
+        contest_date: When contest locked (UTC)
+        player_names: List of player display names
+        player_slots: Dict mapping normalized_name -> 'CPT' or 'FLEX'
     
     Returns:
-        Dict mapping normalized_name -> {projection, salary, position, team, opponent}
-        All values are for FLEX slot (roster_slot_id=512)
+        Dict mapping normalized_name -> {projection, salary, ownership_proj, ...}
     """
     from ivan.sports.nfl.models import ProjectionSnapshot
     from ivan.core.utils import normalize_name
     from zoneinfo import ZoneInfo
     
-    # Convert UTC time to Central Time (assuming snapshots are in local time)
     central_tz = ZoneInfo("America/Chicago")
     contest_local = contest_date.replace(tzinfo=ZoneInfo("UTC")).astimezone(central_tz)
-    
-    # Truncate to day (midnight in local timezone)
     contest_day = contest_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     
-    # Normalize all player names
     norm_names = [normalize_name(name) for name in player_names]
     
-    # Query ONLY FLEX snapshot data (roster_slot_id=512)
+    # Query BOTH CPT (511) and FLEX (512) snapshot data
     results = (
         session.query(ProjectionSnapshot)
         .filter(
             ProjectionSnapshot.snapshot_date == contest_day,
             ProjectionSnapshot.normalized_name.in_(norm_names),
-            ProjectionSnapshot.roster_slot_id == 512  # FLEX only
+            ProjectionSnapshot.roster_slot_id.in_([511, 512])  # BOTH slots
         )
         .all()
-    )  
-    # Convert to simple dict keyed by normalized name
-    snapshot_data = {}
+    )
+    
+    # Group by normalized_name and roster_slot_id
+    snapshot_by_player = {}
     for snap in results:
-        snapshot_data[snap.normalized_name] = {
+        if snap.normalized_name not in snapshot_by_player:
+            snapshot_by_player[snap.normalized_name] = {}
+        
+        slot_key = 'CPT' if snap.roster_slot_id == 511 else 'FLEX'
+        snapshot_by_player[snap.normalized_name][slot_key] = {
             'projection': snap.fpts_mean or 0.0,
             'projection_std': snap.fpts_std or 0.0,
             'salary': snap.salary,
             'position': snap.position,
             'team': snap.team,
             'opponent': snap.opponent,
+            'ownership_proj': snap.ownership_proj or 0.0,
         }
+    
+    # Match each player to their actual slot in this contest
+    snapshot_data = {}
+    for norm_name in norm_names:
+        actual_slot = player_slots.get(norm_name, 'FLEX')  # Default to FLEX if unknown
+        
+        player_snaps = snapshot_by_player.get(norm_name, {})
+        
+        if actual_slot in player_snaps:
+            # Use the snapshot matching their actual slot
+            snapshot_data[norm_name] = player_snaps[actual_slot]
+        elif 'FLEX' in player_snaps:
+            # Fallback: use FLEX data and multiply by 1.5x if they're actually CPT
+            flex_data = player_snaps['FLEX'].copy()
+            if actual_slot == 'CPT':
+                flex_data['projection'] *= 1.5
+                flex_data['salary'] = int(flex_data['salary'] * 1.5)
+                # Ownership should stay the same (it's the same player)
+            snapshot_data[norm_name] = flex_data
+        # else: player has no snapshot data (will be caught later)
     
     return snapshot_data
 
@@ -214,28 +242,24 @@ def quantify_stack_pattern(
         'correlation_score': correlation_score,
     }
 
-
 def process_showdown_contest(
     session: Session,
     hc: HistoricalContest,
     df: pd.DataFrame
 ) -> bool:
     """
-    Process a single showdown contest and store lineup-level data.
-    Now uses ProjectionSnapshot for historical prelock data.
-    
-    Returns True if successful, False otherwise.
+    FIXED: Now correctly matches CPT vs FLEX data at the LINEUP level.
+    Each player can appear as both CPT and FLEX across different lineups.
     """
     contest_id = hc.contest_id
     
-    # Split dataframe into lineups and ownership sections
     base_df = df.iloc[:, :-4].copy()
     own_df = df.iloc[:, -4:].copy()
     
-    # ===== STEP 1: Extract player information from DraftKings results =====
-    # This gives us ACTUAL ownership (post-lock) and ACTUAL fpts
-    player_info = {}
-    player_records = []
+    # ===== STEP 1: Extract player info from ownership table =====
+    # NOTE: This table shows aggregated ownership across ALL lineups,
+    # so we can't rely on it for CPT vs FLEX distinction
+    player_base_info = {}
     
     for _, row in own_df.iterrows():
         player_name = row.get("Player")
@@ -247,82 +271,108 @@ def process_showdown_contest(
             continue
         
         norm_name = normalize_name(player_name)
-        ownership = float(str(pct_drafted).replace("%", ""))
+        ownership_actual = float(str(pct_drafted).replace("%", ""))
         
-        # Parse position from roster position (e.g., "CPT QB", "FLEX WR")
         parts = str(roster_pos).split()
-        slot = parts[0] if parts else "FLEX"
         position = parts[1] if len(parts) > 1 else ""
         
-        player_info[norm_name] = {
+        player_base_info[norm_name] = {
             'name': player_name,
             'position': position,
-            'ownership': ownership,  # ACTUAL ownership (from DK results)
-            'slot': slot,
+            'ownership_actual': ownership_actual,
             'fpts_actual': float(fpts) if pd.notna(fpts) else None,
         }
     
-    # ===== STEP 1.5: Get HISTORICAL prelock data from snapshot =====
-    all_player_names = [player_info[norm]['name'] for norm in player_info.keys()]
-    snapshot_data = get_snapshot_data_for_contest(
-        session,
-        hc.date,
-        all_player_names
-    )
-
-    # Merge snapshot data into player_info (NO 1.5x multiplication here)
-    missing_snapshots = []
-    for norm_name, info in player_info.items():
-        matching_snap = snapshot_data.get(norm_name)
-        
-        if matching_snap:
-            # Store base FLEX values only
-            info.update({
-                'projection': matching_snap['projection'],
-                'salary': matching_snap['salary'],
-                'team': matching_snap['team'],
-                'opponent': matching_snap['opponent'],
-            })
-            
-            # Update position if snapshot has it and DK doesn't
-            if not info['position'] and matching_snap['position']:
-                info['position'] = matching_snap['position']
-        else:
-            # Track missing data for debugging
-            missing_snapshots.append(f"{info['name']} ({info['slot']})")
-            # Fallback: use a default salary to avoid breaking (but log it)
-            info.setdefault('salary', 0)
-            info.setdefault('projection', 0.0)
-            info.setdefault('team', '')
-            info.setdefault('opponent', '')
-
-    # Log if we have missing snapshot data
-    if missing_snapshots:
-        log.warning(
-            f"Contest {contest_id}: Missing snapshot data for {len(missing_snapshots)} players: "
-            f"{', '.join(missing_snapshots[:5])}{'...' if len(missing_snapshots) > 5 else ''}"
-        )
+    # ===== STEP 1.5: Get ALL snapshot data (both CPT and FLEX) =====
+    all_player_names = [player_base_info[norm]['name'] for norm in player_base_info.keys()]
     
-    # Create player records
-    for norm_name, info in player_info.items():
+    # Get snapshot data for BOTH slots - we'll match at lineup level
+    # Pass empty dict for player_slots since we want ALL data
+    snapshot_data_raw = get_snapshot_data_for_contest(
+        session, 
+        hc.date, 
+        all_player_names,
+        {}  # Empty dict means we want both CPT and FLEX data
+    )
+    
+    # Restructure: snapshot_by_player[norm_name][slot] = data
+    snapshot_by_player = {}
+    for norm_name in player_base_info.keys():
+        # Get the raw snapshot which should have both CPT and FLEX
+        raw_snap = snapshot_data_raw.get(norm_name, {})
+        
+        if raw_snap:
+            # The get_snapshot_data_for_contest returns EITHER matched slot OR FLEX with fallback
+            # We need to query both slots ourselves
+            pass
+    
+    # Actually, we need to rewrite get_snapshot_data_for_contest to return BOTH
+    # Let's instead query the snapshots directly here
+    from ivan.sports.nfl.models import ProjectionSnapshot
+    from zoneinfo import ZoneInfo
+    
+    central_tz = ZoneInfo("America/Chicago")
+    contest_local = hc.date.replace(tzinfo=ZoneInfo("UTC")).astimezone(central_tz)
+    contest_day = contest_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    
+    norm_names = list(player_base_info.keys())
+    
+    # Query BOTH CPT (511) and FLEX (512) snapshot data
+    results = (
+        session.query(ProjectionSnapshot)
+        .filter(
+            ProjectionSnapshot.snapshot_date == contest_day,
+            ProjectionSnapshot.normalized_name.in_(norm_names),
+            ProjectionSnapshot.roster_slot_id.in_([511, 512])
+        )
+        .all()
+    )
+    
+    # Group by normalized_name and roster_slot_id
+    snapshot_by_player = {}
+    for snap in results:
+        if snap.normalized_name not in snapshot_by_player:
+            snapshot_by_player[snap.normalized_name] = {}
+        
+        slot_key = 'CPT' if snap.roster_slot_id == 511 else 'FLEX'
+        snapshot_by_player[snap.normalized_name][slot_key] = {
+            'projection': snap.fpts_mean or 0.0,
+            'projection_std': snap.fpts_std or 0.0,
+            'salary': snap.salary,
+            'position': snap.position,
+            'team': snap.team,
+            'opponent': snap.opponent,
+            'ownership_proj': snap.ownership_proj or 0.0,
+        }
+    
+    # Merge base info with snapshot data
+    # For the player records table, we'll use FLEX data as baseline
+    player_records = []
+    for norm_name, base_info in player_base_info.items():
+        player_snaps = snapshot_by_player.get(norm_name, {})
+        
+        # Use FLEX data for player records (since they can be used in either slot)
+        flex_data = player_snaps.get('FLEX', {})
+        
         player_records.append(ShowdownPlayer(
             contest_id=contest_id,
-            player_name=info['name'],
+            player_name=base_info['name'],
             normalized_name=norm_name,
-            position=info.get('position', ''),
-            roster_slot=info['slot'],
-            salary=info.get('salary', 0),
-            ownership_pct=info['ownership'],
-            fpts_actual=info.get('fpts_actual'),
-            team=info.get('team'),
-            opponent=info.get('opponent'),
+            position=flex_data.get('position', base_info.get('position', '')),
+            roster_slot='FLEX',  # Default to FLEX in player table
+            salary=flex_data.get('salary', 0),
+            ownership_pct=base_info['ownership_actual'],
+            ownership_proj=flex_data.get('ownership_proj', 0.0),
+            fpts_actual=base_info.get('fpts_actual'),
+            team=flex_data.get('team', ''),
+            opponent=flex_data.get('opponent', ''),
         ))
     
-    # ===== STEP 2: Parse all lineups and aggregate duplicates =====
+    # ===== STEP 2: Parse lineups and match CPT/FLEX correctly =====
     lineup_data = defaultdict(lambda: {
         'captain': None,
         'flex': [],
-        'positions': {},  # Add position map
+        'positions': {},
         'count': 0,
         'ranks': [],
         'scores': [],
@@ -338,80 +388,116 @@ def process_showdown_contest(
         if not captain:
             continue
         
-        # Create a hashable lineup key
         lineup_key = (captain, tuple(sorted(flex_players)))
         
         lineup_data[lineup_key]['captain'] = captain
         lineup_data[lineup_key]['flex'] = flex_players
-        lineup_data[lineup_key]['positions'] = position_map  # Store positions
+        lineup_data[lineup_key]['positions'] = position_map
         lineup_data[lineup_key]['count'] += 1
         lineup_data[lineup_key]['ranks'].append(int(rank) if pd.notna(rank) else None)
         lineup_data[lineup_key]['scores'].append(float(points) if pd.notna(points) else None)
     
-    # ===== STEP 3: Calculate features for each unique lineup =====
+    # ===== STEP 3: Calculate features with correct CPT/FLEX matching =====
     lineup_records = []
     projections = []
-    ownerships = []
-    cpt_ownerships = []
+    ownerships_proj = []
+    cpt_ownerships_proj = []
     salaries = []
-
     skipped_lineups = 0
+    
+    missing_cpt_data = []
+    missing_flex_data = []
 
     for lineup_key, lu_data in lineup_data.items():
         captain = lu_data['captain']
         flex_players = lu_data['flex']
-        all_players = [captain] + flex_players
         
-        # Skip lineups with missing player data
+        # Get captain data from CPT slot
+        cpt_norm = normalize_name(captain)
+        cpt_snaps = snapshot_by_player.get(cpt_norm, {})
+        
+        # Prefer CPT slot data, fallback to FLEX * 1.5x
+        if 'CPT' in cpt_snaps:
+            cpt_data = cpt_snaps['CPT']
+            cpt_projection = cpt_data['projection']  # Already 1.5x in snapshot
+            cpt_salary = cpt_data['salary']  # Already 1.5x in snapshot
+            cpt_ownership_proj = cpt_data['ownership_proj']
+        elif 'FLEX' in cpt_snaps:
+            cpt_data = cpt_snaps['FLEX']
+            cpt_projection = cpt_data['projection'] * 1.5
+            cpt_salary = int(cpt_data['salary'] * 1.5)
+            cpt_ownership_proj = cpt_data['ownership_proj']  # Same player, same ownership
+            missing_cpt_data.append(f"{captain} (used CPT, had FLEX only)")
+        else:
+            skipped_lineups += 1
+            continue
+        
+        # Get flex players data from FLEX slot
+        flex_projection = 0.0
+        flex_salary = 0
+        flex_ownership_proj = 0.0
+        flex_ownership_actual = 0.0
+        
         skip_lineup = False
-        for p in all_players:
-            norm_p = normalize_name(p)
-            if norm_p not in player_info or player_info[norm_p].get('salary', 0) == 0:
+        for flex_player in flex_players:
+            flex_norm = normalize_name(flex_player)
+            flex_snaps = snapshot_by_player.get(flex_norm, {})
+            
+            if 'FLEX' in flex_snaps:
+                flex_data = flex_snaps['FLEX']
+                flex_projection += flex_data['projection']
+                flex_salary += flex_data['salary']
+                flex_ownership_proj += flex_data['ownership_proj']
+            elif 'CPT' in flex_snaps:
+                # Player has CPT data but used in FLEX - divide by 1.5x
+                cpt_only_data = flex_snaps['CPT']
+                flex_projection += cpt_only_data['projection'] / 1.5
+                flex_salary += int(cpt_only_data['salary'] / 1.5)
+                flex_ownership_proj += cpt_only_data['ownership_proj']
+                missing_flex_data.append(f"{flex_player} (used FLEX, had CPT only)")
+            else:
                 skip_lineup = True
                 break
+            
+            # Add actual ownership from base info
+            flex_ownership_actual += player_base_info.get(flex_norm, {}).get('ownership_actual', 0.0)
         
         if skip_lineup:
             skipped_lineups += 1
             continue
         
-        # Calculate ACTUAL ownership sum (from DK results)
-        ownership_sum = sum(
-            player_info.get(normalize_name(p), {}).get('ownership', 0.0)
-            for p in all_players
-        )
-        
-        # Captain ACTUAL ownership
-        cpt_ownership = player_info.get(normalize_name(captain), {}).get('ownership', 0.0)
-        
-        # HISTORICAL projection (from snapshot at prelock)
-        # Apply 1.5x multiplier to captain projection
-        cpt_norm = normalize_name(captain)
-        cpt_projection = player_info.get(cpt_norm, {}).get('projection', 0.0) * 1.5
-        
-        flex_projection = sum(
-            player_info.get(normalize_name(p), {}).get('projection', 0.0)
-            for p in flex_players
-        )
-        
+        # Total lineup metrics
         projection_raw = cpt_projection + flex_projection
-        
-        # HISTORICAL salary (from snapshot at prelock)
-        # Apply 1.5x multiplier to captain salary
-        cpt_salary = int(player_info.get(cpt_norm, {}).get('salary', 0) * 1.5)
-        
-        flex_salary = sum(
-            player_info.get(normalize_name(p), {}).get('salary', 0)
-            for p in flex_players
-        )
-        
         total_salary = cpt_salary + flex_salary
         salary_remaining = 50000 - total_salary
         salary_remaining_pct = (salary_remaining / 50000) * 100
         
-        # Quantify correlations (using snapshot team/position data)
-        stack_metrics = quantify_stack_pattern(captain, flex_players, player_info)
+        # Ownership sums
+        ownership_sum_proj = cpt_ownership_proj + flex_ownership_proj
+        cpt_ownership_actual = player_base_info.get(cpt_norm, {}).get('ownership_actual', 0.0)
+        ownership_sum_actual = cpt_ownership_actual + flex_ownership_actual
         
-        # Get duplicate count and best performance
+        # Build player_info dict for correlation analysis
+        player_info_for_stack = {}
+        player_info_for_stack[cpt_norm] = cpt_data.copy()
+        for flex_player in flex_players:
+            flex_norm = normalize_name(flex_player)
+            flex_snaps = snapshot_by_player.get(flex_norm, {})
+            if 'FLEX' in flex_snaps:
+                player_info_for_stack[flex_norm] = flex_snaps['FLEX']
+            elif 'CPT' in flex_snaps:
+                # Create FLEX equivalent
+                cpt_only = flex_snaps['CPT']
+                player_info_for_stack[flex_norm] = {
+                    'position': cpt_only['position'],
+                    'team': cpt_only['team'],
+                    'opponent': cpt_only['opponent'],
+                }
+        
+        # Correlations
+        stack_metrics = quantify_stack_pattern(captain, flex_players, player_info_for_stack)
+        
+        # Duplicates
         dup_count = lu_data['count']
         ranks = [r for r in lu_data['ranks'] if r is not None]
         scores = [s for s in lu_data['scores'] if s is not None]
@@ -419,8 +505,10 @@ def process_showdown_contest(
         lineup_records.append({
             'captain': captain,
             'flex': flex_players,
-            'ownership_sum': ownership_sum,
-            'cpt_ownership': cpt_ownership,
+            'ownership_sum_proj': ownership_sum_proj,
+            'ownership_sum_actual': ownership_sum_actual,
+            'cpt_ownership_proj': cpt_ownership_proj,
+            'cpt_ownership_actual': cpt_ownership_actual,
             'projection_raw': projection_raw,
             'total_salary': total_salary,
             'salary_remaining': salary_remaining,
@@ -433,14 +521,26 @@ def process_showdown_contest(
         })
         
         projections.append(projection_raw)
-        ownerships.append(ownership_sum)
-        cpt_ownerships.append(cpt_ownership)
+        ownerships_proj.append(ownership_sum_proj)
+        cpt_ownerships_proj.append(cpt_ownership_proj)
         salaries.append(total_salary)
     
-    # ===== STEP 4: Normalize features within contest (0-1 scaling) =====
+    if missing_cpt_data:
+        log.debug(f"Contest {contest_id}: {len(missing_cpt_data)} players used as CPT but only had FLEX snapshots")
+    if missing_flex_data:
+        log.debug(f"Contest {contest_id}: {len(missing_flex_data)} players used as FLEX but only had CPT snapshots")
+    
+    if skipped_lineups > 0:
+        log.warning(f"Contest {contest_id}: Skipped {skipped_lineups} lineups due to missing snapshot data")
+    
+    # ===== STEP 4: Normalize features =====
+    if not projections:
+        log.warning(f"Contest {contest_id}: No valid lineups after processing")
+        return False
+    
     proj_min, proj_max = min(projections), max(projections)
-    own_min, own_max = min(ownerships), max(ownerships)
-    cpt_min, cpt_max = min(cpt_ownerships), max(cpt_ownerships)
+    own_min, own_max = min(ownerships_proj), max(ownerships_proj)
+    cpt_min, cpt_max = min(cpt_ownerships_proj), max(cpt_ownerships_proj)
     
     def normalize(val, min_val, max_val):
         if max_val == min_val:
@@ -449,40 +549,41 @@ def process_showdown_contest(
     
     # Create lineup ORM objects
     final_lineup_records = []
-    for i, lu_rec in enumerate(lineup_records):
+    for lu_rec in lineup_records:
         proj_norm = normalize(lu_rec['projection_raw'], proj_min, proj_max)
-        own_norm = normalize(lu_rec['ownership_sum'], own_min, own_max)
-        cpt_percentile = normalize(lu_rec['cpt_ownership'], cpt_min, cpt_max)
+        own_norm_proj = normalize(lu_rec['ownership_sum_proj'], own_min, own_max)
+        cpt_percentile_proj = normalize(lu_rec['cpt_ownership_proj'], cpt_min, cpt_max)
         
-        # Calculate percentiles
         proj_percentile = (np.searchsorted(sorted(projections), lu_rec['projection_raw']) 
                           / len(projections))
-        own_percentile = (np.searchsorted(sorted(ownerships), lu_rec['ownership_sum']) 
-                         / len(ownerships))
+        own_percentile_proj = (np.searchsorted(sorted(ownerships_proj), lu_rec['ownership_sum_proj']) 
+                              / len(ownerships_proj))
         
         final_lineup_records.append(ShowdownLineup(
             contest_id=contest_id,
             captain_name=lu_rec['captain'],
             flex_players=lu_rec['flex'],
             
-            # Correlation features (dimension 1)
+            # Correlation features
             **lu_rec['stack_metrics'],
             
-            # Captain ownership (dimension 2)
-            cpt_ownership_pct=lu_rec['cpt_ownership'],
-            cpt_ownership_percentile=cpt_percentile,
+            # Captain ownership - PROJECTED for model
+            cpt_ownership_pct=lu_rec['cpt_ownership_proj'],
+            cpt_ownership_percentile=cpt_percentile_proj,
+            cpt_ownership_actual=lu_rec['cpt_ownership_actual'],
             
-            # Projection (dimension 3) - NOW FROM SNAPSHOT
+            # Projection
             projection_raw=lu_rec['projection_raw'],
             projection_normalized=proj_norm,
             projection_percentile=proj_percentile,
             
-            # Ownership (dimension 4) - ACTUAL from DK results
-            ownership_sum=lu_rec['ownership_sum'],
-            ownership_normalized=own_norm,
-            ownership_percentile=own_percentile,
+            # Ownership - PROJECTED for model
+            ownership_sum=lu_rec['ownership_sum_proj'],
+            ownership_normalized=own_norm_proj,
+            ownership_percentile=own_percentile_proj,
+            ownership_sum_actual=lu_rec['ownership_sum_actual'],
             
-            # Salary (dimension 5) - NOW FROM SNAPSHOT
+            # Salary
             total_salary=lu_rec['total_salary'],
             salary_remaining=lu_rec['salary_remaining'],
             salary_remaining_pct=lu_rec['salary_remaining_pct'],
@@ -506,46 +607,49 @@ def process_showdown_contest(
         total_entries=hc.total_entries,
         entry_fee=hc.entry_fee,
         
-        # Normalization bounds
         min_projection=proj_min,
         max_projection=proj_max,
         median_projection=float(np.median(projections)),
         min_ownership=own_min,
         max_ownership=own_max,
-        median_ownership=float(np.median(ownerships)),
+        median_ownership=float(np.median(ownerships_proj)),
         min_cpt_ownership=cpt_min,
         max_cpt_ownership=cpt_max,
         
-        # Aggregate stats
         unique_lineup_count=len(lineup_records),
         max_duplicate_count=max([lu['dup_count'] for lu in lineup_records]),
         median_duplicate_count=int(np.median([lu['dup_count'] for lu in lineup_records])),
         
         top_stack_patterns=dict(stack_pattern_counts.most_common(10)),
-        ownership_gini=calculate_gini(ownerships),
+        ownership_gini=calculate_gini(ownerships_proj),
         projection_std=float(np.std(projections)),
     )
     
     # ===== STEP 6: Save to database =====
     try:
-        # Clear existing data for this contest
         session.query(ShowdownPlayer).filter_by(contest_id=contest_id).delete()
         session.query(ShowdownLineup).filter_by(contest_id=contest_id).delete()
         session.query(ShowdownContestMetadata).filter_by(contest_id=contest_id).delete()
         
-        # Insert new data
         session.bulk_save_objects(player_records)
         session.bulk_save_objects(final_lineup_records)
         session.add(metadata)
         
         session.commit()
         
-        # Log snapshot data availability - count unique players matched
-        unique_matched = sum(1 for norm_name in player_info if norm_name in snapshot_data)
-        snapshot_match_rate = unique_matched / len(player_info) if player_info else 0
+        unique_with_snapshots = len(snapshot_by_player)
+        total_unique = len(player_base_info)
+        snapshot_match_rate = unique_with_snapshots / total_unique if total_unique else 0
+        
+        players_with_ownership = sum(
+            1 for snaps in snapshot_by_player.values()
+            if any(snap.get('ownership_proj', 0) > 0 for snap in snaps.values())
+        )
+        ownership_proj_rate = players_with_ownership / total_unique if total_unique else 0
+        
         log.info(
-            f"✓ Processed contest {contest_id}: {len(final_lineup_records)} unique lineups | "
-            f"Snapshot match: {snapshot_match_rate:.1%} ({unique_matched}/{len(player_info)} players)"
+            f"✓ Contest {contest_id}: {len(final_lineup_records)} lineups | "
+            f"Snapshot: {snapshot_match_rate:.1%} | Ownership: {ownership_proj_rate:.1%}"
         )
         return True
         
@@ -600,7 +704,6 @@ def run_pipeline(
         .filter(
             HistoricalContest.date >= cutoff,
             HistoricalContest.date <= now,
-            HistoricalContest.contest_type == "Showdown Captain Mode",
             ~HistoricalContest.contest_id.in_(processed_contests),
         )
         .order_by(HistoricalContest.date.desc())
@@ -620,7 +723,7 @@ def run_pipeline(
                 log.warning(f"Skipping contest {hc.contest_id}: no data")
                 continue
             
-            if process_showdown_contest(session, hc, df):
+            if process_contest(session, hc, df):
                 success_count += 1
                 
         except Exception as e:
@@ -629,3 +732,163 @@ def run_pipeline(
     
     log.info(f"Pipeline complete: {success_count}/{len(to_process)} contests processed")
     session.close()
+
+def process_contest(session: Session, hc: HistoricalContest, df: pd.DataFrame) -> bool:
+    """
+    Route to appropriate processor based on contest type.
+    """
+    contest_type = hc.contest_type or ""
+    
+    if "Showdown" in contest_type or "Captain Mode" in contest_type:
+        return process_showdown_contest(session, hc, df)
+    else:
+        # Classic contest
+        return process_classic_contest(session, hc, df)
+
+
+def process_classic_contest(
+    session: Session,
+    hc: HistoricalContest,
+    df: pd.DataFrame
+) -> bool:
+    """
+    Process classic contest: extract distributions, fit KDE, store metadata.
+    
+    Unlike showdown, we don't store individual lineups - just the distribution
+    parameters needed for field sampling.
+    """
+    contest_id = hc.contest_id
+    
+    # Parse lineup data
+    base_df = df.iloc[:, :-4].copy()  # Main lineup data
+    own_df = df.iloc[:, -4:].copy()   # Ownership table
+    
+    # Get player base info from ownership table
+    player_base_info = {}
+    for _, row in own_df.iterrows():
+        player_name = row.get("Player")
+        if pd.isna(player_name):
+            continue
+        
+        norm_name = normalize_name(player_name)
+        ownership_actual = float(str(row.get("%Drafted", "0%")).replace("%", ""))
+        fpts_actual = row.get("FPTS")
+        
+        player_base_info[norm_name] = {
+            'name': player_name,
+            'ownership_actual': ownership_actual,
+            'fpts_actual': float(fpts_actual) if pd.notna(fpts_actual) else None,
+        }
+    
+    # Get snapshot data for players
+    all_player_names = [info['name'] for info in player_base_info.values()]
+    snapshot_data = get_snapshot_data_for_classic_contest(
+        session, 
+        hc.date, 
+        all_player_names
+    )
+    
+    # Parse lineups and compute features
+    lineup_projections = []
+    lineup_ownerships = []
+    lineup_salaries = []
+    
+    for _, row in base_df.iterrows():
+        lineup_str = row.get("Lineup", "")
+        
+        # Parse lineup (different format than showdown)
+        player_names = parse_classic_lineup_string(lineup_str)
+        if not player_names:
+            continue
+        
+        # Calculate lineup projection sum
+        proj_sum = 0.0
+        own_sum = 0.0
+        salary_sum = 0
+        
+        valid_lineup = True
+        for player_name in player_names:
+            norm_name = normalize_name(player_name)
+            snap = snapshot_data.get(norm_name)
+            
+            if not snap:
+                valid_lineup = False
+                break
+            
+            proj_sum += snap.get('projection', 0.0)
+            own_sum += snap.get('ownership_proj', 0.0)
+            salary_sum += snap.get('salary', 0)
+        
+        if not valid_lineup:
+            continue
+        
+        lineup_projections.append(proj_sum)
+        lineup_ownerships.append(own_sum)
+        lineup_salaries.append(salary_sum)
+    
+    if not lineup_projections:
+        log.warning(f"Contest {contest_id}: No valid lineups after processing")
+        return False
+    
+    # Convert to arrays
+    projections = np.array(lineup_projections)
+    ownerships = np.array(lineup_ownerships)
+    salaries = np.array(lineup_salaries)
+    
+    # Normalize to [0, 1]
+    proj_min, proj_max = projections.min(), projections.max()
+    own_min, own_max = ownerships.min(), ownerships.max()
+    
+    if proj_max > proj_min:
+        proj_normalized = (projections - proj_min) / (proj_max - proj_min)
+    else:
+        proj_normalized = np.full_like(projections, 0.5)
+    
+    if own_max > own_min:
+        own_normalized = (ownerships - own_min) / (own_max - own_min)
+    else:
+        own_normalized = np.full_like(ownerships, 0.5)
+    
+    # Store metadata with KDE samples
+    metadata = ClassicContestMetadata(
+        contest_id=contest_id,
+        date=hc.date,
+        total_entries=hc.total_entries,
+        entry_fee=hc.entry_fee,
+        
+        # Normalization bounds
+        min_projection=float(proj_min),
+        max_projection=float(proj_max),
+        min_ownership=float(own_min),
+        max_ownership=float(own_max),
+        
+        # KDE samples (store normalized values)
+        projection_kde_samples=proj_normalized.tolist(),
+        ownership_kde_samples=own_normalized.tolist(),
+        
+        # Statistics
+        projection_mean=float(projections.mean()),
+        projection_std=float(projections.std()),
+        ownership_mean=float(ownerships.mean()),
+        ownership_std=float(ownerships.std()),
+        
+        salary_remaining_mean=float((50000 - salaries).mean()),
+    )
+    
+    # Save to database
+    try:
+        session.query(ClassicContestMetadata).filter_by(contest_id=contest_id).delete()
+        session.add(metadata)
+        session.commit()
+        
+        log.info(
+            f"✓ Contest {contest_id}: {len(projections)} lineups | "
+            f"Proj: [{proj_min:.1f}, {proj_max:.1f}] | "
+            f"Own: [{own_min:.1f}, {own_max:.1f}]"
+        )
+        return True
+        
+    except Exception as e:
+        session.rollback()
+        log.error(f"✗ Failed to save contest {contest_id}: {e}")
+        return False

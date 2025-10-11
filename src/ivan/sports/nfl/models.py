@@ -326,6 +326,8 @@ class ShowdownPlayer(NFLBase):
     # For correlation analysis
     game_id = Column(String, nullable=True)  # Links players in same game
     opponent = Column(String, nullable=True)
+
+    ownership_proj = Column(Float, nullable=True)
     
     __table_args__ = (
         UniqueConstraint('contest_id', 'player_name', 'roster_slot', 
@@ -382,6 +384,9 @@ class ShowdownLineup(NFLBase):
     unique_rank = Column(Integer, nullable=True)  # Rank among unique lineups
     best_score = Column(Float, nullable=True)  # Best score this lineup achieved
     best_rank = Column(Integer, nullable=True)  # Best rank this lineup achieved
+
+    cpt_ownership_actual = Column(Float, nullable=True)
+    ownership_sum_actual = Column(Float, nullable=True)
     
     # Metadata
     first_seen_rank = Column(Integer, nullable=True)  # First occurrence rank
@@ -465,6 +470,45 @@ class ProjectionSnapshot(NFLBase):
     fpts_mean = Column(Float, nullable=False)
     fpts_median = Column(Float, nullable=True)
     fpts_std = Column(Float, nullable=True)
+
+    ownership_proj = Column(Float, nullable=False)
+
+class ClassicContestMetadata(NFLBase):
+    """
+    Contest-level metadata and distribution parameters for Classic contests.
+    Stores KDE parameters for projection and ownership distributions.
+    """
+    __tablename__ = "classic_contest_metadata"
+    
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
+                       primary_key=True)
+    
+    # Contest info
+    date = Column(DateTime, nullable=False)
+    total_entries = Column(Integer, nullable=False)
+    entry_fee = Column(Float, nullable=False)
+    
+    # Normalization bounds (for converting raw values to 0-1)
+    min_projection = Column(Float, nullable=True)
+    max_projection = Column(Float, nullable=True)
+    min_ownership = Column(Float, nullable=True)
+    max_ownership = Column(Float, nullable=True)
+    
+    # KDE Distribution data (stored as JSON arrays)
+    projection_kde_samples = Column(JSON, nullable=True)  # Array of normalized projection sums
+    ownership_kde_samples = Column(JSON, nullable=True)   # Array of normalized ownership sums
+    
+    # Distribution statistics
+    projection_mean = Column(Float, nullable=True)
+    projection_std = Column(Float, nullable=True)
+    ownership_mean = Column(Float, nullable=True)
+    ownership_std = Column(Float, nullable=True)
+    
+    # Optional: salary and stacking patterns
+    salary_remaining_mean = Column(Float, nullable=True)
+    top_stack_patterns = Column(JSON, nullable=True)  # {"4-2-2-1": 0.25, ...}
+    
+    processed_at = Column(DateTime, default=datetime.utcnow)
     
 
 

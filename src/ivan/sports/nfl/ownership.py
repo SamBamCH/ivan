@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.sample_field import (
-    sample_sd_field,
+    sample_showdown_field_learned,
     sample_classic_field,
     build_lineup_matrix,
 )
@@ -156,7 +156,6 @@ def _write_ownership_to_db(
 def project_ownership(
     session: Session,
     *,
-    field_size: int = 10000,
     config: dict = None,
     num_simulations: int = 1,
     aggregate_method: str = 'mean',
@@ -204,15 +203,17 @@ def project_ownership(
         
         try:
             if slate_type == 'showdown':
-                counts_by_lineup, meta = sample_sd_field(
+                field_size=50000
+                counts_by_lineup, meta = sample_showdown_field_learned(
                     session=session,
-                    field_size=50000,
+                    field_size=field_size,
                     config=config,
                 )
             else:  # classic
+                field_size=10000
                 counts_by_lineup, meta = sample_classic_field(
                     session=session,
-                    field_size=10000,
+                    field_size=field_size,
                     config=config,
                 )
             
