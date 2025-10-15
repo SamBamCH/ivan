@@ -32,13 +32,79 @@ from ivan.core.utils import normalize_name
 
 # K / DST handling
 DST_POS = {"DST", "D/ST", "DEF"}
+
+# Kicker defaults (fallback if calibration file not available)
 KICKER_DEFAULT_SHAPE = 7.3
 KICKER_DEFAULT_SCALE = 1.2
+_KICKER_PARAMS_CACHE: dict | None = None
+
+def _load_kicker_params(model_dir: Path) -> dict:
+    """Load calibrated kicker parameters from JSON, with fallback to defaults."""
+    global _KICKER_PARAMS_CACHE
+    if _KICKER_PARAMS_CACHE is not None:
+        return _KICKER_PARAMS_CACHE
+
+    params_path = model_dir / "kicker_params.json"
+    if params_path.exists():
+        try:
+            with open(params_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                shape = data.get("league_wide", {}).get("shape", KICKER_DEFAULT_SHAPE)
+                scale = data.get("league_wide", {}).get("scale", KICKER_DEFAULT_SCALE)
+                _KICKER_PARAMS_CACHE = {"shape": shape, "scale": scale, "by_team": data.get("by_team", {})}
+                logging.debug(f"[kicker] Loaded calibrated params: shape={shape:.2f}, scale={scale:.2f}")
+                return _KICKER_PARAMS_CACHE
+        except Exception as e:
+            logging.warning(f"[kicker] Failed to load params from {params_path}: {e}")
+
+    # Fallback to defaults
+    _KICKER_PARAMS_CACHE = {"shape": KICKER_DEFAULT_SHAPE, "scale": KICKER_DEFAULT_SCALE, "by_team": {}}
+    logging.debug(f"[kicker] Using default params: shape={KICKER_DEFAULT_SHAPE}, scale={KICKER_DEFAULT_SCALE}")
+    return _KICKER_PARAMS_CACHE
 
 # Odds handling
 DEFAULT_ONE_SIDE_VIG = 0.15  # 5% haircut if the opposing side is missing
 DEFAULT_MARKET_WEIGHTS_PATH = Path(r"D:\ivan\data\nfl\models\market_weights.json")
 _MARKET_WEIGHTS_CACHE: dict | None = None
+
+# DST odds formula defaults (fallback if calibration file not available)
+DST_ODDS_DEFAULTS = {
+    "intercept": 11.0,
+    "opp_total": -0.25,
+    "team_favored": 0.15,
+    "total_deviation": 0.05,
+    "residual_std": 5.0,
+}
+_DST_ODDS_PARAMS_CACHE: dict | None = None
+
+def _load_dst_odds_params(model_dir: Path) -> dict:
+    """Load calibrated DST odds formula parameters from JSON, with fallback to defaults."""
+    global _DST_ODDS_PARAMS_CACHE
+    if _DST_ODDS_PARAMS_CACHE is not None:
+        return _DST_ODDS_PARAMS_CACHE
+
+    params_path = model_dir / "dst_odds_params.json"
+    if params_path.exists():
+        try:
+            with open(params_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                coeffs = data.get("coefficients", DST_ODDS_DEFAULTS)
+                _DST_ODDS_PARAMS_CACHE = {
+                    "intercept": coeffs.get("intercept", DST_ODDS_DEFAULTS["intercept"]),
+                    "opp_total": coeffs.get("opp_total", DST_ODDS_DEFAULTS["opp_total"]),
+                    "team_favored": coeffs.get("team_favored", DST_ODDS_DEFAULTS["team_favored"]),
+                    "total_deviation": coeffs.get("total_deviation", DST_ODDS_DEFAULTS["total_deviation"]),
+                    "residual_std": coeffs.get("residual_std", DST_ODDS_DEFAULTS["residual_std"]),
+                }
+                logging.debug(f"[dst] Loaded calibrated odds formula: {_DST_ODDS_PARAMS_CACHE}")
+                return _DST_ODDS_PARAMS_CACHE
+        except Exception as e:
+            logging.warning(f"[dst] Failed to load params from {params_path}: {e}")
+
+    # Fallback to defaults
+    _DST_ODDS_PARAMS_CACHE = DST_ODDS_DEFAULTS.copy()
+    logging.debug(f"[dst] Using default odds formula: {_DST_ODDS_PARAMS_CACHE}")
+    return _DST_ODDS_PARAMS_CACHE
 
 # Simple combined scrimmage TD handling
 SIMPLE_MODE = True  # simplified per-stat + scrimmage TD approach
@@ -47,9 +113,10 @@ def _simple_td_alpha(pos: str) -> float:
     return float(np.clip(SIMPLE_TD_ALPHA.get(pos, 0.0), 0.0, 1.0))
 
 # Role mapping from anytime TD
+# Calibrated from historical data: 25th percentile of volume-based usage
 ROLE_MIN = 0.01
-ROLE_MAX = 0.50
-ROLE_BETA = 1.25
+ROLE_MAX = 0.20  # Lowered from 0.50 to prevent overprojecting backup players
+ROLE_BETA = 1.1
 
 BUCKET_STEP = 0.5   # most props are on .5 increments; change if needed
 
@@ -99,7 +166,7 @@ _MARKET_KEYS = {
 _STAT_COL_ALIASES = {
     "passing_yards":    ("passing_yards", "pass_yards", "pass_yds"),
     "passing_tds":      ("passing_tds", "pass_tds"),
-    "interceptions":    ("interceptions", "pass_interceptions", "interceptions_thrown"),
+    "interceptions":    ("passing_interceptions", "interceptions", "pass_interceptions", "interceptions_thrown"),
 
     "rushing_yards":    ("rushing_yards", "rush_yards", "rush_yds"),
     "rushing_tds":      ("rushing_tds", "rush_tds"),
@@ -699,8 +766,8 @@ def _implied_team_totals(total: float, home_spread: float) -> tuple[float, float
     return home_tt, away_tt
 
 
-def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_spread: float, is_team_home: bool) -> tuple[float, float]:
-    """Heuristic mapping from implied totals/spread to a DST Normal(mean, std)."""
+def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_spread: float, is_team_home: bool, model_dir: Path = Path("data/nfl/models")) -> tuple[float, float]:
+    """Calibrated mapping from implied totals/spread to a DST Normal(mean, std)."""
     home_tt, away_tt = _implied_team_totals(total, home_spread)
 
     if is_team_home:
@@ -710,14 +777,25 @@ def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_s
         team_spread = -home_spread          # away spread is negative of home spread
         opp_tt = home_tt
 
-    # just lazily estimate a mean and std based on odds. better than nothing, but still doesn't factor in interceptions or sacks/fumbles. 
-    mean = 11.0 - 0.25 * float(opp_tt) + 0.15 * max(-float(team_spread), 0.0) + 0.05 * (46.0 - float(total))
+    # Load calibrated parameters
+    params = _load_dst_odds_params(model_dir)
+
+    # Calibrated formula: dst_points = intercept + coef_opp*opp_tt + coef_fav*max(-spread,0) + coef_dev*(46-total)
+    team_favored = max(-float(team_spread), 0.0)  # Positive when team is favored
+    total_deviation = 46.0 - float(total)
+
+    mean = (params["intercept"] +
+            params["opp_total"] * float(opp_tt) +
+            params["team_favored"] * team_favored +
+            params["total_deviation"] * total_deviation)
+
     mean = float(np.clip(mean, -1.5, 14.0))
-    std = 5.0
+    std = float(params["residual_std"])
+
     return mean, std
 
-def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int) -> np.ndarray:
-    """Project DST points from NFLGameOdds when available; otherwise fall back to a generic distribution."""
+def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int, model_dir: Path = Path("data/nfl/models")) -> np.ndarray:
+    """Project DST points from NFLGameOdds when available; otherwise fall back to historical averages."""
     rng = np.random.default_rng()
     logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player pos-DST, trying to match {team} vs {opponent}")
 
@@ -728,14 +806,37 @@ def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n
         total = home_spread = is_team_home = None
 
     if (total is not None) and (home_spread is not None) and (is_team_home is not None):
-        mu, sigma = _dst_normal_params_from_lines(team, opponent, float(total), float(home_spread), bool(is_team_home))
+        mu, sigma = _dst_normal_params_from_lines(team, opponent, float(total), float(home_spread), bool(is_team_home), model_dir)
         logging.debug("[update_odds][generate_and_fit_all][simulate_player_fpts][2] dst normal params: mu=%.3f sigma=%.3f", mu, sigma)
         fpts = rng.normal(loc=mu, scale=sigma, size=n_samples)
     else:
-        # Fallback: historical-ish shape
-        fpts = rng.normal(loc=6.5, scale=5.0, size=n_samples)
+        # Fallback: try team-specific historical average, then opponent-specific, then league-wide
+        mu, sigma = _dst_fallback_params(session, team, opponent)
+        logging.debug("[update_odds][generate_and_fit_all][simulate_player_fpts][2] dst fallback params: mu=%.3f sigma=%.3f", mu, sigma)
+        fpts = rng.normal(loc=mu, scale=sigma, size=n_samples)
 
     return np.clip(fpts, -6.0, None)
+
+def _dst_fallback_params(session: Session, team: str | None, opponent: str | None) -> tuple[float, float]:
+    """
+    Fallback DST parameters when odds are unavailable.
+    Priority:
+      1. Team vs opponent historical average
+      2. Team historical average
+      3. Opponent allowed (defensive perspective)
+      4. League-wide average
+      5. Generic default (6.5, 5.0)
+    """
+    # Try to fetch historical DST points from nfl_dst_game table
+    dst_pts = _fetch_dst_points(session, team, opponent)
+
+    if dst_pts.size >= 5:
+        mu = float(np.mean(dst_pts))
+        sigma = float(np.std(dst_pts, ddof=1) if dst_pts.size > 1 else 5.0)
+        return mu, sigma
+
+    # Final fallback: generic distribution
+    return 6.5, 5.0
 
 def _fpts_summary(samples: np.ndarray,
                   percentiles = (1, 5, 10, 25, 50, 75, 90, 95, 99)) -> dict:
@@ -869,10 +970,22 @@ def simulate_player_fpts(
     pos = 'DST' if raw_pos in DST_POS else raw_pos
 
     if pos == 'K':
-        logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} pos=K → using KICKER_DEFAULT_SHAPE/SCALE")
-        return st.gamma.rvs(KICKER_DEFAULT_SHAPE, scale=KICKER_DEFAULT_SCALE, size=n_samples).astype(float)
+        # Load calibrated kicker params (with fallback to defaults)
+        kicker_params = _load_kicker_params(Path("data/nfl/models"))
+
+        # Try team-specific params if available
+        if player.team and player.team in kicker_params.get("by_team", {}):
+            team_params = kicker_params["by_team"][player.team]
+            shape, scale = team_params["shape"], team_params["scale"]
+            logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} pos=K team={player.team} → using team-specific shape={shape:.2f}, scale={scale:.2f}")
+        else:
+            shape, scale = kicker_params["shape"], kicker_params["scale"]
+            logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} pos=K → using league-wide shape={shape:.2f}, scale={scale:.2f}")
+
+        return st.gamma.rvs(shape, scale=scale, size=n_samples).astype(float)
+
     if pos == 'DST':
-        return _sample_dst_fpts(session, player.team, player.opponent, n_samples)
+        return _sample_dst_fpts(session, player.team, player.opponent, n_samples, Path("data/nfl/models"))
 
 
     stats = position_configs[pos]['stats']
@@ -895,6 +1008,16 @@ def simulate_player_fpts(
 
     for stat in stats:
         base_info = marginals[pos][stat]
+
+        # Check if params is None or missing
+        if base_info.get("params") is None or base_info.get("dist") is None:
+            raise RuntimeError(
+                f"[MARGINALS ERROR] {player.name} pos={pos} stat={stat}: "
+                f"base_info has missing params or dist (params={base_info.get('params')}, dist={base_info.get('dist')}). "
+                f"This indicates corrupted or incomplete marginals data in marginals.pkl. "
+                f"You may need to regenerate the marginals file."
+            )
+
         dist_name, params = base_info["dist"], tuple(base_info["params"])
 
         logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player_id={player_id} stat={stat} base_dist={dist_name} base_params={params}")

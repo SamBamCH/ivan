@@ -691,31 +691,120 @@ def build_player_samples_independent(
 # OWNERSHIP EXTRACTION
 # ==============================================================================
 
+def get_player_ownership_heuristic(
+    session: Session,
+    pid_to_col: Dict[int, int],
+    alpha: float = 2.0,
+    salary_weight: float = 0.3,
+) -> np.ndarray:
+    """
+    Calculate heuristic player ownership based on projections and salary.
+
+    This avoids circular dependency with ownership_proj column.
+
+    Formula: ownership_score = (projection_pct ** alpha) * (1 - salary_weight + salary_weight * salary_pct)
+    Then normalize to sum to reasonable total (e.g., 600% for 6-player showdown)
+
+    Args:
+        session: Database session
+        pid_to_col: Player ID to column index mapping
+        alpha: Power for projection (higher = more concentration on chalk)
+        salary_weight: How much salary matters (0-1)
+
+    Returns:
+        Array [n_players] with heuristic ownership percentages (0-100)
+    """
+    player_data = session.query(
+        NFLPlayer.id,
+        NFLPlayer.fpts_mean,
+        NFLPlayer.salary,
+        NFLPlayer.roster_slot_id,
+    ).filter(NFLPlayer.id.in_(pid_to_col.keys())).all()
+
+    # Build arrays
+    n_players = len(pid_to_col)
+    projections = np.zeros(n_players, dtype=np.float64)
+    salaries = np.zeros(n_players, dtype=np.float64)
+    is_cpt = np.zeros(n_players, dtype=bool)
+
+    for pid, fpts_mean, salary, roster_slot_id in player_data:
+        col = pid_to_col[pid]
+        projections[col] = float(fpts_mean or 0.0)
+        salaries[col] = float(salary or 0.0)
+        is_cpt[col] = (roster_slot_id == CPT_SLOT)
+
+    # Calculate ownership scores separately for CPT and FLEX
+    ownership = np.zeros(n_players, dtype=np.float64)
+
+    # CPT ownership
+    cpt_mask = is_cpt
+    if cpt_mask.any():
+        cpt_projs = projections[cpt_mask]
+        cpt_sals = salaries[cpt_mask]
+
+        # Percentile ranks
+        cpt_proj_pct = np.argsort(np.argsort(cpt_projs)) / max(1, cpt_projs.size - 1)
+        cpt_sal_pct = np.argsort(np.argsort(cpt_sals)) / max(1, cpt_sals.size - 1)
+
+        # Combined score
+        cpt_scores = np.power(cpt_proj_pct, alpha) * (
+            1 - salary_weight + salary_weight * cpt_sal_pct
+        )
+
+        # Normalize to 100% total (one captain per lineup)
+        if cpt_scores.sum() > 0:
+            cpt_ownership = 100.0 * cpt_scores / cpt_scores.sum()
+            ownership[cpt_mask] = cpt_ownership
+
+    # FLEX ownership
+    flex_mask = ~is_cpt
+    if flex_mask.any():
+        flex_projs = projections[flex_mask]
+        flex_sals = salaries[flex_mask]
+
+        flex_proj_pct = np.argsort(np.argsort(flex_projs)) / max(1, flex_projs.size - 1)
+        flex_sal_pct = np.argsort(np.argsort(flex_sals)) / max(1, flex_sals.size - 1)
+
+        flex_scores = np.power(flex_proj_pct, alpha) * (
+            1 - salary_weight + salary_weight * flex_sal_pct
+        )
+
+        # Normalize to 500% total (5 flex per lineup)
+        if flex_scores.sum() > 0:
+            flex_ownership = 500.0 * flex_scores / flex_scores.sum()
+            ownership[flex_mask] = flex_ownership
+
+    return ownership
+
+
 def get_player_ownership(session: Session, pid_to_col: Dict[int, int]) -> np.ndarray:
     """
     Extract actual player ownership from NFLPlayer table.
-    
+
     Returns array [n_players] with ownership percentages (0-100).
     Missing ownership defaults to 0.
+
+    NOTE: This should only be used for actual DK ownership data, NOT for model inputs
+    (to avoid circular dependency with ownership_proj).
     """
     # Try both column names (ownership_proj and ownership)
     player_data = session.query(
         NFLPlayer.id,
         NFLPlayer.ownership_proj  # Changed from ownership to ownership_proj
     ).filter(NFLPlayer.id.in_(pid_to_col.keys())).all()
-    
+
     ownership = np.zeros(len(pid_to_col), dtype=np.float64)
     missing_count = 0
-    
+
     for pid, own in player_data:
         if own is not None and not np.isnan(own):
             ownership[pid_to_col[pid]] = float(own)
         else:
             missing_count += 1
-    
+
     if missing_count > 0:
         print(f"  WARNING: {missing_count} players missing ownership_proj data")
-    
+
     return ownership
 
 # ==============================================================================
@@ -1012,9 +1101,22 @@ def sample_showdown_field_learned(
     
     # Get player samples (independent for popularity features)
     P_indep = build_player_samples_independent(session, pid_to_col, n_sims=64, seed=42)
-    
-    # Get actual player ownership
-    player_ownership = get_player_ownership(session, pid_to_col)
+
+    # Get heuristic player ownership (breaks circular dependency)
+    # Use config values if available, otherwise use defaults
+    alpha = config.get('showdown', {}).get('ownership_alpha', 2.0)
+    salary_weight = config.get('showdown', {}).get('ownership_salary_weight', 0.3)
+
+    player_ownership = get_player_ownership_heuristic(
+        session,
+        pid_to_col,
+        alpha=alpha,
+        salary_weight=salary_weight,
+    )
+
+    print(f"  Using heuristic ownership (alpha={alpha}, salary_weight={salary_weight})")
+    print(f"  Ownership range: [{player_ownership.min():.2f}%, {player_ownership.max():.2f}%], "
+          f"mean={player_ownership.mean():.2f}%")
     
     # Compute features for model (returns features + diagnostics)
     X, feature_diagnostics = compute_lineup_features_for_model(

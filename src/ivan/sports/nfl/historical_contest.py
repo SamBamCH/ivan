@@ -28,7 +28,8 @@ def get_snapshot_data_for_contest(
     session: Session,
     contest_date: datetime,
     player_names: List[str],
-    player_slots: Dict[str, str],  # NEW: map normalized_name -> 'CPT' or 'FLEX'
+    player_slots: Dict[str, str] = None,  # Make optional, default None for classic
+    roster_slot_filter: List[int] = None,  # NEW: allow filtering by slot IDs
 ) -> Dict[str, Dict]:
     """
     Get historical data for players in a contest.
@@ -50,12 +51,18 @@ def get_snapshot_data_for_contest(
     from ivan.sports.nfl.models import ProjectionSnapshot
     from ivan.core.utils import normalize_name
     from zoneinfo import ZoneInfo
+
+    # For classic contests, only get standard (non-CPT) slots
+    if roster_slot_filter is None:
+        roster_slot_filter = [511, 512]  # Both CPT and FLEX by default
     
     central_tz = ZoneInfo("America/Chicago")
     contest_local = contest_date.replace(tzinfo=ZoneInfo("UTC")).astimezone(central_tz)
     contest_day = contest_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     
     norm_names = [normalize_name(name) for name in player_names]
+
+    print(contest_day)
     
     # Query BOTH CPT (511) and FLEX (512) snapshot data
     results = (
@@ -63,7 +70,7 @@ def get_snapshot_data_for_contest(
         .filter(
             ProjectionSnapshot.snapshot_date == contest_day,
             ProjectionSnapshot.normalized_name.in_(norm_names),
-            ProjectionSnapshot.roster_slot_id.in_([511, 512])  # BOTH slots
+            ProjectionSnapshot.roster_slot_id.in_(roster_slot_filter)
         )
         .all()
     )
@@ -668,71 +675,6 @@ def calculate_gini(values: List[float]) -> float:
     index = np.arange(1, n + 1)
     return (2 * np.sum(index * sorted_values)) / (n * np.sum(sorted_values)) - (n + 1) / n
 
-
-def run_pipeline(
-    user_data_dir: str = None,
-    profile_directory: str = None,
-    headless: bool = False,
-    days_back: int = 1,
-):
-    """
-    Main pipeline to process showdown contests.
-    """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
-    )
-    
-    engine = init_db("nfl")
-    session = get_session(engine)
-    
-    # Build DraftKings session
-    sess = build_requests_session_from_chrome(
-        user_data_dir=user_data_dir,
-        profile_directory=profile_directory,
-        headless=headless,
-    )
-    
-    # Find unprocessed showdown contests
-    now = datetime.utcnow()
-    cutoff = now - timedelta(days=days_back)
-    
-    processed_contests = session.query(ShowdownContestMetadata.contest_id).subquery()
-    
-    to_process = (
-        session.query(HistoricalContest)
-        .filter(
-            HistoricalContest.date >= cutoff,
-            HistoricalContest.date <= now,
-            ~HistoricalContest.contest_id.in_(processed_contests),
-        )
-        .order_by(HistoricalContest.date.desc())
-        .all()
-    )
-    
-    log.info(f"Found {len(to_process)} contests to process")
-    
-    success_count = 0
-    for hc in to_process:
-        log.info(f"Processing contest {hc.contest_id} from {hc.date}")
-        
-        try:
-            df = download_contest_dataframe(sess, hc.contest_id)
-            
-            if df is None or df.empty:
-                log.warning(f"Skipping contest {hc.contest_id}: no data")
-                continue
-            
-            if process_contest(session, hc, df):
-                success_count += 1
-                
-        except Exception as e:
-            log.exception(f"Error processing contest {hc.contest_id}")
-            continue
-    
-    log.info(f"Pipeline complete: {success_count}/{len(to_process)} contests processed")
-    session.close()
-
 def process_contest(session: Session, hc: HistoricalContest, df: pd.DataFrame) -> bool:
     """
     Route to appropriate processor based on contest type.
@@ -744,6 +686,25 @@ def process_contest(session: Session, hc: HistoricalContest, df: pd.DataFrame) -
     else:
         # Classic contest
         return process_classic_contest(session, hc, df)
+    
+def parse_classic_lineup_string(lineup_str: str) -> List[str]:
+    """Parse classic lineup format: 'DST Falcons FLEX D'Andre Swift QB Jayden Daniels...'"""
+    if pd.isna(lineup_str) or not isinstance(lineup_str, str):
+        return []
+    
+    # Split by position labels - \s* makes leading whitespace optional (for positions at start)
+    parts = re.split(r'\s*(QB|RB|WR|TE|FLEX|DST)\s+', lineup_str)
+    
+    players = []
+    # After split, pattern is: [text_before, POS1, player1, POS2, player2, ...]
+    # We want to extract the player names (indices 2, 4, 6, ...)
+    for i in range(2, len(parts), 2):
+        if i < len(parts):
+            player_name = parts[i].strip().rstrip(',')  # Remove trailing comma and whitespace
+            if player_name:  # Only add non-empty names
+                players.append(player_name)
+    
+    return players
 
 
 def process_classic_contest(
@@ -782,49 +743,48 @@ def process_classic_contest(
     
     # Get snapshot data for players
     all_player_names = [info['name'] for info in player_base_info.values()]
-    snapshot_data = get_snapshot_data_for_classic_contest(
+    snapshot_data = get_snapshot_data_for_contest(
         session, 
         hc.date, 
-        all_player_names
+        all_player_names,
+        player_slots={},
+        roster_slot_filter=[67, 68, 69, 71]
     )
     
-    # Parse lineups and compute features
+    # Parse all lineups first to get distributions
     lineup_projections = []
     lineup_ownerships = []
     lineup_salaries = []
-    
+    valid_lineup_count = 0
+
     for _, row in base_df.iterrows():
         lineup_str = row.get("Lineup", "")
-        
-        # Parse lineup (different format than showdown)
         player_names = parse_classic_lineup_string(lineup_str)
         if not player_names:
             continue
         
-        # Calculate lineup projection sum
         proj_sum = 0.0
         own_sum = 0.0
         salary_sum = 0
+        valid = True
         
-        valid_lineup = True
         for player_name in player_names:
             norm_name = normalize_name(player_name)
             snap = snapshot_data.get(norm_name)
-            
             if not snap:
-                valid_lineup = False
+                print(f'missing data for {norm_name} on {hc.date}')
+                valid = False
                 break
             
             proj_sum += snap.get('projection', 0.0)
             own_sum += snap.get('ownership_proj', 0.0)
             salary_sum += snap.get('salary', 0)
         
-        if not valid_lineup:
-            continue
-        
-        lineup_projections.append(proj_sum)
-        lineup_ownerships.append(own_sum)
-        lineup_salaries.append(salary_sum)
+        if valid:
+            lineup_projections.append(proj_sum)
+            lineup_ownerships.append(own_sum)
+            lineup_salaries.append(salary_sum)
+            valid_lineup_count += 1
     
     if not lineup_projections:
         log.warning(f"Contest {contest_id}: No valid lineups after processing")

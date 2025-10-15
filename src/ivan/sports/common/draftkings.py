@@ -11,6 +11,8 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from http.client import RemoteDisconnected
 from requests.exceptions import RequestException
 
@@ -77,7 +79,8 @@ def build_requests_session(profile_dir: str, headless: bool = False) -> requests
     opts.add_argument("--no-sandbox")
     opts.add_argument("--lang=en-US")
 
-    driver = webdriver.Chrome(options=opts)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=opts)
 
     time.sleep(10)
     try:
@@ -173,7 +176,8 @@ def build_requests_session_from_chrome(user_data_dir: str,
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option('useAutomationExtension', False)
 
-    driver = webdriver.Chrome(options=opts)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=opts)
 
     try:
         # 1) Hit the main site first (sets core cookies)

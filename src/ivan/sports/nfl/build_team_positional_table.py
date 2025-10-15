@@ -161,16 +161,16 @@ def _load_dst_history(session: Session) -> pd.DataFrame:
     )
     return df
 
-# ----------------- K ingestion from nfl_data_py PBP -----------------
+# ----------------- K ingestion from nflreadpy PBP -----------------
 def _load_k_weekly_from_pbp(years: List[int]) -> pd.DataFrame:
     """
-    Build weekly team-level K fantasy points from nfl_data_py play-by-play.
+    Build weekly team-level K fantasy points from nflreadpy play-by-play.
     Returns columns: season, season_type, week, team, opponent, K
     """
     try:
-        import nfl_data_py as nfl
+        import nflreadpy as nfl
     except Exception as e:
-        raise RuntimeError("nfl_data_py is not installed. Run: pip install nfl_data_py") from e
+        raise RuntimeError("nflreadpy is not installed. Run: pip install nflreadpy") from e
 
     cols = [
         'season', 'season_type', 'week', 'game_id',
@@ -178,9 +178,10 @@ def _load_k_weekly_from_pbp(years: List[int]) -> pd.DataFrame:
         'field_goal_result', 'kick_distance',
         'extra_point_result'
     ]
-    # Pull PBP (cache speeds things up if you've run nfl.cache_pbp(years))
-    pbp = nfl.import_pbp_data(years=years, columns=cols, downcast=True)
+    # Pull PBP - nflreadpy returns Polars DataFrame, convert to pandas
+    pbp = nfl.load_pbp(seasons=years).to_pandas()
 
+    # Select only the columns we need
     df = pbp[cols].copy()
 
     # Distance buckets and points
@@ -283,13 +284,13 @@ def build_team_positional_table(db_url: str | None = None) -> int:
                 suffixes=('', '_k')
             )
             if 'K_k' in df_team.columns:
-                # Prefer nfl_data_py-derived K where available
+                # Prefer nflreadpy-derived K where available
                 df_team['K'] = df_team['K_k'].where(df_team['K_k'].notna(), df_team['K'])
                 df_team = df_team.drop(columns=['K_k'])
         else:
-            print("[pos-table] No seasons found to pull K from nfl_data_py.")
+            print("[pos-table] No seasons found to pull K from nflreadpy.")
     except Exception as e:
-        print(f"[WARN] Could not backfill K via nfl_data_py: {e}")
+        print(f"[WARN] Could not backfill K via nflreadpy: {e}")
 
     # Build opponent mirror and join
     idx_cols = ['season','season_type','week','team']

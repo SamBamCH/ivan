@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import json
-import nfl_data_py as nfl
+import nflreadpy as nfl
 
 from ivan.database.session import init_db
 from sqlalchemy import MetaData, Table, PrimaryKeyConstraint
@@ -22,7 +22,7 @@ def main():
     session = Session()
 
     # 2) fetch & write table
-    df = nfl.import_weekly_data(years=YEARS, downcast=True)
+    df = nfl.load_player_stats(seasons=YEARS, summary_level='week').to_pandas()
     df.to_sql(TABLE_NAME, engine, if_exists="replace", index=False)
     print(f"✅ Table `{TABLE_NAME}` created/replaced in DB")
 

@@ -22,22 +22,35 @@ position_configs = {
         'filter_stat': 'attempts',
         'filter_threshold': 15,
         'stats': [
-            'passing_yards', 'passing_tds', 'interceptions',
+            'passing_yards', 'passing_tds', 'passing_interceptions',
             'rushing_yards', 'rushing_tds'
         ],
         'stat_types': {
             'passing_yards': 'continuous',
             'passing_tds': 'count',
-            'interceptions': 'count',
+            'passing_interceptions': 'count',
             'rushing_yards': 'continuous',
             'rushing_tds': 'count'
-        }, 
+        },
         'overrides': {
             'passing_yards': 'gamma',
             'passing_tds': 'poisson',
-            'interceptions': 'poisson',
+            'passing_interceptions': 'poisson',
             'rushing_yards': 'gamma',
             'rushing_tds': 'poisson'
+        }
+    },
+    'K': {
+        'filter_stat': 'fg_att',
+        'filter_threshold': 0,  # Include all kickers with any FG attempts
+        'stats': [
+            'fantasy_points'  # Model fantasy points directly for kickers
+        ],
+        'stat_types': {
+            'fantasy_points': 'continuous'
+        },
+        'overrides': {
+            'fantasy_points': 'gamma'  # Gamma distribution for kicker points
         }
     },
     'RB': {

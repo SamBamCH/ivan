@@ -1,5 +1,5 @@
-import nfl_data_py as nfl
+import nflreadpy as nfl
 
-data = nfl.import_pbp_data([2024])
+data = nfl.load_pbp(seasons=[2024]).to_pandas()
 
 data.to_csv('data/nfl/pbp_2024.csv', index=False)

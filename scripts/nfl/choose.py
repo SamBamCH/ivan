@@ -408,6 +408,8 @@ def main():
                 "team": info["team"],
                 "salary": info["salary"],
                 "exposure": cnt / total_classic_entries,  # fraction of Classic lineups
+                "ownership": info["ownership"],
+                "projection": info["projection"]
             })
         df_cl_expo = pd.DataFrame(cl_rows)
         _print_exposures(df_cl_expo, header=f"[Classic exposures] (n={total_classic_entries} Classic lineups)", by_col="position")

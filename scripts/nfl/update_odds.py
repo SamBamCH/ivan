@@ -29,13 +29,14 @@ def create_projection_snapshot(session):
     Run this AFTER generate_and_fit_all() and project_ownership() update projections.
     """
     from ivan.core.utils import normalize_name
-    from ivan.sports.nfl.models import NFLPlayer, ProjectionSnapshot
-    
-    # Use today's date at midnight UTC for consistent matching
-    snapshot_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    
+    from ivan.sports.nfl.models import NFLPlayer, ProjectionSnapshot    
     # Get all current players
     players = session.query(NFLPlayer).all()
+    gametimes = set()
+    for player in players:
+        gametimes.add(player.gametime)
+
+    snapshot_date = min(gametimes)
     
     snapshot_records = []
     players_to_update = set()

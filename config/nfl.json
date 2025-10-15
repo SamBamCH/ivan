@@ -1,11 +1,11 @@
 {
-  "database_url": "sqlite:///C:/Users/ivan-/ivan/data/nfl/nfl_history.sqlite",
-  "market_weights": "C:/Users/ivan-/ivan/data/nfl/models/market_weights.json",
+  "database_url": "sqlite:////home/sam-pratt/ivan/data/nfl/nfl_history.sqlite",
+  "market_weights": "/home/sam-pratt/ivan/data/nfl/models/market_weights.json",
   "paths": {
-    "entries_csv": "C:/Users/ivan-/ivan/data/nfl/input/entries.csv"
+    "entries_csv": "/home/sam-pratt/ivan/data/nfl/input/entries.csv"
   },
   "solver": {
-    "glpk_path": "C:/Users/ivan-/ivan/glpk-4.65/w64/glpsol.exe"
+    "glpk_path": "/home/sam-pratt/ivan/glpk-4.65/w64/glpsol.exe"
   },         
 
   "field": {
@@ -41,7 +41,7 @@
       "salary_cap": 50000,
       "max_cap_drop": 5000,
       "n_jobs": 12,
-      "cap_drop_exponent": 1.3,
+      "cap_drop_exponent": 1,
       "jitter": 0.30
     },
     "sampling": {
@@ -71,14 +71,14 @@
       "n_samples": 5000,
       "min_fpts": 1,
       "n_jobs": 12,
-      "jitter": 0.50,
+      "jitter": 0.02,
       "salary_cap": 50000,
-      "min_salary": 48500,
-      "max_off_vs_dst": 1,
+      "min_salary": 45000,
+      "max_off_vs_dst": 3,
       "min_qb_wrte_stack": 1,
       "min_qb_skill_stack": 1,
       "min_qb_bringback": 1,
-      "max_team_players": 4
+      "max_team_players": 5
     },
     "dupe": {
       "alpha_fpts": 1.35,           

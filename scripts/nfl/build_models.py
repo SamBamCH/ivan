@@ -63,8 +63,8 @@ def main():
     print("→ Fitting per-team 10D vine (QB..DST)")
     build_team10_vine(model_dir, args.db_url)     # writes team10_vine.pkl
 
-    print("→ Calibrating game factors (cross-team 10×10 Spearman)")
-    calibrate_game_factors(model_dir)             # writes game_factors.json
+    # print("→ Calibrating game factors (cross-team 10×10 Spearman)")
+    # calibrate_game_factors(model_dir)             # writes game_factors.json
 
 
 if __name__ == '__main__':

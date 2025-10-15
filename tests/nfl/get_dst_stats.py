@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
-import nfl_data_py as nfl
+import nflreadpy as nfl
 from sqlalchemy import text
 from ivan.database.session import init_db, get_session
 
@@ -13,9 +13,9 @@ def load_schedules_safe(years: list[int], include_types=("REG", "POST")) -> pd.D
     Skips years that aren't available yet.
     """
     try:
-        df = nfl.import_schedules(years)
+        df = nfl.load_schedules(seasons=years).to_pandas()
     except Exception as e:
-        raise RuntimeError(f"import_schedules failed for {years}: {e}")
+        raise RuntimeError(f"load_schedules failed for {years}: {e}")
 
     if "game_type" in df.columns and include_types:
         df = df[df["game_type"].isin(include_types)].copy()

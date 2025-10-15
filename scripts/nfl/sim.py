@@ -3,6 +3,9 @@
 import os, json, argparse
 import pandas as pd
 
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.console import Console
+
 from ivan.database.session import init_db, get_session, Base
 from ivan.sports.nfl.simulate_contest import simulate_one_contest  
 
@@ -24,9 +27,10 @@ def main():
 
     # *** NEW: Clean old diagnostics once at start of entire sim run ***
     from ivan.sports.nfl.simulate_contest import clean_old_diagnostics
-    print("🧹 Cleaning old diagnostic folders...")
+    console = Console()
+    console.print("🧹 Cleaning old diagnostic folders...")
     clean_old_diagnostics(days_to_keep=1)
-    print()
+    console.print()
 
     df = pd.read_csv(
         cfg["paths"]["entries_csv"],
@@ -41,22 +45,45 @@ def main():
     df = df.sort_values("Contest ID")
     unique_df = df.drop_duplicates(subset=["Contest Name"], keep="last")
 
-    for _, row in unique_df.iterrows():
-        cid  = int(row["Contest ID"])
-        name = row["Contest Name"]
-        print(f"→ Starting contest {cid} ('{name}')")
-        try:
-            simulate_one_contest(
-                session      = session,
-                contest_id   = cid,
-                contest_name = name,
-                config_path  = args.config,
-                field_cap    = args.c,
-                num_sims     = args.n,
-                use_classic_dupes = args.d,
-            )
-        except Exception as e:
-            print(f"⚠️  Skipped contest {cid} ('{name}') due to error: {e}\n")
+    total_contests = len(unique_df)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        overall_task = progress.add_task(
+            f"[cyan]Processing {total_contests} contests...",
+            total=total_contests
+        )
+
+        for idx, row in enumerate(unique_df.iterrows(), 1):
+            _, row_data = row
+            cid  = int(row_data["Contest ID"])
+            name = row_data["Contest Name"]
+
+            progress.update(overall_task, description=f"[cyan]Contest {idx}/{total_contests}: {name[:40]}...")
+
+            try:
+                simulate_one_contest(
+                    session      = session,
+                    contest_id   = cid,
+                    contest_name = name,
+                    config_path  = args.config,
+                    field_cap    = args.c,
+                    num_sims     = args.n,
+                    use_classic_dupes = args.d,
+                )
+                console.print(f"✓ Completed contest {cid} ('{name}')")
+            except Exception as e:
+                console.print(f"[red]⚠️  Skipped contest {cid} ('{name}') due to error: {e}[/red]")
+
+            progress.advance(overall_task)
+
+    console.print(f"\n[bold green]✓ All {total_contests} contests completed![/bold green]")
 
 if __name__ == "__main__":
     main()

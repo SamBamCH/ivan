@@ -6,12 +6,13 @@ After running this, you can manually log into DraftKings, then close the browser
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 import os
 import time
 
 def setup_chrome_profile():
     # Define your profile directory
-    user_data_dir = r"C:\Users\ivan-\ivan\chrome-selenium\dk-profile"
+    user_data_dir = "/home/sam-pratt/ivan/chrome-selenium/dk-profile"
     profile_directory = "Default"
     
     # Create the directory if it doesn't exist
@@ -36,8 +37,9 @@ def setup_chrome_profile():
     print("\nStarting browser in 3 seconds...")
     time.sleep(3)
     
-    # Launch Chrome
-    driver = webdriver.Chrome(options=chrome_options)
+    # Launch Chrome with webdriver-manager
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     
     # Navigate to DraftKings
     driver.get("https://www.draftkings.com/")
