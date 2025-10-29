@@ -24,6 +24,7 @@ from ivan.sports.nfl.calibrate_game_factors import calibrate_game_factors
 from ivan.sports.nfl.dst_scoring import build_dst_game_table
 from ivan.sports.nfl.team_level_calculations   import build_team_models, _compute_fpts
 from ivan.sports.nfl.build_team_positional_table import build_team_positional_table
+from ivan.sports.nfl.slate_models import build_slate_models
 from ivan.sports.nfl.diagnostics              import (
     plot_marginal_fit,
     test_marginal_ks,
@@ -63,8 +64,7 @@ def main():
     print("→ Fitting per-team 10D vine (QB..DST)")
     build_team10_vine(model_dir, args.db_url)     # writes team10_vine.pkl
 
-    # print("→ Calibrating game factors (cross-team 10×10 Spearman)")
-    # calibrate_game_factors(model_dir)             # writes game_factors.json
+    build_slate_models()
 
 
 if __name__ == '__main__':

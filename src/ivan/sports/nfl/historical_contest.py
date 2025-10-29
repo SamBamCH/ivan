@@ -17,12 +17,64 @@ from ivan.sports.nfl.models import (
     ShowdownPlayer,
     ShowdownLineup,
     ShowdownContestMetadata,
-    ClassicContestMetadata
+    ClassicContestMetadata,
+    ProjectionSnapshot
 )
 
 log = logging.getLogger(__name__)
 
 _SHOWDOWN_LINEUP_REGEX = re.compile(r"(CPT|FLEX)\s+([A-Za-z\s\.''-]+?)(?=\s+(?:CPT|FLEX)|$)")
+
+# ==============================================================================
+# HELPER FUNCTIONS FOR CLASSIC CONTEST PROCESSING
+# ==============================================================================
+
+BINS = 20  # Fixed-width histogram bins
+
+def calculate_gini(values: List[float]) -> float:
+    """Calculate Gini coefficient for ownership concentration."""
+    if not values or len(values) < 2:
+        return 0.0
+    sorted_values = np.array(sorted(values))
+    n = len(sorted_values)
+    index = np.arange(1, n + 1)
+    return (2 * np.sum(index * sorted_values)) / (n * np.sum(sorted_values)) - (n + 1) / n
+
+
+def compute_histograms(
+    projections: np.ndarray,
+    ownerships: np.ndarray,
+    n_bins: int = BINS
+) -> Tuple[List[float], List[float]]:
+    """
+    Compute normalized histogram distributions for projections and ownerships.
+
+    Both should be normalized to [0, 1] BEFORE calling this function.
+
+    Args:
+        projections: Array of normalized [0-1] lineup projection sums
+        ownerships: Array of normalized [0-1] lineup ownership sums
+        n_bins: Number of fixed-width bins (default 20)
+
+    Returns:
+        (hist_proj_counts, hist_own_counts): Two lists of length n_bins, each summing to 1.0
+    """
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+
+    # Compute histograms
+    proj_counts, _ = np.histogram(projections, bins=bin_edges)
+    own_counts, _ = np.histogram(ownerships, bins=bin_edges)
+
+    # Normalize to sum to 1.0
+    proj_counts = proj_counts.astype(float)
+    own_counts = own_counts.astype(float)
+
+    if proj_counts.sum() > 0:
+        proj_counts = proj_counts / proj_counts.sum()
+    if own_counts.sum() > 0:
+        own_counts = own_counts / own_counts.sum()
+
+    return proj_counts.tolist(), own_counts.tolist()
 
 def get_snapshot_data_for_contest(
     session: Session,
@@ -56,19 +108,14 @@ def get_snapshot_data_for_contest(
     if roster_slot_filter is None:
         roster_slot_filter = [511, 512]  # Both CPT and FLEX by default
     
-    central_tz = ZoneInfo("America/Chicago")
-    contest_local = contest_date.replace(tzinfo=ZoneInfo("UTC")).astimezone(central_tz)
-    contest_day = contest_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-    
     norm_names = [normalize_name(name) for name in player_names]
 
-    print(contest_day)
     
     # Query BOTH CPT (511) and FLEX (512) snapshot data
     results = (
         session.query(ProjectionSnapshot)
         .filter(
-            ProjectionSnapshot.snapshot_date == contest_day,
+            ProjectionSnapshot.snapshot_date == contest_date,
             ProjectionSnapshot.normalized_name.in_(norm_names),
             ProjectionSnapshot.roster_slot_id.in_(roster_slot_filter)
         )
@@ -91,7 +138,7 @@ def get_snapshot_data_for_contest(
             'opponent': snap.opponent,
             'ownership_proj': snap.ownership_proj or 0.0,
         }
-    
+
     # Match each player to their actual slot in this contest
     snapshot_data = {}
     for norm_name in norm_names:
@@ -289,46 +336,14 @@ def process_showdown_contest(
             'ownership_actual': ownership_actual,
             'fpts_actual': float(fpts) if pd.notna(fpts) else None,
         }
-    
-    # ===== STEP 1.5: Get ALL snapshot data (both CPT and FLEX) =====
-    all_player_names = [player_base_info[norm]['name'] for norm in player_base_info.keys()]
-    
-    # Get snapshot data for BOTH slots - we'll match at lineup level
-    # Pass empty dict for player_slots since we want ALL data
-    snapshot_data_raw = get_snapshot_data_for_contest(
-        session, 
-        hc.date, 
-        all_player_names,
-        {}  # Empty dict means we want both CPT and FLEX data
-    )
-    
-    # Restructure: snapshot_by_player[norm_name][slot] = data
-    snapshot_by_player = {}
-    for norm_name in player_base_info.keys():
-        # Get the raw snapshot which should have both CPT and FLEX
-        raw_snap = snapshot_data_raw.get(norm_name, {})
         
-        if raw_snap:
-            # The get_snapshot_data_for_contest returns EITHER matched slot OR FLEX with fallback
-            # We need to query both slots ourselves
-            pass
-    
-    # Actually, we need to rewrite get_snapshot_data_for_contest to return BOTH
-    # Let's instead query the snapshots directly here
-    from ivan.sports.nfl.models import ProjectionSnapshot
-    from zoneinfo import ZoneInfo
-    
-    central_tz = ZoneInfo("America/Chicago")
-    contest_local = hc.date.replace(tzinfo=ZoneInfo("UTC")).astimezone(central_tz)
-    contest_day = contest_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-    
     norm_names = list(player_base_info.keys())
     
     # Query BOTH CPT (511) and FLEX (512) snapshot data
     results = (
         session.query(ProjectionSnapshot)
         .filter(
-            ProjectionSnapshot.snapshot_date == contest_day,
+            ProjectionSnapshot.snapshot_date == hc.date,
             ProjectionSnapshot.normalized_name.in_(norm_names),
             ProjectionSnapshot.roster_slot_id.in_([511, 512])
         )
@@ -343,8 +358,8 @@ def process_showdown_contest(
         
         slot_key = 'CPT' if snap.roster_slot_id == 511 else 'FLEX'
         snapshot_by_player[snap.normalized_name][slot_key] = {
-            'projection': snap.fpts_mean or 0.0,
-            'projection_std': snap.fpts_std or 0.0,
+            'projection': snap.fpts_mean* 1.5 if slot_key =='CPT' else snap.fpts_mean or 0.0,
+            'projection_std': snap.fpts_std * 1.5 if slot_key=='CPT' else snap.fpts_std or 0.0,
             'salary': snap.salary,
             'position': snap.position,
             'team': snap.team,
@@ -429,12 +444,6 @@ def process_showdown_contest(
             cpt_projection = cpt_data['projection']  # Already 1.5x in snapshot
             cpt_salary = cpt_data['salary']  # Already 1.5x in snapshot
             cpt_ownership_proj = cpt_data['ownership_proj']
-        elif 'FLEX' in cpt_snaps:
-            cpt_data = cpt_snaps['FLEX']
-            cpt_projection = cpt_data['projection'] * 1.5
-            cpt_salary = int(cpt_data['salary'] * 1.5)
-            cpt_ownership_proj = cpt_data['ownership_proj']  # Same player, same ownership
-            missing_cpt_data.append(f"{captain} (used CPT, had FLEX only)")
         else:
             skipped_lineups += 1
             continue
@@ -455,13 +464,6 @@ def process_showdown_contest(
                 flex_projection += flex_data['projection']
                 flex_salary += flex_data['salary']
                 flex_ownership_proj += flex_data['ownership_proj']
-            elif 'CPT' in flex_snaps:
-                # Player has CPT data but used in FLEX - divide by 1.5x
-                cpt_only_data = flex_snaps['CPT']
-                flex_projection += cpt_only_data['projection'] / 1.5
-                flex_salary += int(cpt_only_data['salary'] / 1.5)
-                flex_ownership_proj += cpt_only_data['ownership_proj']
-                missing_flex_data.append(f"{flex_player} (used FLEX, had CPT only)")
             else:
                 skip_lineup = True
                 break
@@ -481,7 +483,7 @@ def process_showdown_contest(
         
         # Ownership sums
         ownership_sum_proj = cpt_ownership_proj + flex_ownership_proj
-        cpt_ownership_actual = player_base_info.get(cpt_norm, {}).get('ownership_actual', 0.0)
+        cpt_ownership_actual = cpt_ownership_proj #TODO: pull actual cpt ownership for contest out of DK payload eventually?
         ownership_sum_actual = cpt_ownership_actual + flex_ownership_actual
         
         # Build player_info dict for correlation analysis
@@ -713,141 +715,149 @@ def process_classic_contest(
     df: pd.DataFrame
 ) -> bool:
     """
-    Process classic contest: extract distributions, fit KDE, store metadata.
-    
-    Unlike showdown, we don't store individual lineups - just the distribution
-    parameters needed for field sampling.
+    Process classic contest: extract normalized distributions for projection and ownership.
+
+    Stores 20-bin normalized histograms that will be used to train models
+    predicting field distributions based on contest parameters.
     """
     contest_id = hc.contest_id
-    
+
     # Parse lineup data
     base_df = df.iloc[:, :-4].copy()  # Main lineup data
     own_df = df.iloc[:, -4:].copy()   # Ownership table
-    
+
     # Get player base info from ownership table
     player_base_info = {}
     for _, row in own_df.iterrows():
         player_name = row.get("Player")
         if pd.isna(player_name):
             continue
-        
+
         norm_name = normalize_name(player_name)
         ownership_actual = float(str(row.get("%Drafted", "0%")).replace("%", ""))
         fpts_actual = row.get("FPTS")
-        
+
         player_base_info[norm_name] = {
             'name': player_name,
             'ownership_actual': ownership_actual,
             'fpts_actual': float(fpts_actual) if pd.notna(fpts_actual) else None,
         }
-    
+
     # Get snapshot data for players
     all_player_names = [info['name'] for info in player_base_info.values()]
     snapshot_data = get_snapshot_data_for_contest(
-        session, 
-        hc.date, 
+        session,
+        hc.date,
         all_player_names,
         player_slots={},
-        roster_slot_filter=[67, 68, 69, 71]
+        roster_slot_filter=[66, 67, 68, 69, 71]
     )
-    
-    # Parse all lineups first to get distributions
+
+    # Parse all lineups
     lineup_projections = []
     lineup_ownerships = []
     lineup_salaries = []
-    valid_lineup_count = 0
 
     for _, row in base_df.iterrows():
         lineup_str = row.get("Lineup", "")
         player_names = parse_classic_lineup_string(lineup_str)
         if not player_names:
             continue
-        
+
         proj_sum = 0.0
         own_sum = 0.0
         salary_sum = 0
         valid = True
-        
+
         for player_name in player_names:
             norm_name = normalize_name(player_name)
             snap = snapshot_data.get(norm_name)
             if not snap:
-                print(f'missing data for {norm_name} on {hc.date}')
                 valid = False
                 break
-            
+
             proj_sum += snap.get('projection', 0.0)
             own_sum += snap.get('ownership_proj', 0.0)
             salary_sum += snap.get('salary', 0)
-        
+
         if valid:
             lineup_projections.append(proj_sum)
             lineup_ownerships.append(own_sum)
             lineup_salaries.append(salary_sum)
-            valid_lineup_count += 1
-    
+
     if not lineup_projections:
         log.warning(f"Contest {contest_id}: No valid lineups after processing")
         return False
-    
+
     # Convert to arrays
     projections = np.array(lineup_projections)
     ownerships = np.array(lineup_ownerships)
     salaries = np.array(lineup_salaries)
-    
-    # Normalize to [0, 1]
+
+    # Normalize to [0, 1] INDEPENDENTLY
     proj_min, proj_max = projections.min(), projections.max()
     own_min, own_max = ownerships.min(), ownerships.max()
-    
+
     if proj_max > proj_min:
         proj_normalized = (projections - proj_min) / (proj_max - proj_min)
     else:
         proj_normalized = np.full_like(projections, 0.5)
-    
+
     if own_max > own_min:
         own_normalized = (ownerships - own_min) / (own_max - own_min)
     else:
         own_normalized = np.full_like(ownerships, 0.5)
-    
-    # Store metadata with KDE samples
+
+    # Compute 20-bin normalized histograms
+    hist_proj_counts, hist_own_counts = compute_histograms(proj_normalized, own_normalized)
+
+    # Calculate ownership concentration (Gini coefficient)
+    ownership_gini = calculate_gini(ownerships.tolist())
+
+    # Store metadata
     metadata = ClassicContestMetadata(
         contest_id=contest_id,
         date=hc.date,
         total_entries=hc.total_entries,
         entry_fee=hc.entry_fee,
-        
+        num_games=None,  # To be filled in manually or inferred
+
         # Normalization bounds
         min_projection=float(proj_min),
         max_projection=float(proj_max),
         min_ownership=float(own_min),
         max_ownership=float(own_max),
-        
-        # KDE samples (store normalized values)
-        projection_kde_samples=proj_normalized.tolist(),
-        ownership_kde_samples=own_normalized.tolist(),
-        
+
+        # Histogram distributions (normalized, summing to 1.0)
+        hist_proj_counts=hist_proj_counts,
+        hist_own_counts=hist_own_counts,
+
         # Statistics
         projection_mean=float(projections.mean()),
         projection_std=float(projections.std()),
         ownership_mean=float(ownerships.mean()),
         ownership_std=float(ownerships.std()),
-        
+
         salary_remaining_mean=float((50000 - salaries).mean()),
+
+        # Ownership concentration
+        ownership_gini=float(ownership_gini),
     )
-    
+
     # Save to database
     try:
         session.query(ClassicContestMetadata).filter_by(contest_id=contest_id).delete()
         session.add(metadata)
         session.commit()
-        
+
         log.info(
             f"✓ Contest {contest_id}: {len(projections)} lineups | "
             f"Proj: [{proj_min:.1f}, {proj_max:.1f}] | "
-            f"Own: [{own_min:.1f}, {own_max:.1f}]"
+            f"Own: [{own_min:.1f}, {own_max:.1f}] | "
+            f"Gini: {ownership_gini:.3f}"
         )
         return True
-        
+
     except Exception as e:
         session.rollback()
         log.error(f"✗ Failed to save contest {contest_id}: {e}")

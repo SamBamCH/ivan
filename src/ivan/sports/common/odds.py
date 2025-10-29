@@ -164,7 +164,7 @@ def _get_event_odds(sport, api_key, event_id, markets=None):
         print(f"Error fetching event odds: {response.status_code} - {response.text}")
         return None
 
-def get_odds(sport, api_key, relevant_teams):
+def get_odds(sport, api_key, relevant_teams, markets=None):
     """
     Fetches odds only for each team’s next upcoming event.
 
@@ -199,7 +199,7 @@ def get_odds(sport, api_key, relevant_teams):
     odds_by_team: dict[str, dict] = {}
     for team, ev in next_event_by_team.items():
         ev_id = ev['id']
-        odds = _get_event_odds(sport, api_key, ev_id)
+        odds = _get_event_odds(sport, api_key, ev_id, markets=markets)
         odds_by_team[team] = odds
 
     return odds_by_team

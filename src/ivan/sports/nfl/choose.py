@@ -190,17 +190,10 @@ def choose_lineup_ids(
     q = (norm * w_feat).sum(axis=1)  # quality score in [0,1]
 
     # Diversity distances on fpts traces
-    dist_mat = squareform(pdist(fpts_matrix, metric="euclidean"))
+    dist_mat = squareform(pdist(fpts_matrix, metric="cosine"))
 
-    # --- quality-aware diversity + continuous penalty params ---
-    lam = float(weights.get("diversity_lambda", 0.0))         # λ
-    gamma = float(weights.get("quality_gamma", 0.0))           # γ
-    p = float(weights.get("quality_penalty_p", 1))           # p ≥ 1
-    alpha = float(weights.get("diversity_quality_alpha", 1.0)) # α ≥ 1
-
-    # Optional soft floor (completely optional; set eta=0 to disable)
-    q_target = float(weights.get("quality_target", 0.0))       # e.g. 0.6
-    eta = float(weights.get("quality_target_eta", 0.0))        # e.g. 0.5
+    # --- simple quality + diversity trade-off ---
+    lam = float(weights.get("diversity_lambda", 0.5))  # diversity weight
 
     # Greedy selection
     remaining = set(range(N))
@@ -212,25 +205,20 @@ def choose_lineup_ids(
     remaining.remove(first)
 
     def lineup_score(j: int, S: list[int]) -> float:
-        # continuous penalty for straying from top
-        penalty = gamma * (1.0 - q[j])**p
-        # optional soft floor around a target quality
-        hinge = eta * max(0.0, q_target - q[j])**2
-        # quality-aware diversity gain
+        # quality + weighted diversity (average cosine distance to selected)
         if S:
-            qa_div = (q[j]**alpha) * np.sum((q[S]**alpha) * dist_mat[j, S])
+            diversity_gain = np.mean(dist_mat[j, S])
         else:
-            qa_div = 0.0
-        # total score
-        return q[j] - penalty - hinge + lam * qa_div
+            diversity_gain = 0.0
+        return q[j] + lam * diversity_gain
 
     while len(selected) < num_lineups and remaining:
-        # pick item with max *quality-aware* marginal gain
+        # pick item with max quality + diversity trade-off
         best_j = max(remaining, key=lambda j: lineup_score(j, selected))
         selected.append(best_j)
         remaining.remove(best_j)
 
-    # if we still need to fill, do it by descending q (quality), not raw ROI
+    # if we still need to fill, do it by descending q (quality)
     if len(selected) < num_lineups:
         for j in np.argsort(-q):
             if j not in selected:

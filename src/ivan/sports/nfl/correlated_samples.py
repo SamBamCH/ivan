@@ -26,6 +26,7 @@ def generate_correlated_samples_gaussian(
     n_samples: int = 1000,
     seed: int | None = None,
     use_hgv20: bool = True,
+    randomness: float = 1.0,
 ) -> Dict[int, np.ndarray]:
     """
     Simpler sampler: treat all fpts marginals as Normal(μ_i, σ_i) and draw
@@ -33,6 +34,10 @@ def generate_correlated_samples_gaussian(
 
     Requires NFLPlayer.slot_label ∈ {QB,RB1,RB2,WR1,WR2,WR3,TE1,TE2,K,DST}.
     Players deeper than modeled slots should have been pooled at fit time.
+
+    Args:
+        randomness: Controls distribution spread (0.0 = deterministic at median, 1.0 = full distribution).
+                    Values are clamped to [0.0, 1.0].
     """
     from pathlib import Path
     import numpy as np
@@ -41,6 +46,9 @@ def generate_correlated_samples_gaussian(
 
     rng = np.random.default_rng(seed)
     model_dir = Path(model_dir)
+
+    # Clamp randomness to [0.0, 1.0]
+    randomness = float(np.clip(randomness, 0.0, 1.0))
 
     # --- 1) load all players on the slate with means/sigmas/slot_label ---
     q = session.query(NFLPlayer)
@@ -179,13 +187,20 @@ def generate_correlated_samples_gaussian(
         D = np.diag(sigma)
         Sigma = D @ Corr @ D
 
+        # Apply randomness scaling to covariance (scale variance by randomness²)
+        Sigma_scaled = Sigma * (randomness ** 2)
+
         # Sample
-        Z = rng.multivariate_normal(mean=np.zeros(len(players_game)), cov=Sigma, size=n_samples)
+        Z = rng.multivariate_normal(mean=np.zeros(len(players_game)), cov=Sigma_scaled, size=n_samples)
         X = (Z + mu)  # broadcasting: add μ row-wise
 
-        # Store back by player id
+        # Store back by player id (apply 1.5x multiplier for captains)
         for j, p in enumerate(players_game):
-            out[p.id] = X[:, j].astype(np.float32, copy=False)
+            samples = X[:, j].astype(np.float32, copy=False)
+            # Apply 1.5x multiplier for captain slot (roster_slot_id == 511)
+            if p.roster_slot_id == 511:
+                samples = samples * 1.5
+            out[p.id] = samples
 
     # Teams with no paired opponent: fall back to independent N(μ,σ)
     for p in players:
@@ -193,7 +208,13 @@ def generate_correlated_samples_gaussian(
             prm = tuple(p.fpts_dist_params) if isinstance(p.fpts_dist_params, list) else p.fpts_dist_params
             mu_i = float(p.fpts_mean if p.fpts_mean is not None else (prm[0] if prm else 0.0))
             sd_i = float(prm[1]) if (prm and len(prm) >= 2 and prm[1] is not None) else 6.0
-            out[p.id] = rng.normal(loc=mu_i, scale=sd_i, size=n_samples).astype(np.float32, copy=False)
+            # Apply randomness scaling to standard deviation
+            sd_scaled = sd_i * randomness
+            samples = rng.normal(loc=mu_i, scale=sd_scaled, size=n_samples).astype(np.float32, copy=False)
+            # Apply 1.5x multiplier for captain slot (roster_slot_id == 511)
+            if p.roster_slot_id == 511:
+                samples = samples * 1.5
+            out[p.id] = samples
 
     return out
 

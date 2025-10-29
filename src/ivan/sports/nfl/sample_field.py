@@ -7,9 +7,18 @@ Showdown: Uses captain-aware sampling with salary bins and template penalties
 Classic: Weighted sampling based on projections with optional duplication
 
 Key features:
-- Learned duplication model for Showdown (uses historical patterns)
+- Learned duplication model for Showdown (SIMPLIFIED: uses 4 features only)
 - Heuristic sampler with diversity optimization
 - Captain ownership and template diversity controls
+
+UPDATED: Simplified duplication model now uses only 4 features:
+  1. salary_remaining_pct - % of salary cap unused
+  2. ownership_sum - Sum of all player ownership percentages
+  3. cpt_ownership_pct - Captain's ownership percentage
+  4. log_total_entries - Log10 of contest total entries
+  
+This replaces the old 14-feature model for easier verification and debugging.
+Retrain with: python scripts/nfl/train_showdown_model_simplified.py
 """
 
 from __future__ import annotations
@@ -26,138 +35,6 @@ from sqlalchemy.orm import Session
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
-
-# CLASSIC SAMPLER (NO DUPLICATION)
-# ==============================================================================
-
-def sample_classic_field(
-    session: Session,
-    field_size: int,
-    config: dict,
-    contest_id: Optional[int] = None,
-) -> Tuple[Dict[int, int], Dict]:
-    """
-    Classic sampler: weighted sampling WITHOUT replacement (unique lineups only).
-    
-    Strategy:
-    1. Build lineup matrix and get player projections
-    2. Calculate lineup scores (using mean/median/percentile of player sims)
-    3. Apply temperature-based softmax to create weights
-    4. Sample without replacement for unique lineups
-    
-    Config options (under classic.sampling):
-        statistic: "mean", "median", or "pNN" (e.g. "p75" for 75th percentile)
-        temperature: Controls chalkiness (lower = more chalk, higher = more spread)
-        epsilon: Floor probability to avoid completely starving tail lineups
-    """
-    def _get(d: dict, path: List[str], default=None):
-        """Helper to safely navigate nested config dicts."""
-        cur = d
-        for k in path:
-            if not isinstance(cur, dict) or k not in cur:
-                return default
-            cur = cur[k]
-        return cur
-
-    statistic = str(_get(config, ["classic", "sampling", "statistic"], "median")).lower()
-    temperature = float(_get(config, ["classic", "sampling", "temperature"], 1.10))
-    epsilon = float(_get(config, ["classic", "sampling", "epsilon"], 0.02))
-
-    # Build lineup matrix
-    L, lineup_ids, spends, pid_to_col, _, _ = build_lineup_matrix(session)
-    n_lineups, n_players = L.shape
-
-    # Get player simulations
-    samples_by_pid = generate_correlated_samples_gaussian(session, n_samples=100)
-
-    # Reduce to per-player projection
-    def _reduce(arr: np.ndarray) -> float:
-        """Reduce player sample array to single projection value."""
-        if statistic == "mean":
-            return float(np.mean(arr))
-        if statistic.startswith("p"):
-            try:
-                q = float(statistic[1:]) / 100.0
-                return float(np.quantile(arr, q))
-            except Exception:
-                pass
-        return float(np.median(arr))
-
-    proj_vec = np.zeros(n_players, dtype=np.float32)
-    present = np.zeros(n_players, dtype=bool)
-    
-    for pid, col in pid_to_col.items():
-        arr = samples_by_pid.get(pid)
-        if isinstance(arr, np.ndarray) and arr.size:
-            proj_vec[col] = _reduce(arr)
-            present[col] = True
-
-    # Filter out lineups with missing player projections
-    missing_mask = (~present).astype(np.int8)
-    invalid_counts = np.asarray(L @ missing_mask, dtype=np.int32).ravel()
-    valid_row_idx = np.where(invalid_counts == 0)[0]
-    
-    if valid_row_idx.size == 0:
-        raise ValueError("No valid classic lineups after filtering missing projections.")
-
-    # Calculate lineup scores and apply temperature
-    lineup_scores_all = np.asarray(L @ proj_vec, dtype=np.float64).ravel()
-    s = lineup_scores_all[valid_row_idx]
-
-    mu = float(s.mean())
-    sd = float(s.std()) or 1.0
-    T = max(temperature, 1e-6)
-
-    # Temperature-scaled logits
-    logits = (s - mu) / (sd * T)
-    logits -= float(logits.max())  # Numerical stability
-    w = np.exp(logits)
-    
-    w_sum = float(w.sum())
-    if not np.isfinite(w_sum) or w_sum <= 0:
-        w = np.ones_like(w) / len(w)
-    else:
-        w /= w_sum
-
-    # Add epsilon floor to avoid starving tail
-    eps = max(0.0, min(0.5, epsilon))
-    if eps > 0:
-        w = (1.0 - eps) * w + eps / len(w)
-
-    # Sample without replacement
-    k = int(min(field_size, len(valid_row_idx)))
-    rng = np.random.default_rng()
-    chosen_local = rng.choice(len(valid_row_idx), size=k, replace=False, p=w)
-    chosen_rows = valid_row_idx[chosen_local]
-
-    # Each lineup selected at most once
-    counts = {int(lineup_ids[i]): 1 for i in chosen_rows}
-
-    meta = {
-        "sampler": "classic_unique",
-        "num_candidates": int(n_lineups),
-        "num_valid": int(len(valid_row_idx)),
-        "selected": int(k),
-        "temperature": float(temperature),
-        "epsilon": float(eps),
-        "score_mean": float(s.mean()),
-        "score_std": float(s.std()),
-    }
-    
-    return counts, meta
-
-# ==============================================================================
-# CLASSIC SAMPLER (WITH DUPLICATION)
-# ==============================================================================
-
-def _minmax01(x: np.ndarray) -> np.ndarray:
-    """Normalize array to [0, 1] range."""
-    x = np.asarray(x, dtype=np.float64)
-    lo, hi = float(np.min(x)), float(np.max(x))
-    if hi - lo <= 1e-12:
-        return np.full_like(x, 0.5, dtype=np.float64)
-    return (x - lo) / (hi - lo)
-
 
 def _smooth_lam(dupe_lambda: np.ndarray, *,
                 strength: float = 0.6,
@@ -181,146 +58,6 @@ def _smooth_lam(dupe_lambda: np.ndarray, *,
     lam += float(eps_frac) * lam.mean()
     return np.clip(lam, 1e-12, None)
 
-
-def sample_classic_field_dupe(
-    session: Session,
-    field_size: int,
-    config: dict | None = None,
-    contest_id: Optional[int] = None,
-) -> Tuple[Dict[int, int], Dict]:
-    """
-    Classic field sampler WITH duplication.
-    
-    Good for small slates (2-gamers) where duplication is realistic.
-    
-    Strategy:
-    1. Use salary-remaining bins (like Showdown)
-    2. Within each bin, weight by: projection^alpha * near_cap^beta
-    3. Sample with replacement to allow duplicates
-    
-    Config options (under classic.dupe):
-        alpha_fpts: Projection power (higher = more chalk)
-        alpha_cap: Near-cap power (higher = more near-cap preference)
-        epsilon: Floor weight inside bins
-        dup_sharpness: >1 to concentrate on chalk
-        smooth_mid: Whether to flatten middle percentiles
-    """
-    cfg = config or {}
-    
-    def _get(d: dict, path: List[str], default=None):
-        cur = d
-        for k in path:
-            if not isinstance(cur, dict) or k not in cur:
-                return default
-            cur = cur[k]
-        return cur
-
-    alpha_fpts = float(_get(cfg, ["classic", "dupe", "alpha_fpts"], 1.25))
-    alpha_cap = float(_get(cfg, ["classic", "dupe", "alpha_cap"], 0.90))
-    epsilon = float(_get(cfg, ["classic", "dupe", "epsilon"], 1e-6))
-    sharpness = float(_get(cfg, ["classic", "dupe", "dup_sharpness"], 1.0))
-    smooth_mid = bool(_get(cfg, ["classic", "dupe", "smooth_mid"], True))
-    mid_strength = float(_get(cfg, ["classic", "dupe", "mid_boost_strength"], 0.5))
-    mid_sigma = float(_get(cfg, ["classic", "dupe", "mid_boost_sigma"], 0.18))
-    lam_floor = float(_get(cfg, ["classic", "dupe", "lam_floor_frac"], 0.02))
-    seed = _get(cfg, ["classic", "dupe", "seed"], None)
-
-    rng = np.random.default_rng(seed)
-
-    # Build lineup matrix
-    L, lineup_ids, spends, pid_to_col, _, _ = build_lineup_matrix(session)
-    n_lineups = L.shape[0]
-    remaining = (SALARY_CAP - spends).astype(np.int32)
-
-    # Get player projections
-    P = build_player_samples(session, pid_to_col)
-    per_player_mean = np.asarray(P.mean(axis=0), dtype=np.float64)
-    lineup_proj = np.asarray(L @ per_player_mean, dtype=np.float64)
-
-    # Normalized features
-    proj_pct = _percentile_rank(lineup_proj, lineup_proj)
-    rem01 = _minmax01(remaining)
-    near_cap = np.clip(1.0 - rem01, 0.0, 1.0)
-
-    # Base duplication lambda
-    lam = np.power(np.clip(proj_pct, 1e-12, 1.0), alpha_fpts) * \
-          np.power(np.clip(near_cap, 1e-12, 1.0), alpha_cap)
-
-    if sharpness > 1.0:
-        lam = np.power(lam, sharpness)
-
-    if smooth_mid:
-        lam = _smooth_lam(lam, strength=mid_strength, sigma=mid_sigma, eps_frac=lam_floor)
-
-    lam = np.clip(lam, 1e-12, None)
-
-    # Salary-remaining bins
-    bins = list(SALARY_PRIOR)
-    bin_masks = [(remaining >= lo) & (remaining < hi) for lo, hi, _ in bins]
-
-    weights = np.array([w for _, _, w in bins], dtype=np.float64)
-    has_any = np.array([m.any() for m in bin_masks], dtype=bool)
-    
-    if not has_any.any():
-        raise RuntimeError("No lineups in any salary bin. Check SALARY_PRIOR.")
-    
-    w_avail = weights * has_any.astype(np.float64)
-    if w_avail.sum() <= 0:
-        w_avail = has_any.astype(np.float64)
-    w_avail /= w_avail.sum()
-
-    draws_per_bin = rng.multinomial(int(field_size), w_avail)
-    idx_per_bin = [np.where(m)[0] for m in bin_masks]
-
-    # Sample with replacement inside each bin
-    counts = np.zeros(n_lineups, dtype=np.int64)
-    
-    for b, n_draws in enumerate(draws_per_bin):
-        if n_draws <= 0:
-            continue
-        
-        idxs = idx_per_bin[b]
-        if idxs.size == 0:
-            continue
-        
-        w = lam[idxs].astype(np.float64, copy=True)
-        w += epsilon * float(w.mean() if w.size else 1.0)
-        
-        p = _normalize_probs(w, idxs.size)
-        if p is None:
-            p = np.full(idxs.size, 1.0 / idxs.size, dtype=np.float64)
-
-        picks = rng.choice(idxs.size, size=int(n_draws), replace=True, p=p)
-        np.add.at(counts, idxs[picks], 1)
-
-    counts_by_lineup = {int(lineup_ids[i]): int(counts[i]) for i in range(n_lineups)}
-
-    # Meta diagnostics
-    used_mask = counts > 0
-    unique_ids = lineup_ids[used_mask].astype(np.int64).tolist()
-    
-    meta = {
-        "sampler": "classic_dupe",
-        "field_size": int(field_size),
-        "num_unique": int(used_mask.sum()),
-        "unique_ids": unique_ids,
-        "proj_pct_stats": {
-            "mean": float(proj_pct.mean()), 
-            "std": float(proj_pct.std())
-        },
-        "near_cap_stats": {
-            "mean": float(near_cap.mean()), 
-            "std": float(near_cap.std())
-        },
-        "lam_stats": {
-            "min": float(lam.min()), 
-            "max": float(lam.max()), 
-            "mean": float(lam.mean())
-        },
-    }
-    
-    return counts_by_lineup, meta
-
 # ==============================================================================
 # UNIFIED ENTRY POINT
 # ==============================================================================
@@ -332,106 +69,52 @@ def sample_field(
     mode: str,
     contest_id: Optional[int] = None,
     use_classic_dupes: bool = False,
+    total_entries: Optional[int] = None,
+    entry_fee: Optional[float] = None,
+    num_games: Optional[int] = None,
+    ownership_gini: Optional[float] = None,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Unified field sampler entry point.
-    
+
     Args:
         session: Database session
         field_size: Number of entries to generate
         config: Configuration dictionary
         mode: "showdown" or "classic"
         contest_id: Optional contest ID for parameters
-        use_classic_dupes: If True, allow duplication in classic mode
-    
+        use_classic_dupes: Deprecated - now handled automatically by learned sampler
+        total_entries: Total entries in the contest (for learned classic sampler)
+        entry_fee: Entry fee in dollars (for learned classic sampler)
+        num_games: Number of games on slate (for learned classic sampler)
+        ownership_gini: Ownership concentration (for learned classic sampler)
+
     Returns:
         counts_by_lineup: {lineup_id: count}
         meta: Diagnostic information
     """
     mode = (mode or "showdown").lower()
-    
+
     if mode == "showdown":
-        # Check if learned model is enabled
-        use_learned = config.get('showdown', {}).get('use_learned_model', True)
-        
-        if use_learned:
-            print("Using learned duplication model for showdown.")
-            return sample_showdown_field_learned(
-                session,
-                field_size=field_size,
-                config=config,
-                contest_id=contest_id,
-                model_dir=config.get('model_dir', 'data/nfl/models'),
-            )
-        else:
-            print("Using heuristic sampler for showdown.")
-            return sample_showdown_field_heuristic(
-                session, 
-                field_size=field_size, 
-                config=config
-            )
-    
-    # Classic mode
-    if use_classic_dupes:
-        print("Using classic sampler with duplication.")
-        return sample_classic_field_dupe(
-            session, 
-            field_size=field_size, 
-            config=config, 
-            contest_id=contest_id
-        )
-    else:
-        print("Using classic sampler (unique lineups only).")
-        return sample_classic_field(
-            session, 
-            field_size=field_size, 
-            config=config, 
-            contest_id=contest_id
-        )
-
-
-# ==============================================================================
-# MAIN (FOR TESTING)
-# ==============================================================================
-
-if __name__ == "__main__":
-    """Quick test of samplers."""
-    from ivan.database.session import get_session
-    
-    with get_session() as session:
-        # Test showdown sampler
-        config = {
-            'showdown': {
-                'use_learned_model': False,  # Use heuristic for testing
-            }
-        }
-        
-        print("Testing Showdown sampler...")
-        counts, meta = sample_field(
-            session=session,
-            field_size=1000,
+        return sample_showdown_field_learned(
+            session,
+            field_size=field_size,
             config=config,
-            mode='showdown'
+            contest_id=contest_id,
+            model_dir=config.get('model_dir', 'data/nfl/models'),
         )
-        
-        print(f"\nResults:")
-        print(f"  Unique lineups: {meta.get('unique_selected', 'N/A')}")
-        print(f"  Total entries: {sum(counts.values())}")
-        
-        # Test classic sampler
-        print("\n" + "="*60)
-        print("Testing Classic sampler...")
-        counts, meta = sample_field(
-            session=session,
-            field_size=1000,
-            config={},
-            mode='classic',
-            use_classic_dupes=False
-        )
-        
-        print(f"\nResults:")
-        print(f"  Unique lineups: {meta.get('selected', 'N/A')}")
-        print(f"  Total entries: {sum(counts.values())}")
+
+    return sample_classic_field_learned(
+        session,
+        field_size=field_size,
+        config=config,
+        contest_id=contest_id,
+        total_entries=total_entries,
+        entry_fee=entry_fee,
+        num_games=num_games,
+        ownership_gini=ownership_gini,
+    )
+
 # CONSTANTS
 # ==============================================================================
 
@@ -439,94 +122,283 @@ SALARY_CAP = 50000
 CPT_SLOT = 511
 FLEX_SLOT = 512
 
-# ==============================================================================
-# SHOWDOWN SAMPLING PARAMETERS
-# ==============================================================================
-# Control field distribution for Showdown contests
-# Formula: weight = (projection ** ALPHA) * (cpt_percentile ** BETA) * template_penalty
-# template_penalty = exp(-GAMMA * max(0, flex_chalk - TAU) * (1 - cpt_pct))
-
-ALPHA = 1.6   # Projection power (1.0-2.0): higher = more chalk
-BETA = 1.2    # Captain popularity power (0.5-1.5): higher = more captain concentration
-GAMMA = 2.0   # Template penalty strength (1.0-4.0): higher = stronger anti-template bias
-TAU = 0.90    # Template chalk threshold (0.5-0.85): when to start penalizing chalk FLEXes
-
-# Preset configurations:
-# CHALK:       ALPHA=1.5, BETA=1.0, GAMMA=1.0, TAU=0.80
-# CONTRARIAN:  ALPHA=0.9, BETA=0.6, GAMMA=3.0, TAU=0.60
-# BALANCED:    ALPHA=1.2, BETA=0.8, GAMMA=2.0, TAU=0.70
-
-# Salary remaining bins: [low, high, weight]
-# Distribution over how much salary is left unused
-SALARY_PRIOR: List[Tuple[int, int, float]] = [
-    (0,    200,  0.30),   # Near cap (< $200 remaining)
-    (200,  300,  0.20),
-    (300,  400,  0.13),
-    (400,  500,  0.13),
-    (500,  600,  0.07),
-    (600,  700,  0.05),
-    (700,  800,  0.03),
-    (800,  900,  0.03),
-    (900,  1000, 0.03),
-    (1000, 10**9, 0.03),  # >= $1000 remaining
-]
-
-# ==============================================================================
-# DEFAULT CONFIGURATIONS
-# ==============================================================================
-
-DEFAULTS = {
-    "pool": {
-        "size": 10000,
-        "embed_dims": 24,      # JL embedding dimensions for diversity
-        "beta_fpts": 0.5,      # Quality vs diversity tradeoff
-        "seed": None
-    },
-    "dupe_model": {
-        "theta0": -1.8,                 # Base log-rate
-        "theta_remain": -0.6,           # Salary remaining coefficient
-        "theta_cpt": 1.0,               # Captain strength coefficient
-        "theta_fpts": 1.3,              # Projection coefficient
-        "min_count": 1,
-        "mid_boost_strength": 0.6,
-        "mid_boost_sigma": 0.18,
-        "lam_floor_frac": 0.06,
-        "stochastic_rounding": True
-    },
-    "independent_draws": {
-        "n_sims": 64
-    }
-}
 
 # ==============================================================================
 # MODEL LOADING
 # ==============================================================================
 
 def load_showdown_models(model_dir: str | Path = "data/nfl/models"):
-    """Load trained showdown duplication models from disk."""
+    """Load trained showdown duplication models from disk.
+    
+    First tries to load two-stage models (new), falls back to single-stage (legacy).
+    
+    Returns:
+        For two-stage:
+            {
+                'stage1_model': MultiOutputRegressor,
+                'stage1_scaler': StandardScaler,
+                'stage1_feature_cols': list,
+                'stage2_model': GradientBoostingRegressor,
+                'stage2_scaler': StandardScaler,
+                'stage2_feature_cols': list,
+                'mode': 'two_stage',
+            }
+        For legacy:
+            {
+                'dupe_model': GradientBoostingRegressor,
+                'scaler': StandardScaler,
+                'feature_cols': list,
+                'mode': 'legacy',
+            }
+    """
     model_dir = Path(model_dir)
     
-    try:
-        with open(model_dir / 'showdown_duplication_model.pkl', 'rb') as f:
-            dupe_model = pickle.load(f)
-        
-        with open(model_dir / 'showdown_scaler.pkl', 'rb') as f:
-            scaler = pickle.load(f)
-        
-        with open(model_dir / 'showdown_feature_cols.pkl', 'rb') as f:
-            feature_cols = pickle.load(f)
-        
-        return dupe_model, scaler, feature_cols
+    # Try two-stage models first
+    # try:
+    with open(model_dir / 'showdown_stage1_model.pkl', 'rb') as f:
+        stage1_model = pickle.load(f)
+    with open(model_dir / 'showdown_stage1_scaler.pkl', 'rb') as f:
+        stage1_scaler = pickle.load(f)
+    with open(model_dir / 'showdown_stage1_feature_cols.pkl', 'rb') as f:
+        stage1_feature_cols = pickle.load(f)
     
-    except FileNotFoundError as e:
-        raise FileNotFoundError(
-            f"Showdown models not found in {model_dir}. "
-            f"Run 'python scripts/nfl/train_showdown_model.py' first."
-        ) from e
+    with open(model_dir / 'showdown_stage2_model.pkl', 'rb') as f:
+        stage2_model = pickle.load(f)
+    with open(model_dir / 'showdown_stage2_scaler.pkl', 'rb') as f:
+        stage2_scaler = pickle.load(f)
+    with open(model_dir / 'showdown_stage2_feature_cols.pkl', 'rb') as f:
+        stage2_feature_cols = pickle.load(f)
+    
+    print("✓ Loaded TWO-STAGE hierarchical models")
+    
+    return {
+        'stage1_model': stage1_model,
+        'stage1_scaler': stage1_scaler,
+        'stage1_feature_cols': stage1_feature_cols,
+        'stage2_model': stage2_model,
+        'stage2_scaler': stage2_scaler,
+        'stage2_feature_cols': stage2_feature_cols,
+        'mode': 'two_stage',
+    }
+    
+    # except FileNotFoundError:
+    #     # Fall back to legacy single-stage model
+    #     try:
+    #         print("⚠️  Two-stage models not found, trying legacy single-stage model...")
+    #         with open(model_dir / 'showdown_duplication_model.pkl', 'rb') as f:
+    #             dupe_model = pickle.load(f)
+            
+    #         with open(model_dir / 'showdown_scaler.pkl', 'rb') as f:
+    #             scaler = pickle.load(f)
+            
+    #         with open(model_dir / 'showdown_feature_cols.pkl', 'rb') as f:
+    #             feature_cols = pickle.load(f)
+            
+    #         print("✓ Loaded legacy single-stage model")
+            
+    #         return {
+    #             'dupe_model': dupe_model,
+    #             'scaler': scaler,
+    #             'feature_cols': feature_cols,
+    #             'mode': 'legacy',
+    #         }
+    #     except FileNotFoundError as e:
+    #         raise FileNotFoundError(
+    #             f"Showdown models not found in {model_dir}. "
+    #             f"Run 'python scripts/nfl/train_showdown_model.py' first."
+    #         ) from e
 
 # ==============================================================================
-# LINEUP MATRIX CONSTRUCTION
+# TWO-STAGE PREDICTION FUNCTION
 # ==============================================================================
+
+def predict_lineups_with_twostage(
+    session: Session,
+    L,
+    lineup_ids: np.ndarray,
+    spends: np.ndarray,
+    cpt_col_by_row: np.ndarray,
+    player_ownership: np.ndarray,
+    total_entries: int,
+    models: dict,
+    contest_features: dict,
+) -> np.ndarray:
+    """
+    UNIFIED TWO-STAGE PREDICTION
+    
+    Stage 1: Contest Distribution Model
+      Input: Contest parameters (field_size, ownership_gini, projection_std, etc.)
+      Output: Quantile distribution [Q25, Q50, Q75, Q90, Q95, Q99]
+      
+    Stage 2: Lineup Positioning Model  
+      Input: Lineup features (cpt_ownership_pct, ownership_sum, salary_remaining_pct)
+      Output: Duplication scores → percentile ranks relative to candidate pool
+      
+    Combined: Interpolate percentile ranks into Stage 1's quantiles to get final predictions
+    """
+    from scipy.special import expit
+    
+    n_lineups = L.shape[0]
+    
+    print(f"\n{'='*70}")
+    print("UNIFIED TWO-STAGE PREDICTION")
+    print(f"{'='*70}")
+    print(f"Contest size: {total_entries:,} entries")
+    print(f"Candidate lineups: {n_lineups:,}")
+    
+    # ========================================================================
+    # STAGE 1: Contest Distribution Model
+    # ========================================================================
+    print("\n" + "="*70)
+    print("STAGE 1: Contest Distribution Quantiles")
+    print("="*70)
+    
+    # Build contest feature vector
+    stage1_features = np.array([[
+        contest_features['total_entries'],
+        contest_features['field_density'],
+        contest_features['ownership_gini'],
+        contest_features['projection_std'],
+    ]])
+    
+    # Scale and predict quantiles
+    stage1_scaler = models['stage1_scaler']
+    stage1_model = models['stage1_model']
+    
+    stage1_features_scaled = stage1_scaler.transform(stage1_features)
+    quantile_predictions = stage1_model.predict(stage1_features_scaled)  # shape [1, 6]
+    
+    # Extract quantiles [Q25, Q50, Q75, Q90, Q95, Q99]
+    quantile_levels = np.array([0.25, 0.50, 0.75, 0.90, 0.95, 0.99])
+    quantile_values = quantile_predictions[0]  # shape [6]
+    
+    # Clip to realistic range
+    quantile_values = np.clip(quantile_values, 1.0, total_entries * 0.01)
+    
+    print(f"Predicted duplication distribution:")
+    for q_level, q_val in zip(quantile_levels, quantile_values):
+        print(f"  Q{q_level*100:.0f}: {q_val:.2f} duplicates")
+    
+    # ========================================================================
+    # STAGE 2: Lineup Positioning Model
+    # ========================================================================
+    print("\n" + "="*70)
+    print("STAGE 2: Lineup Duplication Scores")
+    print("="*70)
+    
+    # Compute 3 lineup features
+    remaining = (SALARY_CAP - spends).astype(np.int32)
+    salary_remaining_pct = remaining / SALARY_CAP
+    
+    ownership_sum = np.asarray(L @ player_ownership, dtype=np.float64)
+    
+    cpt_ownership = np.zeros(n_lineups, dtype=np.float64)
+    mask = cpt_col_by_row >= 0
+    if mask.any():
+        cpt_ownership[mask] = player_ownership[cpt_col_by_row[mask]]
+    
+    # Build feature matrix (3 features in correct order)
+    X_lineup = np.column_stack([
+        cpt_ownership,
+        ownership_sum,
+        salary_remaining_pct,
+    ])
+    
+    # Scale and predict duplication scores (in logit space)
+    stage2_scaler = models['stage2_scaler']
+    stage2_model = models['stage2_model']
+    
+    X_lineup_scaled = stage2_scaler.transform(X_lineup)
+    dupe_scores_logit = stage2_model.predict(X_lineup_scaled)
+    dupe_scores = expit(dupe_scores_logit)  # Convert from logit to [0, 1]
+    
+    print(f"Raw duplication scores (probability of duplication):")
+    print(f"  Min:    {dupe_scores.min():.3f}")
+    print(f"  Mean:   {dupe_scores.mean():.3f}")
+    print(f"  Median: {np.median(dupe_scores):.3f}")
+    print(f"  Max:    {dupe_scores.max():.3f}")
+    
+    # ========================================================================
+    # COMBINE: Map scores to percentiles, then to quantiles
+    # ========================================================================
+    print("\n" + "="*70)
+    print("COMBINATION: Scores → Percentiles → Duplicates")
+    print("="*70)
+    
+    # Compute percentile rank of each lineup relative to the candidate pool
+    # (Higher score = higher percentile = more duplication)
+    lineup_percentiles = np.argsort(np.argsort(dupe_scores)) / (n_lineups - 1) if n_lineups > 1 else np.ones(n_lineups) * 0.5
+    lineup_percentiles = np.clip(lineup_percentiles, 0.0, 1.0)
+    
+    print(f"Lineup percentile distribution (relative to candidate pool):")
+    print(f"  Min:    {lineup_percentiles.min():.3f}")
+    print(f"  Mean:   {lineup_percentiles.mean():.3f}")
+    print(f"  Median: {np.median(lineup_percentiles):.3f}")
+    print(f"  Max:    {lineup_percentiles.max():.3f}")
+    
+    # Interpolate percentiles into Stage 1's quantile distribution
+    # This gives us the predicted duplicate count for each lineup
+    predicted_dupes = np.interp(
+        lineup_percentiles,
+        quantile_levels,
+        quantile_values,
+    )
+    
+    print(f"\nFinal duplicate predictions:")
+    print(f"  Min:    {predicted_dupes.min():.2f}")
+    print(f"  Mean:   {predicted_dupes.mean():.2f}")
+    print(f"  Median: {np.median(predicted_dupes):.2f}")
+    print(f"  Max:    {predicted_dupes.max():.2f}")
+    print(f"  P90:    {np.percentile(predicted_dupes, 90):.2f}")
+    print(f"  P95:    {np.percentile(predicted_dupes, 95):.2f}")
+    print(f"  P99:    {np.percentile(predicted_dupes, 99):.2f}")
+    
+    print(f"{'='*70}\n")
+    
+    return predicted_dupes
+
+def compute_contest_features_from_lineups(
+    L: sp.csr_matrix,
+    player_ownership: np.ndarray,
+    total_entries: int,
+    n_lineups: int,
+) -> dict:
+    """
+    Compute contest-level features from candidate lineup pool.
+    
+    Returns:
+        dict with keys: total_entries, field_density, ownership_gini, projection_std
+    """
+    # Field density: % of lineups that are unique
+    field_density = min(n_lineups / total_entries, 1.0)
+    
+    # Ownership concentration (Gini coefficient)
+    lineup_ownership = np.asarray(L @ player_ownership, dtype=np.float64)
+    ownership_gini = calculate_gini(lineup_ownership) if len(lineup_ownership) > 1 else 0.5
+    
+    # Projection std (estimate from ownership distribution)
+    # This is a proxy: more concentrated ownership → lower projection variance
+    # We use ownership std as a stand-in
+    projection_std = float(np.std(lineup_ownership)) if len(lineup_ownership) > 1 else 5.0
+    projection_std = np.clip(projection_std, 0.1, 50.0)
+    
+    return {
+        'total_entries': total_entries,
+        'field_density': field_density,
+        'ownership_gini': ownership_gini,
+        'projection_std': projection_std,
+    }
+
+
+def calculate_gini(values: np.ndarray) -> float:
+    """Calculate Gini coefficient for concentration."""
+    if len(values) < 2:
+        return 0.0
+    sorted_vals = np.sort(values)
+    n = len(sorted_vals)
+    index = np.arange(1, n + 1)
+    gini = (2 * np.sum(index * sorted_vals)) / (n * np.sum(sorted_vals)) - (n + 1) / n
+    return float(np.clip(gini, 0.0, 1.0))
 
 def _coerce_player_ids(val) -> List[int]:
     """Extract player IDs from various formats (list, JSON string, etc)."""
@@ -694,26 +566,31 @@ def build_player_samples_independent(
 def get_player_ownership_heuristic(
     session: Session,
     pid_to_col: Dict[int, int],
-    alpha: float = 2.0,
-    salary_weight: float = 0.3,
+    alpha: float = 3.0,  # Changed: Higher default for better concentration
+    salary_weight: float = 0.2,  # Changed: Reduced salary impact
+    captain_concentration: float = 4.0,  # NEW: Separate concentration for captains
 ) -> np.ndarray:
     """
-    Calculate heuristic player ownership based on projections and salary.
+    FIXED: Calculate realistic heuristic player ownership with proper captain concentration.
 
-    This avoids circular dependency with ownership_proj column.
-
-    Formula: ownership_score = (projection_pct ** alpha) * (1 - salary_weight + salary_weight * salary_pct)
-    Then normalize to sum to reasonable total (e.g., 600% for 6-player showdown)
+    Key improvements:
+    - Uses exponential concentration instead of buggy power formula
+    - Captain ownership properly concentrated (top 2-3 get 40-60% combined)
+    - Accounts for 1.5x captain scoring multiplier
+    - Separate concentration parameters for captain vs flex
 
     Args:
         session: Database session
         pid_to_col: Player ID to column index mapping
-        alpha: Power for projection (higher = more concentration on chalk)
+        alpha: Base concentration for flex (higher = more chalk)
         salary_weight: How much salary matters (0-1)
+        captain_concentration: Extra concentration for captains (higher = steeper)
 
     Returns:
-        Array [n_players] with heuristic ownership percentages (0-100)
+        Array [n_players] with realistic ownership percentages (0-100)
     """
+    from ivan.sports.nfl.models import NFLPlayer
+    
     player_data = session.query(
         NFLPlayer.id,
         NFLPlayer.fpts_mean,
@@ -733,46 +610,87 @@ def get_player_ownership_heuristic(
         salaries[col] = float(salary or 0.0)
         is_cpt[col] = (roster_slot_id == CPT_SLOT)
 
-    # Calculate ownership scores separately for CPT and FLEX
     ownership = np.zeros(n_players, dtype=np.float64)
 
-    # CPT ownership
+    # =========================================================================
+    # CAPTAIN OWNERSHIP - FIXED with exponential concentration
+    # =========================================================================
     cpt_mask = is_cpt
     if cpt_mask.any():
         cpt_projs = projections[cpt_mask]
         cpt_sals = salaries[cpt_mask]
 
-        # Percentile ranks
-        cpt_proj_pct = np.argsort(np.argsort(cpt_projs)) / max(1, cpt_projs.size - 1)
-        cpt_sal_pct = np.argsort(np.argsort(cpt_sals)) / max(1, cpt_sals.size - 1)
-
-        # Combined score
-        cpt_scores = np.power(cpt_proj_pct, alpha) * (
-            1 - salary_weight + salary_weight * cpt_sal_pct
+        # Account for 1.5x captain scoring multiplier
+        cpt_projs_adjusted = cpt_projs * 1.5
+        
+        # Captains: projection matters much more than salary
+        captain_salary_weight = salary_weight * 0.5
+        
+        # Calculate value scores (not percentiles - actual values for better differentiation)
+        if cpt_projs_adjusted.max() > 0:
+            proj_score = cpt_projs_adjusted / cpt_projs_adjusted.max()
+        else:
+            proj_score = np.ones_like(cpt_projs_adjusted)
+        
+        # Inverse salary score (lower salary = better value)
+        if cpt_sals.max() > cpt_sals.min():
+            sal_score = 1 - (cpt_sals - cpt_sals.min()) / (cpt_sals.max() - cpt_sals.min())
+        else:
+            sal_score = np.ones_like(cpt_sals)
+        
+        # Combined value score
+        value_scores = (
+            proj_score * (1 - captain_salary_weight) + 
+            sal_score * captain_salary_weight
         )
+        
+        # FIXED: Apply exponential transformation for proper concentration
+        ownership_scores = np.exp(captain_concentration * value_scores)
+        
+        # Add small minimum ownership
+        ownership_scores = ownership_scores + 0.01
+        
+        # Normalize to 100% total
+        cpt_ownership = 100.0 * ownership_scores / ownership_scores.sum()
+        ownership[cpt_mask] = cpt_ownership
+        
+        # Log top captains for verification
+        if len(cpt_ownership) >= 3:
+            top_3_idx = np.argsort(cpt_ownership)[-3:]
+            top_3_own = cpt_ownership[top_3_idx]
+            print(f"  Top 3 captain ownership: {top_3_own[-1]:.1f}%, {top_3_own[-2]:.1f}%, {top_3_own[-3]:.1f}%")
 
-        # Normalize to 100% total (one captain per lineup)
-        if cpt_scores.sum() > 0:
-            cpt_ownership = 100.0 * cpt_scores / cpt_scores.sum()
-            ownership[cpt_mask] = cpt_ownership
-
-    # FLEX ownership
+    # =========================================================================
+    # FLEX OWNERSHIP - More distributed than captain
+    # =========================================================================
     flex_mask = ~is_cpt
     if flex_mask.any():
         flex_projs = projections[flex_mask]
         flex_sals = salaries[flex_mask]
 
-        flex_proj_pct = np.argsort(np.argsort(flex_projs)) / max(1, flex_projs.size - 1)
-        flex_sal_pct = np.argsort(np.argsort(flex_sals)) / max(1, flex_sals.size - 1)
-
-        flex_scores = np.power(flex_proj_pct, alpha) * (
-            1 - salary_weight + salary_weight * flex_sal_pct
+        # Flex: more balanced projection/salary weighting
+        if flex_projs.max() > 0:
+            proj_score = flex_projs / flex_projs.max()
+        else:
+            proj_score = np.ones_like(flex_projs)
+        
+        if flex_sals.max() > flex_sals.min():
+            sal_score = 1 - (flex_sals - flex_sals.min()) / (flex_sals.max() - flex_sals.min())
+        else:
+            sal_score = np.ones_like(flex_sals)
+        
+        value_scores = (
+            proj_score * (1 - salary_weight) + 
+            sal_score * salary_weight
         )
-
+        
+        # FIXED: Use base alpha for flex (less concentration than captain)
+        ownership_scores = np.exp(alpha * value_scores)
+        ownership_scores = ownership_scores + 0.1
+        
         # Normalize to 500% total (5 flex per lineup)
-        if flex_scores.sum() > 0:
-            flex_ownership = 500.0 * flex_scores / flex_scores.sum()
-            ownership[flex_mask] = flex_ownership
+        flex_ownership = 500.0 * ownership_scores / ownership_scores.sum()
+        ownership[flex_mask] = flex_ownership
 
     return ownership
 
@@ -816,228 +734,422 @@ def compute_lineup_features_for_model(
     L,  # sparse lineup matrix [n_lineups x n_players]
     spends: np.ndarray,
     cpt_col_by_row: np.ndarray,
-    P_indep: np.ndarray,  # [n_sims x n_players] independent samples
     player_ownership: np.ndarray,  # [n_players] actual ownership
     total_entries: int,
-    entry_fee: float,
-    ownership_gini: float,
     verbose: bool = True,
 ) -> np.ndarray:
     """
-    Compute feature matrix for trained duplication model.
+    Compute simplified 4-feature matrix for trained duplication model.
     
-    Features include:
-    - Contest metadata (entries, fee, ownership distribution)
-    - Correlation features (placeholder for now)
-    - Captain ownership (actual, not projected)
-    - Lineup projection strength
-    - Total lineup ownership
-    - Salary remaining
-    - Interaction terms
+    Features (must match training order):
+        1. salary_remaining_pct - % of salary cap unused
+        2. ownership_sum - Sum of all player ownership percentages
+        3. cpt_ownership_pct - Captain's ownership percentage
+        4. log_total_entries - Log10 of contest total entries
     
-    Returns: [n_lineups x n_features] array ready for model prediction
+    Returns: [n_lineups x 4] array ready for model prediction
     """
     n_lineups = L.shape[0]
     
     if verbose:
         print("\n" + "="*70)
-        print("FEATURE CALCULATION DEBUG")
+        print("SIMPLIFIED FEATURE COMPUTATION (4 features)")
         print("="*70)
         print(f"Number of lineups: {n_lineups:,}")
         print(f"Number of players: {L.shape[1]:,}")
-        print(f"P_indep shape: {P_indep.shape}")
-        print(f"player_ownership shape: {player_ownership.shape}")
-        print(f"player_ownership stats: min={player_ownership.min():.2f}, "
-              f"max={player_ownership.max():.2f}, mean={player_ownership.mean():.2f}")
-        print(f"Non-zero ownership players: {(player_ownership > 0).sum()} / {len(player_ownership)}")
+        print(f"Contest size: {total_entries:,} entries")
     
-    # Per-player projection means from independent samples
-    per_player_mean = np.asarray(P_indep.mean(axis=0), dtype=np.float64)
-    
-    if verbose:
-        print(f"\nPer-player projection stats:")
-        print(f"  min={per_player_mean.min():.2f}, max={per_player_mean.max():.2f}, "
-              f"mean={per_player_mean.mean():.2f}")
-    
-    # 1. Lineup mean projections
-    mean_proj = np.asarray(L @ per_player_mean, dtype=np.float64)
-    
-    if verbose:
-        print(f"\nLineup projection stats:")
-        print(f"  min={mean_proj.min():.2f}, max={mean_proj.max():.2f}, "
-              f"mean={mean_proj.mean():.2f}")
-    
-    # 2. Captain projections
-    cpt_means = np.zeros(n_lineups, dtype=np.float64)
-    # This extracts captain's mean projection for each lineup
-    # mask filters out lineups with invalid captain indices
-    mask = cpt_col_by_row >= 0
-    if mask.any():
-        cpt_means[mask] = per_player_mean[cpt_col_by_row[mask]]
-    
-    if verbose:
-        print(f"\nCaptain projection stats:")
-        print(f"  Valid captains: {mask.sum()} / {n_lineups}")
-        print(f"  min={cpt_means[mask].min():.2f}, max={cpt_means[mask].max():.2f}, "
-              f"mean={cpt_means[mask].mean():.2f}")
-    
-    # 3. Captain ownership (THE FIX for your bug)
-    cpt_ownership = np.zeros(n_lineups, dtype=np.float64)
-    if mask.any():
-        cpt_ownership[mask] = player_ownership[cpt_col_by_row[mask]]
-    
-    if verbose:
-        print(f"\nCaptain ownership stats:")
-        print(f"  min={cpt_ownership[mask].min():.2f}, max={cpt_ownership[mask].max():.2f}, "
-              f"mean={cpt_ownership[mask].mean():.2f}")
-        print(f"  Zero-ownership captains: {(cpt_ownership[mask] == 0).sum()} / {mask.sum()}")
-        
-        # Show some examples
-        print(f"\nTop 5 captain ownership values:")
-        top_cpt_idx = np.argsort(cpt_ownership[mask])[-5:]
-        for idx in top_cpt_idx:
-            lineup_row = np.where(mask)[0][idx]
-            print(f"    Lineup {lineup_ids[lineup_row]}: captain_own={cpt_ownership[lineup_row]:.1f}%, "
-                  f"captain_proj={cpt_means[lineup_row]:.1f}")
-        
-        print(f"\nBottom 5 captain ownership values:")
-        bottom_cpt_idx = np.argsort(cpt_ownership[mask])[:5]
-        for idx in bottom_cpt_idx:
-            lineup_row = np.where(mask)[0][idx]
-            print(f"    Lineup {lineup_ids[lineup_row]}: captain_own={cpt_ownership[lineup_row]:.1f}%, "
-                  f"captain_proj={cpt_means[lineup_row]:.1f}")
-    
-    # 4. Total lineup ownership (sum of all players' ownership)
-    lineup_total_ownership = np.asarray(L @ player_ownership, dtype=np.float64)
-    
-    if verbose:
-        print(f"\nTotal lineup ownership stats:")
-        print(f"  min={lineup_total_ownership.min():.2f}, max={lineup_total_ownership.max():.2f}, "
-              f"mean={lineup_total_ownership.mean():.2f}")
-        print(f"  Zero-ownership lineups: {(lineup_total_ownership == 0).sum()} / {n_lineups}")
-    
-    # 5. Salary remaining
+    # ====================================================================
+    # Feature 1: Salary remaining (% of cap unused)
+    # ====================================================================
     remaining = (SALARY_CAP - spends).astype(np.int32)
     salary_remaining_pct = remaining / SALARY_CAP
     
     if verbose:
-        print(f"\nSalary remaining stats:")
-        print(f"  min=${remaining.min()}, max=${remaining.max()}, mean=${remaining.mean():.0f}")
-        print(f"  Percentage: min={salary_remaining_pct.min():.3f}, "
-              f"max={salary_remaining_pct.max():.3f}, mean={salary_remaining_pct.mean():.3f}")
+        print(f"\n1. SALARY REMAINING:")
+        print(f"   Min: ${remaining.min()} ({salary_remaining_pct.min():.3%})")
+        print(f"   Max: ${remaining.max()} ({salary_remaining_pct.max():.3%})")
+        print(f"   Mean: ${remaining.mean():.0f} ({salary_remaining_pct.mean():.3%})")
     
-    # Convert to percentile ranks within this lineup pool
-    def _percentile_rank(arr):
-        """Convert values to percentile ranks [0, 1]."""
-        if arr.size <= 1:
-            return np.full_like(arr, 0.5, dtype=np.float64)
-        sorted_arr = np.sort(arr)
-        ranks = np.searchsorted(sorted_arr, arr, side='right')
-        return ranks / float(arr.size)
-    
-    cpt_proj_percentile = _percentile_rank(cpt_means)
-    cpt_own_percentile = _percentile_rank(cpt_ownership)
-    proj_percentile = _percentile_rank(mean_proj)
-    own_percentile = _percentile_rank(lineup_total_ownership)
+    # ====================================================================
+    # Feature 2: Total lineup ownership (sum of all players)
+    # ====================================================================
+    ownership_sum = np.asarray(L @ player_ownership, dtype=np.float64)
     
     if verbose:
-        print(f"\nPercentile conversions:")
-        print(f"  Captain ownership percentiles: min={cpt_own_percentile.min():.3f}, "
-              f"max={cpt_own_percentile.max():.3f}, mean={cpt_own_percentile.mean():.3f}")
-        print(f"  Captain projection percentiles: min={cpt_proj_percentile.min():.3f}, "
-              f"max={cpt_proj_percentile.max():.3f}, mean={cpt_proj_percentile.mean():.3f}")
-        print(f"  Lineup ownership percentiles: min={own_percentile.min():.3f}, "
-              f"max={own_percentile.max():.3f}, mean={own_percentile.mean():.3f}")
-        print(f"  Lineup projection percentiles: min={proj_percentile.min():.3f}, "
-              f"max={proj_percentile.max():.3f}, mean={proj_percentile.mean():.3f}")
+        print(f"\n2. TOTAL LINEUP OWNERSHIP:")
+        print(f"   Min: {ownership_sum.min():.2f}%")
+        print(f"   Max: {ownership_sum.max():.2f}%")
+        print(f"   Mean: {ownership_sum.mean():.2f}%")
+        print(f"   Zero-ownership lineups: {(ownership_sum == 0).sum()} / {n_lineups}")
     
-    # Contest-level features
+    # ====================================================================
+    # Feature 3: Captain ownership
+    # ====================================================================
+    cpt_ownership = np.zeros(n_lineups, dtype=np.float64)
+    mask = cpt_col_by_row >= 0
+    if mask.any():
+        cpt_ownership[mask] = player_ownership[cpt_col_by_row[mask]]
+    
+    if verbose:
+        print(f"\n3. CAPTAIN OWNERSHIP:")
+        print(f"   Valid captains: {mask.sum()} / {n_lineups}")
+        if mask.any():
+            print(f"   Min: {cpt_ownership[mask].min():.2f}%")
+            print(f"   Max: {cpt_ownership[mask].max():.2f}%")
+            print(f"   Mean: {cpt_ownership[mask].mean():.2f}%")
+            print(f"   Zero-ownership captains: {(cpt_ownership[mask] == 0).sum()}")
+    
+    # ====================================================================
+    # Feature 4: Contest size (log scale)
+    # ====================================================================
     log_total_entries = np.log10(max(1, total_entries))
+    log_total_entries_array = np.full(n_lineups, log_total_entries, dtype=np.float64)
     
     if verbose:
-        print(f"\nContest features:")
-        print(f"  log10(total_entries) = {log_total_entries:.3f} (from {total_entries:,})")
-        print(f"  entry_fee = ${entry_fee:.2f}")
-        print(f"  ownership_gini = {ownership_gini:.3f}")
+        print(f"\n4. CONTEST SIZE:")
+        print(f"   Total entries: {total_entries:,}")
+        print(f"   Log10(entries): {log_total_entries:.3f}")
     
-    # Build feature matrix (must match training order!)
-    features = []
+    # ====================================================================
+    # Build feature matrix (ORDER MATTERS - must match training!)
+    # ====================================================================
+    feature_array = np.column_stack([
+        salary_remaining_pct,
+        ownership_sum,
+        cpt_ownership,
+        log_total_entries_array,
+    ])
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print("FEATURE MATRIX SUMMARY")
+        print(f"{'='*70}")
+        print(f"Shape: {feature_array.shape}")
+        
+        # Show sample features for first 3 lineups
+        if n_lineups >= 3:
+            print(f"\nSample features (first 3 lineups):")
+            print(f"{'Feature':<25} {'Lineup 1':>12} {'Lineup 2':>12} {'Lineup 3':>12}")
+            print("-" * 70)
+            feature_names = ['salary_remaining_pct', 'ownership_sum', 
+                           'cpt_ownership_pct', 'log_total_entries']
+            for i, name in enumerate(feature_names):
+                vals = [f"{feature_array[j, i]:12.4f}" for j in range(3)]
+                print(f"{name:<25} {' '.join(vals)}")
+        
+        print(f"{'='*70}\n")
+    
+    return feature_array
+
+# ==============================================================================
+# DIVERSITY SAMPLING WITH EUCLIDEAN DISTANCES
+# ==============================================================================
+
+def compute_lineup_diversity_matrix(
+    session: Session,
+    L: sp.csr_matrix,
+    lineup_ids: np.ndarray,
+    pid_to_col: dict,
+    n_sims: int = 64,
+    seed: int = 42,
+) -> Tuple[np.ndarray, Dict]:
+    """
+    Compute pairwise Euclidean distances between lineups based on simulated fpts traces.
+
+    Uses shallow correlated samples to build fpts traces quickly, then calculates
+    Euclidean distances in the fpts space (similar to choose.py method).
+
+    Args:
+        session: Database session
+        L: Lineup matrix [n_lineups x n_players]
+        lineup_ids: Array of lineup IDs
+        pid_to_col: Dict mapping player ID to column index in L
+        n_sims: Number of correlated simulations (64-128 recommended for speed)
+        seed: Random seed for reproducibility
+
+    Returns:
+        dist_mat: Pairwise distance matrix [n_lineups x n_lineups]
+        meta: Diagnostic info about distances
+    """
+    from scipy.spatial.distance import pdist, squareform
+
+    n_lineups = L.shape[0]
+
+    if n_lineups == 0:
+        return np.array([]), {'error': 'no_lineups', 'n_lineups': 0}
+
+    if n_lineups == 1:
+        return np.array([[0.0]]), {'n_lineups': 1, 'n_sims': n_sims}
+
+    try:
+        # Generate shallow correlated samples
+        print(f"  Generating {n_sims} correlated samples for diversity calculation...")
+        player_samples = generate_correlated_samples_gaussian(
+            session,
+            n_samples=n_sims,
+            seed=seed,
+            use_hgv20=True,
+            randomness=1.0,
+        )
+
+        if not player_samples:
+            print("  WARNING: Failed to generate correlated samples, using uniform diversity")
+            return np.ones((n_lineups, n_lineups)), {'error': 'no_samples'}
+
+        # Build fpts matrix: each row is a lineup's simulated fpts across n_sims scenarios
+        # Shape: [n_lineups x n_sims]
+        print(f"  Building fpts trace matrix ({n_lineups} lineups x {n_sims} sims)...")
+
+        # P should have shape [n_players x n_sims], indexed by column numbers in L
+        n_players = L.shape[1]
+        P = np.zeros((n_players, n_sims), dtype=np.float64)
+
+        for pid, fpts_array in player_samples.items():
+            if pid in pid_to_col and isinstance(fpts_array, np.ndarray) and fpts_array.size >= n_sims:
+                col_idx = pid_to_col[pid]
+                P[col_idx, :] = fpts_array[:n_sims]
+
+        # Convert sparse L to CSR if needed for efficient multiplication
+        if not isinstance(L, sp.csr_matrix):
+            L = sp.csr_matrix(L)
+
+        fpts_matrix = np.asarray(L @ P, dtype=np.float64)  # [n_lineups x n_sims]
+
+        # Compute pairwise Euclidean distances
+        print(f"  Computing pairwise Euclidean distances ({n_lineups} lineups)...")
+        dist_vec = pdist(fpts_matrix, metric="euclidean")
+        dist_mat = squareform(dist_vec)
+
+        meta = {
+            'n_lineups': n_lineups,
+            'n_sims': n_sims,
+            'fpts_shape': fpts_matrix.shape,
+            'distance_stats': {
+                'min': float(dist_mat[dist_mat > 0].min()) if (dist_mat > 0).any() else 0.0,
+                'max': float(dist_mat.max()),
+                'mean': float(dist_mat[np.triu_indices_from(dist_mat, k=1)].mean()),
+                'median': float(np.median(dist_mat[np.triu_indices_from(dist_mat, k=1)])),
+            }
+        }
+
+        print(f"  ✓ Distance matrix computed: min={meta['distance_stats']['min']:.2f}, "
+              f"mean={meta['distance_stats']['mean']:.2f}, max={meta['distance_stats']['max']:.2f}")
+
+        return dist_mat, meta
+
+    except Exception as e:
+        print(f"  WARNING: Diversity computation failed ({e}), using uniform diversity")
+        return np.ones((n_lineups, n_lineups)), {'error': str(e)}
+
+
+def apply_diversity_penalty_to_weights(
+    predicted_dupes: np.ndarray,
+    dist_mat: np.ndarray,
+    diversity_lambda: float = 0.1,
+) -> np.ndarray:
+    """
+    Adjust predicted duplicate weights using diversity penalty based on Euclidean distances.
+
+    Lineups that are far apart in fpts space get higher relative weight.
+    Lineups that are close together get lower relative weight (penalized).
+
+    Formula:
+        adjusted_weight[i] = predicted_dupes[i] * (1 + lambda * mean_distance_to_all[i])
+
+    Args:
+        predicted_dupes: Original predicted duplicate counts [n_lineups]
+        dist_mat: Pairwise distance matrix [n_lineups x n_lineups]
+        diversity_lambda: Strength of diversity penalty (0.0 = no penalty, higher = stronger)
+
+    Returns:
+        adjusted_weights: Normalized weights [n_lineups] that sum to 1
+    """
+    n_lineups = len(predicted_dupes)
+
+    if n_lineups <= 1 or dist_mat.size == 0:
+        return predicted_dupes / (predicted_dupes.sum() + 1e-9)
+
+    # Compute mean distance from each lineup to all others
+    mean_distances = np.zeros(n_lineups, dtype=np.float64)
     for i in range(n_lineups):
-        # Placeholder correlation features (can be computed later)
-        correlation_score = 0.0
-        same_team_count = 6
-        qb_wr_stack = 0
-        rb_dst_negative = 0
-        
-        row = [
-            # Contest features
-            log_total_entries,
-            entry_fee,
-            ownership_gini,
-            
-            # Dimension 1: Correlation (placeholders)
-            correlation_score,
-            same_team_count,
-            qb_wr_stack,
-            rb_dst_negative,
-            
-            # Dimension 2: Captain ownership (USING ACTUAL OWNERSHIP NOW)
-            cpt_own_percentile[i],
-            
-            # Dimension 3: Projection
-            proj_percentile[i],
-            
-            # Dimension 4: Total ownership (USING ACTUAL OWNERSHIP NOW)
-            own_percentile[i],
-            
-            # Dimension 5: Salary
-            salary_remaining_pct[i],
-            
-            # Interactions
-            cpt_own_percentile[i] * own_percentile[i],  # cpt_own_x_total_own
-            1.0 - salary_remaining_pct[i],  # near_cap
-            cpt_own_percentile[i] * own_percentile[i] * proj_percentile[i],  # chalk_score
-        ]
-        features.append(row)
+        # Average distance to all other lineups (excluding self, which is 0)
+        other_dists = np.delete(dist_mat[i], i)
+        if other_dists.size > 0:
+            mean_distances[i] = float(np.mean(other_dists))
+
+    # Normalize distances to [0, 1]
+    if mean_distances.max() > 0:
+        norm_distances = mean_distances / (mean_distances.max() + 1e-9)
+    else:
+        norm_distances = np.zeros_like(mean_distances)
+
+    # Apply diversity penalty: increase weight for diverse lineups
+    diversity_multiplier = 1.0 + diversity_lambda * norm_distances
+
+    adjusted_weights = predicted_dupes * diversity_multiplier
+    adjusted_weights = adjusted_weights / (adjusted_weights.sum() + 1e-9)
+
+    return adjusted_weights
+
+# ==============================================================================
+# UNIFIED DIVERSITY-GATED DUPLICATION SAMPLER
+# ==============================================================================
+
+def sample_showdown_field_unified(
+    session: Session,
+    field_size: int,
+    L,  # sparse lineup matrix
+    lineup_ids: np.ndarray,
+    spends: np.ndarray,
+    pid_to_col: Dict[int, int],
+    cpt_col_by_row: np.ndarray,
+    predicted_dupes: np.ndarray,  # NEW: pass predicted dupes directly
+    player_ownership: np.ndarray,
+    total_entries: int,
+) -> Tuple[Dict[int, int], Dict]:
+    """
+    Unified sampler combining diversity and duplication in one gate.
+
+    Strategy:
+    1. Compute diversity matrix (Euclidean distances in fpts space)
+    2. Use provided predicted duplication counts
+    3. Combine: weight = (1 + diversity_bonus) * predicted_dupes
+    4. Sample with combined weights
+
+    This ensures:
+    - Diverse lineups are prioritized relative to similar ones
+    - Historical duplication patterns are preserved
+    - Both work together (no post-hoc modification)
+
+    Args:
+        predicted_dupes: [n_lineups] array of predicted duplicate counts
+
+    Returns:
+        counts_by_lineup: {lineup_id: count}
+        meta: Diagnostic info
+    """
+    n_lineups = L.shape[0]
+
+    print(f"\n" + "="*70)
+    print("UNIFIED DIVERSITY-GATED DUPLICATION SAMPLER")
+    print("="*70)
+
+    # ========================================================================
+    # Step 1: Compute diversity matrix (Euclidean distances)
+    # ========================================================================
+    print("\nStep 1: Computing diversity matrix...")
+    dist_mat, diversity_meta = compute_lineup_diversity_matrix(
+        session=session,
+        L=L,
+        lineup_ids=lineup_ids,
+        pid_to_col=pid_to_col,
+        n_sims=32,  # Fast: only 32 sims for diversity
+        seed=42,
+    )
+
+    if dist_mat.size == 0 or 'error' in diversity_meta:
+        print("  WARNING: Diversity computation failed, using uniform diversity")
+        dist_mat = np.ones((n_lineups, n_lineups))
+        diversity_meta = {'error': 'computation_failed'}
+
+    # ========================================================================
+    # Step 2: Use predicted duplication from caller
+    # ========================================================================
+    print("\nStep 2: Using predicted duplication...")
     
-    feature_array = np.array(features, dtype=np.float64)
+    predicted_dupes_clipped = np.clip(predicted_dupes, 1.0, None)
     
-    if verbose:
-        print(f"\nFinal feature matrix shape: {feature_array.shape}")
-        print(f"\nSample features for top 3 most-duped lineups (if available):")
-        print(f"{'Feature':<25} {'Lineup 1':>12} {'Lineup 2':>12} {'Lineup 3':>12}")
-        print("-" * 70)
-        feature_names = [
-            'log_total_entries',
-            'entry_fee', 
-            'ownership_gini',
-            'correlation_score',
-            'same_team_count',
-            'qb_wr_stack',
-            'rb_dst_negative',
-            'cpt_own_pct',
-            'proj_pct',
-            'total_own_pct',
-            'salary_remain_pct',
-            'cpt_x_total_own',
-            'near_cap',
-            'chalk_score'
-        ]
-        for feat_idx, feat_name in enumerate(feature_names):
-            vals = [f"{feature_array[i, feat_idx]:12.4f}" for i in range(min(3, n_lineups))]
-            print(f"{feat_name:<25} {' '.join(vals)}")
-        
-        print("="*70 + "\n")
-    
-    # Return features and diagnostics for later analysis
-    diagnostics = {
-        'per_player_mean': per_player_mean,
-        'mean_proj': mean_proj,
-        'cpt_ownership': cpt_ownership,
-        'lineup_total_ownership': lineup_total_ownership,
+    print(f"  Predicted dupes: min={predicted_dupes_clipped.min():.2f}, "
+          f"mean={predicted_dupes_clipped.mean():.2f}, max={predicted_dupes_clipped.max():.2f}")
+
+    # ========================================================================
+    # Step 3: Compute diversity bonuses
+    # ========================================================================
+    print("\nStep 3: Computing diversity bonuses...")
+
+    # For each lineup, compute average distance to others
+    diversity_scores = np.zeros(n_lineups, dtype=np.float64)
+    for i in range(n_lineups):
+        other_dists = np.delete(dist_mat[i], i)
+        if other_dists.size > 0:
+            diversity_scores[i] = float(np.mean(other_dists))
+
+    # Normalize to [0, 1] for interpretability
+    if diversity_scores.max() > diversity_scores.min():
+        diversity_norm = (diversity_scores - diversity_scores.min()) / (diversity_scores.max() - diversity_scores.min())
+    else:
+        diversity_norm = np.ones_like(diversity_scores) * 0.5
+
+    # Diversity bonus: lineups far from others get higher bonus
+    diversity_bonus = 1.0 + 0.5 * (diversity_norm - 0.5)
+
+    print(f"  Diversity scores: min={diversity_scores.min():.2f}, "
+          f"mean={diversity_scores.mean():.2f}, max={diversity_scores.max():.2f}")
+    print(f"  Diversity bonus range: [{diversity_bonus.min():.3f}, {diversity_bonus.max():.3f}]")
+
+    # ========================================================================
+    # Step 4: Combine diversity and duplication
+    # ========================================================================
+    print("\nStep 4: Combining diversity and duplication weights...")
+
+    # Combined weight: higher dupes + higher diversity = higher sampling prob
+    combined_weights = predicted_dupes_clipped * diversity_bonus
+    combined_weights = np.clip(combined_weights, 1e-12, None)
+    combined_weights = combined_weights / combined_weights.sum()
+
+    print(f"  Combined weights: min={combined_weights.min():.2e}, "
+          f"mean={combined_weights.mean():.2e}, max={combined_weights.max():.2e}")
+
+    # ========================================================================
+    # Step 5: Sample field
+    # ========================================================================
+    print(f"\nStep 5: Sampling {field_size} lineups...")
+    rng = np.random.default_rng(42)
+    sampled_indices = rng.choice(n_lineups, size=field_size, replace=True, p=combined_weights)
+
+    # Count duplicates
+    counts = Counter(sampled_indices)
+    counts_by_lineup = {int(lineup_ids[i]): int(count) for i, count in counts.items()}
+    unique_selected = len(counts)
+    actual_dupes = np.array(list(counts.values()))
+
+    print(f"  ✓ Selected {unique_selected:,} unique lineups ({100*unique_selected/field_size:.1f}%)")
+    print(f"  Duplicate range: {actual_dupes.min()}-{actual_dupes.max()} (mean={actual_dupes.mean():.1f})")
+
+    meta = {
+        'sampler': 'showdown_unified_diversity_gated',
+        'total_candidate_lineups': n_lineups,
+        'unique_selected': unique_selected,
+        'uniqueness_rate': unique_selected / field_size,
+        'predicted_dupes': {
+            'min': float(predicted_dupes_clipped.min()),
+            'max': float(predicted_dupes_clipped.max()),
+            'mean': float(predicted_dupes_clipped.mean()),
+        },
+        'diversity_scores': {
+            'min': float(diversity_scores.min()),
+            'max': float(diversity_scores.max()),
+            'mean': float(diversity_scores.mean()),
+        },
+        'diversity_bonus': {
+            'min': float(diversity_bonus.min()),
+            'max': float(diversity_bonus.max()),
+            'mean': float(diversity_bonus.mean()),
+        },
+        'actual_dupes': {
+            'min': int(actual_dupes.min()),
+            'max': int(actual_dupes.max()),
+            'mean': float(actual_dupes.mean()),
+            'median': float(np.median(actual_dupes)),
+        },
+        'diversity_meta': diversity_meta,
     }
-    
-    return feature_array, diagnostics
+
+    print("="*70 + "\n")
+
+    return counts_by_lineup, meta
+
 
 # ==============================================================================
 # LEARNED MODEL SAMPLER (SHOWDOWN)
@@ -1051,24 +1163,24 @@ def sample_showdown_field_learned(
     model_dir: str | Path = "data/nfl/models",
 ) -> Tuple[Dict[int, int], Dict]:
     """
-    Sample showdown field using trained duplication models.
-    
+    Sample showdown field using trained duplication models with diversity control.
+
+    Supports both:
+    - NEW: Two-stage hierarchical model (preferred)
+    - LEGACY: Single-stage model (fallback)
+
     Uses historical patterns to predict lineup duplication based on:
     - Contest size and entry fee
     - Captain and player ownership
     - Lineup projections and salary usage
-    
+
     Returns:
         counts_by_lineup: {lineup_id: duplicate_count}
         meta: Diagnostic info
     """
     # Load trained models
-    try:
-        dupe_model, scaler, feature_cols = load_showdown_models(model_dir)
-    except FileNotFoundError as e:
-        print(f"WARNING: {e}")
-        print("Falling back to heuristic sampler")
-        return sample_showdown_field_heuristic(session, field_size=field_size, config=config)
+    models = load_showdown_models(model_dir)
+    model_mode = models.get('mode', 'unknown')
     
     # Get contest parameters
     if contest_id:
@@ -1077,136 +1189,293 @@ def sample_showdown_field_learned(
         
         if contest:
             total_entries = contest.total_entries
-            entry_fee = contest.entry_fee
-            # Calculate ownership gini from current player pool
-            ownership_gini = 0.5  # Default if calculation fails
         else:
             total_entries = field_size
-            entry_fee = 3.0
-            ownership_gini = 0.5
     else:
         total_entries = field_size
-        entry_fee = 3.0
-        ownership_gini = 0.5
     
     # Build lineup matrix
     L, lineup_ids, spends, pid_to_col, cpt_col_by_row, _ = build_lineup_matrix(session)
     n_lineups = L.shape[0]
-    
+
     if n_lineups == 0:
         print("  WARNING: No lineups found in database")
         return {}, {'error': 'no_lineups'}
-    
-    print(f"  Candidate lineups: {n_lineups:,}")
-    
-    # Get player samples (independent for popularity features)
-    P_indep = build_player_samples_independent(session, pid_to_col, n_sims=64, seed=42)
 
-    # Get heuristic player ownership (breaks circular dependency)
-    # Use config values if available, otherwise use defaults
-    alpha = config.get('showdown', {}).get('ownership_alpha', 2.0)
-    salary_weight = config.get('showdown', {}).get('ownership_salary_weight', 0.3)
+    print(f"  Candidate lineups: {n_lineups:,}")
+
+    # Get heuristic player ownership with FIXED concentration
+    alpha = 3.0  # Changed from 2.0 - better flex concentration
+    salary_weight = 0.2  # Changed from 0.3 - less salary emphasis
+    captain_concentration = 4.0  # NEW - proper captain concentration
 
     player_ownership = get_player_ownership_heuristic(
         session,
         pid_to_col,
         alpha=alpha,
         salary_weight=salary_weight,
+        captain_concentration=captain_concentration,
     )
 
-    print(f"  Using heuristic ownership (alpha={alpha}, salary_weight={salary_weight})")
     print(f"  Ownership range: [{player_ownership.min():.2f}%, {player_ownership.max():.2f}%], "
           f"mean={player_ownership.mean():.2f}%")
     
-    # Compute features for model (returns features + diagnostics)
-    X, feature_diagnostics = compute_lineup_features_for_model(
-        lineup_ids=lineup_ids,
+    # ================================================================
+    # PREDICT DUPLICATION BASED ON MODEL MODE
+    # ================================================================
+    
+    if model_mode == 'two_stage':
+        print(f"\n↓ Using TWO-STAGE hierarchical model...")
+        
+        # Compute contest features from the candidate lineup pool
+        contest_features = compute_contest_features_from_lineups(
+            L=L,
+            player_ownership=player_ownership,
+            total_entries=total_entries,
+            n_lineups=n_lineups,
+        )
+        
+        print(f"  Contest features:")
+        print(f"    Field density: {contest_features['field_density']:.3f}")
+        print(f"    Ownership Gini: {contest_features['ownership_gini']:.3f}")
+        print(f"    Projection std: {contest_features['projection_std']:.3f}")
+        
+        predicted_dupes = predict_lineups_with_twostage(
+            session=session,
+            L=L,
+            lineup_ids=lineup_ids,
+            spends=spends,
+            cpt_col_by_row=cpt_col_by_row,
+            player_ownership=player_ownership,
+            total_entries=total_entries,
+            models=models,
+            contest_features=contest_features,
+        )
+    else:
+        print(f"\n↓ Using LEGACY single-stage model...")
+        X = compute_lineup_features_for_model(
+            lineup_ids=lineup_ids,
+            L=L,
+            spends=spends,
+            cpt_col_by_row=cpt_col_by_row,
+            player_ownership=player_ownership,
+            total_entries=total_entries,
+            verbose=False,
+        )
+        X_scaled = models['scaler'].transform(X)
+        predicted_dupes = models['dupe_model'].predict(X_scaled)
+        predicted_dupes = np.expm1(predicted_dupes)  # Convert from log space
+        predicted_dupes = np.clip(predicted_dupes, 1.0, None)  # Minimum 1 dupe
+    
+    # Use unified diversity-gated duplication sampler
+    counts_by_lineup, meta = sample_showdown_field_unified(
+        session=session,
+        field_size=field_size,
         L=L,
+        lineup_ids=lineup_ids,
         spends=spends,
+        pid_to_col=pid_to_col,
         cpt_col_by_row=cpt_col_by_row,
-        P_indep=P_indep,
+        predicted_dupes=predicted_dupes,  # NEW: pass predicted dupes directly
         player_ownership=player_ownership,
         total_entries=total_entries,
-        entry_fee=entry_fee,
-        ownership_gini=ownership_gini,
-        verbose=True,  # Enable detailed logging
     )
     
-    # Unpack diagnostics
-    per_player_mean = feature_diagnostics['per_player_mean']
-    mean_proj = feature_diagnostics['mean_proj']
-    lineup_total_ownership = feature_diagnostics['lineup_total_ownership']
-    
-    # Scale and predict
-    X_scaled = scaler.transform(X)
-    predicted_dupes = dupe_model.predict(X_scaled)
-    predicted_dupes = np.clip(predicted_dupes, 0.01, None)
-    
-    print(f"  Predicted duplicates: min={predicted_dupes.min():.2f}, "
-          f"mean={predicted_dupes.mean():.2f}, max={predicted_dupes.max():.2f}")
-    
-    # Show top predicted lineups BEFORE sampling
-    print("\n" + "="*70)
-    print("TOP 10 PREDICTED DUPLICATIONS (before sampling)")
-    print("="*70)
-    top_predicted_idx = np.argsort(predicted_dupes)[-10:][::-1]
-    
-    feature_names = ['log_entries', 'entry_fee', 'own_gini', 'corr', 'same_team', 
-                     'qb_wr', 'rb_dst', 'cpt_own_pct', 'proj_pct', 'total_own_pct',
-                     'sal_rem_pct', 'cpt_x_own', 'near_cap', 'chalk']
-    
-    for rank, idx in enumerate(top_predicted_idx, 1):
-        lid = lineup_ids[idx]
-        pred = predicted_dupes[idx]
-        
-        # Get captain info
-        cpt_col = cpt_col_by_row[idx]
-        if cpt_col >= 0:
-            cpt_own_raw = player_ownership[cpt_col]
-            cpt_proj_raw = per_player_mean[cpt_col]
-            total_own_raw = lineup_total_ownership[idx]
-            proj_raw = mean_proj[idx]
-            
-            # Get percentile features from X
-            cpt_own_pct = X[idx, 7]  # cpt_own_pct is 8th feature (index 7)
-            proj_pct = X[idx, 8]
-            total_own_pct = X[idx, 9]
-            
-            print(f"#{rank:2d} | LU {lid:5d} | Pred: {pred:6.1f} dupes")
-            print(f"     Raw: CPT_own={cpt_own_raw:5.1f}% | CPT_proj={cpt_proj_raw:5.1f} | "
-                  f"Total_own={total_own_raw:6.1f} | Proj={proj_raw:5.1f}")
-            print(f"     Pct: CPT_own={cpt_own_pct:.3f} | Proj={proj_pct:.3f} | "
-                  f"Total_own={total_own_pct:.3f}")
-            print(f"     Features: {' | '.join([f'{name}={X[idx, i]:.2f}' for i, name in enumerate(feature_names)])}")
-            print()
-    print("="*70 + "\n")
-    
-    # Convert predictions to sampling weights
-    weights = predicted_dupes / predicted_dupes.sum()
-    
-    # Sample field with replacement
+    # Add metadata
+    meta['model_path'] = str(model_dir)
+    meta['model_mode'] = model_mode
+    meta['contest_params'] = {
+        'total_entries': total_entries,
+    }
+
+    return counts_by_lineup, meta
+
+# ==============================================================================
+# LEARNED CLASSIC SAMPLER (MODEL-BASED DISTRIBUTION PREDICTION)
+# ==============================================================================
+
+def sample_classic_field_learned(
+    session: Session,
+    field_size: int,
+    config: dict,
+    contest_id: Optional[int] = None,
+    total_entries: Optional[int] = None,
+    entry_fee: Optional[float] = None,
+    num_games: Optional[int] = None,
+    ownership_gini: Optional[float] = None,
+    model_dir: str | Path = "data/nfl/models",
+) -> Tuple[Dict[int, int], Dict]:
+    """
+    Model-based classic field sampler.
+
+    Strategy:
+    1. Load trained Random Forest regressors (projection & ownership distributions)
+    2. Predict distribution shapes based on contest parameters
+    3. Sample lineups with replacement matching predicted distributions
+    4. Natural duplication occurs when distributions are concentrated
+
+    Reuses the proven MLB pattern for NFL Classic contests.
+    """
+    import pickle
+    from pathlib import Path
+
+    def _get(d: dict, path: List[str], default=None):
+        """Helper to safely navigate nested config dicts."""
+        cur = d
+        for k in path:
+            if not isinstance(cur, dict) or k not in cur:
+                return default
+            cur = cur[k]
+        return cur
+
+    def _calculate_gini(values: List[float]) -> float:
+        """Calculate Gini coefficient for ownership concentration."""
+        if not values or len(values) < 2:
+            return 0.0
+        sorted_values = np.array(sorted(values))
+        n = len(sorted_values)
+        index = np.arange(1, n + 1)
+        return float((2 * np.sum(index * sorted_values)) / (n * np.sum(sorted_values)) - (n + 1) / n)
+
+    # Load trained models
+    model_dir = Path(model_dir)
+    try:
+        with open(model_dir / "classic_proj_model.pkl", "rb") as f:
+            proj_model = pickle.load(f)
+        with open(model_dir / "classic_own_model.pkl", "rb") as f:
+            own_model = pickle.load(f)
+        with open(model_dir / "classic_scaler.pkl", "rb") as f:
+            scaler = pickle.load(f)
+        with open(model_dir / "classic_bin_edges.pkl", "rb") as f:
+            bin_edges = pickle.load(f)
+    except FileNotFoundError:
+        print(f"  ⚠️  Models not found in {model_dir}")
+        print("  Run: python -m ivan.sports.nfl.build_models")
+        return {}, {'error': 'models_not_found'}
+
+    # Build lineup matrix
+    L, lineup_ids, spends, pid_to_col, _, _ = build_lineup_matrix(session)
+    n_lineups, n_players = L.shape
+
+    if n_lineups == 0:
+        print("  WARNING: No lineups found in database")
+        return {}, {'error': 'no_lineups'}
+
+    print(f"  Candidate lineups: {n_lineups:,}")
+
+    # Calculate ownership_gini and num_games from NFLPlayers if not provided
+    if ownership_gini is None or num_games is None:
+        players = session.query(
+            NFLPlayer.ownership_proj,
+            NFLPlayer.team,
+        ).all()
+
+        # Calculate ownership_gini from ownership_proj values
+        if ownership_gini is None:
+            ownership_values = [p.ownership_proj or 0.0 for p in players if p.ownership_proj is not None]
+            if ownership_values:
+                ownership_gini = _calculate_gini(ownership_values)
+                print(f"  Calculated ownership_gini: {ownership_gini:.4f} from {len(ownership_values)} players")
+            else:
+                ownership_gini = 0.5
+                print(f"  No ownership data found, using default ownership_gini: {ownership_gini}")
+
+        # Calculate num_games from unique gametimes
+        if num_games is None:
+            teams = set(p.team for p in players if p.team is not None)
+            num_games = len(teams) / 2
+            print(f"  Calculated num_games: {num_games} unique gametimes")
+
+    # Get player projections for weighting
+    P = build_player_samples(session, pid_to_col)
+    per_player_mean = np.asarray(P.mean(axis=0), dtype=np.float64)
+    lineup_proj_raw = np.asarray(L @ per_player_mean, dtype=np.float64)
+
+    # Get player ownership for weighting
+    pid_to_col_inv = {v: k for k, v in pid_to_col.items()}
+    player_ownership = get_player_ownership(session, pid_to_col)
+    lineup_own_raw = np.asarray(L @ player_ownership, dtype=np.float64)
+
+    # Prepare feature vector for model
+    # Features: [total_entries, entry_fee, num_games, ownership_gini]
+    X_test = np.array([
+        [
+            total_entries or field_size,
+            entry_fee or 1.0,
+            num_games or 1,
+            ownership_gini or 0.5,
+        ]
+    ]).astype(float)
+
+    # Scale features
+    X_test_scaled = scaler.transform(X_test)
+
+    # Predict distributions
+    proj_probs = proj_model.predict(X_test_scaled)[0]  # [BINS]
+    own_probs = own_model.predict(X_test_scaled)[0]   # [BINS]
+
+    # Ensure valid probabilities
+    proj_probs = np.clip(proj_probs, 0.0, None)
+    own_probs = np.clip(own_probs, 0.0, None)
+    if proj_probs.sum() > 0:
+        proj_probs = proj_probs / proj_probs.sum()
+    else:
+        proj_probs = np.ones_like(proj_probs) / len(proj_probs)
+    if own_probs.sum() > 0:
+        own_probs = own_probs / own_probs.sum()
+    else:
+        own_probs = np.ones_like(own_probs) / len(own_probs)
+
+    print(f"  Predicted distributions:")
+    print(f"    Projection: {proj_probs[:3]}... (first 3 bins)")
+    print(f"    Ownership:  {own_probs[:3]}... (first 3 bins)")
+
+    # Normalize lineup projections and ownerships to [0, 1]
+    if lineup_proj_raw.max() > lineup_proj_raw.min():
+        proj_norm = (lineup_proj_raw - lineup_proj_raw.min()) / (lineup_proj_raw.max() - lineup_proj_raw.min())
+    else:
+        proj_norm = np.full_like(lineup_proj_raw, 0.5)
+
+    if lineup_own_raw.max() > lineup_own_raw.min():
+        own_norm = (lineup_own_raw - lineup_own_raw.min()) / (lineup_own_raw.max() - lineup_own_raw.min())
+    else:
+        own_norm = np.full_like(lineup_own_raw, 0.5)
+
+    # Assign each lineup to bins
+    BINS = len(bin_edges) - 1
+    proj_bins = np.clip(np.digitize(proj_norm, bin_edges) - 1, 0, BINS - 1)
+    own_bins = np.clip(np.digitize(own_norm, bin_edges) - 1, 0, BINS - 1)
+
+    # Combine probabilities: use product (both must match)
+    # For each lineup i, weight = proj_prob[bin_i] * own_prob[bin_i]
+    weights = np.zeros(n_lineups, dtype=np.float64)
+    for i in range(n_lineups):
+        weights[i] = proj_probs[proj_bins[i]] * own_probs[own_bins[i]]
+
+    # Ensure nonzero weights
+    weights = np.clip(weights, 1e-12, None)
+    weights = weights / weights.sum()
+
+    print(f"  Weight stats: min={weights.min():.2e}, mean={weights.mean():.2e}, max={weights.max():.2e}")
+
+    # Sample with replacement
     rng = np.random.default_rng(42)
     sampled_indices = rng.choice(n_lineups, size=field_size, replace=True, p=weights)
-    
+
     # Count duplicates
+    from collections import Counter
     counts = Counter(sampled_indices)
     counts_by_lineup = {int(lineup_ids[i]): int(count) for i, count in counts.items()}
-    
+
     # Diagnostics
     unique_selected = len(counts)
     actual_dupes = np.array(list(counts.values()))
-    
+
     meta = {
-        'sampler': 'showdown_learned',
-        'model_path': str(model_dir),
+        'sampler': 'classic_learned_model',
         'total_candidate_lineups': n_lineups,
         'unique_selected': unique_selected,
         'uniqueness_rate': unique_selected / field_size,
-        'predicted_dupes': {
-            'min': float(predicted_dupes.min()),
-            'max': float(predicted_dupes.max()),
-            'mean': float(predicted_dupes.mean()),
-        },
         'actual_dupes': {
             'min': int(actual_dupes.min()),
             'max': int(actual_dupes.max()),
@@ -1216,172 +1485,16 @@ def sample_showdown_field_learned(
         'contest_params': {
             'total_entries': total_entries,
             'entry_fee': entry_fee,
+            'num_games': num_games,
             'ownership_gini': ownership_gini,
-        }
+        },
     }
-    
+
     print(f"  ✓ Sampled field: {unique_selected:,} unique lineups "
           f"({meta['uniqueness_rate']:.1%})")
     print(f"  Duplicate range: {actual_dupes.min()}-{actual_dupes.max()} "
           f"(mean={actual_dupes.mean():.1f})")
-    
-    return counts_by_lineup, meta
 
-# ==============================================================================
-# HEURISTIC SAMPLER (SHOWDOWN)
-# ==============================================================================
-
-def _percentile_rank(values: np.ndarray, ref: np.ndarray) -> np.ndarray:
-    """
-    Calculate percentile rank of each value vs reference array.
-    Returns values in [0, 1].
-    """
-    ref_sorted = np.sort(ref[~np.isnan(ref)])
-    if ref_sorted.size <= 1 or np.allclose(ref_sorted[0], ref_sorted[-1]):
-        return np.full_like(values, 0.5, dtype=np.float64)
-    
-    idx = np.searchsorted(ref_sorted, values, side="right")
-    return np.clip(idx / ref_sorted.size, 0.0, 1.0).astype(np.float64)
-
-
-def _normalize_probs(w: np.ndarray, size: int) -> np.ndarray | None:
-    """Convert non-negative weights to valid probability vector."""
-    p = np.asarray(w, dtype=np.float64).copy()
-    p[~np.isfinite(p)] = 0.0
-    p = np.clip(p, 0.0, None)
-    
-    s = p.sum()
-    if s <= 0.0:
-        return None
-    
-    p /= s
-    
-    # Force exact sum=1.0
-    residual = 1.0 - p.sum()
-    if abs(residual) > 1e-12:
-        j = int(np.argmax(p))
-        p[j] += residual
-        if p[j] < 0.0:
-            return None
-    
-    return p
-
-
-def sample_showdown_field_heuristic(
-    session: Session,
-    field_size: int,
-    config: dict,
-) -> Tuple[Dict[int, int], Dict]:
-    """
-    Heuristic showdown sampler with captain-aware weighting.
-    
-    Strategy:
-    1. Bin lineups by salary remaining
-    2. Within each bin, weight by:
-       - Projection strength (ALPHA)
-       - Captain popularity (BETA)
-       - Template penalty (GAMMA, TAU) - penalizes chalk flex + weak captain
-    """
-    L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row = \
-        build_lineup_matrix(session)
-    
-    n_lineups = L.shape[0]
-    remaining = (SALARY_CAP - spends).astype(np.int32)
-
-    # Build salary bins
-    bins = list(SALARY_PRIOR)
-    bin_masks = [(remaining >= lo) & (remaining < hi) for lo, hi, _ in bins]
-
-    # Get player samples and projections
-    P = build_player_samples(session, pid_to_col)
-    per_player_mean = np.asarray(P.mean(axis=0), dtype=np.float64)
-    mean_proj = np.asarray(L @ per_player_mean, dtype=np.float64)
-
-    # Captain percentiles
-    valid_cpt_cols = np.unique(cpt_col_by_row[cpt_col_by_row >= 0])
-    cpt_ref = per_player_mean[valid_cpt_cols] if valid_cpt_cols.size else np.array([np.nan])
-    
-    cpt_means = np.full(n_lineups, np.nan, dtype=np.float64)
-    mask_has_cpt = cpt_col_by_row >= 0
-    cpt_means[mask_has_cpt] = per_player_mean[cpt_col_by_row[mask_has_cpt]]
-    
-    cpt_pct = np.zeros(n_lineups, dtype=np.float64)
-    if np.isfinite(cpt_ref).any():
-        cpt_pct = _percentile_rank(np.nan_to_num(cpt_means, nan=np.nanmin(cpt_ref)), cpt_ref)
-
-    # FLEX chalk score (mean of top-3 FLEX projection percentiles)
-    all_flex_cols = np.array(sorted({c for cols in flex_cols_by_row for c in cols}), 
-                            dtype=np.int32)
-    flex_ref = per_player_mean[all_flex_cols] if all_flex_cols.size else np.array([np.nan])
-
-    player_pct_global = np.zeros_like(per_player_mean, dtype=np.float64)
-    if np.isfinite(flex_ref).any():
-        player_pct_global = _percentile_rank(per_player_mean, flex_ref)
-
-    flex_topk_mean_pct = np.zeros(n_lineups, dtype=np.float64)
-    for i, cols in enumerate(flex_cols_by_row):
-        if not cols:
-            flex_topk_mean_pct[i] = 0.0
-            continue
-        vals = player_pct_global[cols]
-        if vals.size <= 3:
-            flex_topk_mean_pct[i] = float(vals.mean())
-        else:
-            flex_topk_mean_pct[i] = float(np.sort(vals)[-3:].mean())
-
-    counts = np.zeros(n_lineups, dtype=np.int64)
-
-    # Allocate entries across bins
-    weights = np.array([w for _, _, w in bins], dtype=np.float64)
-    has_any = np.array([m.any() for m in bin_masks], dtype=bool)
-    
-    if not has_any.any():
-        raise RuntimeError("No lineups in any salary bin. Check SALARY_PRIOR.")
-    
-    w_avail = weights * has_any.astype(np.float64)
-    if w_avail.sum() <= 0:
-        w_avail = has_any.astype(np.float64)
-    w_avail /= w_avail.sum()
-
-    idx_per_bin = [np.where(m)[0] for m in bin_masks]
-    draws_per_bin = np.random.multinomial(int(field_size), w_avail)
-
-    # Sample within each bin
-    for b, n_draws in enumerate(draws_per_bin):
-        if n_draws <= 0:
-            continue
-        
-        idxs = idx_per_bin[b]
-        if idxs.size == 0:
-            continue
-
-        # Captain-aware weighting formula
-        base = np.maximum(mean_proj[idxs], 0.0)
-        cpt_term = np.power(np.clip(cpt_pct[idxs], 0.0, 1.0), BETA)
-        
-        # Template penalty: chalk FLEX + weak captain = bad
-        template_penalty = np.exp(
-            -GAMMA * np.maximum(0.0, flex_topk_mean_pct[idxs] - TAU) * (1.0 - cpt_pct[idxs])
-        )
-
-        w = np.power(base, ALPHA) * cpt_term * template_penalty
-
-        probs = _normalize_probs(w, idxs.size)
-        if probs is None:
-            probs = np.full(idxs.size, 1.0 / idxs.size, dtype=np.float64)
-
-        picks = np.random.choice(idxs.size, size=int(n_draws), replace=True, p=probs)
-        np.add.at(counts, idxs[picks], 1)
-
-    counts_by_lineup = {int(lineup_ids[i]): int(counts[i]) for i in range(n_lineups)}
-    
-    meta = {
-        "sampler": "showdown_heuristic",
-        "params": {"ALPHA": ALPHA, "BETA": BETA, "GAMMA": GAMMA, "TAU": TAU},
-        "unique_selected": int((counts > 0).sum()),
-        "mean_proj_stats": {"mean": float(mean_proj.mean()), "std": float(mean_proj.std())},
-    }
-    
     return counts_by_lineup, meta
 
 # ==============================================================================

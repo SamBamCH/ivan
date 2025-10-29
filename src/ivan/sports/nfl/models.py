@@ -476,38 +476,44 @@ class ProjectionSnapshot(NFLBase):
 class ClassicContestMetadata(NFLBase):
     """
     Contest-level metadata and distribution parameters for Classic contests.
-    Stores KDE parameters for projection and ownership distributions.
+    Stores normalized histogram data for projection and ownership distributions.
+    Used to train models that predict field distributions based on contest parameters.
     """
     __tablename__ = "classic_contest_metadata"
-    
+
     contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
                        primary_key=True)
-    
+
     # Contest info
     date = Column(DateTime, nullable=False)
     total_entries = Column(Integer, nullable=False)
     entry_fee = Column(Float, nullable=False)
-    
+    num_games = Column(Integer, nullable=True)  # Number of games on slate
+
+    # Ownership concentration metric
+    ownership_gini = Column(Float, nullable=True)  # Gini coefficient [0-1]
+
     # Normalization bounds (for converting raw values to 0-1)
     min_projection = Column(Float, nullable=True)
     max_projection = Column(Float, nullable=True)
     min_ownership = Column(Float, nullable=True)
     max_ownership = Column(Float, nullable=True)
-    
-    # KDE Distribution data (stored as JSON arrays)
-    projection_kde_samples = Column(JSON, nullable=True)  # Array of normalized projection sums
-    ownership_kde_samples = Column(JSON, nullable=True)   # Array of normalized ownership sums
-    
+
+    # Histogram bins (BINS=20 fixed-width bins [0-1])
+    # Each entry is a count, normalized to sum to 1.0
+    hist_proj_counts = Column(JSON, nullable=True)  # 20-bin normalized projection distribution
+    hist_own_counts = Column(JSON, nullable=True)   # 20-bin normalized ownership distribution
+
     # Distribution statistics
     projection_mean = Column(Float, nullable=True)
     projection_std = Column(Float, nullable=True)
     ownership_mean = Column(Float, nullable=True)
     ownership_std = Column(Float, nullable=True)
-    
-    # Optional: salary and stacking patterns
+
+    # Field statistics
     salary_remaining_mean = Column(Float, nullable=True)
-    top_stack_patterns = Column(JSON, nullable=True)  # {"4-2-2-1": 0.25, ...}
-    
+    top_stack_patterns = Column(JSON, nullable=True)
+
     processed_at = Column(DateTime, default=datetime.utcnow)
     
 

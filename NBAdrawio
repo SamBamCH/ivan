@@ -1,0 +1,116 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.2.5 Chrome/138.0.7204.251 Electron/37.6.1 Safari/537.36" version="28.2.5">
+  <diagram name="fpts projection flow" id="5io_yqLS5y7OWPzkHupo">
+    <mxGraphModel dx="1665" dy="963" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="3aH-_368MjHxqslZHGdV-7" value="player" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="610" y="50" width="580" height="990" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-14" value="for player in NBAPlayer:" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-7">
+          <mxGeometry x="70" y="60" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-40" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-7" source="3aH-_368MjHxqslZHGdV-37" target="3aH-_368MjHxqslZHGdV-39">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-37" value="calculate fpts by sim &#39;run&#39; after reordering" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-7">
+          <mxGeometry x="40" y="465" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-39" value="fit and store fpts distribution based on these samples (assume normality?)" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-7">
+          <mxGeometry x="40" y="550" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="3aH-_368MjHxqslZHGdV-8" target="3aH-_368MjHxqslZHGdV-10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-8" value="lineup" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="50" width="580" height="990" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-10" value="contest" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="1850" y="50" width="500" height="990" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-12" value="stat" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="80" y="50" width="530" height="990" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-15" target="3aH-_368MjHxqslZHGdV-17">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-15" value="pull all odds matching player name" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="315" y="130" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-17" target="3aH-_368MjHxqslZHGdV-19">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-21" value="WHILE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="3aH-_368MjHxqslZHGdV-20">
+          <mxGeometry x="-0.0963" y="1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-33" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-17" target="3aH-_368MjHxqslZHGdV-32">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="460" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-34" value="FINALLY" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="3aH-_368MjHxqslZHGdV-33">
+          <mxGeometry x="-0.1172" y="4" relative="1" as="geometry">
+            <mxPoint x="-4" y="11" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-17" value="for stat in stats to model:" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="315" y="230" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-23" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-19" target="3aH-_368MjHxqslZHGdV-22">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-19" value="filter down odds for just this stat" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="250" y="360" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-22" target="3aH-_368MjHxqslZHGdV-24">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-22" value="group by point, build concensus estimates for each line and remove sparse lines?" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="250" y="450" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-27" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-24" target="3aH-_368MjHxqslZHGdV-26">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-24" value="build stat distribution for player based on historical data filtered for only player (fallback to all starters?)" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="250" y="540" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-29" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-26" target="3aH-_368MjHxqslZHGdV-28">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-26" value="adjust historical distribution to pass through known points (making lines that have more odds &#39;stronger&#39; in the prediction)" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="250" y="650" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-30" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-28" target="3aH-_368MjHxqslZHGdV-17">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="180" y="780" />
+              <mxPoint x="180" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-28" value="store params for player/stat" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="250" y="750" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-36" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="3aH-_368MjHxqslZHGdV-12" source="3aH-_368MjHxqslZHGdV-32" target="3aH-_368MjHxqslZHGdV-35">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-32" value="sample all stats for player" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="400" y="380" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-35" value="adjust samples to match historical rank order correlation for position/stat" style="whiteSpace=wrap;html=1;" vertex="1" parent="3aH-_368MjHxqslZHGdV-12">
+          <mxGeometry x="400" y="465" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="3aH-_368MjHxqslZHGdV-14" target="3aH-_368MjHxqslZHGdV-15">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="3aH-_368MjHxqslZHGdV-38" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="3aH-_368MjHxqslZHGdV-35" target="3aH-_368MjHxqslZHGdV-37">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

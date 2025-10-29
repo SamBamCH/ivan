@@ -1,0 +1,14 @@
+{
+  "database_url": "sqlite:////home/sam-pratt/ivan/data/nba/nba_history.sqlite",
+  "market_weights": "/home/sam-pratt/ivan/data/nba/models/market_weights.json",
+  "paths": {
+    "entries_csv": "/home/sam-pratt/ivan/data/nba/input/entries.csv"
+  },
+  "solver": {
+    "glpk_path": "/home/sam-pratt/ivan/glpk-4.65/w64/glpsol.exe"
+  },         
+  "min_salary": 49000,
+  "max_salary": 50000,
+  "max_salary_per_team": 20000,
+  "randomness": 1
+}

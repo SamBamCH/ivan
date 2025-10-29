@@ -218,9 +218,8 @@ def generate_single_showdown_lineup_ilp(
     if int(min_k_or_dst) > 0 and k_dst_ids:
         prob += plp.lpSum(x[i] for i in k_dst_ids) >= int(min_k_or_dst), "MinK_or_DST"
 
-    # Objective: 1.5x for CPT rows; add tiny salary tiebreak to stay near cap
     score = plp.lpSum(
-        (1.5 if roster_slot_by_id.get(i) == CPT else 1.0) * float(base_scores.get(i, 0.0)) * x[i]
+        float(base_scores.get(i, 0.0)) * x[i]
         for i in players_by_id
     )
     prob += score + 1e-4 * (salary_expr / float(max(1, int(cap)))), "ScorePlusSalaryTiebreak"
@@ -510,7 +509,14 @@ def generate_and_store_field_lineups(
         roster_slot_by_id[rp.id] = int(getattr(rp, "roster_slot_id", 0) or 0)
 
 
-    samples = generate_correlated_samples_gaussian(session, n_samples=max(5000, num_lineups*2))
+    # Get randomness from config (default 1.0 = full distribution)
+    randomness = float(_cfg(config, "randomness", 1.0))
+
+    samples = generate_correlated_samples_gaussian(
+        session,
+        n_samples=max(5000, num_lineups*2),
+        randomness=randomness
+    )
     slate_type = _infer_slate_type(roster_slot_by_id)
 
     # ---- 2) infer slate type, and choose branch ----

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from ivan.sports.nfl.historical_contest import process_contest
 from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe
 from ivan.database.session import init_db, get_session
-from ivan.sports.nfl.models import ShowdownContestMetadata, HistoricalContest
+from ivan.sports.nfl.models import ShowdownContestMetadata, HistoricalContest, ClassicContestMetadata
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def run_pipeline(
     user_data_dir: str = None,
     profile_directory: str = None,
     headless: bool = False,
-    days_back: int = 7,
+    days_back: int = 2,
 ):
     """
     Main pipeline to process showdown contests.
@@ -146,18 +146,22 @@ def run_pipeline(
         headless=headless,
     )
     
-    # Find unprocessed showdown contests
+    # Find unprocessed contests
     now = datetime.utcnow()
     cutoff = now - timedelta(days=days_back)
-    
-    processed_contests = session.query(ShowdownContestMetadata.contest_id).subquery()
-    
+
+    # Query both processed showdown and classic contests to exclude them
+    processed_showdown = session.query(ShowdownContestMetadata.contest_id).subquery()
+    processed_classic = session.query(ClassicContestMetadata.contest_id).subquery()
+
     to_process = (
         session.query(HistoricalContest)
         .filter(
             HistoricalContest.date >= cutoff,
             HistoricalContest.date <= now,
-            ~HistoricalContest.contest_id.in_(processed_contests),
+            ~HistoricalContest.contest_id.in_(processed_showdown),
+            ~HistoricalContest.contest_id.in_(processed_classic),
+            HistoricalContest.total_entries >= 10000,  # Filter by minimum entries
         )
         .order_by(HistoricalContest.date.desc())
         .all()
@@ -194,6 +198,8 @@ def run_pipeline(
     
     # Combine showdown (all) and classic (filtered) contests
     to_process = showdown_contests + filtered_classic_contests
+
+    to_process = to_process #added just for testing
     
     log.info(f"Will process {len(showdown_contests)} showdown contests + "
              f"{len(filtered_classic_contests)} classic contests = "
@@ -205,7 +211,6 @@ def run_pipeline(
         
         try:
             df = download_contest_dataframe(sess, hc.contest_id)
-            print(df)
             
             if df is None or df.empty:
                 log.warning(f"Skipping contest {hc.contest_id}: no data")

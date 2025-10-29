@@ -16,7 +16,6 @@ def main():
     # initialize engine + session factory
     cfg    = json.load(open(CONFIG_PATH, encoding='utf-8'))
     engine = init_db('nfl', cfg.get('database_url'))
-    Base.metadata.create_all(engine)
     sess   = get_session(engine)
 
     try:

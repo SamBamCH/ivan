@@ -1,11 +1,18 @@
-create models file
-create historical stats table in DB
-populate historical stats
-player ingestion from DK
-contest id setup from DK
-contest payouts from DK
-build historical models that take stokastic projections as inputs
-    generalized by salary, or have some other way to group players better?
+use those odds to adjust marginals for each stat
+
+use correlation for same player/game different stats to covariate tails. 
+
+contest_id DB setup
+contest_id fetch from DK
+payout DB setup
+contest_payout fetch from DK
+
+#once the above is done, should have median projections, distributions for all players on the slate, and contest_ids/payouts. 
+
+Now, generate_lineups
+    build lineup database
+
+
 
 
 

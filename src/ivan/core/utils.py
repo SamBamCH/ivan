@@ -94,7 +94,8 @@ _NAME_OVERRIDES = {
     'kyle pitts sr': 'kyle pitts',
     'scotty miller': 'scott miller',
     'russell gage jr': 'russell gage',
-    'chris godwin jr': 'chris godwin'
+    'chris godwin jr': 'chris godwin',
+    'aaron jones sr': 'aaron jones'
     # add more mappings as needed...
 }
 
@@ -130,7 +131,37 @@ _TEAM_RENAME_DICT = {
             'Denver Broncos': 'DEN',
             'Pittsburgh Steelers': 'PIT',
             'Atlanta Falcons': 'ATL',
-            'Philadelphia Eagles': 'PHI'
+            'Philadelphia Eagles': 'PHI', 
+            'Oklahoma City Thunder': 'OKC', 
+            'Houston Rockets': 'HOU', 
+            'Los Angeles Lakers': 'LAL', 
+            'Golden State Warriors': 'GSW', 
+            'Charlotte Hornets': 'CHA', 
+            'Brooklyn Nets': 'BKN', 
+            'New York Knicks': 'NYK', 
+            'Cleveland Cavaliers': 'CLE', 
+            'Orlando Magic': 'ORL', 
+            'Miami Heat': 'MIA', 
+            'Atlanta Hawks': 'ATL', 
+            'Toronto Raptors': 'TOR', 
+            'Boston Celtics': 'BOS', 
+            'Philadelphia 76ers': 'PHI', 
+            'Chicago Bulls': 'CHI', 
+            'Detroit Pistons': 'DET', 
+            'Memphis Grizzlies': 'MEM', 
+            'New Orleans Pelicans': 'NOP', 
+            'Milwaukee Bucks': 'MIL', 
+            'Washington Wizards': 'WAS', 
+            'Utah Jazz': 'UTA', 
+            'Los Angeles Clippers': 'LAC', 
+            'Dallas Mavericks': 'DAL', 
+            'San Antonio Spurs': 'SAS', 
+            'Portland Trail Blazers': 'POR', 
+            'Minnesota Timberwolves': 'MIN',
+            'Phoenix Suns': 'PHX',
+            'Sacramento Kings': 'SAC',
+            'Indiana Pacers': 'IND',
+            'Denver Nuggets': 'DEN', 
         }
 
 def normalize_name(name: str) -> str:

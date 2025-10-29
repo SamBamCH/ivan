@@ -34,7 +34,7 @@ from ivan.core.utils import normalize_name
 DST_POS = {"DST", "D/ST", "DEF"}
 
 # Kicker defaults (fallback if calibration file not available)
-KICKER_DEFAULT_SHAPE = 7.3
+KICKER_DEFAULT_SHAPE = 7.7
 KICKER_DEFAULT_SCALE = 1.2
 _KICKER_PARAMS_CACHE: dict | None = None
 
@@ -115,8 +115,8 @@ def _simple_td_alpha(pos: str) -> float:
 # Role mapping from anytime TD
 # Calibrated from historical data: 25th percentile of volume-based usage
 ROLE_MIN = 0.01
-ROLE_MAX = 0.20  # Lowered from 0.50 to prevent overprojecting backup players
-ROLE_BETA = 1.1
+ROLE_MAX = 0.25  # Lowered from 0.50 to prevent overprojecting backup players
+ROLE_BETA = 1.5
 
 BUCKET_STEP = 0.5   # most props are on .5 increments; change if needed
 

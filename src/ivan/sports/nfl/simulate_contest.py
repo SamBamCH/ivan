@@ -549,7 +549,7 @@ def simulate_one_contest(
         field_size=capped_field_sz,
         config=cfg,
         mode=mode,
-        use_classic_dupes=use_classic_dupes,  # always allow dupes in NFL
+        use_classic_dupes=use_classic_dupes, 
     )
     total = sum(counts_by_lineup.values())
     assert total == capped_field_sz, (total, capped_field_sz)
