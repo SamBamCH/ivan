@@ -327,7 +327,7 @@ def project_ownership(
         
         try:
             if slate_type == 'showdown':
-                field_size=50000
+                field_size=15000
                 counts_by_lineup, meta = sample_showdown_field_learned(
                     session=session,
                     field_size=field_size,

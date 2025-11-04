@@ -11,11 +11,16 @@ import logging
 from dateutil import parser
 import re
 from sqlalchemy import delete
+from datetime import timezone, datetime
+import pytz
 
 
 logging.basicConfig(level=logging.DEBUG, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
 
 _TEAM_RE = re.compile(r"\b[A-Z]{2,3}\b")
+
+# Define your local timezone (Central Time)
+LOCAL_TZ = pytz.timezone('America/Chicago')
 
 def _extract_matchup_teams(comp: dict[str, object]) -> tuple[str|None, str|None]:
     """
@@ -75,13 +80,52 @@ def _derive_opponent_for_player(team: str|None, comp: dict) -> str|None:
     # If team didn't match either side (rare formatting issues), give up gracefully
     return None
 
+def _parse_gametime_to_local(start_time_str: str|None) -> object|None:
+    """
+    Parse ISO format datetime string and convert to local timezone.
+    Assumes the input is in UTC if no timezone info is present.
+    """
+    if not start_time_str:
+        return None
+    
+    try:
+        # Parse the datetime string
+        dt = parser.isoparse(start_time_str)
+        
+        # If no timezone info, assume UTC
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        
+        # Convert to local timezone
+        local_dt = dt.astimezone(LOCAL_TZ)
+        
+        return local_dt
+    except Exception as e:
+        logging.warning(f"Failed to parse datetime '{start_time_str}': {e}")
+        return None
+
 def main():
     engine = init_db("nba", None)
     session = get_session(engine)
 
-    session.execute(delete(NBAPlayer))
-    session.execute(delete(NBAPlayer))
+    # Get current time in UTC (database likely stores UTC)
+    now = datetime.now(timezone.utc)
+    
+    # Check for unlocked games (games that haven't started yet)
+    unlocked_games = session.query(NBAPlayer).filter(NBAPlayer.gametime > now).all()
+    
+    if unlocked_games:
+        # Only delete unlocked games
+        logging.info(f"Found {len(unlocked_games)} unlocked games. Deleting only unlocked games.")
+        session.query(NBAPlayer).filter(NBAPlayer.gametime > now).delete(synchronize_session=False)
+    else:
+        # All games are locked, clear everything
+        logging.info("All games are locked. Clearing all NBAPlayer records.")
+        session.execute(delete(NBAPlayer))
+    
     session.commit()
+    # Clear the session to remove references to deleted objects
+    session.expunge_all()
 
     contests = fetch_all_contests("nba")
     slate_info = summarize_slates(contests)
@@ -124,6 +168,9 @@ def main():
         if team: relevant_teams.add(team)
         if opp:  relevant_teams.add(team)
 
+        # Parse gametime and convert to local timezone
+        gametime = _parse_gametime_to_local(comp.get("startTime"))
+
         dbp = NBAPlayer(
             id              = p.get("draftableId"),
             name            = player_name,
@@ -131,7 +178,7 @@ def main():
             opponent        = opp,
             position        = p.get("position"),
             roster_slot_id  = p.get("rosterSlotId"),
-            gametime        = parser.isoparse(comp["startTime"]) if comp.get("startTime") else None,
+            gametime        = gametime,
             salary          = p.get("salary"),
             status          = p.get("status"),
         )

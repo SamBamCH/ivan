@@ -1205,9 +1205,9 @@ def sample_showdown_field_learned(
     print(f"  Candidate lineups: {n_lineups:,}")
 
     # Get heuristic player ownership with FIXED concentration
-    alpha = 3.0  # Changed from 2.0 - better flex concentration
+    alpha = 3  # Changed from 2.0 - better flex concentration
     salary_weight = 0.2  # Changed from 0.3 - less salary emphasis
-    captain_concentration = 4.0  # NEW - proper captain concentration
+    captain_concentration = 3  # NEW - proper captain concentration
 
     player_ownership = get_player_ownership_heuristic(
         session,

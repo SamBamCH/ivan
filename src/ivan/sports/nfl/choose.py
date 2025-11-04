@@ -218,7 +218,8 @@ def choose_lineup_ids(
         selected.append(best_j)
         remaining.remove(best_j)
 
-    # if we still need to fill, do it by descending q (quality)
+    # if we still need to fill, do it by descending q (quality) 
+    #TODO: figure out if this loop is needed. I don't think we want to be choosing lineups that aren't diverse. 
     if len(selected) < num_lineups:
         for j in np.argsort(-q):
             if j not in selected:

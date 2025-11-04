@@ -244,14 +244,11 @@ except Exception as e:
 # Get ownership projection settings from config
 ownership_config = config.get("ownership_projection", {})
 num_simulations = ownership_config.get("num_simulations", 3)
-aggregate_method = ownership_config.get("aggregate_method", "mean")
 
 try:
     ownership_results = project_ownership(
         session,
         config=config,
-        num_simulations=num_simulations,
-        aggregate_method=aggregate_method,
     )
     
     if ownership_results:

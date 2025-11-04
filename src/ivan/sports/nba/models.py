@@ -109,12 +109,12 @@ class Lineup(NBABase):
     player_ids_list  = Column(JSON,    nullable=False)
     created_at       = Column(DateTime, server_default=func.now(), nullable=False)
 
-    # simulation_results = relationship(
-    #     "LineupSimulationResult",
-    #     backref="lineup",
-    #     cascade="all, delete-orphan",
-    #     lazy="select"
-    # )
+    simulation_results = relationship(
+        "LineupSimulationResult",
+        backref="lineup",
+        cascade="all, delete-orphan",
+        lazy="select"
+    )
 
     def player_ids(self) -> List[int]:
         return list(self.player_ids_list)

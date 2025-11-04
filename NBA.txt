@@ -1,19 +1,16 @@
-use those odds to adjust marginals for each stat
 
-use correlation for same player/game different stats to covariate tails. 
+make field sampling match stokastic ownership projections for now
+    print exposures of sampled field to verify
+    write ownership back to player objects
+    add ownership to monitor.py
 
-contest_id DB setup
-contest_id fetch from DK
-payout DB setup
-contest_payout fetch from DK
-
-#once the above is done, should have median projections, distributions for all players on the slate, and contest_ids/payouts. 
-
-Now, generate_lineups
-    build lineup database
+add get_contest_data
+    start building out sampling based on historical contest logic
 
 
-
+lateswap
+    need to use existing lineup generation logic
+        add optional arg to lock a player to a slot? 
 
 
 

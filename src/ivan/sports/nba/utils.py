@@ -3,24 +3,23 @@ import re
 import json
 
 
-def _coerce_positions(pos: Iterable[str] | str) -> Union[str, Tuple[str, ...]]:
+def _coerce_positions(pos: Iterable[str] | str) -> Tuple[str, ...]:
     """
     Normalize position(s):
-      - "WR"            -> "WR"
+      - "WR"            -> ("WR",)
       - "WR/TE"         -> ("TE", "WR")
       - ["RB","WR"]     -> ("RB","WR")
-      - " DST ,  "      -> "DST"
+      - " DST ,  "      -> ("DST",)
+    Always returns a tuple for consistency.
     """
     if isinstance(pos, str):
         tokens = [p.strip().upper() for p in re.split(r"[\\/ ,]", pos) if p.strip()]
     else:
         tokens = [str(p).strip().upper() for p in pos if str(p).strip()]
-
+    
     uniq = sorted(set(tokens))
-    if not uniq:
-        return tuple()
-    if len(uniq) == 1:
-        return uniq[0]
+    
+    # ALWAYS return a tuple, even for single positions
     return tuple(uniq)
 
 def _cfg(config: dict, path: str, default):

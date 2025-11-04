@@ -80,16 +80,16 @@
   "classic": {
     "lineup_generation": {
       "n_samples": 5000,
-      "min_fpts": 3,
+      "min_fpts": 2,
       "n_jobs": 12,
       "jitter": 0.10,
       "salary_cap": 50000,
-      "min_salary": 49000,
+      "min_salary": 47500,
       "max_off_vs_dst": 1,
       "min_qb_wrte_stack": 1,
       "min_qb_skill_stack": 1,
       "min_qb_bringback": 1,
-      "max_team_players": 4
+      "max_team_players": 5
     },
     "dupe": {
       "alpha_fpts": 1.35,           

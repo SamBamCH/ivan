@@ -86,7 +86,9 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
             session.query(ShowdownLineup.duplicate_count)
             .filter(ShowdownLineup.contest_id == contest_id)
         )
-        dupes = np.array([x[0] for x in lineup_query.all()], dtype=float)
+        dupes = np.array([x[0] for x in lineup_query.all()], dtype=int)
+
+        print(dupes)
         
         if len(dupes) < 10:  # Need minimum data
             continue

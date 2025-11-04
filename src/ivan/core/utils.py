@@ -95,7 +95,15 @@ _NAME_OVERRIDES = {
     'scotty miller': 'scott miller',
     'russell gage jr': 'russell gage',
     'chris godwin jr': 'chris godwin',
-    'aaron jones sr': 'aaron jones'
+    'aaron jones sr': 'aaron jones',
+    'herb jones': 'herbert jones',
+    'isaiah stewart ii': 'isaiah stewart',
+    'nicolas claxton': 'nic claxton',
+    'ronald holland ii': 'ron holland',
+    'alexandre sarr': 'alex sarr',
+    'bub carrington': 'carlton carrington',
+    'derrick jones': 'derrick jones jr',
+    'vincent williams jr': 'vince williams jr'
     # add more mappings as needed...
 }
 

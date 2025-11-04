@@ -1,39 +1,154 @@
-<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.0.6 Chrome/138.0.7204.100 Electron/37.2.3 Safari/537.36" version="28.0.6">
-  <diagram name="Page-1" id="KanGVaiKNvgkmwAC44I7">
-    <mxGraphModel dx="1281" dy="626" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.2.5 Chrome/138.0.7204.251 Electron/37.6.1 Safari/537.36" version="28.2.5" pages="2">
+  <diagram name="get_contest_data" id="KanGVaiKNvgkmwAC44I7">
+    <mxGraphModel dx="1665" dy="2063" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="zczTSo4Jnf9fzZau6Ahf-2">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="230" y="190" as="targetPoint" />
-          </mxGeometry>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-3" value="sim.py" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="90" y="910" width="120" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-2" value="lineups" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="80" y="160" width="60" height="60" as="geometry" />
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-4" value="get_contest_data" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;" parent="1" vertex="1">
+          <mxGeometry x="100" y="125" width="120" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="zczTSo4Jnf9fzZau6Ahf-4">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="440" y="190" as="targetPoint" />
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-4" value="read all lineups" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="220" y="160" width="120" height="60" as="geometry" />
-        </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="zczTSo4Jnf9fzZau6Ahf-6" target="zczTSo4Jnf9fzZau6Ahf-7">
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-5" target="GV_W1eTsAFWj-8OxMZXx-6" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-6" value="DUPE MODEL" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="440" y="160" width="120" height="60" as="geometry" />
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-5" value="connect to db" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="260" y="80" width="120" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="zczTSo4Jnf9fzZau6Ahf-7" target="zczTSo4Jnf9fzZau6Ahf-9">
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-6" target="GV_W1eTsAFWj-8OxMZXx-8" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-7" value="sample lineups (without replacement) based on euclidian distance (maximizing lineups in the solution space) from this pool counting up based on their dupe value (i.e. lineup 1, duped 31 times would make the next lineup chosen idx 32 in the pool)" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="640" y="160" width="120" height="60" as="geometry" />
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-6" value="build authenticated chrome session" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="460" y="80" width="120" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="zczTSo4Jnf9fzZau6Ahf-9" value="sampled field" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="840" y="160" width="120" height="60" as="geometry" />
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-8" target="GV_W1eTsAFWj-8OxMZXx-15" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-8" value="get all processed contests from DB" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="660" y="80" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-10" target="GV_W1eTsAFWj-8OxMZXx-8" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-10" value="&lt;div style=&quot;color: rgb(204, 204, 204); background-color: rgb(31, 31, 31); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; line-height: 19px; white-space: pre;&quot;&gt;&lt;span style=&quot;color: #4ec9b0;&quot;&gt;ShowdownContestMetadata&lt;/span&gt;&lt;/div&gt;" style="shape=datastore;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="610" y="-110" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-11" target="GV_W1eTsAFWj-8OxMZXx-8" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="915" y="50" />
+              <mxPoint x="750" y="50" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-11" value="&lt;div style=&quot;color: rgb(204, 204, 204); background-color: rgb(31, 31, 31); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; line-height: 19px; white-space: pre;&quot;&gt;&lt;span style=&quot;color: #4ec9b0;&quot;&gt;ClassicContestMetadata&lt;/span&gt;&lt;/div&gt;" style="shape=datastore;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="830" y="-110" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-15" target="GV_W1eTsAFWj-8OxMZXx-17" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-15" value="filter contest_ids to fetch down (remove already fetched, and out of date/entry range)" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="860" y="80" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-17" target="GV_W1eTsAFWj-8OxMZXx-19" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-17" value="for contest_id in to_process:" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1060" y="80" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-19" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1120" y="320" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-19" value="download contest df from DK API" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1060" y="220" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-23" target="GV_W1eTsAFWj-8OxMZXx-24" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-29" value="Text" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="GV_W1eTsAFWj-8OxMZXx-25" vertex="1" connectable="0">
+          <mxGeometry x="-0.0222" y="-4" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-27" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-23" target="GV_W1eTsAFWj-8OxMZXx-26" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-30" value="Showdown" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="GV_W1eTsAFWj-8OxMZXx-27" vertex="1" connectable="0">
+          <mxGeometry x="-0.2" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-23" value="MODE?" style="rhombus;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1080" y="320" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-24" value="" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1060" y="490" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-34" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-26" target="GV_W1eTsAFWj-8OxMZXx-33" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-26" value="get snapshot data" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1220" y="330" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-31" target="GV_W1eTsAFWj-8OxMZXx-26" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-31" value="&lt;div style=&quot;color: rgb(204, 204, 204); background-color: rgb(31, 31, 31); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; line-height: 19px; white-space: pre;&quot;&gt;&lt;span style=&quot;color: #4ec9b0;&quot;&gt;ProjectionSnapshot&lt;/span&gt;&lt;/div&gt;" style="shape=datastore;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1200" y="-110" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-36" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-33" target="GV_W1eTsAFWj-8OxMZXx-35" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-33" value="for lineup in contest_df:" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1420" y="330" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-38" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-35" target="GV_W1eTsAFWj-8OxMZXx-37" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-35" value="parse SD lineup string" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1420" y="470" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-37" target="GV_W1eTsAFWj-8OxMZXx-39" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1575" y="640" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-41" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="GV_W1eTsAFWj-8OxMZXx-37" target="GV_W1eTsAFWj-8OxMZXx-10" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1560" y="640" />
+              <mxPoint x="1560" y="-130" />
+              <mxPoint x="695" y="-130" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-37" value="calculate lineup features" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1420" y="610" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="GV_W1eTsAFWj-8OxMZXx-39" value="&lt;span style=&quot;color: rgb(78, 201, 176); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; white-space: pre; background-color: rgb(31, 31, 31);&quot;&gt;ShowdownLineup&lt;/span&gt;" style="shape=datastore;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="1490" y="-110" width="170" height="110" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="fEOmx5TRJGckbfDI7QVu" name="train_showdown_model">
+    <mxGraphModel dx="1665" dy="963" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="RG6utEcW0uug5BKUodol-1" value="" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ej51I9XubedKgu6driSC-1" value="&lt;div style=&quot;color: rgb(204, 204, 204); background-color: rgb(31, 31, 31); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; line-height: 19px; white-space: pre;&quot;&gt;&lt;span style=&quot;color: #4ec9b0;&quot;&gt;ShowdownContestMetadata&lt;/span&gt;&lt;/div&gt;" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="55" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ciP0IqH7dk20Yd8v0htA-1" value="&lt;span style=&quot;color: rgb(78, 201, 176); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; white-space: pre; background-color: rgb(31, 31, 31);&quot;&gt;ShowdownLineup&lt;/span&gt;" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="250" width="170" height="100" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

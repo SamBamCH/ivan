@@ -19,9 +19,9 @@ def main():
     sess   = get_session(engine)
 
     try:
-        # print("Clearing lineup_simulation_results table...")
-        # sess.execute(text("DELETE FROM lineup_simulation_results"))
-        # sess.commit()
+        print("Clearing lineup_simulation_results table...")
+        sess.execute(text("DELETE FROM lineup_simulation_results"))
+        sess.commit()
         print("✅ lineup_simulation_results has been emptied.")
         print("Clearing lineup_simulation_results table...")
         sess.execute(text("DELETE FROM lineup"))

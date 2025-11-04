@@ -1,5 +1,7 @@
 #TODO:
 
+fix ownership calculations, and sampling showdown. specifically captain calculations look way off. 
+
 make debugs print to CLI like this (use function names): 
 
 [process1]

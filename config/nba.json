@@ -9,6 +9,6 @@
   },         
   "min_salary": 49000,
   "max_salary": 50000,
-  "max_salary_per_team": 20000,
-  "randomness": 1
+  "randomness": 1,
+  "max_salary_per_team": 18000
 }

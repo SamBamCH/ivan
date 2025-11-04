@@ -58,7 +58,7 @@ def choose_lineup_ids(
     N = len(sims)
     print(f'choosing from top {N} unique lineups')
     
-    raw = np.zerox((N, 2), dtype=float)
+    raw = np.zeros((N, 2), dtype=float)
     roi_rows = []
     for i, res in enumerate(sims):
         payouts = np.array(res.payout, dtype=float)
@@ -81,8 +81,41 @@ def choose_lineup_ids(
 
     dist_mat = squareform(pdist(fpts_matrix, metric="cosine"))
 
-    lam = float(weights.get("diversity_lambda", 0.0))
-    gamma = float(weights.get("quality_gamma"))
+    lam = float(weights.get("diversity_lambda", 0.5))
+
+    remaining = set(range(N))
+    selected = []
+
+    first = int(np.argmax(q))
+    selected.append(first)
+    remaining.remove(first)
+
+    def lineup_score(j: int, S: list[int]) -> float:
+        if S:
+            diversity_gain = np.mean(dist_mat[j, S])
+        else:
+            diversity_gain = 0.0
+        return q[j] + lam * diversity_gain
+    
+    while len(selected) < num_lineups and remaining:
+        best_j = max(remaining, key=lambda j: lineup_score(j, selected))
+        selected.append(best_j)
+        remaining.remove(best_j)
+
+    if len(selected) < num_lineups:
+        print('not enough lineups in diversity choosing algo, just selecting top lineups...')
+        for j in np.argsort(-q):
+            if j not in selected:
+                selected.append(j)
+            if len(selected) >= num_lineups:
+                break
+    
+    chosen_ids = [sims[i].lineup_id for i in selected]
+
+
+    #TODO: could add recap shit here if we want to, like plots/exposures/etc.
+
+    return chosen_ids
 
 
     
