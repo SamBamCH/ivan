@@ -88,6 +88,8 @@ class NBAPlayer(NBABase):
     fpts_mean       = Column(Float,     nullable=True)
     fpts_std        = Column(Float,     nullable=True)
     fpts_updated_at = Column(DateTime,  nullable=True)
+    # Projected ownership percentage (0-100)
+    ownership       = Column(Float,     nullable=True, default=0.0)
 
 
 class NBAOdds(NBABase):
@@ -191,3 +193,25 @@ class LineupSimulationResult(NBABase):
         nullable=False,
         index=True
     )
+
+class ProjectionSnapshot(NBABase):
+    """
+    Frozen snapshot of player projections at a specific time.
+    """
+    __tablename__ = "projection_snapshot"
+
+    id              = Column(Integer,   primary_key=True)
+    snapshot_date   = Column(DateTime,  nullable=False, index=True)
+    player_name     = Column(String,    nullable=False, index=True)
+    team            = Column(String,    nullable=False)
+    opponent        = Column(String,    nullable=True)
+    position        = Column(String,    nullable=False)
+    roster_slot_id  = Column(Integer,   nullable=False)
+    gametime        = Column(DateTime,  nullable=False)
+    salary          = Column(Integer,   nullable=False)
+    status          = Column(String,    nullable=True)
+    fpts_mean       = Column(Float,     nullable=True)
+    fpts_std        = Column(Float,     nullable=True)
+    fpts_updated_at = Column(DateTime,  nullable=True)
+    ownership       = Column(Float,     nullable=True, default=0.0)  # Projected ownership %
+

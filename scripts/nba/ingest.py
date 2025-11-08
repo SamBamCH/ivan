@@ -4,7 +4,7 @@ from ivan.sports.common.draftkings import(
     summarize_slates, 
     get_players_for_slate
 )
-from ivan.sports.nba.models import NBAPlayer, NBAOdds
+from ivan.sports.nba.models import NBAPlayer, NBAOdds, ProjectionSnapshot
 from ivan.core.utils import normalize_name
 import sys
 import logging
@@ -108,20 +108,44 @@ def main():
     engine = init_db("nba", None)
     session = get_session(engine)
 
-    # Get current time in UTC (database likely stores UTC)
-    now = datetime.now(timezone.utc)
+    # Get current time in Central timezone (naive) to compare against gametime (which is stored naive but represents Central time)
+    now = datetime.now(LOCAL_TZ).replace(tzinfo=None)
     
-    # Check for unlocked games (games that haven't started yet)
-    unlocked_games = session.query(NBAPlayer).filter(NBAPlayer.gametime > now).all()
+    # Check for locked games (games that have already started or are starting now)
+    locked_players = session.query(NBAPlayer).filter(NBAPlayer.gametime <= now).all()
     
-    if unlocked_games:
-        # Only delete unlocked games
-        logging.info(f"Found {len(unlocked_games)} unlocked games. Deleting only unlocked games.")
-        session.query(NBAPlayer).filter(NBAPlayer.gametime > now).delete(synchronize_session=False)
+    if locked_players:
+        # Create ProjectionSnapshot entries for each locked player before deleting
+        logging.info(f"Found {len(locked_players)} locked games. Creating snapshots before deletion.")
+        # Use current Central Time (naive) to align with downstream queries that assume CT-naive datetimes
+        snapshot_date = datetime.now(LOCAL_TZ).replace(tzinfo=None)
+
+        for player in locked_players:
+            snapshot = ProjectionSnapshot(
+                id=player.id,
+                snapshot_date=snapshot_date,
+                player_name=player.name,
+                team=player.team,
+                opponent=player.opponent,
+                position=player.position,
+                roster_slot_id=player.roster_slot_id,
+                gametime=player.gametime,
+                salary=player.salary,
+                status=player.status,
+                fpts_mean=player.fpts_mean,
+                fpts_std=player.fpts_std,
+                fpts_updated_at=player.fpts_updated_at,
+            )
+            session.add(snapshot)
+
+        session.commit()
+        logging.info(f"Created {len(locked_players)} projection snapshots (snapshot_date in CT).")
+
+        # Now delete the locked games
+        session.query(NBAPlayer).filter(NBAPlayer.gametime <= now).delete(synchronize_session=False)
     else:
-        # All games are locked, clear everything
-        logging.info("All games are locked. Clearing all NBAPlayer records.")
-        session.execute(delete(NBAPlayer))
+        # No locked games yet
+        logging.info("No locked games to clean up.")
     
     session.commit()
     # Clear the session to remove references to deleted objects
@@ -160,7 +184,6 @@ def main():
 
         # Skip duplicate player names
         if player_name in seen_names:
-            logging.debug(f"Skipping duplicate player: {player_name}")
             continue
 
         seen_names.add(player_name)

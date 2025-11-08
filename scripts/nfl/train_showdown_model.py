@@ -57,7 +57,7 @@ def calculate_gini(values: np.ndarray) -> float:
 def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     """
     For each contest, compute:
-    - Contest features (field_size, ownership_concentration, etc.)
+    - Macro contest features (total_entries, entry_fee, ownership_gini)
     - Empirical quantiles of duplication distribution
     """
     
@@ -65,11 +65,11 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
         session.query(
             ShowdownContestMetadata.contest_id,
             ShowdownContestMetadata.total_entries,
+            ShowdownContestMetadata.entry_fee,
             ShowdownContestMetadata.unique_lineup_count,
             ShowdownContestMetadata.max_duplicate_count,
             ShowdownContestMetadata.median_duplicate_count,
             ShowdownContestMetadata.ownership_gini,
-            ShowdownContestMetadata.projection_std,
         )
         .filter(ShowdownContestMetadata.total_entries >= min_entries)
     )
@@ -80,7 +80,7 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     
     contest_quantiles = []
     
-    for contest_id, total_entries, unique_lineups, max_dupes, median_dupes, own_gini, proj_std in contests:
+    for contest_id, total_entries, entry_fee, unique_lineups, max_dupes, median_dupes, own_gini in contests:
         # Get all lineups for this contest
         lineup_query = (
             session.query(ShowdownLineup.duplicate_count)
@@ -92,9 +92,6 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
         
         if len(dupes) < 10:  # Need minimum data
             continue
-        
-        # Contest features
-        field_density = unique_lineups / total_entries if total_entries > 0 else 0.0
         
         # Empirical quantiles (targets for Stage 1)
         quantiles = {
@@ -109,11 +106,8 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
         contest_quantiles.append({
             'contest_id': contest_id,
             'total_entries': total_entries,
-            'unique_lineups': unique_lineups,
-            'field_density': field_density,
-            'log_total_entries': np.log10(max(total_entries, 1)),
+            'entry_fee': entry_fee if entry_fee is not None else 5.0,
             'ownership_gini': own_gini if own_gini is not None else 0.5,
-            'projection_std': proj_std if proj_std is not None else 5.0,
             'max_duplicate_count': max_dupes,
             'median_duplicate_count': median_dupes,
             **quantiles
@@ -126,9 +120,13 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
 def build_lineup_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     """
     For each lineup, compute:
-    - Lineup features
+    - Micro lineup features (captain ownership, projection, salary)
     - Contest context
     - Empirical percentile rank within its contest
+    
+    Key insight: We're training on data GROUPED BY CONTEST, meaning the model
+    learns how lineup features correlate with duplication WITHIN each contest.
+    This is correct because at runtime we're also predicting within a single contest.
     """
     
     # Get all lineups from contests >= min_entries
@@ -138,9 +136,8 @@ def build_lineup_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
             ShowdownLineup.contest_id,
             ShowdownLineup.duplicate_count,
             ShowdownLineup.salary_remaining_pct,
-            ShowdownLineup.ownership_sum,
-            ShowdownLineup.cpt_ownership_pct,
             ShowdownLineup.projection_normalized,
+            ShowdownLineup.cpt_ownership_pct,
             ShowdownContestMetadata.total_entries,
         )
         .join(
@@ -156,8 +153,8 @@ def build_lineup_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     
     columns = [
         'lineup_id', 'contest_id', 'duplicate_count',
-        'salary_remaining_pct', 'ownership_sum', 'cpt_ownership_pct',
-        'projection_normalized', 'total_entries'
+        'salary_remaining_pct', 'projection_normalized', 'cpt_ownership_pct',
+        'total_entries'
     ]
     
     df = pd.DataFrame(results, columns=columns)
@@ -181,7 +178,7 @@ def build_lineup_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     
     # Drop rows with missing critical values
     df = df.dropna(subset=[
-        'salary_remaining_pct', 'ownership_sum', 'cpt_ownership_pct',
+        'salary_remaining_pct', 'projection_normalized', 'cpt_ownership_pct',
         'percentile_rank'
     ])
     
@@ -195,7 +192,12 @@ def train_stage1_model(
     """
     Train Stage 1: Contest Distribution Model
     
-    Predicts quantiles (Q25, Q50, Q75, Q90, Q95, Q99) from contest features.
+    Predicts quantiles (Q25, Q50, Q75, Q90, Q95, Q99) from macro contest features.
+    
+    Features:
+      1. total_entries - Contest size
+      2. entry_fee - Entry fee (contest difficulty proxy)
+      3. ownership_gini - Ownership concentration
     
     Returns:
         model: Trained MultiOutputRegressor
@@ -204,15 +206,14 @@ def train_stage1_model(
     """
     
     print(f"\n{'='*70}")
-    print("STAGE 1: CONTEST DISTRIBUTION MODEL")
+    print("STAGE 1: CONTEST DISTRIBUTION MODEL (MACRO FEATURES)")
     print(f"{'='*70}")
     print(f"Training on {len(df_contest):,} contests")
     
     feature_cols = [
         'total_entries',
-        'field_density',
+        'entry_fee',
         'ownership_gini',
-        'projection_std',
     ]
     
     target_cols = ['q25', 'q50', 'q75', 'q90', 'q95', 'q99']
@@ -319,8 +320,12 @@ def train_stage2_model(
     
     Features (3 only):
       1. cpt_ownership_pct - Captain ownership percentage
-      2. ownership_sum - Sum of flex player ownership percentages
+      2. projection_normalized - Lineup projection (0-1 normalized within contest)
       3. salary_remaining_pct - % of salary cap remaining
+    
+    Note: Using projection_normalized instead of ownership_sum to capture
+    lineup quality/favorability rather than just popularity. At runtime,
+    we'll use INDEPENDENT samples (not correlated) to reduce QB captain bias.
     
     Returns:
         model: Trained GradientBoostingRegressor
@@ -329,13 +334,13 @@ def train_stage2_model(
     """
     
     print(f"\n{'='*70}")
-    print("STAGE 2: LINEUP POSITIONING MODEL")
+    print("STAGE 2: LINEUP POSITIONING MODEL (MICRO FEATURES)")
     print(f"{'='*70}")
     print(f"Training on {len(df_lineup):,} lineups from {df_lineup['contest_id'].nunique()} contests")
     
     feature_cols = [
         'cpt_ownership_pct',
-        'ownership_sum',
+        'projection_normalized',
         'salary_remaining_pct',
     ]
     
@@ -456,7 +461,9 @@ def analyze_dataset(df_contest: pd.DataFrame, df_lineup: pd.DataFrame):
     
     print(f"\nContest-Level Data:")
     print(f"  Total contests: {len(df_contest):,}")
-    print(f"  Average unique lineups per contest: {df_contest['unique_lineups'].mean():.0f}")
+    print(f"  Entry fee range: ${df_contest['entry_fee'].min():.2f} - ${df_contest['entry_fee'].max():.2f}")
+    print(f"  Contest size range: {df_contest['total_entries'].min():,} - {df_contest['total_entries'].max():,}")
+    print(f"  Ownership Gini range: {df_contest['ownership_gini'].min():.3f} - {df_contest['ownership_gini'].max():.3f}")
     print(f"  Average max dupes per contest: {df_contest['max_duplicate_count'].mean():.1f}")
     
     print(f"\nLineup-Level Data:")

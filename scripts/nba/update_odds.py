@@ -2,6 +2,7 @@ from ivan.database.session import init_db, get_session
 from ivan.sports.common.odds import get_odds, parse_odds
 from ivan.sports.nba.models import NBAPlayer, NBAOdds
 from ivan.sports.nba.fpts_calculations import fit_fpts_distributions
+from ivan.sports.nba.ownership import project_ownership
 from sqlalchemy import select
 import logging
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -43,5 +44,7 @@ logger.info("[update_odds][4] Using role-based marginals and correlations (start
 logger.info("[update_odds][4] Player role detected via median minutes to avoid injury misclassification")
 
 fit_fpts_distributions(session, n_samples=10000)
+
+project_ownership(session)
 
 logger.info("[update_odds][5] ✓ FPTS distributions calculated and stored")

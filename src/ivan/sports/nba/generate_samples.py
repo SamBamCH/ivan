@@ -1,13 +1,18 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 import numpy as np
-from ivan.sports.nba.models import NBAPlayer
+from datetime import date, datetime, timedelta
+from typing import Optional, Dict
+from ivan.sports.nba.models import NBAPlayer, ProjectionSnapshot
 
 def generate_player_samples(
     session: Session,
     n_samples: int = 1000,
     randomness: float = 1.0,
-    seed: int | None = None,
+    seed: Optional[int] = None,
+    snapshot_date: Optional[date] = None,
+    include_active_players: bool = True,
+    name_to_id: Optional[Dict[str, int]] = None,
 ) -> dict[int, np.ndarray]:
     """
     Generate independent FPTS samples for all players in the NBAPlayer table.
@@ -34,32 +39,51 @@ def generate_player_samples(
     # Clamp randomness to [0.0, 1.0]
     randomness = float(np.clip(randomness, 0.0, 1.0))
 
-    # Query all players with valid FPTS distributions
-    stmt = select(NBAPlayer).where(
-        (NBAPlayer.fpts_mean.isnot(None)) &
-        (NBAPlayer.fpts_std.isnot(None))
-    )
-    players = session.execute(stmt).scalars().all()
+    samples_by_player: Dict[int, np.ndarray] = {}
 
-    if not players:
-        return {}
+    # Optionally include current active (unlocked) players from NBAPlayer
+    if include_active_players:
+        stmt = select(NBAPlayer).where(
+            (NBAPlayer.fpts_mean.isnot(None)) &
+            (NBAPlayer.fpts_std.isnot(None))
+        )
+        players = session.execute(stmt).scalars().all()
+        for player in players:
+            mean = float(player.fpts_mean)
+            std = float(player.fpts_std)
+            effective_std = std * randomness
+            player_samples = rng.normal(loc=mean, scale=effective_std, size=n_samples)
+            samples_by_player[int(player.id)] = np.clip(player_samples, 0, None)
 
-    samples_by_player = {}
+    # Add ProjectionSnapshot rows for the specified date to cover locked players
+    if snapshot_date is not None:
+        day_start = datetime(snapshot_date.year, snapshot_date.month, snapshot_date.day)
+        day_end = day_start + timedelta(days=1)
 
-    for player in players:
-        # Get the player's fitted mean and std
-        mean = float(player.fpts_mean)
-        std = float(player.fpts_std)
+        snaps = (
+            session.query(ProjectionSnapshot)
+            .filter(
+                ProjectionSnapshot.snapshot_date >= day_start,
+                ProjectionSnapshot.snapshot_date < day_end,
+                ProjectionSnapshot.fpts_mean.isnot(None),
+                ProjectionSnapshot.fpts_std.isnot(None),
+            )
+            .all()
+        )
+        for snap in snaps:
+            # Try to resolve a player ID for this snapshot.
+            pid = getattr(snap, 'id', None)
+            if pid is None:
+                # Cannot resolve to a numeric player ID; skip
+                continue
+            pid = int(pid)
+            if pid in samples_by_player:
+                continue
 
-        # Apply randomness scaling: reduce std when randomness < 1.0
-        effective_std = std * randomness
-
-        # Generate independent samples from Normal(mean, effective_std)
-        player_samples = rng.normal(loc=mean, scale=effective_std, size=n_samples)
-
-        # Clip to non-negative (FPTS can't be negative)
-        player_samples = np.clip(player_samples, 0, None)
-
-        samples_by_player[player.id] = player_samples
+            mean = float(snap.fpts_mean)
+            std = float(snap.fpts_std)
+            effective_std = std * randomness
+            player_samples = rng.normal(loc=mean, scale=effective_std, size=n_samples)
+            samples_by_player[pid] = np.clip(player_samples, 0, None)
 
     return samples_by_player

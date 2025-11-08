@@ -220,46 +220,56 @@ def predict_lineups_with_twostage(
     cpt_col_by_row: np.ndarray,
     player_ownership: np.ndarray,
     total_entries: int,
+    entry_fee: float,
     models: dict,
     contest_features: dict,
 ) -> np.ndarray:
     """
-    UNIFIED TWO-STAGE PREDICTION
+    SIMPLIFIED TWO-STAGE PREDICTION
     
-    Stage 1: Contest Distribution Model
-      Input: Contest parameters (field_size, ownership_gini, projection_std, etc.)
+    Stage 1: Contest Distribution Model (MACRO)
+      Input: Contest-level features (total_entries, entry_fee, ownership_gini)
       Output: Quantile distribution [Q25, Q50, Q75, Q90, Q95, Q99]
       
-    Stage 2: Lineup Positioning Model  
-      Input: Lineup features (cpt_ownership_pct, ownership_sum, salary_remaining_pct)
+    Stage 2: Lineup Positioning Model (MICRO)
+      Input: Lineup features (cpt_ownership_pct, projection_normalized, salary_remaining_pct)
       Output: Duplication scores → percentile ranks relative to candidate pool
       
     Combined: Interpolate percentile ranks into Stage 1's quantiles to get final predictions
+    
+    KEY: projection_normalized is computed using INDEPENDENT samples (not correlated)
+    to reduce QB captain bias.
     """
     from scipy.special import expit
     
     n_lineups = L.shape[0]
+    n_players = L.shape[1]
     
     print(f"\n{'='*70}")
-    print("UNIFIED TWO-STAGE PREDICTION")
+    print("SIMPLIFIED TWO-STAGE PREDICTION")
     print(f"{'='*70}")
     print(f"Contest size: {total_entries:,} entries")
+    print(f"Entry fee: ${entry_fee:.2f}")
     print(f"Candidate lineups: {n_lineups:,}")
     
     # ========================================================================
-    # STAGE 1: Contest Distribution Model
+    # STAGE 1: Contest Distribution Model (MACRO FEATURES)
     # ========================================================================
     print("\n" + "="*70)
     print("STAGE 1: Contest Distribution Quantiles")
     print("="*70)
     
-    # Build contest feature vector
+    # Build contest feature vector (3 features)
     stage1_features = np.array([[
         contest_features['total_entries'],
-        contest_features['field_density'],
+        contest_features['entry_fee'],
         contest_features['ownership_gini'],
-        contest_features['projection_std'],
     ]])
+    
+    print(f"Contest features:")
+    print(f"  Total entries: {contest_features['total_entries']:,}")
+    print(f"  Entry fee: ${contest_features['entry_fee']:.2f}")
+    print(f"  Ownership Gini: {contest_features['ownership_gini']:.3f}")
     
     # Scale and predict quantiles
     stage1_scaler = models['stage1_scaler']
@@ -272,35 +282,53 @@ def predict_lineups_with_twostage(
     quantile_levels = np.array([0.25, 0.50, 0.75, 0.90, 0.95, 0.99])
     quantile_values = quantile_predictions[0]  # shape [6]
     
-    # Clip to realistic range
-    quantile_values = np.clip(quantile_values, 1.0, total_entries * 0.01)
+    # Cap at 5% of field to allow realistic chalk concentration
+    quantile_values = np.clip(quantile_values, 1.0, total_entries * 0.05)
     
-    print(f"Predicted duplication distribution:")
+    print(f"\nPredicted duplication distribution:")
     for q_level, q_val in zip(quantile_levels, quantile_values):
         print(f"  Q{q_level*100:.0f}: {q_val:.2f} duplicates")
     
     # ========================================================================
-    # STAGE 2: Lineup Positioning Model
+    # STAGE 2: Lineup Positioning Model (MICRO FEATURES)
     # ========================================================================
     print("\n" + "="*70)
     print("STAGE 2: Lineup Duplication Scores")
     print("="*70)
     
-    # Compute 3 lineup features
-    remaining = (SALARY_CAP - spends).astype(np.int32)
-    salary_remaining_pct = remaining / SALARY_CAP
-    
-    ownership_sum = np.asarray(L @ player_ownership, dtype=np.float64)
-    
+    # Feature 1: Captain ownership
     cpt_ownership = np.zeros(n_lineups, dtype=np.float64)
     mask = cpt_col_by_row >= 0
     if mask.any():
         cpt_ownership[mask] = player_ownership[cpt_col_by_row[mask]]
     
+    # Feature 2: Projection normalized (using salary as proxy)
+    # In showdown, salary IS the projection (DK sets salaries based on projections)
+    # We use total salary spent as a proxy for lineup quality
+    # Normalize this within the candidate pool (min-max scaling)
+    total_salaries = spends
+    projection_proxy = total_salaries / SALARY_CAP  # 0-1 normalized by cap
+    
+    # Normalize within candidate pool (min-max)
+    proj_min, proj_max = projection_proxy.min(), projection_proxy.max()
+    if proj_max > proj_min:
+        projection_normalized = (projection_proxy - proj_min) / (proj_max - proj_min)
+    else:
+        projection_normalized = np.ones(n_lineups) * 0.5
+    
+    # Feature 3: Salary remaining
+    remaining = (SALARY_CAP - spends).astype(np.int32)
+    salary_remaining_pct = remaining / SALARY_CAP
+    
+    print(f"\nMicro features computed:")
+    print(f"  Captain ownership range: [{cpt_ownership[mask].min():.2f}%, {cpt_ownership[mask].max():.2f}%]" if mask.any() else "  Captain ownership: N/A")
+    print(f"  Projection proxy range: [{projection_normalized.min():.3f}, {projection_normalized.max():.3f}]")
+    print(f"  Salary remaining range: [{salary_remaining_pct.min():.3%}, {salary_remaining_pct.max():.3%}]")
+    
     # Build feature matrix (3 features in correct order)
     X_lineup = np.column_stack([
         cpt_ownership,
-        ownership_sum,
+        projection_normalized,
         salary_remaining_pct,
     ])
     
@@ -312,7 +340,7 @@ def predict_lineups_with_twostage(
     dupe_scores_logit = stage2_model.predict(X_lineup_scaled)
     dupe_scores = expit(dupe_scores_logit)  # Convert from logit to [0, 1]
     
-    print(f"Raw duplication scores (probability of duplication):")
+    print(f"\nRaw duplication scores (probability of duplication):")
     print(f"  Min:    {dupe_scores.min():.3f}")
     print(f"  Mean:   {dupe_scores.mean():.3f}")
     print(f"  Median: {np.median(dupe_scores):.3f}")
@@ -357,36 +385,51 @@ def predict_lineups_with_twostage(
     
     return predicted_dupes
 
+def estimate_field_density(total_entries: int) -> float:
+    """
+    Estimate typical field density based on historical contest sizes.
+    
+    Field density = (unique lineups / total entries) decreases as contest size grows.
+    
+    Historical averages:
+    - Small (<5K): ~65% unique
+    - Medium (5K-20K): ~45% unique  
+    - Large (20K-100K): ~30% unique
+    - Massive (>100K): ~20% unique
+    """
+    if total_entries < 5000:
+        return 0.65
+    elif total_entries < 20000:
+        return 0.45
+    elif total_entries < 100000:
+        return 0.30
+    else:
+        return 0.20
+
+
 def compute_contest_features_from_lineups(
-    L: sp.csr_matrix,
-    player_ownership: np.ndarray,
     total_entries: int,
-    n_lineups: int,
+    entry_fee: float,
+    player_ownership: np.ndarray,
 ) -> dict:
     """
-    Compute contest-level features from candidate lineup pool.
+    Compute simplified macro contest-level features for Stage 1 model.
+    
+    Args:
+        total_entries: Contest size
+        entry_fee: Entry fee (proxy for contest difficulty)
+        player_ownership: Array of player ownership percentages
     
     Returns:
-        dict with keys: total_entries, field_density, ownership_gini, projection_std
+        dict with keys: total_entries, entry_fee, ownership_gini
     """
-    # Field density: % of lineups that are unique
-    field_density = min(n_lineups / total_entries, 1.0)
-    
     # Ownership concentration (Gini coefficient)
-    lineup_ownership = np.asarray(L @ player_ownership, dtype=np.float64)
-    ownership_gini = calculate_gini(lineup_ownership) if len(lineup_ownership) > 1 else 0.5
-    
-    # Projection std (estimate from ownership distribution)
-    # This is a proxy: more concentrated ownership → lower projection variance
-    # We use ownership std as a stand-in
-    projection_std = float(np.std(lineup_ownership)) if len(lineup_ownership) > 1 else 5.0
-    projection_std = np.clip(projection_std, 0.1, 50.0)
+    ownership_gini = calculate_gini(player_ownership) if len(player_ownership) > 1 else 0.5
     
     return {
         'total_entries': total_entries,
-        'field_density': field_density,
+        'entry_fee': entry_fee,
         'ownership_gini': ownership_gini,
-        'projection_std': projection_std,
     }
 
 
@@ -566,7 +609,7 @@ def build_player_samples_independent(
 def get_player_ownership_heuristic(
     session: Session,
     pid_to_col: Dict[int, int],
-    alpha: float = 3.0,  # Changed: Higher default for better concentration
+    alpha: float = 2.0,  # Changed: Higher default for better concentration
     salary_weight: float = 0.2,  # Changed: Reduced salary impact
     captain_concentration: float = 4.0,  # NEW: Separate concentration for captains
 ) -> np.ndarray:
@@ -1183,12 +1226,14 @@ def sample_showdown_field_learned(
     model_mode = models.get('mode', 'unknown')
     
     # Get contest parameters
+    entry_fee = 5.0  # Default entry fee
     if contest_id:
         from ivan.sports.nfl.models import HistoricalContest
         contest = session.query(HistoricalContest).get(contest_id)
         
         if contest:
             total_entries = contest.total_entries
+            entry_fee = contest.entry_fee if contest.entry_fee else 5.0
         else:
             total_entries = field_size
     else:
@@ -1204,21 +1249,35 @@ def sample_showdown_field_learned(
 
     print(f"  Candidate lineups: {n_lineups:,}")
 
-    # Get heuristic player ownership with FIXED concentration
-    alpha = 3  # Changed from 2.0 - better flex concentration
-    salary_weight = 0.2  # Changed from 0.3 - less salary emphasis
-    captain_concentration = 3  # NEW - proper captain concentration
-
-    player_ownership = get_player_ownership_heuristic(
-        session,
-        pid_to_col,
-        alpha=alpha,
-        salary_weight=salary_weight,
-        captain_concentration=captain_concentration,
-    )
-
-    print(f"  Ownership range: [{player_ownership.min():.2f}%, {player_ownership.max():.2f}%], "
-          f"mean={player_ownership.mean():.2f}%")
+    # FIXED: Try to use actual ownership first, fall back to heuristic if not available
+    # The model was trained on actual DK ownership, so using heuristic causes distribution mismatch
+    player_ownership = get_player_ownership(session, pid_to_col)
+    
+    # Check if we have valid ownership data
+    has_ownership = (player_ownership.max() > 0) and not np.isnan(player_ownership).any()
+    
+    if not has_ownership:
+        print("  WARNING: No actual ownership data found, using heuristic projection")
+        print("  (For better accuracy, populate NFLPlayer.ownership_proj from DraftKings data)")
+        
+        # FIXED: Increased captain_concentration from 2 to 4 for realistic chalk
+        alpha = 2.0  # Flex concentration
+        salary_weight = 0.3  # Reduced salary impact
+        captain_concentration = 4.0  # FIXED: Back to 4 for realistic captain chalk
+        
+        player_ownership = get_player_ownership_heuristic(
+            session,
+            pid_to_col,
+            alpha=alpha,
+            salary_weight=salary_weight,
+            captain_concentration=captain_concentration,
+        )
+        print(f"  Heuristic ownership range: [{player_ownership.min():.2f}%, {player_ownership.max():.2f}%], "
+              f"mean={player_ownership.mean():.2f}%")
+    else:
+        print(f"  ✓ Using actual ownership data")
+        print(f"  Ownership range: [{player_ownership.min():.2f}%, {player_ownership.max():.2f}%], "
+              f"mean={player_ownership.mean():.2f}%")
     
     # ================================================================
     # PREDICT DUPLICATION BASED ON MODEL MODE
@@ -1227,18 +1286,17 @@ def sample_showdown_field_learned(
     if model_mode == 'two_stage':
         print(f"\n↓ Using TWO-STAGE hierarchical model...")
         
-        # Compute contest features from the candidate lineup pool
+        # Compute simplified macro contest features
         contest_features = compute_contest_features_from_lineups(
-            L=L,
-            player_ownership=player_ownership,
             total_entries=total_entries,
-            n_lineups=n_lineups,
+            entry_fee=entry_fee,
+            player_ownership=player_ownership,
         )
         
         print(f"  Contest features:")
-        print(f"    Field density: {contest_features['field_density']:.3f}")
+        print(f"    Total entries: {contest_features['total_entries']:,}")
+        print(f"    Entry fee: ${contest_features['entry_fee']:.2f}")
         print(f"    Ownership Gini: {contest_features['ownership_gini']:.3f}")
-        print(f"    Projection std: {contest_features['projection_std']:.3f}")
         
         predicted_dupes = predict_lineups_with_twostage(
             session=session,
@@ -1248,6 +1306,7 @@ def sample_showdown_field_learned(
             cpt_col_by_row=cpt_col_by_row,
             player_ownership=player_ownership,
             total_entries=total_entries,
+            entry_fee=entry_fee,
             models=models,
             contest_features=contest_features,
         )
