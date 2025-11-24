@@ -239,4 +239,5 @@ class StartingLineups(NBABase):
     player_name = Column(String, nullable=False, primary_key=True)
     team        = Column(String, nullable=False)
     position    = Column(String, nullable=False)
+    confirmed   = Column(Boolean, nullable=False, default=False)  # True if lineup is confirmed, False if expected
 

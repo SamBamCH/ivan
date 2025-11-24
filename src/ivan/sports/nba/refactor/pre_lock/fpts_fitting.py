@@ -125,12 +125,21 @@ def _apply_iman_conover(marginal_samples, rank_corr_matrix):
         
     return pd.DataFrame(ordered_samples, columns=cols)
 
-def fit_fpts_distributions(session, logging_level: str = "INFO"):
+def fit_fpts_distributions(session, logging_level: str = "WARNING"):
+    """Process all players and fit fpts distributions.
+
+    logging_level should be a standard name (e.g. 'WARNING', 'INFO'). Passing
+    'WARNING' will suppress INFO/DEBUG messages. Previously this used
+    f"logging.{logging_level}" which produced an invalid level string like
+    'logging.WARNING' and silently failed if logging was already configured.
     """
-    main function: process all players and fit fpts distirbutions.
-    """
-    logging.basicConfig(level=f"logging.{logging_level}")
+    numeric_level = getattr(logging, logging_level.upper(), None)
+    if not isinstance(numeric_level, int):  # validate level
+        raise ValueError(f"Invalid logging level: {logging_level}")
+    # force=True ensures reconfiguration even if another module configured logging earlier
+    logging.basicConfig(level=numeric_level, force=True)
     logger = logging.getLogger(__name__)
+    logger.setLevel(numeric_level)
     players = session.query(NBAPlayer).all()
     
     num_samples = 10000
@@ -141,11 +150,15 @@ def fit_fpts_distributions(session, logging_level: str = "INFO"):
             logger.error(f'{player.name} has unparsable position')
             continue
 
-        # Check if player is projected to start
-        is_projected_starter = session.query(StartingLineups).filter(
+        # Compare naive datetimes (both in Central time)
+        now_central = pd.Timestamp.now(tz='America/Chicago').replace(tzinfo=None)
+        if player.gametime <= now_central:
+            logger.info(f"{player.name}: Game already started, skipping")
+            continue
+
+        is_starting = session.query(StartingLineups).filter(
             StartingLineups.player_name == player.name
         ).first() is not None
-        
         # Check starting frequency: look at last 10 games, count where position != 'BENCH'
         recent_games = session.query(NBAStat).filter(NBAStat.player_name == player.name).order_by(NBAStat.game_date.desc()).limit(10).all()
         
@@ -154,11 +167,12 @@ def fit_fpts_distributions(session, logging_level: str = "INFO"):
             starting_freq = started_count / len(recent_games)
         else:
             starting_freq = 0.0
+
         
         usually_starts = starting_freq >= 0.6  # 60% threshold
         
         # SCENARIO ROUTING: Choose appropriate historical data source
-        if is_projected_starter and not usually_starts:
+        if is_starting and not usually_starts:
             # Scenario 2: Newly starting player - use positional starter stats
             logger.warning(f"{player.name}: Starting today but usually benched ({starting_freq:.1%} start rate)")
             logger.warning(f"  → Using positional starter stats for {player.team} {position}")
@@ -183,7 +197,7 @@ def fit_fpts_distributions(session, logging_level: str = "INFO"):
         
         else:
             # Scenario 1 or 3: Use player's own stats
-            if is_projected_starter:
+            if is_starting:
                 logger.info(f"{player.name}: Regular starter ({starting_freq:.1%} start rate)")
             else:
                 logger.info(f"{player.name}: Bench role ({starting_freq:.1%} start rate)")

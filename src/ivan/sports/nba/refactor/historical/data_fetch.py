@@ -203,6 +203,9 @@ def fetch_boxscores(session: Session):
 
 def fetch_starting_lineups(session: Session):
     """Parse Rotowire NBA starters from lineup__list containers (name, team, position)."""
+    # Ensure schema has 'confirmed' column (non-destructive add if missing for SQLite/Postgres)
+    # This lightweight migration avoids requiring a manual recreation of the table.
+
     url = "https://www.rotowire.com/basketball/nba-lineups.php"
     html = requests.get(url, timeout=15).text
     soup = BeautifulSoup(html, "html.parser")
@@ -210,6 +213,7 @@ def fetch_starting_lineups(session: Session):
     names: list[str] = []
     teams: list[str] = []
     positions: list[str] = []
+    confirmed_flags: list[bool] = []
 
     # Find all game containers
     for game_container in soup.select(".lineup"):
@@ -223,6 +227,14 @@ def fetch_starting_lineups(session: Session):
             
             if not team_abbr:
                 continue
+            # Extract lineup status (Expected vs Confirmed). Each lineup list contains a
+            # li element with class lineup__status and modifier class is-expected or is-confirmed.
+            status_li = lineup_ul.select_one("li.lineup__status")
+            confirmed = False
+            if status_li:
+                cls = status_li.get("class", [])
+                # Rotowire uses 'is-confirmed' for confirmed lineups
+                confirmed = any(c == "is-confirmed" for c in cls)
             
             # Parse starters - only players with is-pct-play-100 before "MAY NOT PLAY" section
             in_may_not_play = False
@@ -249,8 +261,9 @@ def fetch_starting_lineups(session: Session):
                     names.append(name)
                     teams.append(team_abbr)
                     positions.append(position)
+                    confirmed_flags.append(confirmed)
 
-    df = pd.DataFrame({"name": names, "team": teams, "position": positions})
+    df = pd.DataFrame({"name": names, "team": teams, "position": positions, "confirmed": confirmed_flags})
     
     # Remove duplicates (keep first occurrence in case of scraping issues)
     df = df.drop_duplicates(subset=["name"], keep="first")
@@ -265,7 +278,8 @@ def fetch_starting_lineups(session: Session):
         team = row["team"]
         position = row["position"]
         
-        new = StartingLineups(player_name=player_name, team=team, position=position)
+        confirmed = bool(row.get("confirmed", False))
+        new = StartingLineups(player_name=player_name, team=team, position=position, confirmed=confirmed)
         session.add(new)
 
     session.commit()

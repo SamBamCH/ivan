@@ -86,6 +86,7 @@ def _parse_gametime_to_local(start_time_str: str|None) -> object|None:
     """
     Parse ISO format datetime string and convert to local timezone.
     Assumes the input is in UTC if no timezone info is present.
+    Returns timezone-naive datetime in Central time for database storage.
     """
     if not start_time_str:
         return None
@@ -101,7 +102,9 @@ def _parse_gametime_to_local(start_time_str: str|None) -> object|None:
         # Convert to local timezone
         local_dt = dt.astimezone(LOCAL_TZ)
         
-        return local_dt
+        # Remove timezone info to match SQLAlchemy DateTime behavior
+        # (stores as naive datetime in Central time)
+        return local_dt.replace(tzinfo=None)
     except Exception as e:
         logging.warning(f"Failed to parse datetime '{start_time_str}': {e}")
         return None
