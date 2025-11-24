@@ -9,14 +9,8 @@ from datetime import datetime
 import pandas as pd
 
 from ivan.sports.nba.models import NBAPlayer, NBAOdds, NBAStat
+from rich.console import Console
 from sqlalchemy import select, func
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-logger = logging.getLogger(__name__)
 
 MARKET_MAP = {
     'points': ('player_points', 'player_points_alternate'),
@@ -39,6 +33,8 @@ DK_SCORING = {
     'double_double': 1.5,
     'triple_double': 3.0,
 }
+
+console = Console()
 
 
 # ============================================================================
@@ -104,7 +100,6 @@ def _get_position_stats(session, position: str, season: str = "2024-25") -> pd.D
     players = session.execute(stmt).scalars().all()
     
     if not players:
-        logger.warning(f"No players found with position matching '{position}'")
         return pd.DataFrame()
     
     player_names = [p.name for p in players]
@@ -119,16 +114,50 @@ def _get_position_stats(session, position: str, season: str = "2024-25") -> pd.D
         records = pd.read_sql(stats_stmt, conn)
     
     if len(records) == 0:
-        logger.warning(f"No historical stats found for any player with position '{position}'")
         return pd.DataFrame()
     
     stat_cols = [s for s in STATS if s in records.columns]
     data = records[stat_cols].dropna()
-    
-    logger.info(f"Position {position}: Using {len(data)} stat records from {len(records)} games for fallback")
-    
+        
     return data
 
+
+# ============================================================================
+# TEAM+POSITION-LEVEL STATS (ROLE-AWARE FALLBACK)
+# ============================================================================
+
+def _get_team_position_stats(session, team: str, position: str, season: str = "2024-25") -> pd.DataFrame:
+    """
+    Fetch stats for all games by players on a given team and simplified position ('G','F','C').
+    Useful when a bench player starts; team+position captures role better than player-only history.
+
+    Args:
+        session: Database session
+        team: Team abbreviation matching NBAPlayer.team / NBAStat.team_abbreviation
+        position: Simplified position ('G','F','C')
+        season: Season string
+
+    Returns:
+        DataFrame with stat columns from STATS; empty if none.
+    """
+    if not team or not position:
+        return pd.DataFrame()
+
+    stmt = select(NBAStat).where(
+        (func.upper(NBAStat.team_abbreviation) == func.upper(team)) &
+        (NBAStat.position == position) &
+        (NBAStat.season == season)
+    )
+
+    with session.bind.connect() as conn:
+        records = pd.read_sql(stmt, conn)
+
+    if len(records) == 0:
+        return pd.DataFrame()
+
+    stat_cols = [s for s in STATS if s in records.columns]
+    data = records[stat_cols].dropna()
+    return data
 
 # ============================================================================
 # ODDS PROCESSING
@@ -141,64 +170,38 @@ def _get_player_consensus_odds(session, player_name: str) -> Dict[str, List[Dict
     
     Returns: {stat: [{'line', 'side', 'prob'}, ...]}
     """
-    stmt = select(NBAOdds).where(NBAOdds.player == player_name)
-    odds_records = session.execute(stmt).scalars().all()
-
-    logger.info(f"Found {len(odds_records)} total odds records for player: {player_name}")
-
-    if not odds_records:
-        logger.warning(f"No odds records found for player: {player_name}")
-        return {}
-
-    odds_by_stat_line_side = {}
-
-    # Group odds by (stat, line, side)
-    for record in odds_records:
-        stat = None
-        for s, (primary, alternate) in MARKET_MAP.items():
-            if record.market in (primary, alternate):
-                stat = s
-                break
-
-        if stat is None:
-            logger.debug(f"Skipping unrecognized market: {record.market}")
-            continue
-
-        side = record.side.lower()
-        key = (stat, record.point, side)
-        if key not in odds_by_stat_line_side:
-            odds_by_stat_line_side[key] = []
-
-        prob = _american_to_prob(record.price)
-        logger.debug(f"  {stat} @ {record.point} {side}: {record.sportsbook}, prob={prob:.4f}")
-        odds_by_stat_line_side[key].append({'sportsbook': record.sportsbook, 'prob': prob})
-
-    logger.info(f"Grouped {len(odds_by_stat_line_side)} unique (stat, line, side) combinations")
-
-    # Filter: only keep groups with 2+ books (consensus)
-    filtered_odds = {}
-    for key, odds_list in odds_by_stat_line_side.items():
-        if len(odds_list) >= 2:
-            filtered_odds[key] = odds_list
-        else:
-            stat, line, side = key
-            logger.debug(f"Filtered out {stat} @ {line} {side}: only {len(odds_list)} book(s)")
-
-    # Reorganize into {stat: [{'line', 'side', 'prob'}, ...]}
+    # New logic: loop through all stats in STATS, pull all odds for each player/stat combo
     consensus_by_stat = {}
-    for (stat, line, side), odds_list in filtered_odds.items():
-        probs = [o['prob'] for o in odds_list]
-        avg_prob = np.mean(probs)
-
-        if stat not in consensus_by_stat:
-            consensus_by_stat[stat] = []
-
-        consensus_by_stat[stat].append({
-            'line': line,
-            'side': side,
-            'prob': avg_prob,
-        })
-
+    for stat in STATS:
+        market_names = MARKET_MAP[stat]
+        odds_records = session.query(NBAOdds).filter(
+            NBAOdds.player == player_name,
+            NBAOdds.market.in_(market_names)
+        ).all()
+        if not odds_records:
+            print(f"[_get_player_consensus_odds] No odds found for player='{player_name}', stat='{stat}' (markets={market_names})")
+            continue
+        # Group by (line, side)
+        odds_by_line_side = {}
+        for record in odds_records:
+            key = (record.point, record.side.lower())
+            prob = _american_to_prob(record.price)
+            if key not in odds_by_line_side:
+                odds_by_line_side[key] = []
+            odds_by_line_side[key].append({'sportsbook': record.sportsbook, 'prob': prob})
+        # Only keep groups with 2+ books (consensus)
+        for (line, side), odds_list in odds_by_line_side.items():
+            if len(odds_list) < 2:
+                continue
+            probs = [o['prob'] for o in odds_list]
+            avg_prob = np.mean(probs)
+            if stat not in consensus_by_stat:
+                consensus_by_stat[stat] = []
+            consensus_by_stat[stat].append({
+                'line': line,
+                'side': side,
+                'prob': avg_prob,
+            })
     return consensus_by_stat
 
 
@@ -225,13 +228,11 @@ def _get_player_all_historical_stats(
         records = pd.read_sql(stmt, conn)
 
     if len(records) == 0:
-        logger.warning(f"No historical data for player {player_name}")
         return pd.DataFrame()
 
     # Extract only the stats we care about
     stat_cols = [s for s in STATS if s in records.columns]
     data = records[stat_cols].dropna()
-    logger.info(f"Player {player_name}: {len(data)} games with complete stat data")
 
     return data
 
@@ -250,7 +251,6 @@ def _compute_player_correlation_matrix(historical_data: pd.DataFrame) -> np.ndar
         (n_stats, n_stats) correlation matrix
     """
     if len(historical_data) < 3:
-        logger.warning(f"Insufficient data ({len(historical_data)} games) for correlation, using identity matrix")
         return np.eye(len(STATS))
 
     # STEP 1: Clean data BEFORE correlation computation to avoid NaN in results
@@ -260,7 +260,6 @@ def _compute_player_correlation_matrix(historical_data: pd.DataFrame) -> np.ndar
     for col in cleaned_data.columns:
         # Skip if all NaN
         if cleaned_data[col].isna().all():
-            logger.debug(f"Dropping {col}: all NaN values")
             problematic_cols.append(col)
             continue
         
@@ -269,67 +268,52 @@ def _compute_player_correlation_matrix(historical_data: pd.DataFrame) -> np.ndar
             std_val = cleaned_data[col].std()
             if std_val == 0 or np.isnan(std_val):
                 unique_vals = cleaned_data[col].unique()
-                logger.debug(f"Dropping {col}: zero variance (unique values: {unique_vals})")
                 problematic_cols.append(col)
                 continue
         except Exception as e:
-            logger.debug(f"Dropping {col}: error computing std: {e}")
             problematic_cols.append(col)
             continue
         
         # Skip if too many NaN (>50% missing)
         nan_pct = cleaned_data[col].isna().sum() / len(cleaned_data)
         if nan_pct > 0.5:
-            logger.debug(f"Dropping {col}: too many NaN ({nan_pct*100:.1f}% missing)")
             problematic_cols.append(col)
             continue
     
     if problematic_cols:
-        logger.info(f"Removing {len(problematic_cols)} problematic columns: {problematic_cols}")
         cleaned_data = cleaned_data.drop(columns=problematic_cols)
     
     # If we don't have enough columns, fallback to identity
     if len(cleaned_data.columns) < 2:
-        logger.warning(f"Insufficient valid stats for correlation (only {len(cleaned_data.columns)} columns left), using identity matrix")
         return np.eye(len(STATS))
     
     # STEP 2: Compute correlation on cleaned data
     try:
-        logger.debug(f"Computing correlation from {len(cleaned_data)} games, {len(cleaned_data.columns)} stats")
         # Compute Spearman correlation (rank-based, more robust to outliers)
         corr_matrix = cleaned_data.corr(method='spearman').values
         
         num_nonfinite = np.sum(~np.isfinite(corr_matrix))
-        logger.debug(f"Raw correlation matrix: shape={corr_matrix.shape}, non-finite values={num_nonfinite}")
         
         # Double-check for any remaining NaN/Inf and replace
         if num_nonfinite > 0:
-            logger.warning(f"Correlation matrix contains {num_nonfinite} NaN/Inf values, replacing with zeros")
             corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
             np.fill_diagonal(corr_matrix, 1.0)
-            logger.debug(f"After replacement: non-finite values={np.sum(~np.isfinite(corr_matrix))}")
     
     except Exception as e:
-        logger.error(f"Failed to compute correlation: {type(e).__name__}: {e}, using identity matrix")
         return np.eye(len(STATS))
     
     # STEP 3: Ensure positive semi-definite
     try:
         np.linalg.cholesky(corr_matrix)
-        logger.debug(f"Correlation matrix is positive semi-definite")
     except np.linalg.LinAlgError:
-        logger.warning(f"Correlation matrix not positive semi-definite, applying regularization")
         try:
             # Add small ridge to diagonal to ensure PSD
             corr_matrix += np.eye(corr_matrix.shape[0]) * 0.01
             # Verify it worked
             np.linalg.cholesky(corr_matrix)
-            logger.debug(f"Regularization successful")
         except np.linalg.LinAlgError as e:
-            logger.error(f"Failed to regularize: {type(e).__name__}: {e}, using identity matrix")
             return np.eye(len(STATS))
 
-    logger.debug(f"Final correlation matrix: shape={corr_matrix.shape}, all finite={np.all(np.isfinite(corr_matrix))}")
     return corr_matrix
 
 
@@ -360,7 +344,6 @@ def _build_stat_distribution_with_constraints(
         (mean, std) of adjusted distribution
     """
     if len(historical_values) == 0:
-        logger.warning("No historical values provided, using defaults")
         return 0.0, 1.0
 
     # Sample from historical distribution
@@ -373,9 +356,6 @@ def _build_stat_distribution_with_constraints(
     empirical_std = float(np.std(sampled, ddof=1))
     insufficient_data = n_historical < 10
     
-    if insufficient_data:
-        logger.warning(f"Insufficient historical data ({n_historical} games), will blend empirical with constraints")
-
     # ========================================================================
     # BUILD CONSTRAINTS - ONLY USE "OVER" ODDS
     # ========================================================================
@@ -393,7 +373,6 @@ def _build_stat_distribution_with_constraints(
         # ONLY use "over" bets; skip "under"
         # This avoids the duplicate constraint problem
         if side.lower() != 'over':
-            logger.debug(f"Skipping {side} @ {line}: using only 'over' odds to avoid duplicate constraints")
             continue
         
         # P(X > line) = prob  =>  CDF(line) = 1 - prob
@@ -403,20 +382,16 @@ def _build_stat_distribution_with_constraints(
             # If we somehow see the same line twice, average the CDF values
             old_cdf = constraints_by_line[line]
             constraints_by_line[line] = (old_cdf + cdf_at_line) / 2.0
-            logger.debug(f"Averaged CDF for line {line}: {constraints_by_line[line]:.4f}")
         else:
             constraints_by_line[line] = cdf_at_line
-            logger.debug(f"Added constraint: line {line:.4f} -> CDF {cdf_at_line:.4f}")
     
     if not constraints_by_line:
-        logger.debug("No valid constraints found, returning empirical distribution")
         return empirical_mean, empirical_std
     
     # Convert to (quantile, value) pairs
     quantile_points = sorted(constraints_by_line.values())
     value_points = [line for line, _ in sorted([(k, v) for k, v in constraints_by_line.items()], key=lambda x: x[1])]
     
-    logger.debug(f"Constraint points: {list(zip(quantile_points, value_points))}")
     
     # ========================================================================
     # ENSURE MONOTONICITY - Better approach
@@ -427,18 +402,15 @@ def _build_stat_distribution_with_constraints(
             # Adjust value to maintain monotonicity with minimal disturbance
             min_gap = (value_points[-1] - value_points[0]) / (len(value_points) - 1) * 0.1
             value_points[i] = max(value_points[i], value_points[i - 1] + min_gap)
-            logger.debug(f"Adjusted value_points[{i}] for monotonicity: {value_points[i]:.4f}")
     
     # Skip endpoints - avoid constraints too close to 0 or 1
     valid_constraints = []
     for q, v in zip(quantile_points, value_points):
         if 0.01 < q < 0.99:
             valid_constraints.append((q, v))
-        else:
-            logger.debug(f"Skipping constraint at quantile {q:.4f}: too close to endpoints")
+
     
     if not valid_constraints:
-        logger.debug("No valid constraints after endpoint filtering, returning empirical")
         return empirical_mean, empirical_std
     
     quantile_points = [q for q, v in valid_constraints]
@@ -481,14 +453,10 @@ def _build_stat_distribution_with_constraints(
         mean_blended = blend_weight * empirical_mean + (1 - blend_weight) * mean
         std_blended = blend_weight * empirical_std + (1 - blend_weight) * std
         
-        logger.info(f"Blended empirical (weight={blend_weight:.2f}): "
-                   f"mean {mean:.4f} → {mean_blended:.4f}, "
-                   f"std {std:.4f} → {std_blended:.4f}")
         
         mean = mean_blended
         std = std_blended
     
-    logger.debug(f"Final adjusted distribution: mean={mean:.4f}, std={std:.4f}")
     
     return mean, std
 
@@ -527,15 +495,12 @@ def _sample_from_distributions(
                 # Count data: Use Poisson distribution
                 # Lambda parameter is the mean
                 samples[:, i] = np.random.poisson(lam=mean, size=n_samples)
-                logger.debug(f"  {stat}: sampled from Poisson(λ={mean:.4f})")
             else:
                 # Continuous data (points): Use Normal distribution
                 samples[:, i] = np.random.normal(loc=mean, scale=std, size=n_samples)
                 # Ensure non-negative (can't have negative points)
                 samples[:, i] = np.maximum(samples[:, i], 0)
-                logger.debug(f"  {stat}: sampled from Normal(μ={mean:.4f}, σ={std:.4f})")
         else:
-            logger.warning(f"  {stat}: no distribution found, using zeros")
             samples[:, i] = 0
 
     return samples
@@ -561,7 +526,6 @@ def _impose_correlation_structure(
     try:
         corr_normal = np.random.multivariate_normal(mean, target_corr, size=n_samples)
     except np.linalg.LinAlgError:
-        logger.warning("Failed to generate multivariate normal, using random reordering")
         corr_normal = np.random.randn(n_samples, n_stats)
 
     target_ranks = np.apply_along_axis(rankdata, 0, corr_normal)
@@ -628,23 +592,18 @@ def _process_player(
     
     Returns: (fpts_mean, fpts_std) or None if processing fails
     """
-    logger.info(f"[PROCESS] Starting player {player.name} (position: {player.position})")
-
     # Validate and parse player info
     position = _parse_position(player.position)
     if position is None:
-        logger.warning(f"[PROCESS] Could not parse position for {player.name}: '{player.position}'")
+        logging.error(f'{player.name} has unparsable position')
         return None
-
-    logger.info(f"[PROCESS] Position: {position}")
 
     # Fetch individual historical data
     historical_data = _get_player_all_historical_stats(session, player.name, season="2024-25")
     
     # If no individual data, use position fallback
-    if historical_data.empty:
-        logger.info(f"[PROCESS] No individual history for {player.name}, using position fallback ({position})")
-        
+    if historical_data.empty:        
+        logging.error(f"no historical data found for {player.name}, defaulting to position stats {position}")
         # Get or compute position stats
         if position not in position_stats_cache:
             position_stats_cache[position] = _get_position_stats(session, position, season="2024-25")
@@ -652,30 +611,62 @@ def _process_player(
         historical_data = position_stats_cache[position]
         
         if historical_data.empty:
-            logger.warning(f"[PROCESS] No individual history AND no position stats available for {player.name}")
+            logging.error(f"no historical data found for {player.name}, OR for position fallback {position}")
             return None
         
-        logger.info(f"[PROCESS] Using {len(historical_data)} position-level records for {player.name}")
-
     # Get consensus odds for this player
     consensus_odds = _get_player_consensus_odds(session, player.name)
     if not consensus_odds:
-        logger.warning(f"[DELETE] {player.name}: No consensus odds found - marking for deletion")
         return None
 
-    logger.info(f"[PROCESS] Found consensus odds for {len(consensus_odds)} stats")
+    # Determine if player is a projected starter
+    is_starter = False
+    try:
+        from ivan.sports.nba.models import StartingLineups
+        start_stmt = select(StartingLineups.player_name).distinct()
+        starting_players = set(session.execute(start_stmt).scalars().all())
+        is_starter = player.name in starting_players
+    except Exception:
+        # If starting lineup table unavailable, default to non-starter behavior safety-first
+        is_starter = False
+
+    # Pre-compute team+position dataset once (only for starters)
+    team_pos_data = pd.DataFrame()
+    if is_starter:
+        team_pos_data = _get_team_position_stats(session, player.team, position, season="2024-25")
 
     # For each stat, build distribution and adjust with odds
     stat_distributions = {}
     for stat in STATS:
-        logger.info(f"[PROCESS] Building distribution for {stat}")
-        
-        # Get historical values for this stat
-        if stat in historical_data.columns:
-            historical_values = historical_data[stat].values
+        # Selection order depends on starter status.
+        if is_starter:
+            # Starters: prioritize role-aware team+position, then player history, then position pool
+            if stat in team_pos_data.columns and not team_pos_data[stat].dropna().empty:
+                historical_values = team_pos_data[stat].values
+            elif stat in historical_data.columns and not historical_data[stat].dropna().empty:
+                historical_values = historical_data[stat].values
+            elif position in position_stats_cache and stat in position_stats_cache[position].columns and not position_stats_cache[position][stat].dropna().empty:
+                historical_values = position_stats_cache[position][stat].values
+            else:
+                if position not in position_stats_cache:
+                    position_stats_cache[position] = _get_position_stats(session, position, season="2024-25")
+                if stat in position_stats_cache[position].columns and not position_stats_cache[position][stat].dropna().empty:
+                    historical_values = position_stats_cache[position][stat].values
+                else:
+                    historical_values = np.array([])
         else:
-            logger.warning(f"  {stat}: not in historical data")
-            historical_values = np.array([])
+            # Non-starters: match by name (player history) first; avoid team+position to prevent role leakage
+            if stat in historical_data.columns and not historical_data[stat].dropna().empty:
+                historical_values = historical_data[stat].values
+            elif position in position_stats_cache and stat in position_stats_cache[position].columns and not position_stats_cache[position][stat].dropna().empty:
+                historical_values = position_stats_cache[position][stat].values
+            else:
+                if position not in position_stats_cache:
+                    position_stats_cache[position] = _get_position_stats(session, position, season="2024-25")
+                if stat in position_stats_cache[position].columns and not position_stats_cache[position][stat].dropna().empty:
+                    historical_values = position_stats_cache[position][stat].values
+                else:
+                    historical_values = np.array([])
         
         # Get odds constraints for this stat
         stat_odds = consensus_odds.get(stat, [])
@@ -687,34 +678,25 @@ def _process_player(
             n_samples=n_samples
         )
         stat_distributions[stat] = (mean, std)
-        logger.info(f"  {stat}: mean={mean:.4f}, std={std:.4f}")
 
     # Compute correlation matrix from historical data
-    logger.info(f"[PROCESS] Computing correlation matrix from historical data")
     player_corr_matrix = _compute_player_correlation_matrix(historical_data)
 
     # Sample all stats using their distributions
-    logger.info(f"[PROCESS] Sampling {n_samples} from distributions")
     samples = _sample_from_distributions(stat_distributions, n_samples)
 
     # Apply correlation structure
-    logger.info(f"[PROCESS] Applying correlation structure")
     try:
         correlated_samples = _impose_correlation_structure(samples, player_corr_matrix)
     except Exception as e:
-        logger.error(f"[PROCESS] Failed to impose correlation: {e}")
         correlated_samples = samples
 
     # Calculate FPTS
-    logger.info(f"[PROCESS] Calculating FPTS")
     fpts_samples = _calculate_fpts(correlated_samples)
-    logger.debug(f"  FPTS stats: min={fpts_samples.min():.4f}, max={fpts_samples.max():.4f}, "
-                 f"mean={fpts_samples.mean():.4f}, std={fpts_samples.std():.4f}")
 
     # Fit normal distribution
     fpts_mean = float(np.mean(fpts_samples))
     fpts_std = float(np.std(fpts_samples, ddof=1))
-    logger.info(f"[PROCESS] Final FPTS: mean={fpts_mean:.4f}, std={fpts_std:.4f}")
 
     # Store to database
     player.fpts_mean = fpts_mean
@@ -723,7 +705,6 @@ def _process_player(
     session.merge(player)
     session.commit()
 
-    logger.info(f"[PROCESS] Completed {player.name}")
     return fpts_mean, fpts_std
 
 
@@ -741,18 +722,33 @@ def _delete_players_without_odds(session) -> List[str]:
     # Get all unique player names from odds
     odds_stmt = select(NBAOdds.player).distinct()
     players_with_odds = set(session.execute(odds_stmt).scalars().all())
-    
+
+    # Get starting lineup players (protect these from deletion even if no odds)
+    try:
+        from ivan.sports.nba.models import StartingLineups
+        start_stmt = select(StartingLineups.player_name).distinct()
+        starting_players = set(session.execute(start_stmt).scalars().all())
+    except Exception:
+        starting_players = set()
+
     # Get all players from database
     player_stmt = select(NBAPlayer)
     all_players = session.execute(player_stmt).scalars().all()
-    
+
     deleted = []
     for player in all_players:
-        if player.name not in players_with_odds:
-            deleted.append(player.name)
-            logger.info(f"[DELETE] {player.name}: No odds found - deleted from database")
-            session.delete(player)
-    
+        if player.name in players_with_odds:
+            continue
+        if player.name in starting_players:
+            # Keep starter; mark status for clarity if missing odds
+            if not player.status or player.status.upper() != "OUT":
+                player.status = (player.status or "") + (";NO_ODDS" if "NO_ODDS" not in (player.status or "") else "")
+            console.print(f"[cyan]Retaining starter without odds[/cyan] {player.name} (id={player.id})")
+            continue
+        deleted.append(player.name)
+        console.print(f"[yellow]Removing player[/yellow] {player.name} (id={player.id}) - reason: no odds available across books and not in starting lineup")
+        session.delete(player)
+
     session.commit()
     return deleted
 
@@ -773,7 +769,7 @@ def _delete_out_status_players(session) -> List[str]:
     deleted = []
     for player in out_players:
         deleted.append(player.name)
-        logger.info(f"[DELETE] {player.name}: Status is OUT - deleted from database")
+        console.print(f"[yellow]Removing player[/yellow] {player.name} (id={player.id}) - reason: status is OUT")
         session.delete(player)
     
     session.commit()
@@ -825,30 +821,25 @@ def fit_fpts_distributions(session, n_samples: int = 10000):
     - Deletion of players without odds
     - Comprehensive tracking of all deletions and unmatched odds
     """
-    logger.info("[FIT] Starting FPTS distribution fitting")
-    logger.info("[FIT] Data sources: NBAPlayer, NBAStat, NBAOdds")
 
     # ========================================================================
     # PHASE 1: CLEANUP - Remove OUT status and no-odds players
     # ========================================================================
-    logger.info("[FIT] ===== PHASE 1: CLEANUP =====")
     
     out_deleted = _delete_out_status_players(session)
-    logger.info(f"[FIT] Deleted {len(out_deleted)} players with OUT status")
+    if out_deleted:
+        console.print(f"[cyan]Removed {len(out_deleted)} player(s) with OUT status[/cyan]")
     
     no_odds_deleted = _delete_players_without_odds(session)
-    logger.info(f"[FIT] Deleted {len(no_odds_deleted)} players without odds")
+    if no_odds_deleted:
+        console.print(f"[cyan]Removed {len(no_odds_deleted)} player(s) without odds[/cyan]")
     
     # ========================================================================
     # PHASE 2: PROCESSING - Calculate FPTS distributions
-    # ========================================================================
-    logger.info("[FIT] ===== PHASE 2: PROCESSING =====")
-    
+    # ========================================================================    
     # Get all remaining players
     stmt = select(NBAPlayer).distinct()
     players = session.execute(stmt).scalars().all()
-    logger.info(f"[FIT] Found {len(players)} remaining players to process")
-
     # Cache for position-level stats
     position_stats_cache = {}
     
@@ -860,7 +851,6 @@ def fit_fpts_distributions(session, n_samples: int = 10000):
     successful = 0
     failed = 0
     for idx, player in enumerate(players, 1):
-        logger.info(f"[FIT] ===== Player {idx}/{len(players)} =====")
         result = _process_player(session, player, position_stats_cache, n_samples)
         if result is not None:
             successful += 1
@@ -868,65 +858,4 @@ def fit_fpts_distributions(session, n_samples: int = 10000):
         else:
             failed += 1
             failed_players.append(player.name)
-
-    logger.info(f"[FIT] ===== PHASE 2 COMPLETE =====")
-    logger.info(f"[FIT] Successful: {successful}, Failed: {failed}")
     
-    # ========================================================================
-    # PHASE 3: SUMMARY
-    # ========================================================================
-    logger.info(f"[FIT] ===== PHASE 3: SUMMARY =====")
-    
-    logger.info(f"[FIT] Players deleted (OUT status): {len(out_deleted)}")
-    if out_deleted:
-        for player in sorted(out_deleted):
-            logger.info(f"[FIT]   - {player}")
-    
-    logger.info(f"[FIT] Players deleted (no odds): {len(no_odds_deleted)}")
-    if no_odds_deleted:
-        for player in sorted(no_odds_deleted)[:20]:  # Show first 20
-            logger.info(f"[FIT]   - {player}")
-        if len(no_odds_deleted) > 20:
-            logger.info(f"[FIT]   ... and {len(no_odds_deleted) - 20} more")
-    
-    logger.info(f"[FIT] Players processed successfully: {successful}")
-    
-    logger.info(f"[FIT] Players failed to process: {failed}")
-    if failed_players:
-        for player in sorted(failed_players):
-            logger.info(f"[FIT]   - {player}")
-    
-    # ========================================================================
-    # UNMATCHED ODDS - Indicates potential name mismatches
-    # ========================================================================
-    logger.info(f"[FIT] Checking for unmatched odds...")
-    unmatched_odds = _find_unmatched_odds(session)
-    
-    if unmatched_odds:
-        logger.warning(f"[FIT] ===== UNMATCHED ODDS ({len(unmatched_odds)}) - POTENTIAL NAME MISMATCHES =====")
-        
-        # Group by player
-        by_player = {}
-        for odd in unmatched_odds:
-            player = odd['player']
-            if player not in by_player:
-                by_player[player] = []
-            by_player[player].append(odd)
-        
-        # Log unmatched odds grouped by player
-        for player_name in sorted(by_player.keys())[:20]:  # Show first 20
-            odds_for_player = by_player[player_name]
-            logger.warning(f"[FIT] UNMATCHED: {player_name} ({len(odds_for_player)} odds)")
-            for odd in odds_for_player[:2]:  # Show first 2
-                logger.warning(f"[FIT]   {odd['market']} @ {odd['line']} {odd['side']} "
-                             f"({odd['sportsbook']})")
-        
-        if len(by_player) > 20:
-            logger.warning(f"[FIT] ... and {len(by_player) - 20} more unmatched players")
-    else:
-        logger.info(f"[FIT] ✓ All odds matched to players")
-    
-    logger.info(f"[FIT] ===== FIT COMPLETE =====")
-    logger.info(f"[FIT] Total processed: {successful}")
-    logger.info(f"[FIT] Total deleted: {len(out_deleted) + len(no_odds_deleted)}")
-    logger.info(f"[FIT] Total unmatched odds: {len(unmatched_odds)}")

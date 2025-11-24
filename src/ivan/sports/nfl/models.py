@@ -302,43 +302,38 @@ class NFLGameOdds(NFLBase):
 
 class ShowdownPlayer(NFLBase):
     """
-    One row per player per contest.
-    Stores player-level information for building correlation features.
+    Permanent storage for Showdown player data.
+    One row per (contest_id, player_id) where player_id is the DK roster slot ID.
+    Replaces ProjectionSnapshot after contest is processed.
     """
     __tablename__ = "showdown_player"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
     contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"), 
-                       nullable=False, index=True)
+                       primary_key=True)
+    player_id = Column(Integer, primary_key=True)  # DK player ID for this roster slot
+    roster_slot_id = Column(Integer, nullable=False)  # 511=CPT, 512=FLEX
     
-    # Player identification
-    player_name = Column(String, nullable=False)
-    normalized_name = Column(String, nullable=False, index=True)
-    team = Column(String, nullable=True)  # Team abbreviation
-    position = Column(String, nullable=True)  # QB, RB, WR, TE, DST
-    roster_slot = Column(String, nullable=False)  # CPT or FLEX
-    
-    # DraftKings data
+    # Player metadata (from ProjectionSnapshot)
     salary = Column(Integer, nullable=False)
-    ownership_pct = Column(Float, nullable=False)  # 0-100
-    fpts_actual = Column(Float, nullable=True)  # Actual points scored
+    position = Column(String, nullable=False)
+    team = Column(String, nullable=False)
     
-    # For correlation analysis
-    game_id = Column(String, nullable=True)  # Links players in same game
-    opponent = Column(String, nullable=True)
-
+    # Actual ownership from contest results (for model fitting)
+    ownership_actual = Column(Float, nullable=False)  # 0-100, calculated from lineups
+    
+    # Our projections (from ProjectionSnapshot)
     ownership_proj = Column(Float, nullable=True)
+    fpts_proj = Column(Float, nullable=True)
     
-    __table_args__ = (
-        UniqueConstraint('contest_id', 'player_name', 'roster_slot', 
-                        name='uq_showdown_player'),
-    )
+    # Actual performance
+    fpts_actual = Column(Float, nullable=True)
 
 
 class ShowdownLineup(NFLBase):
     """
-    One row per unique lineup in a contest.
-    This is your core training data for the 5-dimensional model.
+    Minimal lineup-level data for Showdown contests.
+    Stores only player IDs and duplication count.
+    All other features calculated at runtime by joining to ShowdownPlayer/ProjectionSnapshot.
     """
     __tablename__ = "showdown_lineup"
     
@@ -346,102 +341,40 @@ class ShowdownLineup(NFLBase):
     contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
                        nullable=False, index=True)
     
-    # Lineup composition
-    captain_name = Column(String, nullable=False)
-    flex_players = Column(JSON, nullable=False)  # List of player names
+    # Lineup composition (DK player IDs for roster slots)
+    cpt_player_id = Column(Integer, nullable=False)  # CPT roster slot player ID
+    flex_player_ids = Column(JSON, nullable=False)  # List[int] of 5 FLEX roster slot IDs
     
-    # Core features for your 5-dimensional model
+    # Salary
+    salary_remaining = Column(Integer, nullable=False)  # 50000 - total
     
-    # 1. Player correlations (quantified)
-    stack_pattern = Column(String, nullable=True)  # e.g., "QB-WR-WR", "RB-DST"
-    same_team_count = Column(Integer, nullable=True)  # Players from same team
-    game_stack_type = Column(String, nullable=True)  # e.g., "5-1", "4-2" (home-away split)
-    qb_wr_stack = Column(Boolean, default=False)  # Has QB+WR from same team
-    rb_dst_negative = Column(Boolean, default=False)  # RB facing own DST
-    correlation_score = Column(Float, nullable=True)  # Custom correlation metric
-    
-    # 2. Captain ownership
-    cpt_ownership_pct = Column(Float, nullable=False)  # 0-100
-    cpt_ownership_percentile = Column(Float, nullable=True)  # 0-1 within contest
-    
-    # 3. Lineup projection (normalized 0-1)
-    projection_raw = Column(Float, nullable=True)  # Raw projection sum
-    projection_normalized = Column(Float, nullable=True)  # 0-1 scaled within contest
-    projection_percentile = Column(Float, nullable=True)  # Percentile within contest
-    
-    # 4. Lineup ownership (normalized 0-1)
-    ownership_sum = Column(Float, nullable=False)  # Sum of all player ownership
-    ownership_normalized = Column(Float, nullable=True)  # 0-1 scaled within contest
-    ownership_percentile = Column(Float, nullable=True)  # Percentile within contest
-    
-    # 5. Salary remaining
-    total_salary = Column(Integer, nullable=False)
-    salary_remaining = Column(Integer, nullable=False)  # 50000 - total_salary
-    salary_remaining_pct = Column(Float, nullable=False)  # Percent of cap unused
-    
-    # Target variables
-    duplicate_count = Column(Integer, nullable=False, default=1)  # How many times this lineup appeared
-    unique_rank = Column(Integer, nullable=True)  # Rank among unique lineups
-    best_score = Column(Float, nullable=True)  # Best score this lineup achieved
-    best_rank = Column(Integer, nullable=True)  # Best rank this lineup achieved
-
-    cpt_ownership_actual = Column(Float, nullable=True)
-    ownership_sum_actual = Column(Float, nullable=True)
-    
-    # Metadata
-    first_seen_rank = Column(Integer, nullable=True)  # First occurrence rank
+    # Target variable
+    dupe_count = Column(Integer, nullable=False, default=1)
     
     __table_args__ = (
-        UniqueConstraint('contest_id', 'captain_name', 'flex_players',
+        UniqueConstraint('contest_id', 'cpt_player_id', 'flex_player_ids',
                         name='uq_showdown_lineup'),
     )
 
 
 class ShowdownContestMetadata(NFLBase):
     """
-    Enhanced contest-level metadata for normalization and modeling context.
-    One row per contest.
+    Contest-level duplication distribution stats.
+    Target variables for phase 1 of showdown dupe model (predict contest quantiles).
     """
     __tablename__ = "showdown_contest_metadata"
     
     contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
                        primary_key=True)
     
-    # Contest info (denormalized for convenience)
-    date = Column(DateTime, nullable=False)
-    total_entries = Column(Integer, nullable=False)
-    entry_fee = Column(Float, nullable=False)
-    
-    # Game information
-    home_team = Column(String, nullable=True)
-    away_team = Column(String, nullable=True)
-    game_time = Column(DateTime, nullable=True)
-    
-    # Normalization bounds for the 5 dimensions
-    min_projection = Column(Float, nullable=True)
-    max_projection = Column(Float, nullable=True)
-    median_projection = Column(Float, nullable=True)
-    
-    min_ownership = Column(Float, nullable=True)
-    max_ownership = Column(Float, nullable=True)
-    median_ownership = Column(Float, nullable=True)
-    
-    min_cpt_ownership = Column(Float, nullable=True)
-    max_cpt_ownership = Column(Float, nullable=True)
-    
-    # Aggregate patterns (for model training context)
+    # Duplication distribution (target variables for phase 1 model)
     unique_lineup_count = Column(Integer, nullable=False)
-    max_duplicate_count = Column(Integer, nullable=False)
-    median_duplicate_count = Column(Integer, nullable=False)
-    
-    # Popular correlation patterns in this contest
-    top_stack_patterns = Column(JSON, nullable=True)  # {"QB-WR-WR": 234, ...}
-    
-    # Distribution summaries
-    ownership_gini = Column(Float, nullable=True)  # Ownership concentration
-    projection_std = Column(Float, nullable=True)
-    
-    processed_at = Column(DateTime, default=datetime.utcnow)
+    max_dupe_count = Column(Integer, nullable=False)
+    median_dupe_count = Column(Integer, nullable=False)
+    p10_dupe_count = Column(Integer, nullable=True)
+    p25_dupe_count = Column(Integer, nullable=True)
+    p75_dupe_count = Column(Integer, nullable=True)
+    p90_dupe_count = Column(Integer, nullable=True)
 
 class ProjectionSnapshot(NFLBase):
     """

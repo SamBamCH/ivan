@@ -27,9 +27,6 @@ def main():
     # *** NEW: Clean old diagnostics once at start of entire sim run ***
     from ivan.sports.nfl.simulate_contest import clean_old_diagnostics
     console = Console()
-    console.print("🧹 Cleaning old diagnostic folders...")
-    clean_old_diagnostics(days_to_keep=1)
-    console.print()
 
     df = pd.read_csv(
         cfg["paths"]["entries_csv"],

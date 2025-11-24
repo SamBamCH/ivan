@@ -23,7 +23,7 @@ from ivan.sports.nba.generate_samples import generate_player_samples
 from ivan.sports.nba.utils import _coerce_positions
 from ivan.sports.nba.sample_field import sample_field
 import csv
-from ivan.sports.nba.sample_field import sample_field
+from collections import Counter
 
 
 console = Console()
@@ -119,29 +119,9 @@ def _identify_locked_players(
         else:
             swappable.add(p.id)
 
-    # Any IDs not present in NBAPlayer: attempt classification via ProjectionSnapshot on same day
+    # Any IDs not present in NBAPlayer are assumed to be locked
     missing = set(player_ids) - found_ids
-    if missing:
-        day_start = datetime(lock_time.year, lock_time.month, lock_time.day)
-        day_end = day_start + timedelta(days=1)
-        snaps = (
-            session.query(ProjectionSnapshot)
-            .filter(
-                ProjectionSnapshot.id.in_(list(missing)),
-                ProjectionSnapshot.snapshot_date >= day_start,
-                ProjectionSnapshot.snapshot_date < day_end,
-            )
-            .all()
-        )
-        found_snap_ids = set()
-        for s in snaps:
-            found_snap_ids.add(s.id)
-            if s.gametime and s.gametime <= lock_time:
-                locked.add(s.id)
-            else:
-                swappable.add(s.id)
-        # Any still missing after snapshots → conservatively mark locked
-        locked.update(missing - found_snap_ids)
+    locked.update(missing)
 
     return locked, swappable
 
@@ -152,29 +132,20 @@ def _generate_swap_candidates(
     lock_time: datetime,
     config: dict,
     num_candidates: int = 50,
-    debug: bool = False,
 ) -> Tuple[List[SwapCandidate], Dict[int, Tuple[float, float]]]:
     """
-    Simplified candidate generation matching field sampling flow:
-    1. Build unified player pool (NBAPlayer + same-day ProjectionSnapshot)
-    2. Map locked players to their roster slots
-    3. Pass locked assignments to optimizer
+    Generate candidate lineups by keeping locked players and optimizing swappable slots.
     
-    Args:
-        debug: If True, print detailed diagnostic information
+    OPTIMIZED VERSION:
+    - Builds simple locked_assignments dict directly from player IDs and slot mapping
+    - Uses available players (gametime > lock_time) for unlocked slots
+    - Doesn't rebuild complex FieldPlayer objects for locked players
     """
     locked_pids = list(original_entry.locked_player_ids)
     n_swappable = len(original_entry.swappable_player_ids)
-
-    console.print(f"[dim]Entry {original_entry.entry_id}: {len(locked_pids)} locked, {n_swappable} swappable[/dim]")
-
+    
     if n_swappable == 0:
-        if len(locked_pids) == 0:
-            console.print(
-                f"[red]  → Warning: entry {original_entry.entry_id} has 0 locked & 0 swappable players. Returning original lineup.[/red]"
-            )
-        else:
-            console.print(f"[yellow]  → All {len(locked_pids)} players locked; returning original lineup only[/yellow]")
+        # No swaps needed; return original lineup as the only candidate
         return [SwapCandidate(
             original_entry_id=original_entry.entry_id,
             original_lineup_id=original_entry.lineup_id,
@@ -183,161 +154,90 @@ def _generate_swap_candidates(
             candidate_lineup_id=original_entry.lineup_id
         )], {}
     
-    # === STEP 1: Build unified player pool (NBAPlayer + same-day ProjectionSnapshot) ===
-    # Same pattern as sample_field.fetch_dk_field_lineups
-    player_pool: List[FieldPlayer] = []
-    seen_ids: Set[int] = set()
-    fallback_stats: Dict[int, Tuple[float, float]] = {}
-    
-    def _to_field_player(p, is_snapshot=False):
-        """Convert NBAPlayer or ProjectionSnapshot to FieldPlayer."""
-        pos_tuple = _coerce_positions(getattr(p, 'position', []) or [])
-        if isinstance(pos_tuple, str):
-            pos_tuple = (pos_tuple,)
-        elif not isinstance(pos_tuple, tuple):
-            pos_tuple = tuple(pos_tuple) if pos_tuple else ()
-        
-        team = getattr(p, 'team', '') or ''
-        opponent = getattr(p, 'opponent', None)
-        game_id = "-".join(sorted([team.upper(), opponent.upper()])) if team and opponent else None
-        
-        pid = int(getattr(p, 'id'))
-        name = getattr(p, 'player_name' if is_snapshot else 'name', f"PID {pid}")
-        gametime = getattr(p, 'gametime', None)
-        
-        return FieldPlayer(
-            id=pid,
-            name=name,
-            salary=int(getattr(p, 'salary') or 0),
-            team=team,
-            opponent=opponent,
-            position=pos_tuple,
-            fpts_mean=float(getattr(p, 'fpts_mean') or 0.0),
-            game_id=game_id,
-            gametime=gametime
-        )
-    
-    # Load NBAPlayer rows (current active players)
-    nba_players = session.query(NBAPlayer).all()
-    for p in nba_players:
-        fp = _to_field_player(p, is_snapshot=False)
-        player_pool.append(fp)
-        seen_ids.add(fp.id)
-        fallback_stats[fp.id] = (
-            float(getattr(p, 'fpts_mean') or 0.0),
-            float(getattr(p, 'fpts_std', None) or 0.0),
-        )
-    
-    # Load same-day ProjectionSnapshot rows (point-in-time projections for this date)
-    day_start = datetime(lock_time.year, lock_time.month, lock_time.day)
-    day_end = day_start + timedelta(days=1)
-    snapshots = (
-        session.query(ProjectionSnapshot)
-        .filter(
-            ProjectionSnapshot.snapshot_date >= day_start,
-            ProjectionSnapshot.snapshot_date < day_end,
-        )
-        .all()
-    )
-    for snap in snapshots:
-        if snap.id in seen_ids:
-            continue
-        fp = _to_field_player(snap, is_snapshot=True)
-        player_pool.append(fp)
-        seen_ids.add(fp.id)
-        fallback_stats[fp.id] = (
-            float(getattr(snap, 'fpts_mean') or 0.0),
-            float(getattr(snap, 'fpts_std', None) or 0.0),
-        )
-    
-    if not player_pool:
-        console.print(f"[red]  ✗ No players in pool (NBAPlayer + ProjectionSnapshot empty)[/red]")
-        return [], {}
-    
-    # === STEP 2: Map locked players to their roster slots ===
+    # Map original lineup to slots to determine which slots are locked
     try:
         slot_to_player = _map_players_to_slots(original_entry.player_ids, session)
     except ValueError as e:
+        console = Console()
         console.print(f"[red]✗ Failed to map players to slots for entry {original_entry.entry_id}: {e}[/red]")
         return [], {}
     
-    # Build locked_assignments: {player_id: slot_name} for locked players only
+    # Build locked_assignments: Dict[player_id, slot_name] for locked players only
     locked_assignments: Dict[int, str] = {}
     for slot_name, player_id in slot_to_player.items():
         if player_id in locked_pids:
             locked_assignments[player_id] = slot_name
     
-    if debug:
-        console.print(f"[dim]  → Locked assignments: {locked_assignments}[/dim]")
+    # Query ALL active players (both locked and unlocked) from DB
+    # Locked players will be forced by locked_assignments, unlocked will be optimized
+    all_players_db = session.query(NBAPlayer).all()
     
-    # Diagnostic: Check that all locked players are in the pool
-    missing_from_pool = set(locked_pids) - seen_ids
-    if missing_from_pool:
-        console.print(f"[red]  ✗ CRITICAL: Locked players {missing_from_pool} NOT in player pool! Cannot generate candidates.[/red]")
-        if debug:
-            console.print(f"[red]     Available player IDs (first 20): {list(seen_ids)[:20]}[/red]")
-        return [], {}
+    # Convert to FieldPlayer objects
+    all_players: List[FieldPlayer] = []
+    fallback_stats: Dict[int, Tuple[float, float]] = {}
     
-    if debug:
-        console.print(f"[dim]  → Locked assignments: {locked_assignments}[/dim]")
-        console.print(f"[dim]  → Player pool: {len(player_pool)} total players[/dim]")
-        console.print(f"[dim]  → All {len(locked_pids)} locked players found in pool ✓[/dim]")
+    for p in all_players_db:
+        pos_tuple = _coerce_positions(p.position or [])
+        if isinstance(pos_tuple, str):
+            pos_tuple = (pos_tuple,)
+        elif not isinstance(pos_tuple, tuple):
+            pos_tuple = tuple(pos_tuple) if pos_tuple else ()
+
+        team = p.team or ""
+        opponent = p.opponent or None
+        if team and opponent:
+            game_id = "-".join(sorted([team.upper(), opponent.upper()]))
+        else:
+            game_id = None
+
+        all_players.append(FieldPlayer(
+            id=p.id,
+            name=p.name,
+            salary=p.salary,
+            team=team,
+            opponent=opponent,
+            position=pos_tuple,
+            fpts_mean=float(p.fpts_mean) if p.fpts_mean else 0.0,
+            game_id=game_id,
+            gametime=p.gametime,
+        ))
+        
+        fallback_stats[p.id] = (
+            float(p.fpts_mean) if p.fpts_mean is not None else 0.0,
+            float(p.fpts_std) if getattr(p, 'fpts_std', None) is not None else 0.0,
+        )
     
-    # === STEP 3: Generate diverse candidates using sample-based optimization ===
+    # Generate diverse candidates using sample-based optimization
     candidates: List[SwapCandidate] = []
     seen_lineups: Set[Tuple[int, ...]] = set()
     
     # Generate player samples for randomness
     samples = generate_player_samples(
         session=session,
-        n_samples=max(num_candidates * 3, 50),
+        n_samples=num_candidates * 3,  # Extra samples for diversity
         randomness=0.5,
         snapshot_date=lock_time.date(),
         include_active_players=True,
     )
-
+    
     import random
-    if samples:
-        first_len = len(next(iter(samples.values())))
-        sample_indices = list(range(first_len))
-        random.shuffle(sample_indices)
-    else:
-        console.print(f"[yellow]  → No player samples available. Falling back to mean-only heuristic.[/yellow]")
-        sample_indices = []
-    
-    console.print(f"[dim]  → Solver input: {len(player_pool)} total players, {len(locked_assignments)} locked assignments[/dim]")
-    
-    # Diagnostic: ensure we have base scores for all players
-    if sample_indices:
-        test_idx = sample_indices[0]
-        sample_coverage = sum(1 for pid in seen_ids if pid in samples)
-        console.print(f"[dim]  → Samples cover {sample_coverage}/{len(seen_ids)} players in pool[/dim]")
-    else:
-        mean_coverage = sum(1 for p in player_pool if p.fpts_mean and p.fpts_mean > 0)
-        console.print(f"[dim]  → fpts_mean available for {mean_coverage}/{len(player_pool)} players[/dim]")
+    from copy import deepcopy
+    # Use sample indices in deterministic order; do not shuffle so all samples are used
+    sample_indices = list(range(len(next(iter(samples.values())))))
     
     attempts = 0
     max_attempts = num_candidates * 5
-    failed_infeasible = 0
-    failed_duplicate = 0
-    failed_missing_locked = 0
-    failed_exception = 0
     
     while len(candidates) < num_candidates and attempts < max_attempts:
         attempts += 1
-        # Build base_scores either from sampled draws or fallback to fpts_mean
-        if sample_indices:
-            samp_idx = sample_indices[attempts % len(sample_indices)]
-            base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items() if pid in seen_ids}
-        else:
-            base_scores = {p.id: float(p.fpts_mean or 0.0) for p in player_pool}
-
-        # Diagnostic: check locked players have scores
-        if attempts == 1 and debug:
-            locked_scores = {pid: base_scores.get(pid, None) for pid in locked_pids}
-            console.print(f"[dim]  → Locked player scores (attempt 1): {locked_scores}[/dim]")
-
-        # Add small jitter for diversity
+        
+        # Pick a random sample to create score variation
+        samp_idx = sample_indices[attempts % len(sample_indices)]
+        
+        # Extract base scores for this sample
+        base_scores = {pid: float(vec[samp_idx]) for pid, vec in samples.items()}
+        
+        # Add small jitter for additional diversity
         jitter = 0.05
         jittered_scores = {
             pid: score * (1.0 + random.uniform(-jitter, jitter))
@@ -345,38 +245,34 @@ def _generate_swap_candidates(
         }
         
         try:
+            # Generate lineup with locked assignments
+            # The LP solver will enforce lock_time exclusions automatically
+            # Relax per-team cap if present to avoid infeasibility when many locks are same team
+            cfg_attempt = deepcopy(config) if isinstance(config, dict) else {}
+            try:
+                cfg_attempt.setdefault("classic", {}).setdefault("lineup_generation", {})
+                cfg_attempt["classic"]["lineup_generation"]["max_salary_per_team"] = None
+            except Exception:
+                pass
             lineup_ids = generate_single_classic_lineup(
-                players=player_pool,
+                players=all_players,
                 base_scores=jittered_scores,
-                config=config,
+                config=cfg_attempt,
                 locked_assignments=locked_assignments,
-                debug_lp_path='data/nba/logs/',
-                attempt_tag=f"{original_entry.entry_id}_attempt{attempts}",
-                lock_time=lock_time
+                lock_time=lock_time,
             )
             
             if not lineup_ids:
-                failed_infeasible += 1
-                if attempts == 1:
-                    console.print(f"[yellow]  → Attempt {attempts}: optimizer returned None (infeasible/non-optimal)[/yellow]")
+                # If optimization failed (infeasible), we skip this attempt
                 continue
             
-            # Verify all locked players are present
-            missing_locked = set(locked_pids) - set(lineup_ids)
-            if missing_locked:
-                failed_missing_locked += 1
-                if debug and attempts == 1:
-                    console.print(f"[yellow]  ⚠ Generated lineup missing locked players {missing_locked}[/yellow]")
-                continue
-            
-            # Check uniqueness
+            # Check for uniqueness
             lineup_key = tuple(sorted(lineup_ids))
             if lineup_key in seen_lineups:
-                failed_duplicate += 1
                 continue
             seen_lineups.add(lineup_key)
             
-            # Extract swapped player IDs (not in locked set)
+            # Extract swapped player IDs (those not in locked)
             swapped_ids = [pid for pid in lineup_ids if pid not in locked_pids]
             
             candidate = SwapCandidate(
@@ -389,41 +285,353 @@ def _generate_swap_candidates(
             candidates.append(candidate)
             
         except Exception as e:
-            failed_exception += 1
-            if attempts <= 3:  # Log first 3 exceptions with full details
-                console.print(f"[red]  → Attempt {attempts}: Exception: {type(e).__name__}: {str(e)}[/red]")
-                import traceback
-                if debug:
-                    console.print(f"[red]{traceback.format_exc()}[/red]")
+            # Log the error but continue trying to generate other candidates
+            console.print(f"[red]✗ Error generating candidate for entry {original_entry.entry_id}: {e}[/red]")
+            import traceback
+            console.print(traceback.format_exc())
             continue
     
-    # Final diagnostic summary
-    if len(candidates) == 0:
-        console.print(f"[red]  ✗ Failed to generate any candidates after {attempts} attempts:[/red]")
-        console.print(f"[red]    - Infeasible (None returned): {failed_infeasible}[/red]")
-        console.print(f"[red]    - Duplicates: {failed_duplicate}[/red]")
-        console.print(f"[red]    - Missing locked players: {failed_missing_locked}[/red]")
-        console.print(f"[red]    - Exceptions: {failed_exception}[/red]")
-        if debug:
-            console.print(f"[red]    Locked player IDs: {locked_pids}[/red]")
-            console.print(f"[red]    Locked assignments (pid→slot): {locked_assignments}[/red]")
-            missing_from_pool = set(locked_pids) - seen_ids
-            if missing_from_pool:
-                console.print(f"[red]    ⚠ CRITICAL: Locked players {missing_from_pool} not found in player pool![/red]")
-            else:
-                console.print(f"[green]    All locked players found in pool ✓[/green]")
-        console.print(f"[yellow]    Check data/nba/logs/ for LP files (if any were written)[/yellow]")
-    else:
-        console.print(f"[green]  ✓ Generated {len(candidates)} candidates[/green]")
-        if debug:
-            console.print(f"[dim]    (attempts={attempts}, dupes={failed_duplicate}, infeasible={failed_infeasible}, missing_locked={failed_missing_locked}, exceptions={failed_exception})[/dim]")
-    
     return candidates, fallback_stats
+
+
+def _load_and_scale_payouts_from_db(
+    session: Session,
+    contest_id: int,
+    num_field_lineups: int,
+    original_field_size: int,
+    entry_fee: float,
+) -> Dict[int, float]:
+    """Scale payouts to desired contest size."""
+    from ivan.sports.nba.models import ContestPayout
+
+    rows = (session.query(ContestPayout)
+                .filter(ContestPayout.contest_id == contest_id)
+                .order_by(ContestPayout.min_position.asc())
+                .all())
+    
+    if not rows:
+        raise ValueError(f"No payouts found for contest_id={contest_id}")
+    
+    payouts_df = pd.DataFrame(
+        [(r.min_position, r.max_position, r.payout_amount) for r in rows],
+        columns=["Start Rank", "End Rank", "Payout"]
+    )
+
+    return scale_payouts_correctly(
+        num_field_lineups=num_field_lineups,
+        payouts_df=payouts_df,
+        original_field_size=original_field_size,
+        entry_fee=entry_fee
+    )
+
+
+def _build_player_samples_matrix(
+    session: Session,
+    pid_to_idx: Dict[int, int],
+    n_samples: int = 1000,
+    fallback_stats: Optional[Dict[int, Tuple[float, float]]] = None,
+) -> Tuple[np.ndarray, int, Dict[int, Tuple[float, float]]]:
+    """
+    Build player FPTS samples matrix.
+    
+    Returns:
+        - P: np.ndarray of shape (n_samples, n_players)
+        - ns: actual number of samples
+        - missing_players: Dict[player_id, (mean, std)] for players that used fallback
+    """
+    raw = generate_player_samples(
+        session=session,
+        n_samples=n_samples,
+        randomness=1.0
+    )
+    ns = 0
+    for v in raw.values():
+        if isinstance(v, np.ndarray):
+            ns = int(v.shape[0])
+            break
+    
+    nP = len(pid_to_idx)
+    P = np.zeros((ns, nP), dtype=np.float32)
+    missing_players: Dict[int, Tuple[float, float]] = {}
+
+    rng = np.random.default_rng(42)
+    for pid, col in pid_to_idx.items():
+        v = raw.get(pid)
+        if isinstance(v, np.ndarray):
+            vv = v.astype(np.float32, copy=False)
+            if vv.shape[0] < ns:
+                reps = int(np.ceil(ns / vv.shape[0]))
+                vv = np.tile(vv, reps)[:ns]
+            elif vv.shape[0] > ns:
+                vv = vv[:ns]
+            P[:, col] = vv
+            continue
+
+        # fallback: use provided (mean, std) if available, else zeros
+        if fallback_stats and pid in fallback_stats:
+            mu, sd = fallback_stats[pid]
+            missing_players[pid] = (mu, sd)
+            if sd and sd > 0:
+                P[:, col] = rng.normal(loc=mu, scale=sd, size=ns).astype(np.float32)
+            else:
+                P[:, col] = np.full(ns, float(mu), dtype=np.float32)
+        else:
+            # leave zeros if nothing known
+            missing_players[pid] = (0.0, 0.0)
+            P[:, col] = 0.0
+    
+    return P, ns, missing_players
+
+
+def _expand_candidates_for_simulation(
+    candidates: List[SwapCandidate],
+) -> Tuple[List[SwapCandidate], List[List[int]], Dict[int, int], np.ndarray, np.ndarray]:
+    """Expand candidates into a simulation matrix format."""
+    all_pids = set()
+    for cand in candidates:
+        all_pids.update(cand.full_lineup())
+    
+    unique_pids = sorted(all_pids)
+    pid_to_idx = {pid: i for i, pid in enumerate(unique_pids)}
+    
+    lineup_ix = []
+    for cand in candidates:
+        full_lineup = cand.full_lineup()
+        idxs = [pid_to_idx[p] for p in full_lineup]
+        lineup_ix.append(idxs)
+    
+    M = len(candidates)
+    starts = np.arange(M, dtype=np.int64)
+    ends = np.arange(1, M + 1, dtype=np.int64)
+    
+    return candidates, lineup_ix, pid_to_idx, starts, ends
+
+
+def _print_missing_player_report(
+    session: Session,
+    missing_players: Dict[int, Tuple[float, float]],
+    all_candidates: List[SwapCandidate],
+) -> None:
+    """
+    Print a concise report of missing players with default projections.
+    Shows player name, mean/std used, and frequency across all candidate lineups.
+    """
+    if not missing_players:
+        console.print("[green]✓ All players found in active projections (no fallbacks needed)[/green]")
+        return
+    
+    # Count how many times each missing player appears in candidates
+    from collections import Counter
+    pid_counts = Counter()
+    for cand in all_candidates:
+        for pid in cand.full_lineup():
+            if pid in missing_players:
+                pid_counts[pid] += 1
+    
+    # Get player names from DB
+    pids = list(missing_players.keys())
+    players_db = session.query(NBAPlayer).filter(NBAPlayer.id.in_(pids)).all()
+    pid_to_name = {p.id: p.name for p in players_db}
+    
+    # Also check ProjectionSnapshot for names of players not in NBAPlayer
+    missing_names = set(pids) - set(pid_to_name.keys())
+    if missing_names:
+        snapshots = session.query(ProjectionSnapshot).filter(ProjectionSnapshot.id.in_(missing_names)).all()
+        for snap in snapshots:
+            if snap.id not in pid_to_name:
+                pid_to_name[snap.id] = snap.player_name
+    
+    console.print(f"\n[bold yellow]⚠ Missing Player Report ({len(missing_players)} players using fallback projections)[/bold yellow]")
+    console.print("─" * 90)
+    console.print(f"{'Player':<30} {'ID':<10} {'Mean':<8} {'Std':<8} {'Frequency':<12}")
+    console.print("─" * 90)
+    
+    # Sort by frequency (most common first)
+    sorted_pids = sorted(missing_players.keys(), key=lambda p: pid_counts[p], reverse=True)
+    
+    for pid in sorted_pids:
+        mean, std = missing_players[pid]
+        name = pid_to_name.get(pid, f"Unknown")
+        count = pid_counts[pid]
+        total_candidates = len(all_candidates)
+        freq_pct = 100.0 * count / total_candidates if total_candidates > 0 else 0.0
+        
+        console.print(f"{name:<30} {pid:<10} {mean:<8.2f} {std:<8.2f} {count:>4}/{total_candidates:<4} ({freq_pct:>5.1f}%)")
+    
+    console.print("─" * 90)
+    console.print(f"[yellow]Note: These players were assigned projections from ProjectionSnapshot or used default values[/yellow]\n")
+
+
+def _calculate_and_write_ownership(
+    session: Session,
+    all_candidates: List[SwapCandidate],
+    lock_time: datetime,
+) -> None:
+    """
+    Calculate ownership percentage for all players across candidates and write to database.
+    - For unlocked players (gametime > lock_time): Write to NBAPlayer.ownership
+    - For locked players: Write to ProjectionSnapshot.ownership (if column exists, otherwise skip)
+    """
+    from collections import Counter
+    
+    # Count player appearances across all candidates
+    pid_counts = Counter()
+    for cand in all_candidates:
+        for pid in cand.full_lineup():
+            pid_counts[pid] += 1
+    
+    total_lineups = len(all_candidates)
+    if total_lineups == 0:
+        return
+    
+    # Separate locked vs unlocked players
+    all_pids = list(pid_counts.keys())
+    unlocked_players = session.query(NBAPlayer).filter(
+        NBAPlayer.id.in_(all_pids),
+        NBAPlayer.gametime > lock_time
+    ).all()
+    
+    unlocked_pids = {p.id for p in unlocked_players}
+    locked_pids = set(all_pids) - unlocked_pids
+    
+    # Update ownership for unlocked players in NBAPlayer table
+    unlocked_count = 0
+    for player in unlocked_players:
+        count = pid_counts.get(player.id, 0)
+        ownership_pct = 100.0 * count / total_lineups
+        player.ownership = ownership_pct
+        unlocked_count += 1
+    
+    if unlocked_count > 0:
+        session.commit()
+        console.print(f"[green]✓ Updated ownership for {unlocked_count} unlocked players in NBAPlayer table[/green]")
+    
+    # Update ownership for locked players in ProjectionSnapshot
+    # Check if ownership column exists using SQLAlchemy inspector
+    from sqlalchemy import inspect
+    inspector = inspect(session.bind)
+    
+    # Handle both SQLite (no schema) and PostgreSQL (with schema)
+    if session.bind.dialect.name == 'sqlite':
+        columns = [col['name'] for col in inspector.get_columns('projection_snapshot')]
+    else:
+        columns = [col['name'] for col in inspector.get_columns('projection_snapshot', schema='nba')]
+    
+    if 'ownership' not in columns:
+        console.print(f"[yellow]⚠ ProjectionSnapshot table does not have 'ownership' column. Skipping ownership write for {len(locked_pids)} locked players.[/yellow]")
+        console.print(f"[yellow]  Run: python scripts/nba/add_ownership_to_snapshot.py[/yellow]")
+        return
+    
+    # Constrain to lock date
+    day_start = datetime(lock_time.year, lock_time.month, lock_time.day)
+    day_end = day_start + timedelta(days=1)
+    
+    locked_count = 0
+    for pid in locked_pids:
+        count = pid_counts.get(pid, 0)
+        ownership_pct = 100.0 * count / total_lineups
+        
+        # Find most recent snapshot for this player
+        snapshot = (
+            session.query(ProjectionSnapshot)
+            .filter(
+                ProjectionSnapshot.id == pid,
+                ProjectionSnapshot.snapshot_date >= day_start,
+                ProjectionSnapshot.snapshot_date < day_end,
+            )
+            .order_by(ProjectionSnapshot.snapshot_date.desc())
+            .first()
+        )
+        
+        if snapshot:
+            snapshot.ownership = ownership_pct
+            locked_count += 1
+    
+    if locked_count > 0:
+        session.commit()
+        console.print(f"[green]✓ Updated ownership for {locked_count} locked players in ProjectionSnapshot table[/green]")
+
+
+def _simulate_lateswap_chunk(
+    start: int,
+    end: int,
+    lineup_ix: List[List[int]],
+    P_chunk: np.ndarray,
+    entry_fee: float,
+    scaled_payouts: Dict[int, float],
+) -> Dict[str, np.ndarray]:
+    """Simulate one chunk of swap candidates."""
+    slice_len = end - start
+    M = len(lineup_ix)
+
+    scores = np.zeros((slice_len, M), dtype=np.float64)
+    payouts = np.zeros_like(scores)
+    rois = np.zeros_like(scores)
+    ranks = np.zeros((slice_len, M), dtype=np.int32)
+
+    pay_arr = np.zeros(M, dtype=np.float64)
+    for r, a in scaled_payouts.items():
+        if 1 <= r <= M:
+            pay_arr[r - 1] = float(a)
+    pay_csum = np.cumsum(pay_arr, dtype=np.float64)
+
+    atol = 1e-8
+
+    for local_i in range(slice_len):
+        row = P_chunk[local_i]
+
+        # Score each candidate
+        for m in range(M):
+            idxs = lineup_ix[m]
+            if idxs:
+                scores[local_i, m] = row[idxs].sum(dtype=np.float64)
+
+        # Rank by score
+        order = np.argsort(-scores[local_i], kind="stable")
+        sc_sorted = scores[local_i][order]
+
+        diffs = np.abs(np.diff(sc_sorted))
+        edges = np.concatenate(([0], np.nonzero(diffs > atol)[0] + 1, [M]))
+
+        start_rank = edges[:-1] + 1
+        end_rank = edges[1:]
+        sizes = end_rank - (start_rank - 1)
+
+        j2 = end_rank - 1
+        j1m1 = start_rank - 2
+        pools = pay_csum[j2] - np.where(j1m1 >= 0, pay_csum[j1m1], 0.0)
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            per_entry = np.divide(
+                pools, sizes,
+                out=np.zeros_like(pools, dtype=np.float64),
+                where=sizes > 0
+            )
+
+        for g in range(len(start_rank)):
+            i0, i1 = edges[g], edges[g+1]
+            idx_in_field = order[i0:i1]
+            if idx_in_field.size == 0:
+                continue
+            payouts[local_i, idx_in_field] = per_entry[g]
+            ranks[local_i, idx_in_field] = int(start_rank[g])
+
+        rois[local_i] = (payouts[local_i] - entry_fee) / entry_fee
+
+    return {
+        "start": start,
+        "end": end,
+        "scores": scores.astype(np.float32, copy=False),
+        "payouts": payouts.astype(np.float32, copy=False),
+        "rois": rois.astype(np.float32, copy=False),
+        "ranks": ranks,
+    }
 
 
 def parse_entries_csv(
     csv_path: str,
     session: Session,
+    quiet: bool = False,
 ) -> Dict[int, List[OriginalEntry]]:
     """
     Parse DraftKings entries CSV in the native export format.
@@ -456,7 +664,8 @@ def parse_entries_csv(
         )
         return {}
 
-    console.print(f"[cyan]Processing {len(df)} rows from CSV...[/cyan]")
+    if not quiet:
+        console.print(f"[cyan]Parsing entries CSV ({len(df)} rows)...[/cyan]")
 
     import re
     for _, row in df.iterrows():
@@ -480,7 +689,8 @@ def parse_entries_csv(
             for col in position_cols
         )
         if not has_any_player:
-            console.print(f"[yellow]⊘ Entry {entry_id}: blank lineup, skipping[/yellow]")
+            if not quiet:
+                console.print(f"[yellow]⊘ Entry {entry_id}: blank lineup, skipping[/yellow]")
             continue
 
         player_ids: List[int] = []
@@ -492,9 +702,10 @@ def parse_entries_csv(
             player_str = '' if pd.isna(player_val) else str(player_val).strip()
 
             if not player_str:
-                console.print(
-                    f"[red]✗ Entry {entry_id}: missing player at position {pos_idx} ({pos_col.upper()})[/red]"
-                )
+                if not quiet:
+                    console.print(
+                        f"[red]✗ Entry {entry_id}: missing player at position {pos_idx} ({pos_col.upper()})[/red]"
+                    )
                 skip_entry = True
                 break
 
@@ -520,9 +731,10 @@ def parse_entries_csv(
                         NBAPlayer.name.ilike(f"%{name_text}%")
                     ).first()
                     if not p:
-                        console.print(
-                            f"[red]✗ Entry {entry_id} pos {pos_idx}: player '{name_text}' not found[/red]"
-                        )
+                        if not quiet:
+                            console.print(
+                                f"[red]✗ Entry {entry_id} pos {pos_idx}: player '{name_text}' not found[/red]"
+                            )
                         skip_entry = True
                         break
                     player_id = p.id
@@ -560,10 +772,198 @@ def parse_entries_csv(
     if total_entries == 0:
         console.print(f"[red]✗ No valid entries parsed from {csv_path}. Failing.")
         raise RuntimeError("No valid entries parsed from entries CSV.")
-    console.print(
-        f"[green]✓ Parsed {total_entries} entries from {csv_path} across {len(entries_by_contest)} contests[/green]"
-    )
+    if not quiet:
+        console.print(
+            f"[green]✓ Parsed {total_entries} entries across {len(entries_by_contest)} contests[/green]"
+        )
     return entries_by_contest
+
+
+#MAIN ENTRY POINT OF CLI SCRIPT
+def lateswap_one_contest(
+    session: Session,
+    contest_id: int,
+    entries: List[OriginalEntry],
+    config_path: str,
+    lock_time: datetime,
+    num_sims: int = 1000,
+    num_swap_candidates: int = 50,
+) -> List[Tuple[str, SwapCandidate]]:
+    """Run lateswap logic for a single contest."""
+    cfg = json.load(open(config_path, encoding="utf-8"))
+    console = Console()
+    contest = session.query(HistoricalContest).filter_by(contest_id=contest_id).one()
+    field_sz = int(contest.total_entries)
+    entry_fee = float(contest.entry_fee)
+
+    # Identify locked vs swappable
+    console.print(f"[bold cyan]Step 1: Identifying locked players for {len(entries)} entries...")
+    for entry in entries:
+        locked, swappable = _identify_locked_players(session, entry.player_ids, lock_time)
+        entry.locked_player_ids = locked
+        entry.swappable_player_ids = swappable
+        console.print(f"[cyan]  Entry {entry.entry_id}: {len(locked)} locked, {len(swappable)} swappable[/cyan]")
+    if not any(e.swappable_player_ids for e in entries):
+        console.print(f"[red]✗ All entries are fully locked. No swappable players. Failing.")
+        raise RuntimeError("All entries are fully locked. No swappable players.")
+
+    # Generate candidates
+    console.print(f"[bold cyan]Step 2: Generating {num_swap_candidates} candidates per entry...[/bold cyan]")
+    all_candidates = []
+    entry_to_candidates = {}
+    fallback_stats_all: Dict[int, Tuple[float, float]] = {}
+    for entry in entries:
+        candidates, fb_stats = _generate_swap_candidates(
+            session=session,
+            original_entry=entry,
+            lock_time=lock_time,
+            config=cfg,
+            num_candidates=num_swap_candidates,
+        )
+        if not candidates:
+            console.print(f"[red]✗ No swap candidates generated for entry {entry.entry_id}. Failing.")
+            raise RuntimeError(f"No swap candidates generated for entry {entry.entry_id}.")
+        entry_to_candidates[entry.entry_id] = candidates
+        all_candidates.extend(candidates)
+        fallback_stats_all.update(fb_stats)
+    console.print(f"[green]✓ Total candidates: {len(all_candidates)}[/green]")
+    if not all_candidates:
+        console.print(f"[red]✗ No candidates generated for any entry. Failing.")
+        raise RuntimeError("No candidates generated for any entry.")
+
+    # Expand for simulation
+    console.print(f"[bold cyan]Step 3: Expanding candidates for simulation...")
+    candidates_list, lineup_ix, pid_to_idx, starts, ends = _expand_candidates_for_simulation(all_candidates)
+    M = len(candidates_list)
+    if M == 0:
+        console.print(f"[red]✗ No candidates to simulate. Failing.")
+        raise RuntimeError("No candidates to simulate.")
+
+    # Scale payouts
+    console.print(f"[bold cyan]Step 4: Scaling payouts for contest...")
+    scaled = _load_and_scale_payouts_from_db(
+        session=session,
+        contest_id=contest_id,
+        num_field_lineups=M,
+        original_field_size=field_sz,
+        entry_fee=entry_fee
+    )
+
+    # Generate FPTS samples
+    console.print(f"[bold cyan]Step 5: Generating {num_sims} FPTS samples...")
+    P, num_sims_actual, missing_players = _build_player_samples_matrix(
+        session=session,
+        pid_to_idx=pid_to_idx,
+        n_samples=num_sims,
+        fallback_stats=fallback_stats_all,
+    )
+    if P.shape[0] == 0 or P.shape[1] == 0:
+        console.print(f"[red]✗ Failed to generate player samples. Failing.")
+        raise RuntimeError("Failed to generate player samples.")
+    
+    # Print missing player report
+    _print_missing_player_report(session, missing_players, all_candidates)
+    
+    # Calculate and write ownership to database
+    console.print(f"[bold cyan]Step 5b: Calculating ownership and writing to database...")
+    _calculate_and_write_ownership(session, all_candidates, lock_time)
+
+    # Run simulations
+    console.print(f"[bold cyan]Step 6: Running {num_sims_actual} simulations across {M} candidates...")
+    import math
+    chunk_size = math.ceil(num_sims_actual / min(12, num_sims_actual))
+    full_scores = np.zeros((num_sims_actual, M), dtype=np.float32)
+    full_payouts = np.zeros_like(full_scores)
+    full_rois = np.zeros_like(full_scores)
+    full_ranks = np.zeros((num_sims_actual, M), dtype=int)
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    with ProcessPoolExecutor(max_workers=8) as exe:
+        futures = []
+        for start in range(0, num_sims_actual, chunk_size):
+            end = min(start + chunk_size, num_sims_actual)
+            futures.append(
+                exe.submit(
+                    _simulate_lateswap_chunk,
+                    start,
+                    end,
+                    lineup_ix,
+                    P[start:end],
+                    float(entry_fee),
+                    scaled
+                )
+            )
+        for fut in as_completed(futures):
+            part = fut.result()
+            s, e = part["start"], part["end"]
+            full_scores[s:e] = part["scores"]
+            full_payouts[s:e] = part["payouts"]
+            full_rois[s:e] = part["rois"]
+            full_ranks[s:e] = part["ranks"]
+
+    # Compute aggregates per candidate
+    console.print(f"[bold cyan]Step 7: Computing mean metrics per candidate...")
+    for i, candidate in enumerate(candidates_list):
+        candidate.mean_fpts = float(full_scores[:, i].mean())
+        candidate.mean_payout = float(full_payouts[:, i].mean())
+        candidate.mean_roi = float(full_rois[:, i].mean())
+        candidate.mean_rank = float(full_ranks[:, i].mean())
+
+    # Select best candidate per entry
+    console.print(f"[bold cyan]Step 8: Selecting best candidate per entry (by ROI)...")
+    results = []
+    for entry in entries:
+        entry_candidates = entry_to_candidates.get(entry.entry_id, [])
+        if not entry_candidates:
+            console.print(f"[red]✗ No candidates for entry {entry.entry_id} after simulation. Failing.")
+            raise RuntimeError(f"No candidates for entry {entry.entry_id} after simulation.")
+        best = max(entry_candidates, key=lambda c: c.mean_roi if c.mean_roi else -float('inf'))
+        entry.best_candidate = best
+        results.append((entry.entry_id, best))
+        console.print(
+            f"[green]  Entry {entry.entry_id}: best ROI={best.mean_roi:.2%}[/green]"
+        )
+    if not results:
+        console.print(f"[red]✗ No results to write for contest {contest_id}. Failing.")
+        raise RuntimeError(f"No results to write for contest {contest_id}.")
+    console.print(f"[green]✓ Completed contest {contest_id}: {len(results)} entries processed[/green]")
+    return results
+
+
+def write_lateswap_csv(
+    results: List[Tuple[str, SwapCandidate]],
+    output_path: str,
+    session: Session,
+) -> None:
+    """Write lateswap results to CSV for DraftKings upload."""
+    rows = []
+    
+    for entry_id, candidate in results:
+        full_lineup = candidate.full_lineup()
+        
+        row = {
+            'Entry ID': entry_id,
+            'Original Lineup ID': candidate.original_lineup_id,
+            'Locked Players': ','.join(map(str, candidate.locked_player_ids)),
+            'Swapped Players': ','.join(map(str, candidate.swapped_player_ids)),
+        }
+        
+        for i, pid in enumerate(full_lineup, 1):
+            row[f'Player {i}'] = pid
+        
+        row['Mean FPTS'] = candidate.mean_fpts
+        row['Mean Payout'] = candidate.mean_payout
+        row['Mean ROI'] = candidate.mean_roi
+        row['Mean Rank'] = candidate.mean_rank
+        
+        rows.append(row)
+    
+    if not rows:
+        Console().print(f"[red]✗ No rows to write to {output_path}. Failing.")
+        raise RuntimeError(f"No rows to write to {output_path}.")
+    output_df = pd.DataFrame(rows)
+    output_df.to_csv(output_path, index=False)
+    Console().print(f"[green]✓ Wrote {len(rows)} entries to {output_path}")
+
 
 # === Alternative late-swap flow (field sampling → per-entry candidates → ROI) ===
 
@@ -645,303 +1045,6 @@ def _evaluate_candidates_vs_field(
     return rois
 
 
-def _print_field_summary(
-    session: Session,
-    field_lineups: List[List[int]],
-    unmatched_tracker: dict,
-    contest_id: Optional[int] = None,
-    snapshot_date = None,
-    lineups_with_defaults: int = 0,
-    total_attempted: int = 0,
-    lock_time: Optional[datetime] = None,
-) -> None:
-    """Print comprehensive field summary after sampling.
-    
-    Args:
-        snapshot_date: Date to use for looking up projections (uses ProjectionSnapshot if provided)
-        lineups_with_defaults: Number of lineups that had to use default player values
-        total_attempted: Total number of lineups attempted to parse
-        lock_time: Time to determine if players are locked (game started)
-    """
-    from collections import Counter
-    from rich.table import Table
-    from rich.panel import Panel
-    
-    console = Console()
-    total_lineups = len(field_lineups)
-    
-    # Calculate player exposures
-    pid_counts = Counter(pid for lu in field_lineups for pid in lu if pid != -1)
-    total_appearances = sum(pid_counts.values())
-    
-    # Get player info - try NBAPlayer first, then ProjectionSnapshot
-    unique_pids = list(pid_counts.keys())
-    players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(unique_pids)).all()
-    player_map = {p.id: p for p in players}
-    
-    # Fill in missing players from ProjectionSnapshot if snapshot_date provided
-    if snapshot_date:
-        missing_pids = [pid for pid in unique_pids if pid not in player_map]
-        if missing_pids:
-            day_start = datetime.combine(snapshot_date, datetime.min.time())
-            day_end = day_start + timedelta(days=1)
-            snapshots = (
-                session.query(ProjectionSnapshot)
-                .filter(
-                    ProjectionSnapshot.id.in_(missing_pids),
-                    ProjectionSnapshot.snapshot_date >= day_start,
-                    ProjectionSnapshot.snapshot_date < day_end,
-                )
-                .all()
-            )
-            # Use a simple wrapper to make ProjectionSnapshot look like NBAPlayer
-            for snap in snapshots:
-                if snap.id not in player_map:
-                    class PlayerProxy:
-                        def __init__(self, snap):
-                            self.id = snap.id
-                            self.name = snap.player_name or f"PID {snap.id}"
-                            self.team = snap.team or ""
-                            self.salary = snap.salary or 0
-                            self.fpts_mean = snap.fpts_mean or 0.0
-                            self.position = snap.position or ""
-                            self.gametime = snap.gametime
-                    player_map[snap.id] = PlayerProxy(snap)
-    
-    # Calculate lineup projection stats
-    import numpy as np
-    
-    lineup_projs = []
-    players_with_projs = 0
-    players_without_projs = 0
-    
-    for lu in field_lineups:
-        proj = 0.0
-        for pid in lu:
-            if pid in player_map and player_map[pid].fpts_mean:
-                proj += player_map[pid].fpts_mean
-                players_with_projs += 1
-            else:
-                players_without_projs += 1
-        lineup_projs.append(proj)
-    
-    # Check if we have meaningful projection data
-    proj_mean = np.mean(lineup_projs) if lineup_projs else 0.0
-    has_projection_data = proj_mean > 0
-    
-    if lineup_projs and has_projection_data:
-        proj_min = np.min(lineup_projs)
-        proj_max = np.max(lineup_projs)
-        proj_median = np.median(lineup_projs)
-        proj_std = np.std(lineup_projs)
-        
-        # Create histogram buckets
-        bins = np.linspace(proj_min, proj_max, 11)
-        hist, _ = np.histogram(lineup_projs, bins=bins)
-    
-    # Create summary panel
-    title = f"[bold cyan]Contest {contest_id} Field Summary[/bold cyan]" if contest_id else "[bold cyan]Field Summary[/bold cyan]"
-    
-    # Calculate default usage percentage
-    default_pct = 100.0 * lineups_with_defaults / total_attempted if total_attempted > 0 else 0.0
-    default_warning = ""
-    if default_pct > 90:
-        default_warning = f"\n  [red]⚠ WARNING: {default_pct:.1f}% of lineups used defaults - data quality issue![/red]"
-    elif default_pct > 50:
-        default_warning = f"\n  [yellow]⚠ {default_pct:.1f}% of lineups used defaults[/yellow]"
-    
-    summary_text = f"""[bold]Lineup Statistics:[/bold]
-  • Total Lineups Attempted: {total_attempted:,}
-  • Successfully Parsed: {total_lineups:,}
-  • Lineups with Defaults: {lineups_with_defaults:,} ({default_pct:.1f}%){default_warning}
-  • Unique Players: {len(unique_pids)}
-  • Total Player Appearances: {total_appearances:,}
-"""
-    
-    if has_projection_data:
-        summary_text += f"""
-[bold]Projection Distribution:[/bold]
-  • Mean: {proj_mean:.2f} pts
-  • Median: {proj_median:.2f} pts
-  • Std Dev: {proj_std:.2f} pts
-  • Range: {proj_min:.2f} - {proj_max:.2f} pts
-"""
-    else:
-        # No projection data available
-        missing_pct = 100.0 * players_without_projs / (players_with_projs + players_without_projs) if (players_with_projs + players_without_projs) > 0 else 0
-        summary_text += f"""
-[yellow]⚠ Projection Data:[/yellow]
-  • Players with projections: {players_with_projs:,}
-  • Players without projections: {players_without_projs:,} ({missing_pct:.1f}%)
-  • [yellow]Unable to calculate lineup projections - missing snapshot data for {snapshot_date}[/yellow]
-"""
-    
-    # Add histogram only if we have meaningful data
-    if lineup_projs and has_projection_data:
-        summary_text += "\n[bold]Lineup Projection Histogram:[/bold]\n"
-        max_count = max(hist) if len(hist) > 0 else 1
-        for i, count in enumerate(hist):
-            bar_len = int(30 * count / max_count) if max_count > 0 else 0
-            bar = "█" * bar_len
-            pct = 100.0 * count / total_lineups
-            summary_text += f"  {bins[i]:6.1f}-{bins[i+1]:6.1f}: {bar} {count:4d} ({pct:5.1f}%)\n"
-    
-    console.print(Panel(summary_text, title=title, expand=False))
-    
-    # Top exposures table
-    top_owned = pid_counts.most_common(15)
-    if top_owned:
-        table = Table(title="Top 15 Player Exposures", show_header=True, header_style="bold cyan")
-        table.add_column("Rank", style="dim", width=4)
-        table.add_column("Player", style="white", width=22)
-        table.add_column("Pos", style="cyan", width=6)
-        table.add_column("Team", style="cyan", width=4)
-        table.add_column("Salary", style="green", width=7, justify="right")
-        table.add_column("Proj", style="magenta", width=6, justify="right")
-        table.add_column("Value", style="yellow", width=6, justify="right")
-        table.add_column("Exposure", style="yellow", width=10, justify="right")
-        
-        for rank, (pid, count) in enumerate(top_owned, 1):
-            p = player_map.get(pid)
-            if p:
-                exposure_pct = 100.0 * count / total_lineups
-                proj_display = f"{p.fpts_mean:.1f}" if p.fpts_mean and p.fpts_mean > 0 else "N/A"
-                salary_display = f"${p.salary:,}" if p.salary else "N/A"
-                
-                # Calculate value: fpts / (salary / 1000)
-                if p.salary and p.salary > 0 and p.fpts_mean and p.fpts_mean > 0:
-                    value = p.fpts_mean / (p.salary / 1000)
-                    value_display = f"{value:.2f}"
-                else:
-                    value_display = "N/A"
-                
-                # Get position
-                position = getattr(p, 'position', '') or ''
-                
-                # Check if locked (game started)
-                is_locked = False
-                if lock_time and hasattr(p, 'gametime') and p.gametime:
-                    is_locked = p.gametime <= lock_time
-                
-                # Color player name red if locked
-                player_name = f"[red]{p.name}[/red]" if is_locked else p.name
-                
-                table.add_row(
-                    str(rank),
-                    player_name,
-                    position,
-                    p.team or "",
-                    salary_display,
-                    proj_display,
-                    value_display,
-                    f"{exposure_pct:.1f}%"
-                )
-        console.print(table)
-    
-    # Unmatched players summary
-    if unmatched_tracker:
-        total_unmatched = sum(unmatched_tracker.values())
-        console.print(f"\n[yellow]⚠ Warning: {len(unmatched_tracker)} unique unmatched players ({total_unmatched} total occurrences)[/yellow]")
-        if len(unmatched_tracker) <= 10:
-            for name, count in sorted(unmatched_tracker.items(), key=lambda x: x[1], reverse=True):
-                console.print(f"  • {name}: {count} occurrence(s)")
-        else:
-            top_unmatched = sorted(unmatched_tracker.items(), key=lambda x: x[1], reverse=True)[:10]
-            for name, count in top_unmatched:
-                console.print(f"  • {name}: {count} occurrence(s)")
-            console.print(f"  • ... and {len(unmatched_tracker) - 10} more")
-    else:
-        console.print(f"\n[green]✓ All players matched successfully[/green]")
-    
-    console.print()
-
-
-def _print_entry_with_candidates(
-    session: Session,
-    entry: 'OriginalEntry',
-    candidates: List['SwapCandidate'],
-    candidate_rois: List[float],
-    lock_time: datetime,
-    snapshot_date = None,
-) -> None:
-    """Print original entry and its generated candidates with ROI."""
-    from rich.text import Text
-    
-    console = Console()
-    
-    # Get player info
-    all_pids = set(entry.player_ids)
-    for cand in candidates:
-        all_pids.update(cand.full_lineup())
-    
-    # Try NBAPlayer first, then ProjectionSnapshot
-    players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(all_pids)).all()
-    player_map = {p.id: p for p in players}
-    
-    if snapshot_date:
-        missing_pids = [pid for pid in all_pids if pid not in player_map]
-        if missing_pids:
-            day_start = datetime.combine(snapshot_date, datetime.min.time())
-            day_end = day_start + timedelta(days=1)
-            snapshots = (
-                session.query(ProjectionSnapshot)
-                .filter(
-                    ProjectionSnapshot.id.in_(missing_pids),
-                    ProjectionSnapshot.snapshot_date >= day_start,
-                    ProjectionSnapshot.snapshot_date < day_end,
-                )
-                .all()
-            )
-            for snap in snapshots:
-                if snap.id not in player_map:
-                    class PlayerProxy:
-                        def __init__(self, snap):
-                            self.id = snap.id
-                            self.name = snap.player_name or f"PID {snap.id}"
-                            self.fpts_mean = snap.fpts_mean or 0.0
-                            self.gametime = snap.gametime
-                    player_map[snap.id] = PlayerProxy(snap)
-    
-    # Determine locked players (games already started)
-    def is_locked(pid):
-        p = player_map.get(pid)
-        if p and hasattr(p, 'gametime') and p.gametime:
-            return p.gametime <= lock_time
-        return False
-    
-    # Print original entry
-    original_proj = sum(player_map[pid].fpts_mean for pid in entry.player_ids if pid in player_map)
-    
-    # Create player name list with colors
-    player_names = []
-    for pid in entry.player_ids:
-        p = player_map.get(pid)
-        name = p.name if p else f"PID {pid}"
-        if is_locked(pid):
-            player_names.append(f"[red]{name}[/red]")
-        else:
-            player_names.append(name)
-    
-    console.print(f"\n[bold white]{entry.entry_id}:[/bold white] [{', '.join(player_names)}] | Proj: {original_proj:.1f}")
-    
-    # Print candidates (indented, different color)
-    for idx, (cand, roi) in enumerate(zip(candidates, candidate_rois), start=1):
-        cand_lineup = cand.full_lineup()
-        cand_proj = sum(player_map[pid].fpts_mean for pid in cand_lineup if pid in player_map)
-        
-        # Create player name list with colors
-        cand_names = []
-        for pid in cand_lineup:
-            p = player_map.get(pid)
-            name = p.name if p else f"PID {pid}"
-            if is_locked(pid):
-                cand_names.append(f"[red]{name}[/red]")
-            else:
-                cand_names.append(name)
-        
-        console.print(f"  [cyan]→ Candidate {idx}:[/cyan] [{', '.join(cand_names)}] | Proj: {cand_proj:.1f} | ROI: {roi:.3f}")
-
-
 def _sample_field_lineups(
     session: Session,
     num_field_samples: int,
@@ -949,22 +1052,16 @@ def _sample_field_lineups(
     config: Optional[dict] = None,
     http_session=None,
     snapshot_date=None,
-    unmatched_tracker: dict = None,
-) -> tuple[List[List[int]], int, int]:
+    lock_time=None,
+) -> List[List[int]]:
     """
     Build a list of field lineups (each a list of 8 player IDs).
 
     - If config[classic.field_source] == 'dk' and contest_id provided, pull from DK standings.
     - Else sample from DB-stored lineups.
-    
-    Args:
-        unmatched_tracker: Optional dict to accumulate unmatched names (format: {name: count})
-        
-    Returns:
-        Tuple of (lineups, lineups_with_defaults, total_attempted)
     """
     cfg = config or {}
-    source = (cfg.get("classic", {}).get("field_source") or cfg.get("field_source") or "db").lower()
+    source = "dk"
     if source == "dk" and contest_id is not None:
         from ivan.sports.nba.sample_field import fetch_dk_field_lineups
         # chrome profile path can be configured under paths.chrome_profile
@@ -973,8 +1070,9 @@ def _sample_field_lineups(
             or "/home/sam-pratt/ivan/chrome-selenium/dk-profile"
         )
         # Fetch as many as available from DK, we'll downsample if needed
-        max_lineups = int(2_000_000)
-        field, lineups_with_defaults, total_attempted = fetch_dk_field_lineups(
+        # IMPORTANT: Pass max_lineups as num_field_samples to sample BEFORE parsing (optimization)
+        max_lineups = int(num_field_samples)
+        field, _, _ = fetch_dk_field_lineups(
             session=session,
             contest_ids=[int(contest_id)],
             max_lineups=max_lineups,
@@ -982,18 +1080,14 @@ def _sample_field_lineups(
             profile_directory="Default",
             sess=http_session,
             snapshot_date=snapshot_date,
-            unmatched_tracker=unmatched_tracker,
+            lock_time=lock_time,
+            config=cfg,
         )
-        # If DK has more than requested, sample down to requested size
-        if isinstance(field, list) and len(field) > int(num_field_samples):
-            import random as _rand
-            _rand.seed(42)
-            field = _rand.sample(field, int(num_field_samples))
-        return (field, lineups_with_defaults, total_attempted)
+        # No need to downsample again since we already limited parsing
+        return field
     # default: DB lineups
     from ivan.sports.nba.sample_field import fetch_db_field_lineups
-    db_lineups = fetch_db_field_lineups(session, num_field_samples)
-    return (db_lineups, 0, len(db_lineups))
+    return fetch_db_field_lineups(session, num_field_samples)
 
 
 def lateswap_one_contest_field(
@@ -1007,46 +1101,61 @@ def lateswap_one_contest_field(
     num_sims: int = 5000,
     seed: Optional[int] = 42,
     http_session=None,
-    debug: bool = False,
+    quiet: bool = False,
 ) -> Tuple[List[Tuple['OriginalEntry', List[int], float]], List[Tuple[int, str, int, List[int], float]]]:
     """
     Alternative per-contest flow using sampled field and per-entry candidates.
     Returns list of (entry, best_lineup_ids, roi_mean)
-    
-    Args:
-        debug: If True, print detailed diagnostic information
     """
     console = Console()
-    console.print(f"[cyan]•[/cyan] Contest {contest_id}: sampling field (requested: {num_field_samples:,})")
-    
-    # Track unmatched players
-    unmatched_tracker = {}
-    
-    field_lineups, lineups_with_defaults, total_attempted = _sample_field_lineups(
+    if not quiet:
+        console.print(f"[cyan]Contest {contest_id}: sampling field (target={num_field_samples})[/cyan]")
+    field_lineups = _sample_field_lineups(
         session, 
         num_field_samples, 
         contest_id=contest_id, 
         config=config, 
         http_session=http_session,
         snapshot_date=lock_time.date(),
-        unmatched_tracker=unmatched_tracker,
+        lock_time=lock_time,
     )
     if not field_lineups:
         console.print(f"[red]✗[/red] No field lineups sampled for contest {contest_id}")
         raise RuntimeError(f"No field lineups sampled for contest {contest_id}")
     
-    # Print comprehensive field summary
-    _print_field_summary(
-        session, field_lineups, unmatched_tracker, 
-        contest_id=contest_id, 
-        snapshot_date=lock_time.date(),
-        lineups_with_defaults=lineups_with_defaults,
-        total_attempted=total_attempted,
-        lock_time=lock_time
-    )
+    available = len(field_lineups)
+    effective_target = min(int(num_field_samples), available)
+    if not quiet:
+        if available > int(num_field_samples):
+            console.print(f"[green]✓ Field sampled: {effective_target}/{available} (capped)" )
+        elif available < int(num_field_samples):
+            console.print(f"[yellow]⚠ Field sampled: {available} (< requested {num_field_samples})" )
+        else:
+            console.print(f"[green]✓ Field sampled: {available} lineups" )
+
+    # Print Top-10 owned players in the sampled field
+    if not quiet:
+        try:
+            from collections import Counter
+            pid_counts = Counter(pid for lu in field_lineups for pid in lu)
+            total_lu = len(field_lineups)
+            top5 = pid_counts.most_common(5)
+            if top5:
+                pids = [pid for pid, _ in top5]
+                players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(pids)).all()
+                pmap = {p.id: p for p in players}
+                console.print("[cyan]Top owned (5) preview:[/cyan]")
+                for pid, cnt in top5:
+                    p = pmap.get(pid)
+                    name = p.name if p else f"PID {pid}"
+                    pct = 100.0 * cnt / total_lu
+                    console.print(f"  {name:<22} {pct:6.2f}%")
+        except Exception:
+            pass
 
     # Player samples include same-day snapshots to cover locked players
-    console.print(f"[cyan]•[/cyan] Building player samples (T={num_sims})")
+    if not quiet:
+        console.print(f"[cyan]Building player samples (T={num_sims})[/cyan]")
     randomness = float(config.get("classic", {}).get("lineup_generation", {}).get("randomness", 0.05))
     player_samples = generate_player_samples(
         session,
@@ -1058,7 +1167,8 @@ def lateswap_one_contest_field(
     )
 
     # Precompute field scores (N, T)
-    console.print(f"[cyan]•[/cyan] Precomputing field scores")
+    if not quiet:
+        console.print(f"[cyan]Precomputing field scores[/cyan]")
     field_scores = np.stack([_sum_lineup_scores(player_samples, lu) for lu in field_lineups], axis=0)
 
     # Payouts
@@ -1067,65 +1177,45 @@ def lateswap_one_contest_field(
     results: List[Tuple['OriginalEntry', List[int], float]] = []
     candidate_rows: List[Tuple[int, str, int, List[int], float]] = []  # (contest_id, entry_id, idx, lineup_ids, roi)
 
-    # Ensure lock classification has been performed for this flow (was missing previously)
-    console.print(f"[cyan]•[/cyan] Classifying locked/swappable players for {len(entries)} entries")
-    classified_any = False
+    if not quiet:
+        console.print(f"[cyan]Generating candidates & simulating ({len(entries)} entries)")
     for entry in entries:
-        # Only classify if not already populated
-        if not entry.locked_player_ids and not entry.swappable_player_ids:
-            locked, swappable = _identify_locked_players(session, entry.player_ids, lock_time)
-            entry.locked_player_ids = locked
-            entry.swappable_player_ids = swappable
-        classified_any = True
-        console.print(f"  [dim]Entry {entry.entry_id}: {len(entry.locked_player_ids)} locked, {len(entry.swappable_player_ids)} swappable[/dim]")
-    if not any(e.swappable_player_ids for e in entries):
-        console.print(f"[yellow]⚠ All entries appear fully locked after classification; candidate generation will return originals only[/yellow]")
-
-    console.print(f"[cyan]•[/cyan] Generating candidates and simulating ({len(entries)} entries)")
-
-
-    for entry in entries:
+        # Generate K candidates for this entry (reuse existing core logic)
         candidates, _ = _generate_swap_candidates(
             session=session,
             original_entry=entry,
             lock_time=lock_time,
             config=config,
             num_candidates=num_candidates_per_entry,
-            debug=debug,
         )
         if not candidates:
-            console.print(f"[yellow]![/yellow] No candidates for entry {entry.entry_id}; skipping")
+            if not quiet:
+                console.print(f"[yellow]![/yellow] No candidates for entry {entry.entry_id}; skipping")
             continue
 
-        # Always include the original lineup as a candidate (first position)
-        original_lineup = entry.player_ids
-        all_candidate_objs = [SwapCandidate(
-            original_entry_id=entry.entry_id,
-            original_lineup_id=entry.lineup_id,
-            locked_player_ids=list(entry.locked_player_ids),
-            swapped_player_ids=[pid for pid in original_lineup if pid not in entry.locked_player_ids],
-            candidate_lineup_id=entry.lineup_id
-        )] + candidates
-
-        candidate_lineups = [c.full_lineup() for c in all_candidate_objs]
+        # Candidate lineups (complete: locked + swapped)
+        candidate_lineups = [c.full_lineup() for c in candidates]
         candidate_scores = [_sum_lineup_scores(player_samples, lu) for lu in candidate_lineups]
 
-        # For each candidate, compute the median fpts (projected score) and select the max
-        medians = [float(np.median(cand_score)) for cand_score in candidate_scores]
-
-        # Emit per-candidate rows (median fpts)
-        for idx, (lu, median_fpts) in enumerate(zip(candidate_lineups, medians), start=0):
-            candidate_rows.append((contest_id, entry.entry_id, idx, lu, float(median_fpts)))
-
-        # Pick best by median fpts
-        best_idx = int(np.argmax(medians))
-        results.append((entry, candidate_lineups[best_idx], float(medians[best_idx])))
-
-        # Print original entry and all candidates
-        _print_entry_with_candidates(
-            session, entry, all_candidate_objs, medians, lock_time, snapshot_date=lock_time.date()
+        # ROI mean per candidate
+        rois = _evaluate_candidates_vs_field(
+            field_scores=field_scores,
+            candidate_scores=candidate_scores,
+            prize_per_rank=prize_per_rank,
+            entry_fee=entry_fee,
+            entries_max=entries_max,
         )
 
+        # Emit per-candidate rows (injected-vs-field ROI)
+        for idx, (lu, rmean) in enumerate(zip(candidate_lineups, rois), start=1):
+            candidate_rows.append((contest_id, entry.entry_id, idx, lu, float(rmean)))
+
+        # Pick best
+        best_idx = int(np.argmax(rois))
+        results.append((entry, candidate_lineups[best_idx], float(rois[best_idx])))
+
+    if not quiet:
+        console.print(f"[green]✓ Contest {contest_id} complete ({len(results)} entries processed)")
     return results, candidate_rows
 
 
@@ -1138,13 +1228,9 @@ def lateswap_slate(
     num_field_samples: int = 10000,
     num_sims: int = 5000,
     seed: Optional[int] = 42,
-    debug: bool = False,
+    quiet: bool = False,
 ) -> Tuple[List[Tuple['OriginalEntry', List[int], float]], List[Tuple[int, str, int, List[int], float]]]:
-    """Slate-level coordinator: groups by contest and runs late swap for each.
-    
-    Args:
-        debug: If True, print detailed diagnostic information
-    """
+    """Slate-level coordinator: groups by contest and runs late swap for each."""
     by_contest = _group_entries_by_contest(entries)
     # Create a single authenticated DK session if using DK field source
     source = (config.get("classic", {}).get("field_source") or config.get("field_source") or "db").lower()
@@ -1174,16 +1260,47 @@ def lateswap_slate(
             num_sims=num_sims,
             seed=seed,
             http_session=http_sess,
-            debug=debug,
+            quiet=quiet,
         )
         all_results.extend(result)
         all_candidate_rows.extend(cand_rows)
+    if not quiet:
+        Console().print(f"[green]✓ Slate complete: {len(all_results)} optimized entries across {len(by_contest)} contests")
+    # Print player exposures across chosen candidate lineups (match scripts/nba/choose.py style)
+    try:
+
+        pid_counts = Counter(pid for _entry, lineup_ids, _roi in all_results for pid in lineup_ids)
+        total_selected = len(all_results)
+
+        if total_selected == 0:
+            console.print("[yellow]⚠ No chosen lineups to compute exposures[/yellow]")
+        else:
+            console.print(f"\n[bold cyan]Player exposures across {total_selected} chosen lineups[/bold cyan]")
+            console.print("─" * 70)
+            console.print(f"{'Player':<30} {'ID':<8} {'Count':<8} {'Exposure':<10}")
+            console.print("─" * 70)
+
+            # Lookup names for pids
+            pids = list(pid_counts.keys())
+            players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(pids)).all()
+            pid_to_name = {p.id: p.name for p in players}
+
+            for pid, cnt in sorted(pid_counts.items(), key=lambda kv: kv[1], reverse=True):
+                name = pid_to_name.get(pid, f"PID {pid}")
+                pct = 100.0 * cnt / total_selected
+                console.print(f"{name:<30} {pid:<8} {cnt:<8} {pct:6.2f}%")
+
+            console.print("─" * 70)
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not compute exposures: {e}[/yellow]")
+
     return all_results, all_candidate_rows
 
 
 def write_lateswap_csv_simple(
     results: List[Tuple['OriginalEntry', List[int], float]],
     output_path: str,
+    quiet: bool = False,
 ) -> None:
     """Minimal CSV: entry_id, 8 player ids in roster order, roi_mean."""
     with open(output_path, "w", newline="") as f:
@@ -1192,12 +1309,14 @@ def write_lateswap_csv_simple(
         for entry, lineup_ids, roi_mean in results:
             row = [entry.entry_id] + lineup_ids + [roi_mean]
             w.writerow(row)
-    Console().print(f"[green]✓[/green] Wrote late-swap CSV: {output_path}")
+    if not quiet:
+        Console().print(f"[green]✓[/green] Wrote late-swap CSV: {output_path}")
 
 
 def write_lateswap_candidates_csv(
     candidate_rows: List[Tuple[int, str, int, List[int], float]],
     output_path: str,
+    quiet: bool = False,
 ) -> None:
     """Write all candidate lineups with ROI to CSV: contest_id, entry_id, idx, p1..p8, roi_mean."""
     with open(output_path, "w", newline="") as f:
@@ -1206,7 +1325,91 @@ def write_lateswap_candidates_csv(
         for contest_id, entry_id, idx, lineup_ids, roi_mean in candidate_rows:
             row = [contest_id, entry_id, idx] + lineup_ids + [roi_mean]
             w.writerow(row)
-    Console().print(f"[green]✓[/green] Wrote candidate ROI CSV: {output_path}")
+    if not quiet:
+        Console().print(f"[green]✓[/green] Wrote candidate ROI CSV: {output_path}")
+
+
+def write_lateswap_csv_entries_format(
+    results: List[Tuple['OriginalEntry', List[int], float]],
+    output_path: str,
+    session: Session,
+    quiet: bool = False,
+) -> None:
+    """
+    Write late-swap results to match the DraftKings entries CSV format.
+
+    Columns (first 12 to match parser expectations):
+    - Entry ID, Contest Name, Contest ID, Entry Fee, PG, SG, SF, PF, C, G, F, UTIL
+
+    Values for PG..UTIL will be in "Name (ID)" format to mirror the native export.
+    """
+    # Header exactly as DK export
+    headers = [
+        "Entry ID",
+        "Contest Name",
+        "Contest ID",
+        "Entry Fee",
+        "PG",
+        "SG",
+        "SF",
+        "PF",
+        "C",
+        "G",
+        "F",
+        "UTIL",
+    ]
+
+    # Preload contest metadata to avoid repeated queries
+    from ivan.sports.nba.models import HistoricalContest, NBAPlayer
+    from collections import Counter
+    contest_ids = sorted({int(e.contest_id) for e, _, _ in results})
+    contests = (
+        session.query(HistoricalContest)
+        .filter(HistoricalContest.contest_id.in_(contest_ids))
+        .all()
+    )
+    contest_map = {int(c.contest_id): c for c in contests}
+
+    # Preload all player names referenced
+    all_pids = sorted({pid for _, lineup_ids, _ in results for pid in lineup_ids})
+    players = (
+        session.query(NBAPlayer)
+        .filter(NBAPlayer.id.in_(all_pids))
+        .all()
+    )
+    pid_to_name = {int(p.id): (p.name or str(p.id)) for p in players}
+
+    # Write CSV
+    with open(output_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(headers)
+
+        for entry, lineup_ids, _roi_mean in results:
+            meta = contest_map.get(int(entry.contest_id))
+            contest_name = meta.name if meta and getattr(meta, "name", None) else ""
+            # Format entry fee with $ and two decimals to match DK export
+            try:
+                fee_val = float(meta.entry_fee) if meta and getattr(meta, "entry_fee", None) is not None else 0.0
+            except Exception:
+                fee_val = 0.0
+            entry_fee_str = f"${fee_val:.2f}"
+
+            # Build Name (ID) strings in slot order
+            pos_strings = [
+                f"{pid_to_name.get(pid, str(pid))} ({pid})" for pid in lineup_ids
+            ]
+
+            row = [
+                entry.entry_id,
+                contest_name,
+                int(entry.contest_id),
+                entry_fee_str,
+                *pos_strings,
+            ]
+            w.writerow(row)
+
+    if not quiet:
+        Console().print(f"[green]✓[/green] Wrote DK entries-format CSV: {output_path}")
 
 
 

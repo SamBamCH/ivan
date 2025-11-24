@@ -277,6 +277,128 @@ def _select_diverse_lineups(
     return selected_lineup_ids, meta
 
 
+def _estimate_ownership_from_lineups(
+    session: Session,
+    slate_type: str,
+    num_lineups: int = 1000,
+) -> Dict[int, float]:
+    """
+    Estimate player ownership by generating lineups and counting exposures.
+    
+    Simple and accurate approach:
+    - Generate N lineups using actual lineup generation logic
+    - Count how often each player appears
+    - Return ownership percentages
+    
+    Args:
+        session: Database session
+        slate_type: 'showdown' or 'classic'
+        num_lineups: Number of lineups to generate for sampling
+    
+    Returns:
+        {player_id: ownership_pct} where ownership_pct is 0-100
+    """
+    from ivan.sports.nfl.models import NFLPlayer
+    from ivan.sports.nfl.generate_lineups_logic import (
+        generate_single_showdown_lineup_ilp,
+        generate_single_classic_lineup,
+        FieldPlayer,
+    )
+    from collections import Counter
+    import random
+    
+    # Get all active players
+    db_players = session.query(NFLPlayer).filter(NFLPlayer.fpts_mean > 0).all()
+
+    if not db_players:
+        logger.warning("[ownership] No players with projections found")
+        return {}
+
+    # Convert to FieldPlayer format and collect stddevs
+    field_players = []
+    roster_slot_by_id = {}
+    fpts_mean_by_id = {}
+    fpts_std_by_id = {}
+
+    for p in db_players:
+        field_players.append(FieldPlayer(
+            id=p.id,
+            name=p.name,
+            team=p.team or '',
+            opponent=p.opponent,
+            position=p.position or '',
+            salary=p.salary,
+            fpts_projection=p.fpts_mean,
+        ))
+        roster_slot_by_id[p.id] = p.roster_slot_id
+        fpts_mean_by_id[p.id] = p.fpts_mean
+        fpts_std_by_id[p.id] = p.fpts_std if hasattr(p, 'fpts_std') and p.fpts_std is not None else 0.0
+
+    # Configurable CPT multiplier and extra randomness for CPT
+    cpt_multiplier = 1.5
+    cpt_extra_noise_std = 5.0  # Extra stddev for CPT position (tune as needed)
+
+    # Generate lineups
+    player_appearances = Counter()
+    successful_lineups = 0
+
+    logger.info(f"[ownership] Generating {num_lineups} lineups to estimate ownership (full sampling)...")
+
+    import numpy as np
+    rng = np.random.default_rng()
+
+    for i in range(num_lineups * 2):  # Try up to 2x to get num_lineups successful
+        if successful_lineups >= num_lineups:
+            break
+
+        # Sample each player's fpts from their normal distribution
+        base_scores = {}
+        for p in field_players:
+            mu = fpts_mean_by_id[p.id]
+            sigma = fpts_std_by_id[p.id]
+            is_cpt = slate_type == 'showdown' and roster_slot_by_id.get(p.id) == 511
+            if is_cpt:
+                # Inject extra randomness for CPT slot
+                total_sigma = (sigma ** 2 + cpt_extra_noise_std ** 2) ** 0.5
+                sample = float(rng.normal(mu, total_sigma))
+                base_scores[p.id] = sample * cpt_multiplier
+            else:
+                sample = float(rng.normal(mu, sigma*0.50 if sigma > 0 else 1.0))
+                base_scores[p.id] = sample
+
+        # Generate lineup
+        if slate_type == 'showdown':
+            lineup_ids = generate_single_showdown_lineup_ilp(
+                players=field_players,
+                roster_slot_by_id=roster_slot_by_id,
+                base_scores=base_scores,
+            )
+        else:
+            lineup_ids = generate_single_classic_lineup(
+                players=field_players,
+                roster_slot_by_id=roster_slot_by_id,
+                base_scores=base_scores,
+            )
+
+        if lineup_ids:
+            for pid in lineup_ids:
+                player_appearances[pid] += 1
+            successful_lineups += 1
+
+    if successful_lineups == 0:
+        logger.warning("[ownership] No successful lineups generated")
+        return {}
+
+    logger.info(f"[ownership] Generated {successful_lineups} successful lineups")
+
+    # Convert to ownership percentages
+    ownership = {}
+    for pid, count in player_appearances.items():
+        ownership[pid] = (count / successful_lineups) * 100
+
+    return ownership
+
+
 def project_ownership(
     session: Session,
     *,
@@ -285,20 +407,20 @@ def project_ownership(
     aggregate_method: str = 'mean',
 ) -> Dict[int, float]:
     """
-    Project player ownership using field simulation.
+    Project player ownership by generating sample lineups and counting exposures.
     
     Strategy:
     1. Detect slate type (showdown/classic)
-    2. Check if we have generated lineups in database
-    3. Run field sampling simulation(s)
-    4. Aggregate ownership across simulations
-    5. Write ownership back to NFLPlayer.ownership_proj
+    2. Generate N lineups using actual lineup generation logic
+    3. Count player appearances to calculate ownership
+    4. Write ownership back to NFLPlayer.ownership_proj
+    
+    This approach is simple, accurate, and uses the same logic as lineup generation.
     
     Args:
         session: Database session
-        field_size: Size of simulated field (default 10k)
         config: Configuration dict (optional)
-        num_simulations: Number of field samples to average (default 1)
+        num_simulations: Number of sampling runs to average (default 1)
         aggregate_method: How to combine sims ('mean', 'median', 'max')
     
     Returns:
@@ -310,42 +432,21 @@ def project_ownership(
     slate_type = _detect_slate_type(session)
     logger.info(f"[ownership] Detected slate type: {slate_type}")
     
-    # 2. Check if lineups exist
-    lineup_count = session.query(Lineup).count()
-    if lineup_count == 0:
-        logger.warning("[ownership] No lineups found in database. Cannot project ownership.")
-        logger.warning("[ownership] Run 'python scripts/nfl/generate_lineups.py' first.")
-        return {}
+    # 2. Generate lineups and count exposures
+    num_lineups = config.get('ownership_num_lineups', 1000)
     
-    logger.info(f"[ownership] Found {lineup_count:,} lineups in database")
+    logger.info(f"[ownership] Generating {num_lineups} lineups to estimate ownership")
     
-    # 3. Run field simulation(s)
     all_ownership = []
     
     for sim_idx in range(num_simulations):
-        logger.info(f"[ownership] Running field simulation {sim_idx + 1}/{num_simulations}")
+        logger.info(f"[ownership] Running simulation {sim_idx + 1}/{num_simulations}")
         
         try:
-            if slate_type == 'showdown':
-                field_size=50000
-                counts_by_lineup, meta = sample_showdown_field_learned(
-                    session=session,
-                    field_size=field_size,
-                    config=config,
-                )
-            else:  # classic
-                field_size=10000
-                counts_by_lineup, meta = sample_classic_field_learned(
-                    session=session,
-                    field_size=field_size,
-                    config=config,
-                )
-            
-            # Compute exposures for this simulation
-            ownership = _compute_exposures_from_counts(
+            ownership = _estimate_ownership_from_lineups(
                 session=session,
-                counts_by_lineup=counts_by_lineup,
-                total_entries=field_size,
+                slate_type=slate_type,
+                num_lineups=num_lineups,
             )
             
             all_ownership.append(ownership)

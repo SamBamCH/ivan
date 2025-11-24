@@ -8,7 +8,7 @@ from ivan.database.session import get_session, init_db
 from ivan.sports.nba.swap_logic import (
     parse_entries_csv,
     lateswap_slate,
-    write_lateswap_csv_simple,
+    write_lateswap_csv_entries_format,
     write_lateswap_candidates_csv,
 )
 
@@ -27,12 +27,12 @@ def main():
     )
     parser.add_argument(
         "--output-csv", 
-        default="lateswap_results.csv",
+        default="data/nba/output/lateswap_results.csv",
         help="Output CSV path"
     )
     parser.add_argument(
         "--candidates-csv",
-        default="lateswap_candidates.csv",
+        default="data/nba/output/lateswap_candidates.csv",
         help="Output CSV for all candidates with ROI (DK field mode)"
     )
     parser.add_argument(
@@ -55,8 +55,14 @@ def main():
     parser.add_argument(
         "--field-samples",
         type=int,
-        default=10,
+        default=5000,
         help="Max number of field lineups to sample when using DK field"
+    )
+    parser.add_argument(
+        "--field-workers",
+        type=int,
+        default=8,
+        help="Parallel workers for DK field parsing/completion (0 to disable)"
     )
     parser.add_argument(
         "--debug",
@@ -70,48 +76,45 @@ def main():
     if args.lock_time:
         try:
             lock_time = datetime.strptime(args.lock_time, "%Y-%m-%d %H:%M")
-            # Treat provided time as Central Time (naive, for compatibility with DB values)
-            lock_time_display = f"{lock_time.strftime('%Y-%m-%d %H:%M')} CT (as provided)"
         except ValueError:
             console.print("[red]✗ Invalid --lock-time format. Use YYYY-MM-DD HH:MM[/red]")
             return
     else:
-        # Default to current Central Time for testing; keep naive for comparisons
-        now_ct = datetime.now(ZoneInfo('America/Chicago'))
-        lock_time = now_ct.replace(tzinfo=None)
-        lock_time_display = f"{lock_time.strftime('%Y-%m-%d %H:%M')} CT (defaulted to current for testing)"
-        console.print("[yellow]![/yellow] --lock-time not provided; defaulting to current Central Time (CT) for testing.")
+        # Default to current Central Time (naive) for comparisons
+        lock_time = datetime.now(ZoneInfo('America/Chicago')).replace(tzinfo=None)
 
-    console.print("[bold cyan]NBA Late Swap Optimizer[/bold cyan]")
-    console.print(f"[cyan]Entries CSV: {args.entries_csv}[/cyan]")
-    console.print(f"[cyan]Config: {args.config}[/cyan]")
-    console.print(f"[cyan]Lock Time: {lock_time_display}[/cyan]")
-    console.print(f"[cyan]Simulations: {args.num_sims}[/cyan]")
-    console.print(f"[cyan]Candidates per entry: {args.num_candidates}[/cyan]")
-    console.print()
+    quiet = not args.debug
+    if not quiet:
+        console.print("[bold cyan]NBA Late Swap Optimizer[/bold cyan]")
+        console.print(f"[cyan]Lock Time: {lock_time.strftime('%Y-%m-%d %H:%M')} CT[/cyan]")
+        console.print(f"[cyan]Simulations: {args.num_sims} | Candidates/Entry: {args.num_candidates} | Field Samples: {args.field_samples}[/cyan]")
+        console.print()
     
     # Initialize database
     engine = init_db('nba')
     session = get_session(engine)
 
-    # Parse entries
-    console.print("[cyan]Parsing entries CSV...[/cyan]")
-    entries_by_contest = parse_entries_csv(args.entries_csv, session)
+    # Parse entries (quiet mode suppresses per-row output inside helper)
+    entries_by_contest = parse_entries_csv(args.entries_csv, session, quiet=quiet)
     
     if not entries_by_contest:
         console.print("[red]No entries found in CSV[/red]")
         return
 
-    console.print("\n[bold cyan]Using DK field lineups for simulation[/bold cyan]")
+    if not quiet:
+        console.print("[cyan]Using DK field lineups source[/cyan]")
     cfg = json.load(open(args.config, encoding="utf-8"))
     # Force DK field source for this run
     cfg.setdefault("classic", {})["field_source"] = "dk"
+    # Configure parallelism for field parsing/completion
+    cfg["classic"]["field_parallel_workers"] = int(args.field_workers)
 
     # Flatten all entries; coordinator groups by contest internally
     all_entries = []
     for _, entries in entries_by_contest.items():
         all_entries.extend(entries)
 
+    # Run late swap (swap_logic internally handles minimal field sampling progress)
     best_results, candidate_rows = lateswap_slate(
         session=session,
         entries=all_entries,
@@ -121,12 +124,12 @@ def main():
         num_field_samples=args.field_samples,
         num_sims=args.num_sims,
         seed=42,
-        debug=args.debug,
     )
-    console.print(f"\n[cyan]Writing results to {args.output_csv} and {args.candidates_csv}...[/cyan]")
-    write_lateswap_csv_simple(best_results, args.output_csv)
-    write_lateswap_candidates_csv(candidate_rows, args.candidates_csv)
-    console.print(f"[green]✓ Late swap (DK field) complete! Results saved to {args.output_csv} and {args.candidates_csv}[/green]")
+    if not quiet:
+        console.print(f"[cyan]Writing results to {args.output_csv} and {args.candidates_csv}[/cyan]")
+    write_lateswap_csv_entries_format(best_results, args.output_csv, session=session, quiet=quiet)
+    write_lateswap_candidates_csv(candidate_rows, args.candidates_csv, quiet=quiet)
+    console.print(f"[green]✓ Late swap complete[/green]")
 
 
 if __name__ == "__main__":

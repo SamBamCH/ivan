@@ -1,6 +1,11 @@
+import pickle
+from pathlib import Path
+
 import random
 import re
 from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 from sqlalchemy.orm import Session
 
@@ -15,6 +20,7 @@ from ivan.sports.nba.lineup_generation import (
     FieldPlayer,
     generate_single_classic_lineup,
     SLOT_NAMES,
+    SLOT_ELIGIBILITY,
 )
 from copy import deepcopy
 
@@ -73,6 +79,126 @@ def sample_field(session: Session, field_size: int, cfg: dict) -> Dict[int, int]
     unique_indices, counts = np.unique(sampled_indices, return_counts=True)
     for idx, count in zip(unique_indices, counts):
         counts_by_lineup[lineup_ids[idx]] = int(count)
+    
+    return counts_by_lineup
+
+
+def sample_field_with_projection_model(
+        session: Session, 
+        field_size: int, 
+        cfg: dict, 
+        model_path: str = "data/nba/models/field_distribution_model.pkl", 
+        contest_params: dict = None
+) -> Dict[int, int]:
+    """
+    Sample field using the projection-based field model.
+    contest_params: dict with keys [entry_fee, total_entries, multi_entry]
+    """
+    # Load model
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+    scaler = model['scaler']
+    proj_model = model['proj_model']
+    bin_edges = model['bin_edges']
+    projection_min = model.get('projection_min', 200.0)  # Default to 200 if not stored
+
+    entry_fee = contest_params.get('entry_fee', 4.0)
+    total_entries = contest_params.get('total_entries', 20000)
+    multi_entry = contest_params.get('multi_entry', 150)
+
+    X = np.array([[entry_fee, total_entries, multi_entry]])
+    X_scaled = scaler.transform(X)
+    proj_dist = proj_model.predict(X_scaled)[0]  # shape (BINS,)
+
+    # Get all lineups and their projection sums
+    all_lineups = session.query(Lineup).all()
+    if not all_lineups:
+        raise ValueError("No lineups found in database")
+    lineup_ids = []
+    lineup_projection_sums = []
+    for lineup in all_lineups:
+        player_ids = lineup.player_ids_list
+        if not player_ids:
+            total_projection = 0.0
+        else:
+            if isinstance(player_ids, str):
+                import json
+                try:
+                    player_ids = json.loads(player_ids)
+                except:
+                    player_ids = []
+            if not isinstance(player_ids, list):
+                player_ids = list(player_ids) if hasattr(player_ids, '__iter__') else []
+            player_ids = [int(pid) for pid in player_ids if pid]
+            players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(player_ids)).all()
+            player_dict = {p.id: p for p in players}
+            total_projection = sum(
+                player_dict[pid].fpts_mean 
+                for pid in player_ids 
+                if pid in player_dict and player_dict[pid].fpts_mean is not None
+            )
+        
+        # Drop lineups below projection_min
+        if total_projection >= projection_min:
+            lineup_ids.append(lineup.id)
+            lineup_projection_sums.append(float(total_projection))
+    
+    if not lineup_ids:
+        raise ValueError(f"No lineups found with projection >= {projection_min}")
+    
+    lineup_projection_sums = np.array(lineup_projection_sums, dtype=np.float64)
+
+    # Normalize lineup projections to [0, 1] using projection_min as min and max_proj as max
+    max_proj = lineup_projection_sums.max()
+    if max_proj > projection_min:
+        norm_proj = (lineup_projection_sums - projection_min) / (max_proj - projection_min)
+    else:
+        norm_proj = np.zeros_like(lineup_projection_sums)
+    
+    # Clip to valid range [0, 1)
+    norm_proj = np.clip(norm_proj, 0, 1 - 1e-8)
+    
+    # Bin each normalized projection
+    bin_indices = np.floor(norm_proj * (len(bin_edges) - 1)).astype(int)
+    bin_indices = np.clip(bin_indices, 0, len(bin_edges) - 2)
+
+    # Group lineups by bin
+    lineups_by_bin = {}
+    for idx, bin_idx in enumerate(bin_indices):
+        if bin_idx not in lineups_by_bin:
+            lineups_by_bin[bin_idx] = []
+        lineups_by_bin[bin_idx].append(idx)
+
+    # Sample bins according to proj_dist, then sample lineups within each bin
+    # This forces the field to match the histogram distribution
+    num_bins = len(proj_dist)
+    
+    # Normalize proj_dist to get probabilities
+    bin_probs = proj_dist / proj_dist.sum() if proj_dist.sum() > 0 else np.ones(num_bins) / num_bins
+    
+    # Sample which bins to draw from (with replacement)
+    sampled_bins = np.random.choice(num_bins, size=field_size, replace=True, p=bin_probs)
+    
+    # For each sampled bin, randomly pick a lineup from that bin
+    counts_by_lineup = {}
+    for bin_idx in sampled_bins:
+        if bin_idx in lineups_by_bin and lineups_by_bin[bin_idx]:
+            # Randomly pick a lineup from this bin
+            lineup_idx = np.random.choice(lineups_by_bin[bin_idx])
+            lineup_id = lineup_ids[lineup_idx]
+            counts_by_lineup[lineup_id] = counts_by_lineup.get(lineup_id, 0) + 1
+        else:
+            # Bin has no lineups - fallback to sampling from all lineups
+            lineup_idx = np.random.choice(len(lineup_ids))
+            lineup_id = lineup_ids[lineup_idx]
+            counts_by_lineup[lineup_id] = counts_by_lineup.get(lineup_id, 0) + 1
+    
+    unique_lineups = len(counts_by_lineup)
+    total_entries = sum(counts_by_lineup.values())
+    avg_dupe = total_entries / unique_lineups if unique_lineups > 0 else 0
+    
+    print(f"Sampled from {len(lineup_ids)} lineups (dropped {len(all_lineups) - len(lineup_ids)} below {projection_min:.0f})")
+    print(f"Field composition: {unique_lineups} unique lineups, {total_entries} total entries (avg {avg_dupe:.1f}x duplication)")
     
     return counts_by_lineup
 
@@ -142,6 +268,7 @@ def _parse_lineup_positions(lineup_str: str) -> List[Tuple[str, Optional[str]]]:
     If the value contains 'LOCKED' or is empty/placeholder, we return None for the name.
     """
     if not isinstance(lineup_str, str) or not lineup_str.strip():
+        print("error parsing lineup")
         return []
     s = re.sub(r"\s+", " ", lineup_str).strip()
 
@@ -229,7 +356,7 @@ def _ensure_placeholder_projection(session: Session, player_id: int = -1,
             snapshot_date=datetime.now(),
             team="Unknown",
             opponent="Unknown",
-            position="Unknown",
+            position="PG/SG/SF/PF/C",  # Make eligible for all positions to avoid infeasible lineups
             roster_slot_id=0,
             gametime=datetime.now(),
             salary=0,
@@ -279,10 +406,115 @@ def _map_names_to_ids(session: Session, names: List[str], snapshot_date=None,
     return ids
 
 
+def _complete_lineups_chunk(
+    slot_pairs_chunk: List[List[Tuple[str, Optional[str]]]],
+    name_map: Dict[str, int],
+    player_pool: List[FieldPlayer],
+    base_scores: Dict[int, float],
+    config: Optional[dict],
+    debug_lp_path: str,
+    lock_time: Optional[datetime] = None,
+) -> Tuple[List[List[int]], int, Dict[str, int], int]:
+    """Complete a chunk of DK lineups using optimizer, respecting locked names.
+
+    Returns: (completed_lineups, lineups_completed_count, unmatched_counter)
+    """
+    from copy import deepcopy as _deepcopy
+    completed: List[List[int]] = []
+    lineups_completed = 0
+    infeasible_count = 0
+    unmatched_counter: Dict[str, int] = {}
+
+    # Build config attempts list once per chunk
+    # First attempt: ALWAYS relax team cap to avoid infeasibility from many same-team locks
+    config_attempts: List[dict] = []
+    primary_cfg = _deepcopy(config or {})
+    node0 = primary_cfg
+    node0.setdefault("classic", {}).setdefault("lineup_generation", {})
+    node0["classic"]["lineup_generation"].setdefault("salary_cap", 50000)
+    node0["classic"]["lineup_generation"]["min_salary"] = 0
+    node0["classic"]["lineup_generation"]["max_salary_per_team"] = None
+    config_attempts.append(primary_cfg)
+
+    # Second attempt: identical fallback (kept for future toggles); currently same as primary
+    fallback_cfg = _deepcopy(primary_cfg)
+    config_attempts.append(fallback_cfg)
+
+    # Quick id -> FieldPlayer map for lock checks
+    id_to_fp: Dict[int, FieldPlayer] = {fp.id: fp for fp in player_pool}
+
+    for slot_pairs in slot_pairs_chunk:
+        # Build locked assignments
+        locked: Dict[int, str] = {}
+        known_count = 0
+        for slot, maybe_name in slot_pairs[:8]:
+            if not maybe_name:
+                continue
+            pid = name_map.get(normalize_name(maybe_name)) or name_map.get(maybe_name)
+            if pid is None:
+                nm = normalize_name(maybe_name)
+                unmatched_counter[nm] = unmatched_counter.get(nm, 0) + 1
+                continue
+            slot_up = slot.upper()
+            if slot_up in SLOT_NAMES:
+                # ALWAYS lock known players to preserve field lineup integrity
+                # We are reconstructing actual lineups, not optimizing them
+                fp = id_to_fp.get(int(pid))
+                
+                # Verify eligibility for the given slot to avoid infeasibility
+                if fp:
+                    pos_tuple = fp.position if isinstance(fp.position, (tuple, list)) else (fp.position,)
+                    if any(pos in SLOT_ELIGIBILITY.get(slot_up, set()) for pos in pos_tuple):
+                        locked[int(pid)] = slot_up # i.e. {12345: PG}
+                        known_count += 1
+                    else:
+                        # Player exists but not eligible for this slot?
+                        # This implies a data mismatch between DK lineup and our player DB
+                        print(f"[field-parser] Warning: Player {pid} ({fp.name}) not eligible for {slot_up} (pos={fp.position})")
+                else:
+                     # Player ID found in name_map but not in player_pool?
+                     # This shouldn't happen if player_pool is built from same sources
+                     pass
+
+        # Try to complete lineup with optimizer
+        completed_lineup: Optional[List[int]] = None
+        for idx, cfg_attempt in enumerate(config_attempts):
+            try:
+                completed_lineup = generate_single_classic_lineup(
+                    players=player_pool,
+                    base_scores=base_scores,
+                    config=cfg_attempt,
+                    locked_assignments=locked,
+                    attempt_tag=str(idx + 1),
+                    lock_time=lock_time,
+                )
+            except Exception as e:
+                print(f"[field-parser] Error optimizing lineup: {e}")
+                import traceback
+                traceback.print_exc()
+                completed_lineup = None
+            if completed_lineup:
+                break
+
+        if completed_lineup:
+            completed.append(completed_lineup)
+            if known_count < 8:
+                lineups_completed += 1
+        else:
+            # Log why it failed (infeasible)
+            # Only print first few failures to avoid spamming
+            if infeasible_count < 5:
+                print(f"[field-parser] Infeasible lineup (locked={locked})")
+            infeasible_count += 1
+
+    return completed, lineups_completed, unmatched_counter, infeasible_count
+
+
 def fetch_dk_field_lineups(session: Session, contest_ids: List[int], max_lineups: int = 10000,
                             user_data_dir: Optional[str] = None, profile_directory: str = "Default",
                             seed: Optional[int] = 42, sess=None, snapshot_date=None,
-                            unmatched_tracker: dict = None, config: Optional[dict] = None) -> tuple[List[List[int]], int, int]:
+                            unmatched_tracker: dict = None, config: Optional[dict] = None,
+                            lock_time: Optional[datetime] = None) -> tuple[List[List[int]], int, int]:
     """Download DK standings CSV and extract lineup player-id lists. De-dupes and samples.
     
     Args:
@@ -389,82 +621,104 @@ def fetch_dk_field_lineups(session: Session, contest_ids: List[int], max_lineups
     _extend_pool_from_nba_players(raw_players)
     _extend_pool_from_snapshots(snapshot_date)
 
+    # Build a global name_map once (uses current players and same-day snapshots)
+    name_map = _build_name_map(session, snapshot_date=snapshot_date)
+
+    # Parallel controls from config
+    workers = 8
+    chunk_size = 500
+    if config:
+        workers = int(config.get("classic", {}).get("field_parallel_workers", 8) or 8)
+        chunk_size = int(config.get("classic", {}).get("field_parallel_chunk_size", 500) or 500)
+
+    debug_lp_path = '/home/sam-pratt/ivan/data/nba/logs/'
+
+    # Fallback: if lock_time not provided, default to current Central Time (naive) for late-swap style filtering
+    if lock_time is None:
+        try:
+            from zoneinfo import ZoneInfo
+            lock_time = datetime.now(ZoneInfo("America/Chicago")).replace(tzinfo=None)
+        except Exception:
+            lock_time = datetime.now().replace(tzinfo=None)
+
     for cid in contest_ids:
         df = download_contest_dataframe(sess=sess, contest_id=int(cid))
         if df is None or df.empty:
-            continue
+            print('no data returned from draftkings')
+            break
 
         cols = [str(c).strip() for c in df.columns]
         lineup_col = next((c for c in cols if c.lower() == 'lineup'), None)
         if lineup_col:
             tmp = df[[lineup_col]].dropna().drop_duplicates()
+            
+            # OPTIMIZATION: Sample lineups BEFORE parsing to avoid processing entire contest
+            # If we have more than max_lineups, sample down first
+            if len(tmp) > int(max_lineups):
+                random.seed(seed or 42)
+                tmp = tmp.sample(n=int(max_lineups), random_state=seed or 42)
+            
+            # Prepare work: parse to slot_pairs ahead of time
+            slot_pairs_list: List[List[Tuple[str, Optional[str]]]] = []
             for _, row in tmp.iterrows():
-                total_attempted += 1
                 lineup_str = str(row[lineup_col])
                 slot_pairs = _parse_lineup_positions(lineup_str)
-                if not slot_pairs:
-                    continue
+                if slot_pairs:
+                    slot_pairs_list.append(slot_pairs)
+            total_attempted += len(slot_pairs_list)
 
-                # Build locked assignments: player_id -> slot_name for known names
-                locked: Dict[int, str] = {}
-                known_count = 0
-                name_map = _build_name_map(session, snapshot_date=snapshot_date)
-                for slot, maybe_name in slot_pairs[:8]:
-                    if maybe_name:
-                        pid = name_map.get(normalize_name(maybe_name)) or name_map.get(maybe_name)
-                        if pid is None:
-                            if unmatched_tracker is not None:
-                                nm = normalize_name(maybe_name)
-                                unmatched_tracker[nm] = unmatched_tracker.get(nm, 0) + 1
-                            # Treat as missing (not locked)
-                        else:
-                            # Only lock if slot label is valid
-                            slot_up = slot.upper()
-                            if slot_up in SLOT_NAMES:
-                                locked[int(pid)] = slot_up
-                                known_count += 1
-
-                # Try to complete lineup with optimizer, respecting locked players
-                # First attempt with provided config, then with relaxed constraints if needed
-                config_attempts: List[dict] = []
-                if config:
-                    config_attempts.append(config)
-                # Always include a safe fallback with min_salary relaxed
-                fallback_cfg = deepcopy(config or {})
-                # Navigate to min_salary in a tolerant way
-                node = fallback_cfg
-                node.setdefault("classic", {}).setdefault("lineup_generation", {})
-                node["classic"]["lineup_generation"].setdefault("salary_cap", 50000)
-                # Our core model no longer enforces min_salary; keep a low cap override just in case
-                node["classic"]["lineup_generation"]["min_salary"] = 0
-                config_attempts.append(fallback_cfg)
-
-                completed_lineup: Optional[List[int]] = None
-                for idx, cfg_attempt in enumerate(config_attempts):
-                    try:
-                        completed_lineup = generate_single_classic_lineup(
-                            players=player_pool,
-                            base_scores=base_scores,
-                            config=cfg_attempt,
-                            locked_assignments=locked,
-                            attempt_tag=str(idx + 1),
-                            debug_lp_path='/home/sam-pratt/ivan/data/nba/logs/'
+            if workers and workers > 1:
+                # Process in parallel by chunks
+                chunks: List[List[List[Tuple[str, Optional[str]]]]] = [
+                    slot_pairs_list[i:i + chunk_size] for i in range(0, len(slot_pairs_list), chunk_size)
+                ]
+                with ProcessPoolExecutor(max_workers=workers) as ex:
+                    futs = [
+                        ex.submit(
+                            _complete_lineups_chunk,
+                            chunk,
+                            name_map,
+                            player_pool,
+                            base_scores,
+                            config,
+                            debug_lp_path,
+                            lock_time,  # Pass lock_time to parallel workers
                         )
-                    except Exception:
-                        completed_lineup = None
-                    if completed_lineup:
-                        break
-
-                if not completed_lineup:
-                    # Skip if infeasible
-                    continue
-
-                key = tuple(completed_lineup)
-                if key not in seen:
+                        for chunk in chunks
+                    ]
+                    infeasible_total = 0
+                    for fut in as_completed(futs):
+                        comp, completed_count, unmatched, infeasible_count = fut.result()
+                        # Deduplicate and accumulate
+                        for lu in comp:
+                            key = tuple(lu)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            all_lineups.append(lu)
+                        lineups_completed += int(completed_count)
+                        infeasible_total += int(infeasible_count)
+                        if unmatched_tracker is not None and unmatched:
+                            for k, v in unmatched.items():
+                                unmatched_tracker[k] = unmatched_tracker.get(k, 0) + int(v)
+                    # Simple progress diagnostic
+                    print(f"[field-parser] chunks complete: attempted={total_attempted} feasible={len(all_lineups)} infeasible={infeasible_total}")
+            else:
+                # Sequential fallback (still faster due to single name_map)
+                comp, completed_count, unmatched, infeasible_count = _complete_lineups_chunk(
+                    slot_pairs_list, name_map, player_pool, base_scores, config, debug_lp_path, lock_time=lock_time
+                )
+                for lu in comp:
+                    key = tuple(lu)
+                    if key in seen:
+                        continue
                     seen.add(key)
-                    if known_count < 8:
-                        lineups_completed += 1
-                    all_lineups.append(completed_lineup)
+                    all_lineups.append(lu)
+                lineups_completed += int(completed_count)
+                if unmatched_tracker is not None and unmatched:
+                    for k, v in unmatched.items():
+                        unmatched_tracker[k] = unmatched_tracker.get(k, 0) + int(v)
+                print(f"[field-parser] sequential complete: attempted={total_attempted} feasible={len(all_lineups)} infeasible={infeasible_count}")
 
     if not all_lineups:
         return ([], lineups_completed, total_attempted)

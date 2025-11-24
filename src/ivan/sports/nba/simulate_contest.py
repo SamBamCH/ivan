@@ -5,10 +5,17 @@ import numpy as np
 from typing import Dict, Tuple, List
 from sqlalchemy.orm import Session
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections import Counter
+import pickle
 
+try:
+    import plotext as plt
+    HAS_PLOTEXT = True
+except ImportError:
+    HAS_PLOTEXT = False
 
-from ivan.sports.nba.models import HistoricalContest, ContestPayout, Lineup, LineupSimulationResult
-from ivan.sports.nba.sample_field import sample_field
+from ivan.sports.nba.models import HistoricalContest, ContestPayout, Lineup, LineupSimulationResult, NBAPlayer
+from ivan.sports.nba.sample_field import sample_field_with_projection_model
 from ivan.sports.nba.generate_samples import generate_player_samples
 # Reuse your MLB payout scaler (sport-agnostic)
 from ivan.sports.mlb.payouts import scale_payouts_correctly
@@ -35,10 +42,6 @@ def _load_and_scale_payouts_from_db(
         [(r.min_position, r.max_position, r.payout_amount) for r in rows],
         columns=["Start Rank", "End Rank", "Payout"]
     )
-
-    print(f'original payouts_df = {payouts_df}')
-
-    print(f'scaling parameters: num_field_lineups={num_field_lineups}, original_field_size={original_field_size}, entry_fee={entry_fee}')
     return scale_payouts_correctly(
         num_field_lineups=num_field_lineups,
         payouts_df=payouts_df,
@@ -251,6 +254,136 @@ def _simulate_chunk(
     }
 
 
+def plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params, model_path="data/nba/models/field_distribution_model.pkl"):
+    """
+    Plot the model's predicted projection distribution vs. the empirical distribution from the sampled field.
+    Prints in terminal using plotext if available, otherwise prints text summary.
+    Also prints player exposures.
+    """
+    # Load model
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+    scaler = model['scaler']
+    proj_model = model['proj_model']
+    bin_edges = model['bin_edges']
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    BINS = len(bin_centers)
+
+    # Predict model distribution for this contest
+    X = np.array([[contest_params['entry_fee'], contest_params['total_entries'], contest_params['multi_entry']]])
+    X_scaled = scaler.transform(X)
+    proj_dist = proj_model.predict(X_scaled)[0]
+
+    # Gather all sampled lineups and their projection sums
+    lineup_ids = list(counts_by_lineup.keys())
+    lineup_counts = list(counts_by_lineup.values())
+    all_lineups = session.query(Lineup).filter(Lineup.id.in_(lineup_ids)).all()
+    id_to_lineup = {l.id: l for l in all_lineups}
+    lineup_proj = []
+    for lid in lineup_ids:
+        l = id_to_lineup[lid]
+        pids = l.player_ids_list
+        if isinstance(pids, str):
+            import json
+            try:
+                pids = json.loads(pids)
+            except:
+                pids = []
+        pids = [int(x) for x in (pids or []) if x is not None]
+        players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(pids)).all()
+        player_dict = {p.id: p for p in players}
+        total_proj = sum(player_dict[pid].fpts_mean for pid in pids if pid in player_dict and player_dict[pid].fpts_mean is not None)
+        # Add the projection sum for each time this lineup was sampled
+        lineup_proj.extend([total_proj] * counts_by_lineup[lid])
+
+    lineup_proj = np.array(lineup_proj)
+    
+    # Load projection_min from model
+    projection_min = model.get('projection_min', 200.0)
+    
+    # Filter lineups below projection_min (matching sampling logic)
+    valid_mask = lineup_proj >= projection_min
+    lineup_proj = lineup_proj[valid_mask]
+    
+    # Normalize lineup projections to [0, 1] using projection_min as min and max as max
+    if len(lineup_proj) > 0:
+        max_proj = lineup_proj.max()
+        if max_proj > projection_min:
+            norm_proj = (lineup_proj - projection_min) / (max_proj - projection_min)
+        else:
+            norm_proj = np.zeros_like(lineup_proj)
+        
+        # Empirical histogram (normalized to sum to 1 for comparison)
+        hist, _ = np.histogram(norm_proj, bins=bin_edges, density=False)
+        hist = hist / hist.sum() if hist.sum() > 0 else hist
+
+        # Map bin centers to projection space for plotting on the new range
+        proj_bin_centers = projection_min + bin_centers * max(1e-6, (max_proj - projection_min))
+
+        # Print terminal plot using projection-space x-axis to "shrink" to the active range
+        print("\n" + "="*70)
+        print("Field Sampling Diagnostics: Model vs Sampled Distribution")
+        print("="*70)
+        
+        if HAS_PLOTEXT:
+            plt.clf()
+            plt.bar(proj_bin_centers.tolist(), proj_dist.tolist(), label='Model Prediction', color='green')
+            plt.bar(proj_bin_centers.tolist(), hist.tolist(), label='Sampled Field', color='blue', fill=False)
+            plt.title(f'Projection Distribution (sum): {projection_min:.0f}–{max_proj:.0f}')
+            plt.xlabel('Lineup Projection Sum')
+            plt.ylabel('Probability Density')
+            plt.plotsize(100, 25)
+            # limit x-axis to the active projection range for better detail
+            try:
+                plt.xlim(projection_min, max_proj)
+            except Exception:
+                pass
+            plt.show()
+        else:
+            print("\n(Install plotext for terminal graphs: pip install plotext)")
+            m_idx = int(np.argmax(proj_dist)) if proj_dist.size else 0
+            s_idx = int(np.argmax(hist)) if hist.size else 0
+            m_x = proj_bin_centers[m_idx] if m_idx < len(proj_bin_centers) else float('nan')
+            s_x = proj_bin_centers[s_idx] if s_idx < len(proj_bin_centers) else float('nan')
+            print(f"Range: [{projection_min:.1f}, {max_proj:.1f}] (projection sums)")
+            print(f"Model peak at {m_x:.1f}, max prob: {proj_dist.max():.3f}")
+            print(f"Sampled peak at {s_x:.1f}, max prob: {hist.max():.3f}")
+
+    # --- Player exposures ---
+    player_counter = Counter()
+    for lid in lineup_ids:
+        l = id_to_lineup[lid]
+        pids = l.player_ids_list
+        if isinstance(pids, str):
+            import json
+            try:
+                pids = json.loads(pids)
+            except:
+                pids = []
+        pids = [int(x) for x in (pids or []) if x is not None]
+        for pid in pids:
+            player_counter[pid] += counts_by_lineup[lid]
+
+    # Print top 20 player exposures
+    print("\n" + "="*70)
+    print("Top 20 Player Exposures in Sampled Field")
+    print("="*70)
+    if player_counter:
+        player_ids = list(player_counter.keys())
+        players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(player_ids)).all()
+        id_to_name = {p.id: p.name for p in players}
+        # Total field size = sum of all lineup counts (accounts for duplicates)
+        total_field_size = sum(counts_by_lineup.values())
+        top = player_counter.most_common(20)
+        for pid, count in top:
+            pct = 100.0 * count / total_field_size
+            name = id_to_name.get(pid, str(pid))
+            print(f"  {name:30s}  {count:6d}  ({pct:5.2f}%)")
+    else:
+        print("  (No player exposures found)")
+    print("="*70 + "\n")
+
+
 def simulate_one_contest(
     session: Session,
     contest_id: int,
@@ -265,11 +398,22 @@ def simulate_one_contest(
     capped_field_sz = min(field_cap, field_sz)
     entry_fee = float(contest.entry_fee)
 
-    counts_by_lineup = sample_field(
+    contest_params = {
+    "entry_fee": float(getattr(contest, "entry_fee", 4.0)),
+    "total_entries": int(getattr(contest, "total_entries", 5000)),
+    "multi_entry": int(getattr(contest, "multi_entry", 150)),
+    }
+
+    counts_by_lineup = sample_field_with_projection_model(
         session,
         field_size=capped_field_sz,
         cfg=cfg,
+        contest_params=contest_params
     )
+    
+    # Plot field sampling diagnostics in terminal
+    plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params)
+    
     entry_lids, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(session, counts_by_lineup)
 
     M = len(entry_lids)

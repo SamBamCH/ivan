@@ -174,7 +174,6 @@ def get_odds(sport, api_key, relevant_teams, markets=None):
     # 1) grab all upcoming events
     events = _get_upcoming_events(sport, api_key)
     if not events:
-        print("No upcoming events found.")
         return {}
 
     # 2) sort them by start time (earliest first)

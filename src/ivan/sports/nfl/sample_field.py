@@ -101,7 +101,6 @@ def sample_field(
             field_size=field_size,
             config=config,
             contest_id=contest_id,
-            model_dir=config.get('model_dir', 'data/nfl/models'),
         )
 
     return sample_classic_field_learned(
@@ -113,6 +112,7 @@ def sample_field(
         entry_fee=entry_fee,
         num_games=num_games,
         ownership_gini=ownership_gini,
+        allow_duplicates=use_classic_dupes,
     )
 
 # CONSTANTS
@@ -127,57 +127,51 @@ FLEX_SLOT = 512
 # MODEL LOADING
 # ==============================================================================
 
-def load_showdown_models(model_dir: str | Path = "data/nfl/models"):
+def load_showdown_models(model_dir: str | Path = "models/nfl"):
     """Load trained showdown duplication models from disk.
     
-    First tries to load two-stage models (new), falls back to single-stage (legacy).
+    Loads the 2-stage model built by build_dupe_model.py:
+    - Stage 1: Contest-level quantile prediction (RF models)
+    - Stage 2: Lineup-level dupe prediction (GBM)
     
     Returns:
-        For two-stage:
-            {
-                'stage1_model': MultiOutputRegressor,
-                'stage1_scaler': StandardScaler,
-                'stage1_feature_cols': list,
-                'stage2_model': GradientBoostingRegressor,
-                'stage2_scaler': StandardScaler,
-                'stage2_feature_cols': list,
-                'mode': 'two_stage',
-            }
-        For legacy:
-            {
-                'dupe_model': GradientBoostingRegressor,
-                'scaler': StandardScaler,
-                'feature_cols': list,
-                'mode': 'legacy',
-            }
+        {
+            'contest_quantiles_model': dict of {quantile: RandomForestRegressor},
+            'lineup_dupe_model': GradientBoostingRegressor,
+            'mode': 'two_stage',
+        }
     """
     model_dir = Path(model_dir)
     
-    # Try two-stage models first
-    # try:
-    with open(model_dir / 'showdown_stage1_model.pkl', 'rb') as f:
-        stage1_model = pickle.load(f)
-    with open(model_dir / 'showdown_stage1_scaler.pkl', 'rb') as f:
-        stage1_scaler = pickle.load(f)
-    with open(model_dir / 'showdown_stage1_feature_cols.pkl', 'rb') as f:
-        stage1_feature_cols = pickle.load(f)
+    # Load stage 1: contest quantile models
+    contest_model_path = model_dir / 'contest_dupe_quantiles.pkl'
+    if not contest_model_path.exists():
+        raise FileNotFoundError(
+            f"Contest quantile model not found at {contest_model_path}. "
+            f"Run 'python scripts/nfl/build_dupe_model.py' first."
+        )
     
-    with open(model_dir / 'showdown_stage2_model.pkl', 'rb') as f:
-        stage2_model = pickle.load(f)
-    with open(model_dir / 'showdown_stage2_scaler.pkl', 'rb') as f:
-        stage2_scaler = pickle.load(f)
-    with open(model_dir / 'showdown_stage2_feature_cols.pkl', 'rb') as f:
-        stage2_feature_cols = pickle.load(f)
+    with open(contest_model_path, 'rb') as f:
+        contest_quantiles_model = pickle.load(f)
     
-    print("✓ Loaded TWO-STAGE hierarchical models")
+    # Load stage 2: lineup dupe model
+    lineup_model_path = model_dir / 'lineup_dupe_model.pkl'
+    if not lineup_model_path.exists():
+        raise FileNotFoundError(
+            f"Lineup dupe model not found at {lineup_model_path}. "
+            f"Run 'python scripts/nfl/build_dupe_model.py' first."
+        )
+    
+    with open(lineup_model_path, 'rb') as f:
+        lineup_dupe_model = pickle.load(f)
+    
+    print("✓ Loaded 2-stage duplication models")
+    print(f"  Stage 1: Contest quantile predictors ({len(contest_quantiles_model)} quantiles)")
+    print(f"  Stage 2: Lineup dupe predictor")
     
     return {
-        'stage1_model': stage1_model,
-        'stage1_scaler': stage1_scaler,
-        'stage1_feature_cols': stage1_feature_cols,
-        'stage2_model': stage2_model,
-        'stage2_scaler': stage2_scaler,
-        'stage2_feature_cols': stage2_feature_cols,
+        'contest_quantiles_model': contest_quantiles_model,
+        'lineup_dupe_model': lineup_dupe_model,
         'mode': 'two_stage',
     }
     
@@ -212,160 +206,216 @@ def load_showdown_models(model_dir: str | Path = "data/nfl/models"):
 # TWO-STAGE PREDICTION FUNCTION
 # ==============================================================================
 
-def predict_lineups_with_twostage(
+def predict_lineups_with_twostage_new(
     session: Session,
     L,
     lineup_ids: np.ndarray,
     spends: np.ndarray,
     cpt_col_by_row: np.ndarray,
+    flex_cols_by_row: list,
+    pid_to_col: dict,
     player_ownership: np.ndarray,
     total_entries: int,
     entry_fee: float,
     models: dict,
-    contest_features: dict,
 ) -> np.ndarray:
     """
-    SIMPLIFIED TWO-STAGE PREDICTION
+    NEW 2-STAGE PREDICTION using models from build_dupe_model.py
     
-    Stage 1: Contest Distribution Model (MACRO)
-      Input: Contest-level features (total_entries, entry_fee, ownership_gini)
-      Output: Quantile distribution [Q25, Q50, Q75, Q90, Q95, Q99]
+    Stage 1: Contest Distribution Model
+      Input: Contest features (total_entries, entry_fee, ownership stats)
+      Output: Quantile distribution [p10, p25, median, p75, p90, max]
+      Models: 6 separate RandomForestRegressors
       
-    Stage 2: Lineup Positioning Model (MICRO)
-      Input: Lineup features (cpt_ownership_pct, projection_normalized, salary_remaining_pct)
-      Output: Duplication scores → percentile ranks relative to candidate pool
+    Stage 2: Lineup Dupe Model
+      Input: Lineup features (ownership_sum, salary_remaining_pct, correlations)
+      Output: Raw dupe predictions per lineup
+      Model: GradientBoostingRegressor
       
-    Combined: Interpolate percentile ranks into Stage 1's quantiles to get final predictions
+    Combined: Scale Stage 2 predictions to match Stage 1 distribution
     
-    KEY: projection_normalized is computed using INDEPENDENT samples (not correlated)
-    to reduce QB captain bias.
+    Features match build_dupe_model.py:
+      - ownership_sum
+      - salary_remaining_pct  
+      - same_team_count
+      - qb_wr_stack
+      - rb_dst_negative
+      - cpt_ownership
     """
-    from scipy.special import expit
-    
     n_lineups = L.shape[0]
-    n_players = L.shape[1]
     
     print(f"\n{'='*70}")
-    print("SIMPLIFIED TWO-STAGE PREDICTION")
+    print("NEW 2-STAGE PREDICTION (using build_dupe_model.py models)")
     print(f"{'='*70}")
     print(f"Contest size: {total_entries:,} entries")
     print(f"Entry fee: ${entry_fee:.2f}")
     print(f"Candidate lineups: {n_lineups:,}")
     
     # ========================================================================
-    # STAGE 1: Contest Distribution Model (MACRO FEATURES)
+    # STAGE 1: Contest-level quantile prediction
     # ========================================================================
     print("\n" + "="*70)
-    print("STAGE 1: Contest Distribution Quantiles")
+    print("STAGE 1: Contest Duplication Distribution")
     print("="*70)
     
-    # Build contest feature vector (3 features)
-    stage1_features = np.array([[
-        contest_features['total_entries'],
-        contest_features['entry_fee'],
-        contest_features['ownership_gini'],
+    # Build contest features matching training data
+    # The model was trained on: [total_entries, entry_fee, unique_lineup_count]
+    # We need to estimate unique_lineup_count from field characteristics
+    
+    # Calculate ownership stats to estimate field diversity
+    ownership_gini = calculate_gini(player_ownership) if len(player_ownership) > 1 else 0.5
+    
+    # Estimate unique lineup count based on ownership concentration
+    # Higher Gini = more chalk = fewer unique lineups
+    # Historical data: ~20-40% of field is unique for showdown
+    estimated_uniqueness_rate = 0.40 - (0.20 * ownership_gini)  # Range: 0.20-0.40
+    estimated_unique_lineups = int(total_entries * estimated_uniqueness_rate)
+    
+    # Contest feature vector: [total_entries, entry_fee, unique_lineup_count]
+    contest_features = np.array([[
+        total_entries,
+        entry_fee,
+        estimated_unique_lineups,
     ]])
     
     print(f"Contest features:")
-    print(f"  Total entries: {contest_features['total_entries']:,}")
-    print(f"  Entry fee: ${contest_features['entry_fee']:.2f}")
-    print(f"  Ownership Gini: {contest_features['ownership_gini']:.3f}")
+    print(f"  Total entries: {total_entries:,}")
+    print(f"  Entry fee: ${entry_fee:.2f}")
+    print(f"  Ownership Gini: {ownership_gini:.3f}")
+    print(f"  Estimated unique lineups: {estimated_unique_lineups:,} ({estimated_uniqueness_rate:.1%})")
     
-    # Scale and predict quantiles
-    stage1_scaler = models['stage1_scaler']
-    stage1_model = models['stage1_model']
-    
-    stage1_features_scaled = stage1_scaler.transform(stage1_features)
-    quantile_predictions = stage1_model.predict(stage1_features_scaled)  # shape [1, 6]
-    
-    # Extract quantiles [Q25, Q50, Q75, Q90, Q95, Q99]
-    quantile_levels = np.array([0.25, 0.50, 0.75, 0.90, 0.95, 0.99])
-    quantile_values = quantile_predictions[0]  # shape [6]
-    
-    # Cap at 5% of field to allow realistic chalk concentration
-    quantile_values = np.clip(quantile_values, 1.0, total_entries * 0.05)
+    # Predict quantiles using separate RF models
+    contest_quantiles_model = models['contest_quantiles_model']
+    quantile_names = ['median', 'p75', 'p90', 'max']
+    quantile_levels = [0.50, 0.75, 0.90, 1.0]
+    quantile_values = []
     
     print(f"\nPredicted duplication distribution:")
-    for q_level, q_val in zip(quantile_levels, quantile_values):
-        print(f"  Q{q_level*100:.0f}: {q_val:.2f} duplicates")
+    for qname in quantile_names:
+        if qname in contest_quantiles_model:
+            qval = contest_quantiles_model[qname].predict(contest_features)[0]
+            quantile_values.append(qval)
+            print(f"  {qname:>6s}: {qval:.2f} duplicates")
+        else:
+            print(f"  WARNING: Missing model for {qname}")
+            quantile_values.append(1.0)
+    
+    quantile_values = np.array(quantile_values)
     
     # ========================================================================
-    # STAGE 2: Lineup Positioning Model (MICRO FEATURES)
-    # ========================================================================
-    print("\n" + "="*70)
-    print("STAGE 2: Lineup Duplication Scores")
-    print("="*70)
-    
-    # Feature 1: Captain ownership
-    cpt_ownership = np.zeros(n_lineups, dtype=np.float64)
-    mask = cpt_col_by_row >= 0
-    if mask.any():
-        cpt_ownership[mask] = player_ownership[cpt_col_by_row[mask]]
-    
-    # Feature 2: Projection normalized (using salary as proxy)
-    # In showdown, salary IS the projection (DK sets salaries based on projections)
-    # We use total salary spent as a proxy for lineup quality
-    # Normalize this within the candidate pool (min-max scaling)
-    total_salaries = spends
-    projection_proxy = total_salaries / SALARY_CAP  # 0-1 normalized by cap
-    
-    # Normalize within candidate pool (min-max)
-    proj_min, proj_max = projection_proxy.min(), projection_proxy.max()
-    if proj_max > proj_min:
-        projection_normalized = (projection_proxy - proj_min) / (proj_max - proj_min)
-    else:
-        projection_normalized = np.ones(n_lineups) * 0.5
-    
-    # Feature 3: Salary remaining
-    remaining = (SALARY_CAP - spends).astype(np.int32)
-    salary_remaining_pct = remaining / SALARY_CAP
-    
-    print(f"\nMicro features computed:")
-    print(f"  Captain ownership range: [{cpt_ownership[mask].min():.2f}%, {cpt_ownership[mask].max():.2f}%]" if mask.any() else "  Captain ownership: N/A")
-    print(f"  Projection proxy range: [{projection_normalized.min():.3f}, {projection_normalized.max():.3f}]")
-    print(f"  Salary remaining range: [{salary_remaining_pct.min():.3%}, {salary_remaining_pct.max():.3%}]")
-    
-    # Build feature matrix (3 features in correct order)
-    X_lineup = np.column_stack([
-        cpt_ownership,
-        projection_normalized,
-        salary_remaining_pct,
-    ])
-    
-    # Scale and predict duplication scores (in logit space)
-    stage2_scaler = models['stage2_scaler']
-    stage2_model = models['stage2_model']
-    
-    X_lineup_scaled = stage2_scaler.transform(X_lineup)
-    dupe_scores_logit = stage2_model.predict(X_lineup_scaled)
-    dupe_scores = expit(dupe_scores_logit)  # Convert from logit to [0, 1]
-    
-    print(f"\nRaw duplication scores (probability of duplication):")
-    print(f"  Min:    {dupe_scores.min():.3f}")
-    print(f"  Mean:   {dupe_scores.mean():.3f}")
-    print(f"  Median: {np.median(dupe_scores):.3f}")
-    print(f"  Max:    {dupe_scores.max():.3f}")
-    
-    # ========================================================================
-    # COMBINE: Map scores to percentiles, then to quantiles
+    # STAGE 2: Lineup-level dupe prediction
     # ========================================================================
     print("\n" + "="*70)
-    print("COMBINATION: Scores → Percentiles → Duplicates")
+    print("STAGE 2: Lineup Duplication Features")
     print("="*70)
     
-    # Compute percentile rank of each lineup relative to the candidate pool
-    # (Higher score = higher percentile = more duplication)
-    lineup_percentiles = np.argsort(np.argsort(dupe_scores)) / (n_lineups - 1) if n_lineups > 1 else np.ones(n_lineups) * 0.5
+    # Get player data for correlation features
+    from ivan.sports.nfl.models import NFLPlayer
+    
+    player_data = session.query(
+        NFLPlayer.id,
+        NFLPlayer.team,
+        NFLPlayer.position,
+    ).filter(NFLPlayer.id.in_(pid_to_col.keys())).all()
+    
+    player_team = {}
+    player_pos = {}
+    for pid, team, pos in player_data:
+        player_team[pid] = team
+        player_pos[pid] = pos
+    
+    # Calculate lineup features
+    print("Calculating lineup features...")
+    X_lineup = []
+    
+    # Reverse lookup: col -> pid
+    col_to_pid = {col: pid for pid, col in pid_to_col.items()}
+    
+    for i in range(n_lineups):
+        # Get captain player ID
+        cpt_col = cpt_col_by_row[i]
+        if cpt_col < 0 or cpt_col not in col_to_pid:
+            # Invalid captain, skip
+            X_lineup.append([0, 0, 0, 0, 0, 0])
+            continue
+        
+        cpt_pid = col_to_pid[cpt_col]
+        cpt_team = player_team.get(cpt_pid, '')
+        cpt_pos = player_pos.get(cpt_pid, '')
+        cpt_own = player_ownership[cpt_col]
+        
+        # Get flex player IDs
+        flex_cols = flex_cols_by_row[i]
+        flex_pids = [col_to_pid.get(col) for col in flex_cols if col in col_to_pid]
+        flex_teams = [player_team.get(pid, '') for pid in flex_pids]
+        flex_positions = [player_pos.get(pid, '') for pid in flex_pids]
+        flex_own = [player_ownership[col] for col in flex_cols if col >= 0 and col < len(player_ownership)]
+        
+        # Feature 1: ownership_sum
+        ownership_sum = cpt_own + sum(flex_own)
+        
+        # Feature 2: salary_remaining_pct
+        salary_remaining = SALARY_CAP - spends[i]
+        salary_remaining_pct = salary_remaining / SALARY_CAP
+        
+        # Feature 3: same_team_count (flex players on same team as captain)
+        same_team_count = sum(1 for t in flex_teams if t == cpt_team)
+        
+        # Feature 4: qb_wr_stack
+        qb_wr_stack = 0
+        if cpt_pos == 'QB':
+            qb_wr_stack = sum(1 for j, pos in enumerate(flex_positions) 
+                             if pos in ['WR', 'TE'] and flex_teams[j] == cpt_team)
+        
+        # Feature 5: rb_dst_negative
+        rb_dst_negative = 0
+        for j, pos in enumerate(flex_positions):
+            if pos == 'RB':
+                for k, other_pos in enumerate(flex_positions):
+                    if other_pos == 'DST' and flex_teams[j] == flex_teams[k]:
+                        rb_dst_negative = 1
+                        break
+        
+        X_lineup.append([
+            ownership_sum,
+            salary_remaining_pct,
+            same_team_count,
+            qb_wr_stack,
+            rb_dst_negative,
+            cpt_own,
+        ])
+    
+    X_lineup = np.array(X_lineup)
+    
+    print(f"\nFeature ranges:")
+    feature_names = ['ownership_sum', 'salary_remaining_pct', 'same_team_count',
+                    'qb_wr_stack', 'rb_dst_negative', 'cpt_ownership']
+    for i, fname in enumerate(feature_names):
+        fmin, fmax, fmean = X_lineup[:, i].min(), X_lineup[:, i].max(), X_lineup[:, i].mean()
+        print(f"  {fname:25s}: [{fmin:.3f}, {fmax:.3f}], mean={fmean:.3f}")
+    
+    # Predict raw dupes
+    lineup_dupe_model = models['lineup_dupe_model']
+    raw_dupe_predictions = lineup_dupe_model.predict(X_lineup)
+    
+    print(f"\nRaw dupe predictions:")
+    print(f"  Min:    {raw_dupe_predictions.min():.2f}")
+    print(f"  Mean:   {raw_dupe_predictions.mean():.2f}")
+    print(f"  Median: {np.median(raw_dupe_predictions):.2f}")
+    print(f"  Max:    {raw_dupe_predictions.max():.2f}")
+    
+    # ========================================================================
+    # COMBINE: Scale lineup predictions to contest distribution
+    # ========================================================================
+    print("\n" + "="*70)
+    print("COMBINATION: Scaling to Contest Distribution")
+    print("="*70)
+    
+    # Compute percentile rank of each lineup
+    lineup_percentiles = np.argsort(np.argsort(raw_dupe_predictions)) / (n_lineups - 1) if n_lineups > 1 else np.ones(n_lineups) * 0.5
     lineup_percentiles = np.clip(lineup_percentiles, 0.0, 1.0)
     
-    print(f"Lineup percentile distribution (relative to candidate pool):")
-    print(f"  Min:    {lineup_percentiles.min():.3f}")
-    print(f"  Mean:   {lineup_percentiles.mean():.3f}")
-    print(f"  Median: {np.median(lineup_percentiles):.3f}")
-    print(f"  Max:    {lineup_percentiles.max():.3f}")
-    
-    # Interpolate percentiles into Stage 1's quantile distribution
-    # This gives us the predicted duplicate count for each lineup
+    # Interpolate into contest quantiles
     predicted_dupes = np.interp(
         lineup_percentiles,
         quantile_levels,
@@ -377,9 +427,10 @@ def predict_lineups_with_twostage(
     print(f"  Mean:   {predicted_dupes.mean():.2f}")
     print(f"  Median: {np.median(predicted_dupes):.2f}")
     print(f"  Max:    {predicted_dupes.max():.2f}")
+    print(f"  P10:    {np.percentile(predicted_dupes, 10):.2f}")
+    print(f"  P25:    {np.percentile(predicted_dupes, 25):.2f}")
+    print(f"  P75:    {np.percentile(predicted_dupes, 75):.2f}")
     print(f"  P90:    {np.percentile(predicted_dupes, 90):.2f}")
-    print(f"  P95:    {np.percentile(predicted_dupes, 95):.2f}")
-    print(f"  P99:    {np.percentile(predicted_dupes, 99):.2f}")
     
     print(f"{'='*70}\n")
     
@@ -1203,27 +1254,32 @@ def sample_showdown_field_learned(
     field_size: int,
     config: dict,
     contest_id: Optional[int] = None,
-    model_dir: str | Path = "data/nfl/models",
+    model_dir: str | Path = "models/nfl",
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Sample showdown field using trained duplication models with diversity control.
-
-    Supports both:
-    - NEW: Two-stage hierarchical model (preferred)
-    - LEGACY: Single-stage model (fallback)
 
     Uses historical patterns to predict lineup duplication based on:
     - Contest size and entry fee
     - Captain and player ownership
     - Lineup projections and salary usage
+    
+    Falls back to heuristic sampling if models are not available.
 
     Returns:
         counts_by_lineup: {lineup_id: duplicate_count}
         meta: Diagnostic info
     """
-    # Load trained models
-    models = load_showdown_models(model_dir)
-    model_mode = models.get('mode', 'unknown')
+    # Try to load trained models
+    try:
+        models = load_showdown_models(model_dir)
+        model_mode = models.get('mode', 'unknown')
+        use_models = True
+    except FileNotFoundError as e:
+        print(f"  ⚠️  Duplication models not found: {e}")
+        print(f"  Using heuristic sampling (for ownership projection only)")
+        use_models = False
+        model_mode = 'heuristic'
     
     # Get contest parameters
     entry_fee = 5.0  # Default entry fee
@@ -1240,7 +1296,7 @@ def sample_showdown_field_learned(
         total_entries = field_size
     
     # Build lineup matrix
-    L, lineup_ids, spends, pid_to_col, cpt_col_by_row, _ = build_lineup_matrix(session)
+    L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row = build_lineup_matrix(session)
     n_lineups = L.shape[0]
 
     if n_lineups == 0:
@@ -1283,48 +1339,47 @@ def sample_showdown_field_learned(
     # PREDICT DUPLICATION BASED ON MODEL MODE
     # ================================================================
     
-    if model_mode == 'two_stage':
-        print(f"\n↓ Using TWO-STAGE hierarchical model...")
+    if use_models and model_mode == 'two_stage':
+        print(f"\n↓ Using TWO-STAGE duplication model...")
         
-        # Compute simplified macro contest features
-        contest_features = compute_contest_features_from_lineups(
-            total_entries=total_entries,
-            entry_fee=entry_fee,
-            player_ownership=player_ownership,
-        )
-        
-        print(f"  Contest features:")
-        print(f"    Total entries: {contest_features['total_entries']:,}")
-        print(f"    Entry fee: ${contest_features['entry_fee']:.2f}")
-        print(f"    Ownership Gini: {contest_features['ownership_gini']:.3f}")
-        
-        predicted_dupes = predict_lineups_with_twostage(
+        # Use new prediction function with updated models
+        predicted_dupes = predict_lineups_with_twostage_new(
             session=session,
             L=L,
             lineup_ids=lineup_ids,
             spends=spends,
             cpt_col_by_row=cpt_col_by_row,
+            flex_cols_by_row=flex_cols_by_row,
+            pid_to_col=pid_to_col,
             player_ownership=player_ownership,
             total_entries=total_entries,
             entry_fee=entry_fee,
             models=models,
-            contest_features=contest_features,
         )
+    elif not use_models:
+        print(f"\n↓ Using HEURISTIC duplication (models not available)...")
+        
+        # Simple heuristic: lineups with higher ownership get more duplication
+        # This is good enough for ownership projection purposes
+        ownership_sum = np.asarray(L @ player_ownership, dtype=np.float64)
+        
+        # Normalize to get relative duplication scores
+        if ownership_sum.max() > ownership_sum.min():
+            ownership_norm = (ownership_sum - ownership_sum.min()) / (ownership_sum.max() - ownership_sum.min())
+        else:
+            ownership_norm = np.ones(n_lineups) * 0.5
+        
+        # Map to realistic dupe counts (1-50 range for typical contests)
+        base_dupes = 2.0
+        max_dupes = min(50.0, total_entries * 0.01)  # Cap at 1% of field
+        predicted_dupes = base_dupes + (max_dupes - base_dupes) * (ownership_norm ** 2)
+        
+        print(f"  Heuristic dupe range: [{predicted_dupes.min():.1f}, {predicted_dupes.max():.1f}]")
     else:
-        print(f"\n↓ Using LEGACY single-stage model...")
-        X = compute_lineup_features_for_model(
-            lineup_ids=lineup_ids,
-            L=L,
-            spends=spends,
-            cpt_col_by_row=cpt_col_by_row,
-            player_ownership=player_ownership,
-            total_entries=total_entries,
-            verbose=False,
+        raise RuntimeError(
+            f"Unknown model mode: {model_mode}. "
+            f"Run 'python scripts/nfl/build_dupe_model.py' to create models."
         )
-        X_scaled = models['scaler'].transform(X)
-        predicted_dupes = models['dupe_model'].predict(X_scaled)
-        predicted_dupes = np.expm1(predicted_dupes)  # Convert from log space
-        predicted_dupes = np.clip(predicted_dupes, 1.0, None)  # Minimum 1 dupe
     
     # Use unified diversity-gated duplication sampler
     counts_by_lineup, meta = sample_showdown_field_unified(
@@ -1363,6 +1418,7 @@ def sample_classic_field_learned(
     num_games: Optional[int] = None,
     ownership_gini: Optional[float] = None,
     model_dir: str | Path = "data/nfl/models",
+    allow_duplicates: bool = True,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Model-based classic field sampler.
@@ -1517,9 +1573,17 @@ def sample_classic_field_learned(
 
     print(f"  Weight stats: min={weights.min():.2e}, mean={weights.mean():.2e}, max={weights.max():.2e}")
 
-    # Sample with replacement
+    # Sampling (with or without replacement)
     rng = np.random.default_rng(42)
-    sampled_indices = rng.choice(n_lineups, size=field_size, replace=True, p=weights)
+    if not allow_duplicates:
+        if field_size > n_lineups:
+            print(f"  ⚠️  Requested field_size {field_size} exceeds unique candidate lineups {n_lineups}; falling back to sampling with replacement.")
+            replace_flag = True
+        else:
+            replace_flag = False
+    else:
+        replace_flag = True
+    sampled_indices = rng.choice(n_lineups, size=field_size, replace=replace_flag, p=weights)
 
     # Count duplicates
     from collections import Counter
@@ -1547,6 +1611,8 @@ def sample_classic_field_learned(
             'num_games': num_games,
             'ownership_gini': ownership_gini,
         },
+        'dedup_strategy': 'no_replacement' if (not allow_duplicates and field_size <= n_lineups) else 'with_replacement',
+        'allow_duplicates': allow_duplicates,
     }
 
     print(f"  ✓ Sampled field: {unique_selected:,} unique lineups "

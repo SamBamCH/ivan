@@ -532,7 +532,7 @@ def simulate_one_contest(
     config_path: str,
     field_cap: int,
     num_sims: int = 1000,
-    use_classic_dupes: bool = True,
+    use_classic_dupes: bool = False,
 ) -> None:
     # 1) contest info
     cfg      = json.load(open(config_path, encoding="utf-8"))

@@ -29,11 +29,8 @@ def main():
     engine = init_db("nfl")
     db = get_session(engine)
 
-    # 2) 'naked' request, no auth needed for this endpoint
-    sess = requests.Session()
-
     # 3) Fetch & filter contests
-    filtered = get_upcoming_contest_ids(sess, sport="NFL", days_ahead=1)
+    filtered = get_upcoming_contest_ids(sport="NFL", days_ahead=1)
 
     # 4) Upsert each into historical_contests
     for c in filtered:

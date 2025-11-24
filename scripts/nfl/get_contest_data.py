@@ -1,26 +1,22 @@
 import logging
 from datetime import datetime, timedelta
 
-from ivan.sports.nfl.historical_contest import process_contest
 from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe
 from ivan.database.session import init_db, get_session
-from ivan.sports.nfl.models import ShowdownContestMetadata, HistoricalContest, ClassicContestMetadata
+from ivan.sports.nfl.models import (
+    ShowdownContestMetadata, 
+    HistoricalContest, 
+    ClassicContestMetadata,
+)
+from ivan.sports.nfl.historical_contest import process_showdown_contest, process_classic_contest
 
 log = logging.getLogger(__name__)
 
 
 def is_showdown_contest(contest):
-    """
-    Determine if a contest is a showdown contest.
-    
-    Checks the contest_type field:
-    - 'Showdown Captain Mode' = showdown contest
-    - 'Classic' = classic contest
-    """
+    """Determine if a contest is a showdown contest."""
     if hasattr(contest, 'contest_type') and contest.contest_type:
         return contest.contest_type == 'Showdown Captain Mode'
-    
-    # Default: treat as classic if we can't determine
     return False
 
 
@@ -126,7 +122,7 @@ def run_pipeline(
     user_data_dir: str = None,
     profile_directory: str = None,
     headless: bool = False,
-    days_back: int = 2,
+    days_back: int = 7,
 ):
     """
     Main pipeline to process showdown contests.
@@ -161,7 +157,7 @@ def run_pipeline(
             HistoricalContest.date <= now,
             ~HistoricalContest.contest_id.in_(processed_showdown),
             ~HistoricalContest.contest_id.in_(processed_classic),
-            HistoricalContest.total_entries >= 10000,  # Filter by minimum entries
+            HistoricalContest.total_entries >= 5000,  # Filter by minimum entries
         )
         .order_by(HistoricalContest.date.desc())
         .all()
@@ -216,7 +212,13 @@ def run_pipeline(
                 log.warning(f"Skipping contest {hc.contest_id}: no data")
                 continue
             
-            if process_contest(session, hc, df):
+            # Route to appropriate processor
+            if is_showdown_contest(hc):
+                success = process_showdown_contest(session, hc, df)
+            else:
+                success = process_classic_contest(session, hc, df)
+            
+            if success:
                 success_count += 1
             
                 

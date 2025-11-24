@@ -6,17 +6,9 @@ from ivan.database.session import init_db, get_session, Base
 from ivan.core.utils import PROJECT_ROOT
 
 def main():
-    # assume this script lives in <project_root>/mlb/
-    CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config', 'nfl.json')
-
-    # load your DB connection info
-    with open(CONFIG_PATH, encoding='utf-8') as f:
-        cfg = json.load(f)
 
     # initialize engine + session factory
-    cfg    = json.load(open(CONFIG_PATH, encoding='utf-8'))
-    engine = init_db('nfl', cfg.get('database_url'))
-    Base.metadata.create_all(engine)
+    engine = init_db('nfl')
     sess   = get_session(engine)
 
     try:

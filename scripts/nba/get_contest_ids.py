@@ -33,7 +33,7 @@ def main():
     sess = requests.Session()
 
     # 3) Fetch & filter contests
-    filtered = get_upcoming_contest_ids(sess, sport="NBA", days_ahead=1)
+    filtered = get_upcoming_contest_ids(sport="NBA", days_ahead=1)
 
     # 4) Upsert each into historical_contests
     for c in filtered:

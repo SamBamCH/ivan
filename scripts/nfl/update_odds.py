@@ -46,6 +46,7 @@ def create_projection_snapshot(session):
         players_to_update.add(norm_name)
         
         snapshot_records.append({
+            'player_id': player.id,  # DraftKings player ID
             'snapshot_date': snapshot_date,
             'player_name': player.name,
             'normalized_name': norm_name,

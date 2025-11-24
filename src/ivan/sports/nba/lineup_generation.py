@@ -185,6 +185,9 @@ def generate_single_classic_lineup(
     # Determine locked player IDs (those explicitly assigned to slots)
     locked_player_ids = set(locked_assignments.keys()) if locked_assignments else set()
     
+    filtered_count = 0
+    locked_vars_created = 0
+    
     for player in players:
         x[player.id] = {}
         
@@ -192,6 +195,7 @@ def generate_single_classic_lineup(
         if lock_time is not None and player.gametime is not None:
             if player.gametime <= lock_time and player.id not in locked_player_ids:
                 # Game has started and player is not locked - exclude from optimization
+                filtered_count += 1
                 continue
         
         # FIX: Ensure position is always a tuple/iterable
@@ -208,11 +212,17 @@ def generate_single_classic_lineup(
             
             var_name = f"x_{_safe_var_name(player.name)}_slot{slot_name}_{player.id}"
             x[player.id][slot_name] = plp.LpVariable(var_name, 0, 1, plp.LpBinary)
+            
+            if player.id in locked_player_ids:
+                locked_vars_created += 1
     
     # (Intentionally removing multi-game grouping/constraints for a minimal core model)
     
     # --- STEP 2 & 3: Set up LP problem and slot-fill constraints ---
     prob = plp.LpProblem(_unique_problem_name("nba_classic_lineup"), plp.LpMaximize)
+
+    # Optional minimum distinct games constraint (late swap requirement): at least players from 2 different games
+    min_distinct_games = 2
     
     # Each slot must have exactly one player (or be locked to a specific player)
     for slot_name in SLOT_NAMES:
@@ -363,6 +373,22 @@ def generate_single_classic_lineup(
         for slot in x[player.id]
     )
     prob += score
+
+    # --- Optional distinct games constraint (after variables defined) ---
+    try:
+        game_ids = {}
+        for p in players:
+            if p.id in x and x[p.id] and p.game_id:
+                game_ids.setdefault(p.game_id, []).append(p.id)
+        if game_ids and min_distinct_games and min_distinct_games > 1:
+            # Binary z_g indicating if any player from game g is selected
+            z: Dict[str, plp.LpVariable] = {g: plp.LpVariable(f"game_used_{_safe_var_name(g)}", 0, 1, plp.LpBinary) for g in game_ids}
+            for g, pids in game_ids.items():
+                prob += z[g] <= plp.lpSum(y[pid] for pid in pids if pid in y), f"GameLink_{_safe_var_name(g)}"
+                # If any pid selected then z[g] can be 1; allow slack by not forcing equality
+            prob += plp.lpSum(z.values()) >= min_distinct_games, "MinDistinctGames"
+    except Exception:
+        pass
     
     # --- STEP 6: Solve ---
     solver = _make_glpk_solver(config)
@@ -482,9 +508,8 @@ def generate_and_store_field_lineups(
         randomness=randomness
     )
     
-    # Shuffle the sample indices so we cycle through them randomly
-    shuffled_sample_indices = list(range(n_samples))
-    random.shuffle(shuffled_sample_indices)
+    # Use sample indices in deterministic order; do not shuffle so all samples are used
+    sample_indices = list(range(n_samples))
 
     created = 0
     batch = 0
@@ -492,8 +517,8 @@ def generate_and_store_field_lineups(
 
     sample_cursor = 0
     while created < num_lineups:
-        # Pick next sample set from shuffled order
-        samp_idx = shuffled_sample_indices[sample_cursor % n_samples]
+        # Pick next sample set in sequence (no shuffle)
+        samp_idx = sample_indices[sample_cursor % n_samples]
         sample_cursor += 1
 
         # Extract base scores for this sample set from all players

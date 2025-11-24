@@ -103,7 +103,19 @@ _NAME_OVERRIDES = {
     'alexandre sarr': 'alex sarr',
     'bub carrington': 'carlton carrington',
     'derrick jones': 'derrick jones jr',
-    'vincent williams jr': 'vince williams jr'
+    'vincent williams jr': 'vince williams jr',
+    'bam knight': 'zonovan knight',
+    'paul reed': 'paul reed jr',
+    'michael porter': 'michael porter jr',
+    'jaren jackson': 'jaren jackson jr',
+    'wendell carter': 'wendell carter jr',
+    'bub carrington': 'carlton carrington',
+    'dereck lively': 'dereck lively ii',
+    'vince williams': 'vince williams jr',
+    'gary trent': 'gary trent jr',
+    'craig porter': 'craig porter jr',
+    'jabari smith': 'jabari smith jr',
+    'trey murphy': 'trey murphy iii'
     # add more mappings as needed...
 }
 

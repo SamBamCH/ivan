@@ -63,7 +63,7 @@ def _load_kicker_params(model_dir: Path) -> dict:
     return _KICKER_PARAMS_CACHE
 
 # Odds handling
-DEFAULT_ONE_SIDE_VIG = 0.15  # 5% haircut if the opposing side is missing
+DEFAULT_ONE_SIDE_VIG = 0.05  # 5% haircut if the opposing side is missing
 DEFAULT_MARKET_WEIGHTS_PATH = Path(r"D:\ivan\data\nfl\models\market_weights.json")
 _MARKET_WEIGHTS_CACHE: dict | None = None
 

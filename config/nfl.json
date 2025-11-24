@@ -80,38 +80,16 @@
   "classic": {
     "lineup_generation": {
       "n_samples": 5000,
-      "min_fpts": 2,
+      "min_fpts": 5,
       "n_jobs": 12,
       "jitter": 0.10,
       "salary_cap": 50000,
-      "min_salary": 47500,
-      "max_off_vs_dst": 1,
+      "min_salary": 49000,
+      "max_off_vs_dst": 0,
       "min_qb_wrte_stack": 1,
       "min_qb_skill_stack": 1,
       "min_qb_bringback": 1,
-      "max_team_players": 5
-    },
-    "dupe": {
-      "alpha_fpts": 1.35,           
-      "alpha_cap": 0.95,            
-      "dup_sharpness": 1.5,         
-      "epsilon": 0.005,             
-      "smooth_mid": true,
-      "mid_boost_strength": 0.55,
-      "mid_boost_sigma": 0.20,
-      "lam_floor_frac": 0.03,
-      "seed": null
-    },
-    "sampling": {
-      "n_samples": 1000,
-      "min_fpts": 6,
-      "n_jobs": 12,
-      "jitter": 0.10
-    },
-    "simulation": {
-      "n_samples": 500,
-      "min_fpts": 6,
-      "jitter": 0.03
+      "max_team_players": 4
     }
   }
 }

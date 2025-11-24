@@ -3,6 +3,7 @@ import io
 import zipfile
 import logging
 import json
+import sys
 from datetime import date, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -15,19 +16,31 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from http.client import RemoteDisconnected
 from requests.exceptions import RequestException
+import pytz
+import re
+from ivan.core.utils import normalize_name
+from dateutil import parser
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # Base URLs
 LOBBY_URL = "https://www.draftkings.com/lobby/getcontests"
 API_BASE  = "https://api.draftkings.com/draftgroups/v1"
+DK_CONTESTDETAIL_URL = "https://api.draftkings.com/contests/v1/contests/{cid}"
+_TEAM_RE = re.compile(r"\b[A-Z]{2,3}\b")
+# Define your local timezone (Central Time)
+LOCAL_TZ = pytz.timezone('America/Chicago')
+
 
 def get_upcoming_contest_ids(
-    sess: requests.Session,
-    sport: str = "MLB",
+    sport: str = "NBA",
     days_ahead: int = 1,
     entry_filter: int = 100
 ) -> list[str]:
     # 1) fetch raw JSON
+    sess = requests.Session()
     start = date.today().isoformat()
     end   = (date.today() + timedelta(days=days_ahead)).isoformat()
     params = {"sport": sport.lower(), "startDate": start, "endDate": end}
@@ -348,16 +361,186 @@ def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
 
     payload = r.json()
     draftables = payload.get("draftables", [])
-
-    # dump the first one so you know all available keys
-    if draftables:
-        print("=== First draftable payload ===\n%s", json.dumps(draftables[0], indent=4))
-    else:
-        logging.warning("No draftables for DG=%s", draft_group_id)
-
     # tag for easy upsert
     for p in draftables:
         p["draftGroupId"] = draft_group_id
 
     return draftables
+
+def get_upcoming_payouts(cid):
+    url = DK_CONTESTDETAIL_URL.format(cid=cid)
+    try:
+        resp = requests.get(url, params={"format": "json"})
+        resp.raise_for_status()
+        payload = resp.json()
+        return payload
+    except requests.RequestException as e:
+        logger.error(f"HTTP error for contest {cid}: {e}")
+        return None
+    
+def _extract_matchup_teams(comp: dict[str, object]) -> tuple[str|None, str|None]:
+    """
+    Try to extract (away, home) from the competition payload.
+    Priority 1: comp['name'] like 'TEN @ DEN'
+    Fallback:   scan for two team tokens in comp['name'] or nameDisplay
+    """
+    away = home = None
+
+    name = (comp or {}).get("name") or ""
+    # normalize common separators to '@'
+    normalized = (
+        name.replace(" vs. ", " @ ")
+            .replace(" vs ", " @ ")
+            .replace(" VS ", " @ ")
+            .replace(" at ", " @ ")
+            .replace(" AT ", " @ ")
+    )
+    if "@" in normalized:
+        parts = [p.strip() for p in normalized.split("@")]
+        if len(parts) == 2:
+            away, home = parts[0], parts[1]
+
+    if not (away and home):
+        # Fallback: try regex on name
+        tokens = _TEAM_RE.findall(name)
+        if len(tokens) >= 2:
+            away, home = tokens[0], tokens[-1]
+        else:
+            # Last fallback: nameDisplay array
+            nd = (comp or {}).get("nameDisplay") or []
+            vals = []
+            for item in nd:
+                if isinstance(item, dict):
+                    v = (item.get("value") or "").strip()
+                else:
+                    v = str(item).strip()
+                vals.extend(_TEAM_RE.findall(v))
+            if len(vals) >= 2:
+                away, home = vals[0], vals[-1]
+
+    # sanity: return None if they look invalid
+    if away == home:
+        return None, None
+    return away, home
+    
+def _derive_opponent_for_player(team: str|None, comp: dict) -> str|None:
+    if not team or not comp:
+        return None
+    away, home = _extract_matchup_teams(comp)
+    if not (away and home):
+        return None
+    if team == away:
+        return home
+    if team == home:
+        return away
+    # If team didn't match either side (rare formatting issues), give up gracefully
+    return None
+
+def _parse_gametime_to_local(start_time_str: str|None) -> object|None:
+    """
+    Parse ISO format datetime string and convert to local timezone.
+    Assumes the input is in UTC if no timezone info is present.
+    """
+    if not start_time_str:
+        return None
+    
+    try:
+        # Parse the datetime string
+        dt = parser.isoparse(start_time_str)
+        
+        # If no timezone info, assume UTC
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        
+        # Convert to local timezone
+        local_dt = dt.astimezone(LOCAL_TZ)
+        
+        return local_dt
+    except Exception as e:
+        logging.warning(f"Failed to parse datetime '{start_time_str}': {e}")
+        return None
+    
+class Player:
+    def __init__(self, dk_id, name, team, opponent, position, roster_slot_id, gametime, salary, status):
+        self.dk_id = dk_id
+        self.name = name
+        self.team = team
+        self.opponent = opponent
+        self.position = position
+        self.roster_slot_id = roster_slot_id
+        self.gametime = gametime
+        self.salary = salary
+        self.status = status
+
+    
+def ingest_players(sport):
+    """
+    pull all draftables from draftkings for a draft group id. (slate)
+    returns player objects for upsert in main script
+    """
+    contests = fetch_all_contests(sport)
+    slate_info = summarize_slates(contests)
+
+    print("             Available NBA Slates:")
+    for i, (dg, info) in enumerate(slate_info.items(), start=1):
+        print(f"                {i:2}. DG={dg} | {info['gameType']:8} | entries={info['count']:2} | at {info['sdstring']} | '{info['name']}'")
+    print()
+        # 4) prompt user
+    choice = input(f"Select a slate 1–{len(slate_info)} (or Q to quit): ").strip().upper()
+    if choice == "Q":
+        sys.exit(0)
+    try:
+        idx = int(choice) - 1
+        dg = list(slate_info.keys())[idx]
+    except Exception:
+        sys.exit(1)
+
+    players = get_players_for_slate(dg)
+
+    relevant_teams = set()
+    seen_names = set()
+    kept_by_name: dict[str, dict] = {}
+    processed_players = set()
+
+    for p in players:
+        team = p.get("teamAbbreviation")
+        comp = p.get("competition") or {}
+        opp = _derive_opponent_for_player(team, comp)
+        player_name = normalize_name(p.get("displayName"))
+        if player_name in seen_names:
+            continue
+        seen_names.add(player_name)
+        kept_by_name[player_name] = p
+
+        if team: relevant_teams.add(team)
+        if opp: relevant_teams.add(team)
+        gametime = _parse_gametime_to_local(comp.get("startTime"))
+        draftable_id    = p.get("draftableId")
+        position        = p.get("position")
+        salary          = p.get("salary")
+
+        if draftable_id is None:
+            continue
+        if position is None:
+            continue
+        if salary is None:
+            continue
+        
+        player = Player(
+            dk_id=draftable_id,
+            name=player_name,
+            team=team,
+            opponent=opp,
+            position=position,
+            roster_slot_id=p.get("rosterSlotId"),
+            gametime=gametime,
+            salary=salary,
+            status=p.get("status"),
+        )
+        processed_players.add(player)
+
+    return processed_players
+        
+
+
 

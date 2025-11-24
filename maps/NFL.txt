@@ -1,0 +1,12 @@
+#TODO:
+get_contest_data
+    write database tables needed to ingest historical data
+    ingest historical data into the tables
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+'fears
+*not modelling DST/K at all right now. Can probably just do some very basic calculations for those considering how variant they are. 
+

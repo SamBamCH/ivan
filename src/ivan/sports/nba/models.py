@@ -30,47 +30,43 @@ class NBAStat(NBABase):
 
     # Game identifiers
     game_id = Column(String, nullable=False, index=True)
-    game_date = Column(Date, nullable=False, index=True)
-    season = Column(String, nullable=False)  # e.g., "2023-24"
+    game_date = Column(Date, nullable=True, index=True)
+    season = Column(String, nullable=True)  # e.g., "2023-24"
 
     # Player identifiers
-    player_id = Column(String, nullable=False, index=True)
-    player_name = Column(String, nullable=False)
+    player_name = Column(String, nullable=False) #normalized on input
+    position = Column(String, nullable=True)  # G, F, or C from START_POSITION
 
     # Team info
     team_abbreviation = Column(String, nullable=False)
-    opponent_team = Column(String)
-    is_home = Column(Integer)  # 1 for home, 0 for away
-    position = Column(String)  # G, F, or C from START_POSITION
 
     # Box score stats
     minutes = Column(Float)
-    points = Column(Integer, default=0)
-    rebounds = Column(Integer, default=0)
-    assists = Column(Integer, default=0)
-    steals = Column(Integer, default=0)
-    blocks = Column(Integer, default=0)
-    turnovers = Column(Integer, default=0)
+    points = Column(Integer)
+    rebounds = Column(Integer)
+    rebounds_off = Column(Integer)
+    rebounds_def = Column(Integer)
+    assists = Column(Integer)
+    steals = Column(Integer)
+    blocks = Column(Integer)
+    turnovers = Column(Integer)
 
     # Shooting stats
-    fgm = Column(Integer, default=0)  # field goals made
-    fga = Column(Integer, default=0)  # field goals attempted
+    fgm = Column(Integer)  # field goals made
+    fga = Column(Integer)  # field goals attempted
     fg_pct = Column(Float)
-    fg3m = Column(Integer, default=0)  # 3-pointers made
-    fg3a = Column(Integer, default=0)  # 3-pointers attempted
+    fg3m = Column(Integer)  # 3-pointers made
+    fg3a = Column(Integer)  # 3-pointers attempted
     fg3_pct = Column(Float)
-    ftm = Column(Integer, default=0)  # free throws made
-    fta = Column(Integer, default=0)  # free throws attempted
+    ftm = Column(Integer)  # free throws made
+    fta = Column(Integer)  # free throws attempted
     ft_pct = Column(Float)
-
-    # Additional stats
-    plus_minus = Column(Integer)
 
     # Fantasy points
     dk_fpts = Column(Float, default=0.0)
 
     __table_args__ = (
-        UniqueConstraint("game_id", "player_id", name="uq_nba_stats_game_player"),
+        UniqueConstraint("game_id", "player_name", name="uq_nba_stats_game_player"),
     )
 
 class NBAPlayer(NBABase):
@@ -214,4 +210,33 @@ class ProjectionSnapshot(NBABase):
     fpts_std        = Column(Float,     nullable=True)
     fpts_updated_at = Column(DateTime,  nullable=True)
     ownership       = Column(Float,     nullable=True, default=0.0)  # Projected ownership %
+
+class ClassicContestMetadata(NBABase):
+    """
+    Contest-level metadata and distribution parameters for Classic contests.
+    Stores normalized histogram data for projection and ownership distributions.
+    Used to train models that predict field distributions based on contest parameters.
+    """
+    __tablename__ = "classic_contest_metadata"
+
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"),
+                    primary_key=True)
+    
+    max_projection  = Column(Float, nullable=False)
+    max_ownership   = Column(Float, nullable=False) 
+
+    # Histogram bins (BINS=20 fixed-width bins [0-1])
+    # Each entry is a count, normalized to sum to 1.0
+    hist_proj_counts = Column(JSON, nullable=True)  # 20-bin normalized projection distribution
+    hist_own_counts = Column(JSON, nullable=True)   # 20-bin normalized ownership distribution
+
+class StartingLineups(NBABase):
+    """
+    projected starting lineups via scrape of rotowire nba lineups url
+    """
+    __tablename__ = "starting_lineups"
+
+    player_name = Column(String, nullable=False, primary_key=True)
+    team        = Column(String, nullable=False)
+    position    = Column(String, nullable=False)
 
