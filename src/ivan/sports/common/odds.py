@@ -148,7 +148,10 @@ def _get_event_odds(sport, api_key, event_id, markets=None):
             "player_pass_tds,player_pass_yds,player_pass_completions,"
             "player_pass_attempts,player_pass_interceptions,"
             "player_rush_yds,player_rush_attempts,"
-            "player_receptions,player_reception_yds,player_anytime_td"
+            "player_receptions,player_reception_yds,player_anytime_td,"
+            "player_defensive_interceptions,player_field_goals,player_kicking_points,player_kicking_points_alternate,"
+            "player_field_goals_alternate,player_receptions_alternate,player_sacks,player_sacks_alternate,player_receptions_alternate,player_reception_yds_alternate,"
+            "player_rush_tds_alternate,player_rush_yds_alternate,player_pass_tds_alternate,player_pass_yds_alternate"
         )
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
     params = {

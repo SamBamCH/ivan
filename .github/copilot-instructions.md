@@ -1,14 +1,77 @@
-# GitHub Copilot Instructions for IVAN NBA Module
+# GitHub Copilot Instructions for IVAN
 
 ## ⚡ Response Style
 - **BE CONCISE** - No verbose explanations unless asked
 - **MINIMAL OUTPUT** - Only show essential info (errors, warnings, key results)
 - **NO DOCUMENTATION** - Don't create docs unless explicitly requested
 
-## 🏀 Project Overview
-IVAN is a multi-sport DFS (Daily Fantasy Sports) optimization framework. The NBA module provides end-to-end pipeline for contest simulation, lineup generation, and late-swap optimization using Monte Carlo methods and linear programming.
+## 🎯 Project Overview
+IVAN is a multi-sport DFS (Daily Fantasy Sports) optimization framework supporting NBA, NFL, MLB, and LOL. Each sport follows a unified architecture with sport-specific modeling while sharing core infrastructure for database management, lineup generation, Monte Carlo simulation, and optimization.
 
-## 📁 NBA Module Architecture
+**Core Pipeline (All Sports):**
+1. **Ingest** - Fetch DraftKings contest/player data + betting odds
+2. **Model** - Fit statistical distributions to player performance
+3. **Generate** - Create optimized lineups using linear programming
+4. **Simulate** - Monte Carlo contest simulation with field sampling
+5. **Choose** - Select diverse subset of lineups to enter
+6. **Swap** - Late-swap optimization after games start (NBA/NFL)
+
+## 📁 Architecture Overview
+
+### Project Structure
+```
+ivan/
+├── src/ivan/
+│   ├── core/              # Shared utilities across all sports
+│   │   ├── player.py      # BasePlayer mixin for ORM models
+│   │   ├── lineup.py      # BaseLineup mixin for ORM models
+│   │   ├── config.py      # Configuration loader
+│   │   └── utils.py       # File I/O, logging helpers
+│   ├── database/
+│   │   └── session.py     # init_db(), get_session() - CRITICAL
+│   └── sports/
+│       ├── common/        # Cross-sport modeling utilities
+│       │   ├── kdes.py    # Gaussian KDE utilities
+│       │   ├── regressors.py  # Bin regressors
+│       │   └── io.py      # Data I/O helpers
+│       ├── nba/           # NBA Classic (8-player lineups)
+│       ├── nfl/           # NFL Showdown + Classic
+│       ├── mlb/           # MLB Classic with stacking
+│       └── lol/           # League of Legends
+├── scripts/               # CLI entrypoints (per sport)
+│   ├── nba/              # NBA workflow scripts
+│   ├── nfl/              # NFL workflow scripts
+│   ├── mlb/              # MLB workflow scripts
+│   └── lol/              # LOL workflow scripts
+├── config/               # Sport-specific JSON configs
+│   ├── nba.json
+│   ├── nfl.json
+│   ├── mlb.json
+│   └── lol.json
+├── data/                 # SQLite databases (gitignored)
+│   ├── nba/nba_history.sqlite
+│   ├── nfl/nfl_history.sqlite
+│   └── ...
+└── tests/                # Visualization & test scripts
+```
+
+### Multi-Sport Database Pattern
+Each sport has **separate SQLite database** with **own metadata namespace**:
+- NBA: `data/nba/nba_history.sqlite` (no schema prefix)
+- NFL: `data/nfl/nfl_history.sqlite` (uses `nfl_metadata`)
+- MLB: `data/mlb/mlb_history.sqlite` (uses shared `Base`)
+- LOL: `data/lol/lol_history.sqlite`
+
+### Sport Module Structure (Consistent Pattern)
+Each `src/ivan/sports/{sport}/` contains:
+- `models.py` - SQLAlchemy ORM models (Player, Stat, Lineup, etc.)
+- `lineup_generation.py` or `generate_lineups_logic.py` - PuLP optimization
+- `simulate_contest.py` - Monte Carlo simulation engine
+- `ownership.py` - Ownership projection
+- `sample_field.py` - Field sampling for opponents
+- Sport-specific files (e.g., `showdown_models.py` for NFL)
+
+## 🏀 NBA Module (Primary Reference Implementation)
 
 ### Core Module Location: `src/ivan/sports/nba/`
 
@@ -43,6 +106,206 @@ IVAN is a multi-sport DFS (Daily Fantasy Sports) optimization framework. The NBA
 - `get_payouts.py` - Fetch contest payout structures
 - `analyze_lineups.py` - Analyze lineup characteristics
 - `monitor.py` - Monitor running processes
+
+## 🏈 NFL Module
+
+### Dual Contest Types: Showdown vs Classic
+
+**NFL supports TWO distinct contest formats with separate workflows:**
+
+#### Showdown (Captain Mode)
+- **6-player roster**: 1 CPT (1.5x points) + 5 FLEX
+- **Salary cap**: $50,000
+- **Models**: `ShowdownPlayer`, `ShowdownLineup`, `ShowdownContestMetadata`
+- **Key scripts**: `scripts/nfl/generate_lineups.py`, `scripts/nfl/sim.py`
+- **Unique feature**: Duplication prediction model (predicts how many times lineups appear in field)
+
+#### Classic (Traditional DFS)
+- **9-player roster**: QB, RB, RB, WR, WR, WR, TE, FLEX, DST
+- **Models**: `NFLPlayer`, `Lineup` (shared with NBA pattern)
+- **Stacking**: QB-WR/TE correlation, bring-back stacks
+
+### NFL-Specific Modeling: KDE + Odds Calibration
+
+**Philosophy**: Instead of simple normal distributions, NFL uses:
+1. **Individual stat modeling** (pass_yds, rush_yds, rec_yds, TDs, etc.)
+2. **Odds calibration** - Adjust KDEs to match betting market probabilities
+3. **Correlation preservation** - Gaussian copula maintains stat dependencies
+4. **FPTS derivation** - Combine stats using DraftKings scoring weights
+
+**Key Module**: `src/ivan/sports/nfl/refactor/stat.py`
+
+```python
+from ivan.sports.nfl.refactor.stat import fit_stat_distribution, sample_stat
+
+# Fit distribution with odds calibration
+stat_dist = fit_stat_distribution(
+    odds_df,              # DataFrame with betting odds
+    historical_values,    # List of historical stat values
+    stat_name='passing_yards'
+)
+
+# Sample from calibrated distribution
+samples = sample_stat(stat_dist, n_samples=10000, rng=np.random.default_rng(42))
+```
+
+**StatDistribution dataclass**:
+- `dist_name`: 'kde' or parametric ('norm', 'poisson')
+- `kde_bandwidth`, `kde_support`: For KDE-based distributions
+- `quantile_map`: Calibration points mapping raw values to odds-adjusted CDFs
+- `odds_points`: List of (line, target_cdf) from betting markets
+
+**Position-specific stat sets** (in `refactor/player.py`):
+```python
+STATS = {
+    'QB': ['passing_yards', 'passing_tds', 'passing_interceptions', 'rushing_yards', 'rushing_tds'],
+    'RB': ['rushing_yards', 'rushing_tds', 'receptions', 'receiving_yards'],
+    'WR': ['receptions', 'receiving_yards', 'receiving_tds'],
+    'TE': ['receptions', 'receiving_yards', 'receiving_tds'],
+    'K':  ['fg_made', 'pat_made'],
+    'DST': ['def_tds', 'def_sacks', 'def_interceptions', 'special_teams_tds', 'points_allowed']
+}
+```
+
+### Showdown Duplication Model v2
+
+**Problem**: Predict how many times each lineup appears in a contest (critical for ownership/ROI)
+
+**Two-stage architecture** (see `docs/nfl_showdown_dupe_v2_summary.md`):
+
+**Stage 1: Contest Distribution Model**
+- **Inputs**: `log_field_size`, `entry_fee_tier`, `ownership_gini`, `num_games_tier`
+- **Outputs**: Quantiles of duplicate distribution (q50, q75, q90, q95, q99)
+- **Model**: Multi-output Gradient Boosting
+
+**Stage 2: Lineup Positioning Model**
+- **Inputs**: `cpt_ownership`, `flex_ownership_mean`, `flex_ownership_std`, `salary_remaining_pct`
+- **Output**: Duplication score (0-1) → percentile in contest distribution
+- **Model**: Gradient Boosting Regressor
+
+**Combination**: Interpolate lineup percentile into contest distribution to get duplicate count
+
+### NFL Workflow Scripts
+
+**Setup/Ingestion**:
+1. `create_db.py` - Initialize NFL database schema
+2. `ingest.py` - Fetch DraftKings player/contest data
+3. `update_odds.py` - Pull betting odds from sportsbooks
+4. `get_contest_data.py` - Get contest metadata and entries
+
+**Modeling**:
+5. `build_models.py` - Fit stat distributions with odds calibration
+6. `train_showdown_model.py` - Train duplication prediction model (Showdown only)
+
+**Generation/Simulation**:
+7. `generate_lineups.py` - Generate optimized lineups (Showdown or Classic)
+8. `sim.py` - Monte Carlo contest simulation
+9. `choose.py` - Select diverse lineup subset
+
+**Maintenance**:
+- `clear_all.py` - Clear player/lineup data
+- `clear_sims.py` - Clear simulation results
+- `monitor.py` - Monitor worker processes
+
+### NFL Config Pattern (`config/nfl.json`)
+
+**Key sections**:
+```json
+{
+  "showdown": {
+    "use_learned_model": true,         // Use v2 dupe model vs simple formula
+    "ownership_alpha": 1.0,            // Ownership projection sharpness
+    "lineup_generation": {
+      "n_samples": 5000,
+      "salary_cap": 50000,
+      "max_cap_drop": 5000,            // Allow salary under cap for diversity
+      "cap_drop_exponent": 1,          // Weight distribution of cap drops
+      "jitter": 0.30                   // Randomness in projections
+    },
+    "sampling": {                      // Field sampling parameters
+      "n_samples": 100,
+      "alpha": 0.0,                    // Ownership concentration
+      "rho_game": 0.0,                 // Game-level correlation
+      "kicker_rho": 0.40               // Kicker correlation factor
+    }
+  },
+  "classic": {
+    "lineup_generation": {
+      "min_qb_wrte_stack": 1,          // Force QB stacks
+      "min_qb_bringback": 1,           // Require bring-back player
+      "max_team_players": 4,           // Team exposure limit
+      "max_off_vs_dst": 2              // Max offensive players vs owned DST
+    }
+  }
+}
+```
+
+### NFL Refactor Pattern
+
+**Active refactoring**: `src/ivan/sports/nfl/refactor/`
+
+**Goal**: Extract stat-level modeling into clean, testable modules:
+- `stat.py` - Stat distribution fitting (KDE + odds calibration)
+- `player.py` - Player-level FPTS aggregation with correlation
+- `historical/` - Historical data ingestion utilities
+
+**Migration approach**: New code in `refactor/`, gradually migrate scripts to use it
+
+## ⚾ MLB Module
+
+### MLB-Specific Features: Stacking + Pitcher-Batter Correlation
+
+**Roster structure** (9 players):
+- 2 Pitchers (P, P)
+- 1 Catcher (C)
+- 1 First Baseman (1B)
+- 1 Second Baseman (2B)
+- 1 Third Baseman (3B)
+- 1 Shortstop (SS)
+- 2 Outfielders (OF, OF)
+
+**Stacking strategies** (config-driven):
+```json
+{
+  "stack_probabilities": {
+    "5-3": 0.20,   // 5-man primary stack + 3-man secondary
+    "5-2": 0.40,   // 5-man primary + 2-man secondary
+    "5-x": 0.20,   // 5-man primary + no secondary
+    "4-4": 0.20,   // Two 4-man stacks
+    "4-3": 0.20,   // 4-man + 3-man
+    "4-x": 0.20    // 4-man primary only
+  }
+}
+```
+
+**Key constraint**: `max_opposing_batters` - Limit batters facing your pitchers
+
+**Models**:
+- `MLBStat` - Historical box score data (PA, AB, HR, RBI, SB, etc.)
+- `BatterProjection` - Per-game projections with park factors
+- `PitcherProjection` - Pitching projections
+
+**Workflow scripts** (`scripts/mlb/`):
+- `ingest.py` - Load projection CSVs
+- `generate_lineups.py` - Generate stacked lineups
+- `sim.py` - Simulate contests
+- `analyze.py` - Post-analysis of lineup quality
+
+## 🎮 LOL Module (League of Legends)
+
+**Roster structure** (8 players):
+- 2 Top laners
+- 2 Junglers  
+- 2 Mid laners
+- 2 ADCs
+- **Team constraint**: Must select full 5-man teams (no mixing)
+
+**Unique challenge**: Team-level correlation (all 5 players win/lose together)
+
+**Models**:
+- `LOLPlayer` - Individual player projections
+- `LOLTeam` - Team-level metadata
+- `LOLLineup` - Generated lineups
 
 ## 🗄️ Database Patterns
 
@@ -506,18 +769,22 @@ player_ids = _coerce_player_ids([123, 456, 789])    # Returns [123, 456, 789]
 6. Forget to commit database changes
 7. Use blocking operations in multiprocessing without queues
 8. Store player_ids as strings (always List[int])
+9. Mix sport-specific imports (e.g., import NFLPlayer when working with NBA)
+10. Forget sport parameter in `init_db()` - it determines database path
 
 ### ✅ Do:
-1. Always call `init_db('nba')` → `get_session(engine)`
+1. Always call `init_db('sport')` → `get_session(engine)` (sport = 'nba', 'nfl', 'mlb', 'lol')
 2. Use separate DB connections in each process
 3. Use Rich for all user-facing output
-4. Import ROSTER_STRUCTURE from lineup_generation
+4. Import ROSTER_STRUCTURE from lineup_generation (NBA) or use sport-specific patterns
 5. Call `session.commit()` after modifications
 6. Use Queue for inter-process communication
 7. Store player_ids as JSON arrays in database
 8. Use FieldPlayer dataclass for player data in optimization
-9. Leverage locked_assignments for late swap
+9. Leverage locked_assignments for late swap (NBA/NFL)
 10. Generate multiple candidates for diversity
+11. Check config/{sport}.json for sport-specific parameters before adding new ones
+12. Use `tests/{sport}/` for visualization/validation scripts (not pytest)
 
 ## 📈 Typical Development Workflow
 
@@ -525,16 +792,23 @@ player_ids = _coerce_player_ids([123, 456, 789])    # Returns [123, 456, 789]
 1. **Model changes** - Update `models.py` if new data needed
 2. **Data ingestion** - Extend `ingest.py` to fetch new data
 3. **Core logic** - Add functions to appropriate module (lineup_generation, simulate_contest, etc.)
-4. **Script** - Create/update script in `scripts/nba/`
-5. **Config** - Add config parameters to `config/nba.json`
-6. **Test** - Verify with sample data
+4. **Script** - Create/update script in `scripts/{sport}/`
+5. **Config** - Add config parameters to `config/{sport}.json`
+6. **Test** - Verify with sample data using `tests/{sport}/` visualization scripts
 
-### Example: Adding Player Prop Constraints
+### Example: Adding Player Prop Constraints (NBA)
 1. Model: Add `prop_targets` column to NBAPlayer
 2. Ingest: Fetch props in `ingest.py`, store in NBAOdds
 3. Logic: Update `generate_single_classic_lineup()` to add prop constraints
 4. Config: Add `"use_prop_constraints": true` to config
 5. Test: Run `generate_lineups.py` and verify constraints work
+
+### Example: Adding New Stat Market (NFL)
+1. Model: Ensure stat column exists in NFLStat (e.g., `passing_2pt_conversions`)
+2. Mapping: Add market name to `MARKET_TO_STAT` in `refactor/stat.py`
+3. Ingestion: Update `update_odds.py` to fetch new market odds
+4. Scoring: Add stat weight to `FPTS_WEIGHTS` in `refactor/player.py`
+5. Test: Use `tests/nfl/visualize_stat_to_fpts.py` to verify calibration
 
 ## 🔍 Debugging Tips
 
@@ -590,6 +864,18 @@ def worker(...):
     # ... rest of worker code
 ```
 
+### Visualize NFL Stat Modeling (tests/nfl/)
+```bash
+# Comprehensive player modeling pipeline
+python tests/nfl/visualize_stat_to_fpts.py "Patrick Mahomes"
+
+# Compare multiple players
+python tests/nfl/visualize_player_comparison.py "Patrick Mahomes" "Josh Allen" "Lamar Jackson"
+
+# Check odds calibration quality
+python tests/nfl/analyze_odds_calibration.py
+```
+
 ## 📚 External Dependencies
 
 **Critical packages:**
@@ -597,7 +883,7 @@ def worker(...):
 - `pulp` - Linear programming solver (with GLPK backend)
 - `numpy` - Array operations and Monte Carlo sampling
 - `pandas` - Data manipulation (especially in ingestion)
-- `scipy` - Statistical distributions
+- `scipy` - Statistical distributions, KDE fitting
 - `rich` - Terminal UI (progress bars, formatted output)
 
 **When adding dependencies:**
@@ -607,13 +893,14 @@ def worker(...):
 
 ## 🎯 Key Design Principles
 
-1. **Separation of Concerns**: Core logic (src/ivan/sports/nba/) vs Scripts (scripts/nba/)
+1. **Separation of Concerns**: Core logic (src/ivan/sports/{sport}/) vs Scripts (scripts/{sport}/)
 2. **Database-Centric**: All data flows through SQLAlchemy models
-3. **Configuration-Driven**: Behavior controlled by config/nba.json
+3. **Configuration-Driven**: Behavior controlled by config/{sport}.json
 4. **Parallel-First**: Design for multiprocessing from start
 5. **Type Hints**: Use dataclasses and type hints for clarity
 6. **Progress Visibility**: Always show progress for long operations
 7. **Reusability**: Core functions like generate_single_classic_lineup() used everywhere
+8. **Sport Independence**: Each sport module is self-contained with shared utilities in core/
 
 ---
 

@@ -35,37 +35,166 @@ NFLBase = declarative_base(metadata=nfl_metadata)
 cfg    = json.load(open(Path(PROJECT_ROOT) / "config" / "nfl.json", encoding="utf-8"))
 engine = init_db("nfl", cfg["database_url"])
 
-# ── 2) reflect only the nfl_stats table ────────────────────────────────────
-metadata = MetaData()
-nfl_stats_table = Table(
-    "nfl_stats",
-    metadata,
-    autoload_with=engine
-)
+class NFLStat(NFLBase):
+    __tablename__ = 'nfl_stats'
 
-# ── 3) declare a composite PK so the mapper knows how to identify rows ────
-nfl_stats_table.append_constraint(
-        PrimaryKeyConstraint("week", "season", "season_type", "player_display_name", name="pk_nfl_stats")
-    )
+    id                          = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # Player info
+    player_id                   = Column(String, nullable=True)
+    player_name                 = Column(String, nullable=True)
+    player_display_name         = Column(String, nullable=True)
+    position                    = Column(String, nullable=True)
+    position_group              = Column(String, nullable=True)
+    headshot_url                = Column(String, nullable=True)
+    
+    # Game info
+    season                      = Column(Integer, nullable=True)
+    week                        = Column(Integer, nullable=True)
+    season_type                 = Column(String, nullable=True)
+    team                        = Column(String, nullable=True)
+    opponent_team               = Column(String, nullable=True)
+    
+    # Passing stats
+    completions                 = Column(Float, nullable=True)
+    attempts                    = Column(Float, nullable=True)
+    passing_yards               = Column(Float, nullable=True)
+    passing_tds                 = Column(Float, nullable=True)
+    passing_interceptions       = Column(Float, nullable=True)
+    sacks_suffered              = Column(Float, nullable=True)
+    sack_yards_lost             = Column(Float, nullable=True)
+    sack_fumbles                = Column(Float, nullable=True)
+    sack_fumbles_lost           = Column(Float, nullable=True)
+    passing_air_yards           = Column(Float, nullable=True)
+    passing_yards_after_catch   = Column(Float, nullable=True)
+    passing_first_downs         = Column(Float, nullable=True)
+    passing_epa                 = Column(Float, nullable=True)
+    passing_cpoe                = Column(Float, nullable=True)
+    passing_2pt_conversions     = Column(Float, nullable=True)
+    pacr                        = Column(Float, nullable=True)
+    
+    # Rushing stats
+    carries                     = Column(Float, nullable=True)
+    rushing_yards               = Column(Float, nullable=True)
+    rushing_tds                 = Column(Float, nullable=True)
+    rushing_fumbles             = Column(Float, nullable=True)
+    rushing_fumbles_lost        = Column(Float, nullable=True)
+    rushing_first_downs         = Column(Float, nullable=True)
+    rushing_epa                 = Column(Float, nullable=True)
+    rushing_2pt_conversions     = Column(Float, nullable=True)
+    
+    # Receiving stats
+    receptions                  = Column(Float, nullable=True)
+    targets                     = Column(Float, nullable=True)
+    receiving_yards             = Column(Float, nullable=True)
+    receiving_tds               = Column(Float, nullable=True)
+    receiving_fumbles           = Column(Float, nullable=True)
+    receiving_fumbles_lost      = Column(Float, nullable=True)
+    receiving_air_yards         = Column(Float, nullable=True)
+    receiving_yards_after_catch = Column(Float, nullable=True)
+    receiving_first_downs       = Column(Float, nullable=True)
+    receiving_epa               = Column(Float, nullable=True)
+    receiving_2pt_conversions   = Column(Float, nullable=True)
+    racr                        = Column(Float, nullable=True)
+    target_share                = Column(Float, nullable=True)
+    air_yards_share             = Column(Float, nullable=True)
+    wopr                        = Column(Float, nullable=True)
+    
+    # Special teams stats
+    special_teams_tds           = Column(Float, nullable=True)
+    
+    # Defensive stats
+    def_tackles_solo            = Column(Float, nullable=True)
+    def_tackles_with_assist     = Column(Float, nullable=True)
+    def_tackle_assists          = Column(Float, nullable=True)
+    def_tackles_for_loss        = Column(Float, nullable=True)
+    def_tackles_for_loss_yards  = Column(Float, nullable=True)
+    def_fumbles_forced          = Column(Float, nullable=True)
+    def_sacks                   = Column(Float, nullable=True)
+    def_sack_yards              = Column(Float, nullable=True)
+    def_qb_hits                 = Column(Float, nullable=True)
+    def_interceptions           = Column(Float, nullable=True)
+    def_interception_yards      = Column(Float, nullable=True)
+    def_pass_defended           = Column(Float, nullable=True)
+    def_tds                     = Column(Float, nullable=True)
+    def_fumbles                 = Column(Float, nullable=True)
+    def_safeties                = Column(Float, nullable=True)
+    
+    # Miscellaneous stats
+    misc_yards                  = Column(Float, nullable=True)
+    fumble_recovery_own         = Column(Float, nullable=True)
+    fumble_recovery_yards_own   = Column(Float, nullable=True)
+    fumble_recovery_opp         = Column(Float, nullable=True)
+    fumble_recovery_yards_opp   = Column(Float, nullable=True)
+    fumble_recovery_tds         = Column(Float, nullable=True)
+    penalties                   = Column(Float, nullable=True)
+    penalty_yards               = Column(Float, nullable=True)
+    
+    # Return stats
+    punt_returns                = Column(Float, nullable=True)
+    punt_return_yards           = Column(Float, nullable=True)
+    kickoff_returns             = Column(Float, nullable=True)
+    kickoff_return_yards        = Column(Float, nullable=True)
+    
+    # Field goal stats
+    fg_made                     = Column(Float, nullable=True)
+    fg_att                      = Column(Float, nullable=True)
+    fg_missed                   = Column(Float, nullable=True)
+    fg_blocked                  = Column(Float, nullable=True)
+    fg_long                     = Column(Float, nullable=True)
+    fg_pct                      = Column(Float, nullable=True)
+    fg_made_0_19                = Column(Float, nullable=True)
+    fg_made_20_29               = Column(Float, nullable=True)
+    fg_made_30_39               = Column(Float, nullable=True)
+    fg_made_40_49               = Column(Float, nullable=True)
+    fg_made_50_59               = Column(Float, nullable=True)
+    fg_made_60_                 = Column(Float, nullable=True)
+    fg_missed_0_19              = Column(Float, nullable=True)
+    fg_missed_20_29             = Column(Float, nullable=True)
+    fg_missed_30_39             = Column(Float, nullable=True)
+    fg_missed_40_49             = Column(Float, nullable=True)
+    fg_missed_50_59             = Column(Float, nullable=True)
+    fg_missed_60_               = Column(Float, nullable=True)
+    fg_made_list                = Column(JSON, nullable=True)
+    fg_missed_list              = Column(JSON, nullable=True)
+    fg_blocked_list             = Column(JSON, nullable=True)
+    fg_made_distance            = Column(JSON, nullable=True)
+    fg_missed_distance          = Column(JSON, nullable=True)
+    fg_blocked_distance         = Column(JSON, nullable=True)
+    
+    # PAT stats
+    pat_made                    = Column(Float, nullable=True)
+    pat_att                     = Column(Float, nullable=True)
+    pat_missed                  = Column(Float, nullable=True)
+    pat_blocked                 = Column(Float, nullable=True)
+    pat_pct                     = Column(Float, nullable=True)
+    
+    # Game-winning FG stats
+    gwfg_made                   = Column(Float, nullable=True)
+    gwfg_att                    = Column(Float, nullable=True)
+    gwfg_missed                 = Column(Float, nullable=True)
+    gwfg_blocked                = Column(Float, nullable=True)
+    gwfg_distance               = Column(Float, nullable=True)
+    
+    # Kicker points (simple calculation)
+    kicker_pts                  = Column(Float, nullable=True)  # FG made × 3 + PAT made × 1
+    
+    # Fantasy points
+    fantasy_points              = Column(Float, nullable=True)
+    fantasy_points_ppr          = Column(Float, nullable=True)
 
-# ── 4) automap that table into an ORM class ────────────────────────────────
-AutomapBase = automap_base(metadata=metadata)
-AutomapBase.prepare()
-
-# Now NFLStat is a normal mapped class you can import elsewhere:
-NFLStat = AutomapBase.classes.nfl_stats
 
 
 class NFLPlayer(NFLBase, BasePlayer):
     __tablename__ = 'nfl_player'
 
     id              = Column(Integer,   primary_key=True)
+    roster_slot_id  = Column(Integer,   nullable=False)  # Composite PK with id
     name            = Column(String,    nullable=False)
     team            = Column(String,    nullable=False)
     opponent        = Column(String,    nullable=True)
     position        = Column(String,    nullable=False)
     slot_label      = Column(String,    nullable=True)  # e.g. 'RB1', 'WR2', 'FLEX', 'DST'
-    roster_slot_id  = Column(Integer,   nullable=False)
     gametime        = Column(DateTime,  nullable=False) 
     salary          = Column(Integer,   nullable=False)
     status          = Column(String,    nullable=True)

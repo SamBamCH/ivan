@@ -1,6 +1,8 @@
 from pathlib import Path
 import json
 import logging
+from dotenv import load_dotenv
+import os
 
 from sqlalchemy import select
 
@@ -19,6 +21,7 @@ from sqlalchemy import select, distinct
 from ivan.core.utils import normalize_name
 from ivan.sports.nfl.models import NFLPlayer, NFLOdds, NFLGameOdds
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
 
 DIAG_DIR = Path("data/nfl/diagnostics")
@@ -46,7 +49,7 @@ def create_projection_snapshot(session):
         players_to_update.add(norm_name)
         
         snapshot_records.append({
-            'player_id': player.id,  # DraftKings player ID
+            'id': player.id,  # DraftKings player ID
             'snapshot_date': snapshot_date,
             'player_name': player.name,
             'normalized_name': norm_name,
@@ -147,7 +150,9 @@ session = get_session(engine)
 
 logging.info("[update_odds][1] ✓ Connected to database")
 
-api_key = '58699e4fe47856c9182db84884772536' 
+api_key = os.getenv('ODDS_API_KEY')
+if not api_key:
+    raise ValueError("ODDS_API_KEY not found in environment variables")
 relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
 
 logging.debug(f"Teams to fetch odds for: {sorted(relevant_teams)} ({len(relevant_teams) // 2} games)")

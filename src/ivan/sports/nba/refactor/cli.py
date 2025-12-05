@@ -1,6 +1,7 @@
 from datetime import datetime
 import sys
-from typing import Optional
+import json
+from typing import Optional, List, Dict, Union
 from rich.console import Console
 from rich.table import Table
 from ivan.database.session import init_db, get_session
@@ -151,6 +152,284 @@ def view_lineups(session: Session, prompt_missing: bool = False) -> list[str]:
     # return unique unmatched names in original encounter order
     return list(dict.fromkeys(unmatched))
 
+
+def print_exposures(
+    session: Session,
+    lineups: Union[List[int], List[List[int]], None] = None,
+    title: str = "Player Exposures",
+    console: Optional[Console] = None,
+    top_n: int = 30,
+) -> None:
+    """
+    Print a formatted table of player exposures from a set of lineups.
+    
+    Args:
+        session: Database session
+        lineups: Either:
+            - List of lineup IDs (will fetch from Lineup table)
+            - List of player ID lists [[pid1, pid2, ...], ...]
+            - None to use all lineups in database
+        title: Title for the exposure table
+        console: Rich console for output (optional)
+        top_n: Number of top exposed players to show (default 30)
+    """
+    if console is None:
+        console = Console()
+    
+    # Resolve lineups to list of player ID lists
+    lineup_player_ids: List[List[int]] = []
+    
+    if lineups is None:
+        # Fetch all lineups from database
+        all_lineups = session.query(Lineup).all()
+        for lu in all_lineups:
+            pids = lu.player_ids_list
+            if isinstance(pids, str):
+                try:
+                    pids = json.loads(pids)
+                except:
+                    pids = []
+            pids = [int(x) for x in (pids or []) if x is not None]
+            if pids:
+                lineup_player_ids.append(pids)
+    elif lineups and isinstance(lineups[0], int):
+        # List of lineup IDs
+        lineup_ids = lineups
+        fetched = session.query(Lineup).filter(Lineup.id.in_(lineup_ids)).all()
+        id_to_lineup = {lu.id: lu for lu in fetched}
+        for lid in lineup_ids:
+            lu = id_to_lineup.get(lid)
+            if lu:
+                pids = lu.player_ids_list
+                if isinstance(pids, str):
+                    try:
+                        pids = json.loads(pids)
+                    except:
+                        pids = []
+                pids = [int(x) for x in (pids or []) if x is not None]
+                if pids:
+                    lineup_player_ids.append(pids)
+    else:
+        # Already list of player ID lists
+        lineup_player_ids = lineups
+    
+    if not lineup_player_ids:
+        console.print(f"[yellow]No lineups to calculate exposures for.[/yellow]")
+        return
+    
+    total_lineups = len(lineup_player_ids)
+    
+    # Count exposures
+    exposure_counter: Counter = Counter()
+    for pids in lineup_player_ids:
+        for pid in pids:
+            exposure_counter[pid] += 1
+    
+    # Get all player info
+    all_pids = list(exposure_counter.keys())
+    players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(all_pids)).all()
+    player_map: Dict[int, NBAPlayer] = {p.id: p for p in players}
+    
+    # Build table
+    table = Table(title=f"{title} ({total_lineups} lineups)", show_header=True, header_style="bold cyan")
+    table.add_column("Player", style="white", no_wrap=True)
+    table.add_column("Team", style="cyan", width=5)
+    table.add_column("Pos", style="magenta", width=8)
+    table.add_column("Salary", style="green", justify="right")
+    table.add_column("FPTS", style="yellow", justify="right")
+    table.add_column("Own%", style="blue", justify="right")
+    table.add_column("Count", style="dim", justify="right")
+    table.add_column("Exposure", style="bold white", justify="right")
+    
+    # Sort by exposure descending
+    sorted_exposures = exposure_counter.most_common(top_n)
+    
+    for pid, count in sorted_exposures:
+        p = player_map.get(pid)
+        if p:
+            name = p.name
+            team = p.team or "?"
+            pos = p.position or "?"
+            salary = f"${p.salary:,}" if p.salary else "N/A"
+            fpts = f"{p.fpts_mean:.1f}" if p.fpts_mean else "N/A"
+            own = f"{p.ownership:.1f}%" if p.ownership else "N/A"
+        else:
+            name = f"Player {pid}"
+            team = "?"
+            pos = "?"
+            salary = "N/A"
+            fpts = "N/A"
+            own = "N/A"
+        
+        exposure_pct = (count / total_lineups) * 100
+        
+        # Color based on exposure level
+        if exposure_pct >= 50:
+            exp_str = f"[bold red]{exposure_pct:.1f}%[/bold red]"
+        elif exposure_pct >= 25:
+            exp_str = f"[yellow]{exposure_pct:.1f}%[/yellow]"
+        else:
+            exp_str = f"{exposure_pct:.1f}%"
+        
+        table.add_row(
+            name,
+            team,
+            pos,
+            salary,
+            fpts,
+            own,
+            str(count),
+            exp_str,
+        )
+    
+    console.print(table)
+    
+    # Summary stats
+    console.print(f"\n[dim]Showing top {min(top_n, len(sorted_exposures))} of {len(exposure_counter)} unique players[/dim]")
+
+
+def print_exposures_from_counts(
+    session: Session,
+    counts_by_lineup: Dict[int, int],
+    title: str = "Field Exposures",
+    console: Optional[Console] = None,
+    top_n: int = 20,
+) -> None:
+    """
+    Print player exposures from a field sample with counts per lineup.
+    
+    Preprocesses the counts into expanded lineup lists, then calls print_exposures.
+    
+    Args:
+        session: Database session
+        counts_by_lineup: Dict mapping lineup_id -> count (number of times sampled)
+        title: Title for the exposure table
+        console: Rich console for output
+        top_n: Number of top exposed players to show
+    """
+    if console is None:
+        console = Console()
+    
+    # Fetch lineups
+    lineup_ids = list(counts_by_lineup.keys())
+    fetched = session.query(Lineup).filter(Lineup.id.in_(lineup_ids)).all()
+    id_to_lineup = {lu.id: lu for lu in fetched}
+    
+    # Expand counts into list of player ID lists (weighted by count)
+    expanded_lineups: List[List[int]] = []
+    for lid, count in counts_by_lineup.items():
+        lu = id_to_lineup.get(lid)
+        if not lu:
+            continue
+        pids = lu.player_ids_list
+        if isinstance(pids, str):
+            try:
+                pids = json.loads(pids)
+            except:
+                pids = []
+        pids = [int(x) for x in (pids or []) if x is not None]
+        if pids:
+            # Add this lineup `count` times to represent field duplication
+            for _ in range(count):
+                expanded_lineups.append(pids)
+    
+    # Update title to show unique count
+    total_field_size = sum(counts_by_lineup.values())
+    enhanced_title = f"{title} ({total_field_size:,} entries, {len(lineup_ids)} unique)"
+    
+    # Delegate to print_exposures
+    print_exposures(
+        session=session,
+        lineups=expanded_lineups,
+        title=enhanced_title,
+        console=console,
+        top_n=top_n,
+    )
+
+
+def analyze_lineups(
+    session: Session,
+    console: Optional[Console] = None,
+    num_buckets: int = 8,
+) -> None:
+    """
+    Analyze all lineups in the database and plot a histogram of projected FPTS sums.
+    
+    Args:
+        session: Database session
+        console: Rich console for output (optional)
+        num_buckets: Number of histogram buckets (default 15)
+    """
+    if console is None:
+        console = Console()
+    
+    # Fetch all lineups
+    lineups = session.query(Lineup).all()
+    
+    if not lineups:
+        console.print("[yellow]No lineups found in database.[/yellow]")
+        return
+    
+    # Get all unique player IDs
+    all_player_ids = set()
+    for lineup in lineups:
+        pids = lineup.player_ids_list
+        if isinstance(pids, str):
+            try:
+                pids = json.loads(pids)
+            except:
+                pids = []
+        pids = [int(x) for x in (pids or []) if x is not None]
+        all_player_ids.update(pids)
+    
+    # Fetch all players
+    players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(all_player_ids)).all()
+    player_fpts_map = {p.id: (p.fpts_mean or 0.0) for p in players}
+    
+    # Calculate FPTS sum for each lineup
+    lineup_fpts_sums = []
+    for lineup in lineups:
+        pids = lineup.player_ids_list
+        if isinstance(pids, str):
+            try:
+                pids = json.loads(pids)
+            except:
+                pids = []
+        pids = [int(x) for x in (pids or []) if x is not None]
+        fpts_sum = sum(player_fpts_map.get(pid, 0.0) for pid in pids)
+        lineup_fpts_sums.append(fpts_sum)
+    
+    if not lineup_fpts_sums:
+        console.print("[yellow]No lineup FPTS data to analyze.[/yellow]")
+        return
+    
+    # Calculate stats
+    fpts_array = np.array(lineup_fpts_sums)
+    mean_fpts = float(np.mean(fpts_array))
+    median_fpts = float(np.median(fpts_array))
+    std_fpts = float(np.std(fpts_array))
+    min_fpts = float(np.min(fpts_array))
+    max_fpts = float(np.max(fpts_array))
+    
+    # Print summary
+    console.print(f"\n[bold cyan]═══ Lineup Pool Analysis ({len(lineups):,} lineups) ═══[/bold cyan]")
+    console.print(f"  Mean:   {mean_fpts:>8.1f}")
+    console.print(f"  Median: {median_fpts:>8.1f}")
+    console.print(f"  Std:    {std_fpts:>8.1f}")
+    console.print(f"  Min:    {min_fpts:>8.1f}")
+    console.print(f"  Max:    {max_fpts:>8.1f}")
+    
+    # Plot histogram using plotext
+    plt.clf()
+    plt.theme('clear')  # Transparent background
+    plt.hist(lineup_fpts_sums, bins=num_buckets)
+    plt.title(f"Lineup Projected FPTS Distribution ({len(lineups):,} lineups)")
+    plt.xlabel("Projected FPTS Sum")
+    plt.yticks([])  # Hide y-axis tick values
+    plt.plotsize(100, 20)
+    plt.show()
+
+
 def plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params, model_path="data/nba/models/field_distribution_model.pkl"):
     """
     Plot the model's predicted projection distribution vs. the empirical distribution from the sampled field.
@@ -178,10 +457,11 @@ def plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params, m
     id_to_lineup = {l.id: l for l in all_lineups}
     lineup_proj = []
     for lid in lineup_ids:
-        l = id_to_lineup[lid]
+        l = id_to_lineup.get(lid)
+        if not l:
+            continue
         pids = l.player_ids_list
         if isinstance(pids, str):
-            import json
             try:
                 pids = json.loads(pids)
             except:
@@ -235,35 +515,6 @@ def plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params, m
         except Exception:
             pass
         plt.show()
-    # --- Player exposures ---
-    player_counter = Counter()
-    for lid in lineup_ids:
-        l = id_to_lineup[lid]
-        pids = l.player_ids_list
-        if isinstance(pids, str):
-            import json
-            try:
-                pids = json.loads(pids)
-            except:
-                pids = []
-        pids = [int(x) for x in (pids or []) if x is not None]
-        for pid in pids:
-            player_counter[pid] += counts_by_lineup[lid]
-
-    # Print top 20 player exposures
-    print("\n" + "="*70)
-    print("Top 20 Player Exposures in Sampled Field")
-    print("="*70)
-    if player_counter:
-        player_ids = list(player_counter.keys())
-        players = session.query(NBAPlayer).filter(NBAPlayer.id.in_(player_ids)).all()
-        id_to_name = {p.id: p.name for p in players}
-        total = len(all_lineups)
-        top = player_counter.most_common(20)
-        for pid, count in top:
-            pct = 100.0 * count / total
-            name = id_to_name.get(pid, str(pid))
-            print(f"  {name:30s}  {count:6d}  ({pct:5.2f}%)")
-    else:
-        print("  (No player exposures found)")
-    print("="*70 + "\n")
+    
+    # Use the new modular exposure function
+    print_exposures_from_counts(session, counts_by_lineup, title="Sampled Field Exposures")

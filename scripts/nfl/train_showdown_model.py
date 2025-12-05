@@ -21,6 +21,7 @@ At inference:
 """
 
 import argparse
+from datetime import datetime
 import pickle
 from pathlib import Path
 from typing import Tuple, Dict, List
@@ -39,7 +40,9 @@ from sqlalchemy import func
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import (
     ShowdownLineup,
+    HistoricalContest,
     ShowdownContestMetadata,
+    ProjectionSnapshot,
 )
 
 
@@ -61,17 +64,21 @@ def build_contest_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     - Empirical quantiles of duplication distribution
     """
     
+    # Pull total_entries and entry_fee from HistoricalContest (source of truth)
     query = (
         session.query(
-            ShowdownContestMetadata.contest_id,
-            ShowdownContestMetadata.total_entries,
-            ShowdownContestMetadata.entry_fee,
+            HistoricalContest.contest_id,
+            HistoricalContest.total_entries,
+            HistoricalContest.entry_fee,
             ShowdownContestMetadata.unique_lineup_count,
-            ShowdownContestMetadata.max_duplicate_count,
-            ShowdownContestMetadata.median_duplicate_count,
-            ShowdownContestMetadata.ownership_gini,
+            ShowdownContestMetadata.max_dupe_count,
+            ShowdownContestMetadata.median_dupe_count
         )
-        .filter(ShowdownContestMetadata.total_entries >= min_entries)
+        .join(
+            HistoricalContest,
+            ShowdownContestMetadata.contest_id == HistoricalContest.contest_id,
+        )
+        .filter(HistoricalContest.total_entries >= min_entries)
     )
     
     contests = query.all()
@@ -130,34 +137,107 @@ def build_lineup_level_data(session, min_entries: int = 5000) -> pd.DataFrame:
     """
     
     # Get all lineups from contests >= min_entries
-    query = (
+    # Pull only the minimal lineup fields available, and filter contests
+    lineup_rows = (
         session.query(
             ShowdownLineup.id,
             ShowdownLineup.contest_id,
-            ShowdownLineup.duplicate_count,
-            ShowdownLineup.salary_remaining_pct,
-            ShowdownLineup.projection_normalized,
-            ShowdownLineup.cpt_ownership_pct,
-            ShowdownContestMetadata.total_entries,
+            ShowdownLineup.dupe_count,
+            ShowdownLineup.salary_remaining,
+            ShowdownLineup.cpt_player_id,
+            ShowdownLineup.flex_player_ids,
+            HistoricalContest.total_entries,
         )
         .join(
-            ShowdownContestMetadata,
-            ShowdownLineup.contest_id == ShowdownContestMetadata.contest_id
+            HistoricalContest,
+            ShowdownLineup.contest_id == HistoricalContest.contest_id
         )
-        .filter(ShowdownContestMetadata.total_entries >= min_entries)
-    )
-    
-    results = query.all()
-    if not results:
+        .filter(HistoricalContest.total_entries >= min_entries)
+    ).all()
+
+    if not lineup_rows:
         return pd.DataFrame()
-    
-    columns = [
-        'lineup_id', 'contest_id', 'duplicate_count',
-        'salary_remaining_pct', 'projection_normalized', 'cpt_ownership_pct',
-        'total_entries'
-    ]
-    
-    df = pd.DataFrame(results, columns=columns)
+
+    # Collect all roster_slot_ids appearing in selected lineups
+    all_pids: set[int] = set()
+    for _, _, _, _, cpt_id, flex_ids, _ in lineup_rows:
+        all_pids.add(int(cpt_id))
+        for pid in (flex_ids or []):
+            all_pids.add(int(pid))
+
+    if not all_pids:
+        return pd.DataFrame()
+
+    # Fetch ProjectionSnapshot for these roster_slot_ids
+    # Use the latest snapshot per roster_slot_id
+    snapshot_rows = (
+        session.query(
+            ProjectionSnapshot.roster_slot_id,
+            ProjectionSnapshot.snapshot_date,
+            ProjectionSnapshot.fpts_mean,
+            ProjectionSnapshot.ownership_proj,
+        )
+        .filter(ProjectionSnapshot.roster_slot_id.in_(list(all_pids)))
+        .all()
+    )
+
+    if not snapshot_rows:
+        return pd.DataFrame()
+
+    # Reduce to latest snapshot per roster slot
+    latest_by_slot: dict[int, tuple[float, float]] = {}
+    seen_date: dict[int, datetime] = {}
+    for slot_id, snap_dt, fpts_mean, own_proj in snapshot_rows:
+        prev = seen_date.get(slot_id)
+        if prev is None or (snap_dt and snap_dt > prev):
+            seen_date[slot_id] = snap_dt
+            latest_by_slot[slot_id] = (
+                float(fpts_mean or 0.0),
+                float(own_proj or 0.0),
+            )
+
+    # Build feature rows; drop any lineup missing snapshot data for any player id
+    feat_rows: list[dict] = []
+    for lineup_id, contest_id, dupe_count, salary_remaining, cpt_id, flex_ids, total_entries in lineup_rows:
+        player_ids = [int(cpt_id)] + [int(x) for x in (flex_ids or [])]
+        # Ensure we have snapshot for all players
+        if any(pid not in latest_by_slot for pid in player_ids):
+            continue
+
+        # Build projection and ownership vectors
+        fpts_vec = [latest_by_slot[pid][0] for pid in player_ids]
+        own_vec = [latest_by_slot[pid][1] for pid in player_ids]
+
+        projection_sum = float(np.sum(fpts_vec))
+        cpt_ownership_pct = float(own_vec[0])  # first is CPT
+        # salary remaining percent of cap (assume DK Showdown cap=50000)
+        salary_remaining_pct = float(np.clip(salary_remaining, 0, 50000)) / 50000.0
+
+        feat_rows.append({
+            'lineup_id': lineup_id,
+            'contest_id': contest_id,
+            'duplicate_count': dupe_count,
+            'total_entries': total_entries,
+            'salary_remaining_pct': salary_remaining_pct,
+            'projection_sum': projection_sum,
+            'cpt_ownership_pct': cpt_ownership_pct,
+        })
+
+    df = pd.DataFrame(feat_rows)
+    if df.empty:
+        return df
+
+    # Normalize projection within each contest to 0-1 range
+    def _normalize_group(series: pd.Series) -> pd.Series:
+        if series.empty:
+            return series
+        mn = series.min()
+        mx = series.max()
+        if not np.isfinite(mn) or not np.isfinite(mx) or mx == mn:
+            return pd.Series(np.zeros(len(series)), index=series.index)
+        return (series - mn) / (mx - mn)
+
+    df['projection_normalized'] = df.groupby('contest_id')['projection_sum'].transform(_normalize_group)
     
     # Calculate percentile rank within each contest using transform (preserves index)
     def compute_percentile_rank(x):

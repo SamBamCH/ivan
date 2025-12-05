@@ -1,84 +1,104 @@
-#!/usr/bin/env python3
-# scripts/nfl/sim_all.py
-import os, json, argparse
-import pandas as pd
+from ivan.sports.nba.refactor.pre_lock.lineup import generate_lineups, deduplicate_lineups
+from ivan.sports.nba.refactor.pre_lock.slate import simulate_one_slate, choose_lineups_for_slate
+from ivan.sports.nba.refactor.cli import print_exposures, analyze_lineups
+from ivan.database.session import init_db, get_session
+from sqlalchemy import text
+import argparse
 
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.console import Console
 
-from ivan.database.session import init_db, get_session, Base
-from ivan.sports.nba.simulate_contest import simulate_one_contest  
-
-def parse_args():
-    p = argparse.ArgumentParser(description="Run NBA simulations for each contest in entries_csv")
-    p.add_argument("--config", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../config/nba.json")))
-    p.add_argument("-n", type=int, default=1000, help="Number of simulation samples per contest (default: 1000)")
-    p.add_argument("-c", type=int, default=10000, help="Field cap (default: 100)")
-    p.add_argument("-d", type=bool, default=False, help="Allow duplicates in classic slates (default: False)")
-    return p.parse_args()
 
 def main():
-    args = parse_args()
-    cfg   = json.load(open(args.config, encoding="utf-8"))
+    p = argparse.ArgumentParser(description="NBA pre-lock simulation flow")
+    p.add_argument("--entries-csv", default="data/nba/input/entries.csv", help="Path to DK entries CSV")
+    p.add_argument("--num-lineups", default=25000, type=int, help="Number of lineups to generate before simming")
+    p.add_argument("--num-jobs", default=8, type=int, help="Number of parallel jobs for lineup generation")
+    p.add_argument("--fresh", action="store_true", help="Clear all lineups in DB prior to run")
+    p.add_argument("--min-fpts", default=None, type=float, help="Optional minimum fantasy points constraint for lineups")
+    p.add_argument("--field-cap", default=10000, type=int, help="Number of lineups to cap field at when simulating")
+    p.add_argument("--num-sims", default=1000, type=int, help="Number of Monte Carlo simulations to run")
+    p.add_argument("--output-csv", default="data/nba/output/chosen_lineups.csv", help="Output CSV for chosen lineups")
 
-    engine  = init_db("nba")
+    args = p.parse_args()
+    console = Console() 
+    
+    # Initialize DB session for exposures
+    engine = init_db('nba')
     session = get_session(engine)
 
-    # *** NEW: Clean old diagnostics once at start of entire sim run ***
-    from ivan.sports.nfl.simulate_contest import clean_old_diagnostics
-    console = Console()
-
-    df = pd.read_csv(
-        cfg["paths"]["entries_csv"],
-        engine="python",
-        usecols=["Contest ID", "Contest Name"],
-        dtype={"Contest ID": str, "Contest Name": str},
-    )
-    df["Contest ID"]   = df["Contest ID"].str.strip()
-    df["Contest Name"] = df["Contest Name"].str.strip()
-    df = df.dropna(subset=["Contest ID", "Contest Name"]).copy()
-    df["Contest ID"] = df["Contest ID"].astype(int)
-    df = df.sort_values("Contest ID")
-    unique_df = df.drop_duplicates(subset=["Contest Name"], keep="last")
-
-    total_contests = len(unique_df)
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        overall_task = progress.add_task(
-            f"[cyan]Processing {total_contests} contests...",
-            total=total_contests
-        )
-
-        for idx, row in enumerate(unique_df.iterrows(), 1):
-            _, row_data = row
-            cid  = int(row_data["Contest ID"])
-            name = row_data["Contest Name"]
-
-            progress.update(overall_task, description=f"[cyan]Contest {idx}/{total_contests}: {name[:40]}...")
-
+    # Always clear simulation results before new run
+    session.execute(text("DELETE FROM lineup_simulation_results"))
+    session.commit()
+    console.print("[dim]✓ Cleared lineup_simulation_results table[/dim]")
+    
+    # Optionally clear lineups with --fresh flag
+    if args.fresh:
+        session.execute(text("DELETE FROM lineup"))
+        session.commit()
+        console.print("[yellow]✓ Cleared lineup table (--fresh)[/yellow]")
+    
+    # Generate lineups
+    console.print("\n[bold cyan]═══ LINEUP GENERATION ═══[/bold cyan]")
+    generate_lineups(args.num_lineups, args.num_jobs, min_fpts=args.min_fpts)
+    deduplicate_lineups()
+    
+    # Analyze lineup pool (histogram + exposures)
+    analyze_lineups(session, console=console)
+    print_exposures(session, lineups=None, title="Generated Lineup Pool Exposures", console=console)
+    
+    # Interactive loop to regenerate if needed
+    while True:
+        console.print("\n[bold cyan]Lineup Generation Complete[/bold cyan]")
+        
+        new_min_fpts = console.input("[yellow]Set min_fpts threshold (or press Enter to skip):[/yellow] ").strip()
+        new_num_lineups = console.input("[yellow]How many additional lineups to generate? (or press Enter to skip):[/yellow] ").strip()
+        
+        if not new_min_fpts and not new_num_lineups:
+            console.print("[green]✓ Proceeding with current lineups[/green]")
+            break
+        
+        if new_min_fpts:
             try:
-                simulate_one_contest(
-                    session      = session,
-                    contest_id   = cid,
-                    contest_name = name,
-                    config_path  = args.config,
-                    field_cap    = args.c,
-                    num_sims     = args.n,
-                )
-                console.print(f"✓ Completed contest {cid} ('{name}')")
-            except Exception as e:
-                console.print(f"[red]⚠️  Skipped contest {cid} ('{name}') due to error: {e}[/red]")
+                args.min_fpts = float(new_min_fpts)
+            except ValueError:
+                console.print("[red]✗ Invalid min_fpts value[/red]")
+                continue
+        
+        if new_num_lineups:
+            try:
+                args.num_lineups = int(new_num_lineups)
+            except ValueError:
+                console.print("[red]✗ Invalid num_lineups value[/red]")
+                continue
+        
+        console.print("[cyan]Regenerating lineups with new parameters...[/cyan]")
+        generate_lineups(args.num_lineups, args.num_jobs, min_fpts=args.min_fpts)
+        deduplicate_lineups()
+        
+        # Analyze updated lineup pool
+        analyze_lineups(session, console=console)
+        print_exposures(session, lineups=None, title="Generated Lineup Pool Exposures", console=console)
+    
+    # Simulate
+    console.print("\n[bold cyan]═══ CONTEST SIMULATION ═══[/bold cyan]")
+    entries_by_contest = simulate_one_slate(
+        entries_csv=args.entries_csv,
+        console=console,
+        field_cap=args.field_cap,
+        num_sims=args.num_sims,
+    )
+    
+    # Choose lineups
+    console.print("\n[bold cyan]═══ LINEUP SELECTION ═══[/bold cyan]")
+    choose_lineups_for_slate(
+        entries_csv=args.entries_csv,
+        entries_by_contest=entries_by_contest,
+        console=console,
+        output_csv=args.output_csv,
+    )
+    
+    console.print("\n[bold green]✓ Complete![/bold green]")
 
-            progress.advance(overall_task)
-
-    console.print(f"\n[bold green]✓ All {total_contests} contests completed![/bold green]")
 
 if __name__ == "__main__":
     main()

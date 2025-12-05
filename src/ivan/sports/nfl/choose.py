@@ -190,10 +190,24 @@ def choose_lineup_ids(
     q = (norm * w_feat).sum(axis=1)  # quality score in [0,1]
 
     # Diversity distances on fpts traces
-    dist_mat = squareform(pdist(fpts_matrix, metric="cosine"))
+    dist_mat = squareform(pdist(fpts_matrix, metric="euclidean"))
+    # Normalize distance matrix to [0, 1] to match quality score scale
+    dist_mat = (dist_mat - dist_mat.min()) / (dist_mat.max() - dist_mat.min() + 1e-6)
+    
+    # Debug: print distance matrix statistics
+    print(f"Distance matrix stats - min: {dist_mat.min():.6f}, "
+          f"max: {dist_mat.max():.6f}, mean: {dist_mat.mean():.6f}")
+    print(f"Quality score (q) stats - min: {q.min():.6f}, max: {q.max():.6f}, "
+          f"range: {q.max() - q.min():.6f}")
 
     # --- simple quality + diversity trade-off ---
     lam = float(weights.get("diversity_lambda", 0.5))  # diversity weight
+
+    # Print average ROI of top num_lineups before diversity
+    top_indices = np.argsort(-q)[:num_lineups]
+    top_roi_means = [roi_matrix[i].mean() for i in top_indices]
+    avg_top_roi = np.mean(top_roi_means)
+    print(f"Average ROI of top {num_lineups} lineups (before diversity): {avg_top_roi:.4f}")
 
     # Greedy selection
     remaining = set(range(N))
@@ -203,6 +217,9 @@ def choose_lineup_ids(
     first = int(np.argmax(q))
     selected.append(first)
     remaining.remove(first)
+    
+    # Debug: track first few selections
+    debug_count = 0
 
     def lineup_score(j: int, S: list[int]) -> float:
         # quality + weighted diversity (average cosine distance to selected)
@@ -215,6 +232,14 @@ def choose_lineup_ids(
     while len(selected) < num_lineups and remaining:
         # pick item with max quality + diversity trade-off
         best_j = max(remaining, key=lambda j: lineup_score(j, selected))
+        
+        if debug_count < 5:
+            div_gain = np.mean(dist_mat[best_j, selected]) if selected else 0.0
+            total_score = q[best_j] + lam * div_gain
+            print(f"  Selection {len(selected)}: lineup {best_j}, q={q[best_j]:.6f}, "
+                  f"div_gain={div_gain:.6f}, total={total_score:.6f}")
+            debug_count += 1
+        
         selected.append(best_j)
         remaining.remove(best_j)
 
@@ -228,6 +253,11 @@ def choose_lineup_ids(
                 break
 
     chosen_ids = [sims[i].lineup_id for i in selected]
+
+    # Print average ROI of chosen lineups after diversity
+    chosen_roi_means = [roi_matrix[i].mean() for i in selected]
+    avg_chosen_roi = np.mean(chosen_roi_means)
+    print(f"Average ROI of {len(selected)} chosen lineups (after diversity): {avg_chosen_roi:.4f}")
 
     # === Verification printout: ROIs and cash% for chosen lineups ===
     print("\n=== Selected lineup verification ===")

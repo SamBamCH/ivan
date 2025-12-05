@@ -10,5 +10,6 @@
   "min_salary": 48000,
   "max_salary": 50000,
   "randomness": 0.25,
-  "max_salary_per_team": 30000
+  "max_salary_per_team": 30000,
+  "player_min_fpts": 0.0
 }

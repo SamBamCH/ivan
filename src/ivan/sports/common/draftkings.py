@@ -473,10 +473,15 @@ class Player:
         self.status = status
 
     
-def ingest_players(sport):
+def ingest_players(sport, dedupe_by_name=True):
     """
     pull all draftables from draftkings for a draft group id. (slate)
     returns player objects for upsert in main script
+    
+    Args:
+        sport: Sport key ('nba', 'nfl', etc.)
+        dedupe_by_name: If True, only keep first occurrence of each player name.
+                        If False, keep all roster slots (e.g., NFL showdown CPT/FLEX).
     """
     contests = fetch_all_contests(sport)
     slate_info = summarize_slates(contests)
@@ -499,7 +504,6 @@ def ingest_players(sport):
 
     relevant_teams = set()
     seen_names = set()
-    kept_by_name: dict[str, dict] = {}
     processed_players = set()
 
     for p in players:
@@ -507,17 +511,20 @@ def ingest_players(sport):
         comp = p.get("competition") or {}
         opp = _derive_opponent_for_player(team, comp)
         player_name = normalize_name(p.get("displayName"))
-        if player_name in seen_names:
-            continue
-        seen_names.add(player_name)
-        kept_by_name[player_name] = p
+        
+        # Optional deduplication by name
+        if dedupe_by_name:
+            if player_name in seen_names:
+                continue
+            seen_names.add(player_name)
 
         if team: relevant_teams.add(team)
-        if opp: relevant_teams.add(team)
+        if opp: relevant_teams.add(opp)
         gametime = _parse_gametime_to_local(comp.get("startTime"))
         draftable_id    = p.get("draftableId")
         position        = p.get("position")
         salary          = p.get("salary")
+        roster_slot_id  = p.get("rosterSlotId")
 
         if draftable_id is None:
             continue
@@ -532,7 +539,7 @@ def ingest_players(sport):
             team=team,
             opponent=opp,
             position=position,
-            roster_slot_id=p.get("rosterSlotId"),
+            roster_slot_id=roster_slot_id,
             gametime=gametime,
             salary=salary,
             status=p.get("status"),
