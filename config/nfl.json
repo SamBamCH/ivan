@@ -12,7 +12,7 @@
     "target_unique_ratio": 0.20,                 
     "max_unique": null                           
   },
-  "randomness": 0.50,
+  "randomness": 1,
   "pool": {
     "size": 10000,                                
     "embed_dims": 32,                            
@@ -80,15 +80,15 @@
   "classic": {
     "lineup_generation": {
       "n_samples": 5000,
-      "min_fpts": 3,
+      "min_fpts": 2,
       "n_jobs": 8,
       "jitter": 0.05,
       "salary_cap": 50000,
-      "min_salary": 48500,
-      "max_off_vs_dst": 2,
+      "min_salary": 48000,
+      "max_off_vs_dst": 0,
       "min_qb_wrte_stack": 1,
-      "min_qb_skill_stack": 1,
-      "min_qb_bringback": 1,
+      "min_qb_skill_stack": 0,
+      "min_qb_bringback": 0,
       "max_team_players": 4
     }
   }

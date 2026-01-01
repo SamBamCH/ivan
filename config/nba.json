@@ -7,9 +7,9 @@
   "solver": {
     "glpk_path": "/home/sam-pratt/ivan/glpk-4.65/w64/glpsol.exe"
   },         
-  "min_salary": 48000,
+  "min_salary": 49000,
   "max_salary": 50000,
-  "randomness": 0.25,
+  "randomness": 1,
   "max_salary_per_team": 30000,
-  "player_min_fpts": 0.0
+  "player_min_fpts": 15.0
 }

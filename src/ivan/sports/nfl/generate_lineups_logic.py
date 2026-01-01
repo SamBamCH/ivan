@@ -592,11 +592,11 @@ def generate_and_store_field_lineups(
         batch   = 0
         seen_lineups: set[tuple[int, ...]] = set()
 
-        jitter            = float(_cfg(config, "showdown.lineup_generation.jitter", 0.10))
+        jitter            = float(_cfg(config, "showdown.lineup_generation.jitter", 0.25))
         salary_cap        = int(_cfg(config, "showdown.lineup_generation.salary_cap", 50000))
         min_cap_drop      = int(_cfg(config, "showdown.lineup_generation.min_cap_drop", 0))
-        max_cap_drop      = int(_cfg(config, "showdown.lineup_generation.max_cap_drop", 2000))
-        cap_drop_exponent = float(_cfg(config, "showdown.lineup_generation.cap_drop_exponent", 2.0))
+        max_cap_drop      = int(_cfg(config, "showdown.lineup_generation.max_cap_drop", 5000))
+        cap_drop_exponent = float(_cfg(config, "showdown.lineup_generation.cap_drop_exponent", 1.2))
         debug_lp_dir      = _cfg(config, "showdown.lineup_generation.debug_lp_dir", None)
 
         sample_cursor = 0

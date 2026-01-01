@@ -1,7 +1,42 @@
-from typing import Dict, List, Tuple, Optional, Iterable, Union
-import re
-import json
+from typing import Optional, Iterable, Tuple
+import re, json
 
+def parse_position(position: str) -> Optional[str]:
+    """Parse position string (PG, SG, etc.) into simplified form (G, F, C)."""
+    if not position:
+        return None
+    position = position.strip().upper()
+
+    guard_positions = {'PG', 'SG'}
+    forward_positions = {'SF', 'PF'}
+    center_positions = {'C'}
+
+    if '/' in position:
+        positions = [p.strip() for p in position.split('/')]
+        for pos in positions:
+            if pos in guard_positions:
+                return 'G'
+            elif pos in forward_positions:
+                return 'F'
+            elif pos in center_positions:
+                return 'C'
+    else:
+        if position in guard_positions:
+            return 'G'
+        elif position in forward_positions:
+            return 'F'
+        elif position in center_positions:
+            return 'C'
+
+    return None
+
+def american_to_prob(american_odds: int) -> float:
+    """Convert American odds to implied probability."""
+    if american_odds > 0:
+        return 100.0 / (american_odds + 100.0)
+    else:
+        return abs(american_odds) / (abs(american_odds) + 100.0)
+    
 
 def _coerce_positions(pos: Iterable[str] | str) -> Tuple[str, ...]:
     """

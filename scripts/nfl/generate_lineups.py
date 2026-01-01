@@ -102,7 +102,7 @@ def _run_with_progress(quotas, config_path, total_workers):
         procs.append(p)
 
     n_workers = len(procs)
-
+  
     # Fallback (no rich) - unchanged
     if Progress is None:
         totals = quotas[:]

@@ -288,9 +288,27 @@ def fetch_all_contests(sport: str = "MLB") -> List[Dict[str, Any]]:
     """
     Hit the Lobby endpoint and return the raw list of contests.
     """
-    r = requests.get(LOBBY_URL, params={"sport": sport})
-    r.raise_for_status()
-    data = r.json()
+    logging.info(f"[draftkings] Fetching contests for sport={sport} from {LOBBY_URL}")
+    try:
+        r = requests.get(
+            LOBBY_URL,
+            params={"sport": sport},
+            timeout=15,  # <--- ADD THIS
+        )
+        logging.info(f"[draftkings] HTTP status={r.status_code} url={r.url}")
+        r.raise_for_status()
+    except requests.exceptions.Timeout:
+        logging.error("[draftkings] Timeout while calling lobby endpoint.")
+        raise
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[draftkings] RequestException while calling lobby endpoint: {e}")
+        raise
+
+    try:
+        data = r.json()
+    except Exception as e:
+        logging.error(f"[draftkings] Failed to parse JSON: {e}; first 300 chars: {r.text[:300]!r}")
+        raise
 
     if isinstance(data, dict) and "Contests" in data:
         return data["Contests"]
@@ -356,7 +374,7 @@ def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
     """
     url = f"{API_BASE}/draftgroups/{draft_group_id}/draftables"
     logging.debug("GET %s", url)
-    r = requests.get(url)
+    r = requests.get(url, timeout=5)
     r.raise_for_status()
 
     payload = r.json()

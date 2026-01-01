@@ -26,6 +26,7 @@ for c in filtered:
     existing = session.query(HistoricalContest).filter_by(contest_id=cid).one_or_none()
 
     contest_date    = parse_sd(c.get("sd"))
+
     entry_fee       = float(c.get("a"))
     total_entries   = int(c.get("m"))
 
@@ -69,19 +70,35 @@ csv_path = Path("data/nba/input/stok.csv")
 df = pd.read_csv(csv_path)
 # Update database players from CSV
 for _, row in df.iterrows():
-    name = normalize_name(row['Name'])
+    name = normalize_name(row['Player'])
     player = session.query(NBAPlayer).filter(
         NBAPlayer.name.ilike(name)
     ).first()
     if player:
         player.fpts_mean = row['Projection']
         player.fpts_std = row['Std Dev']
-        player.ownership = row['Ownership%']
+        player.ownership = row['Ownership %']
         session.merge(player)
     else:
         print(f'no player found matching {name}')
 
 # Commit all changes to database
+
+# Step 1: Collect player names from stok.csv
+existing_players = set(df['Player'].apply(normalize_name).tolist())
+
+# Step 2: Query all players in the database
+all_players = session.query(NBAPlayer).all()
+
+# Step 3: Remove players not in the CSV
+for player in all_players:
+    if player.name not in existing_players:
+        session.delete(player)
+
+# Commit changes after deleting players not in the CSV
+session.commit()
+print(f"✓ Removed players not in stok.csv")
+
 session.commit()
 print("✓ All player projections and ownership values upserted successfully")
 

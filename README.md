@@ -3,7 +3,7 @@
 A modular, multi-sport analytics and simulation framework built in Python.
 
 ## 🚀 Overview
-`ivan` is designed to support robust sports analytics pipelines for multiple sports (initially MLB and NFL) with shared core utilities, database integration, statistical modeling, and lineup sampling. Its modular structure makes it easy to add new sports, customize regressors and KDE fitting, and scale simulations.
+`ivan` is designed to support robust sports analytics pipelines for multiple sports with shared core utilities, database integration, statistical modeling, and lineup sampling. Its modular structure makes it easy to add new sports, customize regressors and KDE fitting, and scale simulations.
 
 ## 📦 Installation
 

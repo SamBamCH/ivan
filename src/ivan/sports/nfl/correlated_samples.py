@@ -25,7 +25,8 @@ def generate_correlated_samples_gaussian(
     model_dir: str | Path = "data/nfl/models",
     n_samples: int = 1000,
     seed: int | None = None,
-    use_hgv20: bool = True,
+    use_hgv20: bool = False,  # Default to team-specific now
+    use_team_specific_corr: bool = True,  # NEW: use team-specific correlations from historical data
     randomness: float = 1.0,
 ) -> Dict[int, np.ndarray]:
     """
@@ -36,6 +37,9 @@ def generate_correlated_samples_gaussian(
     Players deeper than modeled slots should have been pooled at fit time.
 
     Args:
+        use_team_specific_corr: If True (default), build correlation matrices from each team's
+                                historical data. This captures team-specific offensive structures.
+        use_hgv20: If True (and use_team_specific_corr=False), use HGV-20 vine copula correlations.
         randomness: Controls distribution spread (0.0 = deterministic at median, 1.0 = full distribution).
                     Values are clamped to [0.0, 1.0].
     """
@@ -74,10 +78,22 @@ def generate_correlated_samples_gaussian(
             continue
         seen.add((a, b)); matchups.append((a, b))
 
-    # --- 2) slot-slot correlations (Spearman -> Pearson) ---
+    # --- 2) slot-slot correlations ---
     TEAM10 = ["QB","RB1","RB2","WR1","WR2","WR3","TE1","TE2","K","DST"]
+    
+    # Spearman -> Pearson (bivariate normal relationship)
+    def s2p(Rs: np.ndarray) -> np.ndarray:
+        return 2.0 * np.sin(np.clip(np.pi * Rs / 6.0, -np.pi/2, np.pi/2))
 
-    if use_hgv20:
+    # Cache for team-specific correlations (avoid recomputing)
+    team_corr_cache: Dict[str, np.ndarray] = {}
+    cross_corr_cache: Dict[Tuple[str, str], np.ndarray] = {}
+    
+    if use_team_specific_corr:
+        # Import team correlation builder
+        from ivan.sports.nfl.refactor.team_correlation import build_team_correlation, build_cross_team_correlation
+        print("Using team-specific correlations from historical data")
+    elif use_hgv20:
         # compute once from your HGV-20 (vine+factors) the two 10x10 Spearman matrices
         from .correlated_sampling_validation import print_hgv20_spearman
         hgv = print_hgv20_spearman(model_dir, n=20_000)
@@ -95,21 +111,18 @@ def generate_correlated_samples_gaussian(
             Rx_S = np.asarray(hgv["cross"], dtype=float)
         else:
             raise RuntimeError("print_hgv20_spearman returned an unexpected type.")
+            
+        Rw = s2p(Rw_S)
+        Rx = s2p(Rx_S)
+        np.fill_diagonal(Rw, 1.0)
     else:
         # Or load a JSON/NPZ you precomputed and checked in
         d = json.loads((Path(model_dir) / "team10_spearman.json").read_text())
         Rw_S = np.array(d["within"], float)
         Rx_S = np.array(d["cross"], float)
-
-    # Spearman -> Pearson (bivariate normal relationship)
-    def s2p(Rs: np.ndarray) -> np.ndarray:
-        return 2.0 * np.sin(np.clip(np.pi * Rs / 6.0, -np.pi/2, np.pi/2))
-
-    Rw = s2p(Rw_S)
-    Rx = s2p(Rx_S)
-    # Ensure diagonals are exactly 1
-    np.fill_diagonal(Rw, 1.0)
-    np.fill_diagonal(Rx, np.diag(Rx))  # cross has no diagonal usage, but keep as is
+        Rw = s2p(Rw_S)
+        Rx = s2p(Rx_S)
+        np.fill_diagonal(Rw, 1.0)
 
     slot_idx = {s:i for i,s in enumerate(TEAM10)}
 
@@ -170,11 +183,37 @@ def generate_correlated_samples_gaussian(
         slots_A = [slot_idx[p.slot_label] for p in A]
         slots_B = [slot_idx[p.slot_label] for p in B]
 
-        # Within-team corr for A and B:
-        Corr_A = Rw[np.ix_(slots_A, slots_A)]
-        Corr_B = Rw[np.ix_(slots_B, slots_B)]
-        # Cross-team corr (A rows vs B cols):
-        Corr_X = Rx[np.ix_(slots_A, slots_B)]
+        # Get correlation matrices (team-specific or generic)
+        if use_team_specific_corr:
+            # Build/retrieve team-specific correlations
+            if a not in team_corr_cache:
+                Rw_a_S, _ = build_team_correlation(session, a)
+                team_corr_cache[a] = s2p(Rw_a_S)
+                np.fill_diagonal(team_corr_cache[a], 1.0)
+            if b not in team_corr_cache:
+                Rw_b_S, _ = build_team_correlation(session, b)
+                team_corr_cache[b] = s2p(Rw_b_S)
+                np.fill_diagonal(team_corr_cache[b], 1.0)
+            
+            cross_key = (a, b) if a < b else (b, a)
+            if cross_key not in cross_corr_cache:
+                Rx_S, _ = build_cross_team_correlation(session, a, b)
+                cross_corr_cache[cross_key] = s2p(Rx_S)
+            
+            Rw_a = team_corr_cache[a]
+            Rw_b = team_corr_cache[b]
+            Rx_ab = cross_corr_cache[cross_key]
+            
+            # Within-team corr for A and B (using team-specific matrices)
+            Corr_A = Rw_a[np.ix_(slots_A, slots_A)]
+            Corr_B = Rw_b[np.ix_(slots_B, slots_B)]
+            # Cross-team corr
+            Corr_X = Rx_ab[np.ix_(slots_A, slots_B)]
+        else:
+            # Use generic (HGV20 or JSON) correlations
+            Corr_A = Rw[np.ix_(slots_A, slots_A)]
+            Corr_B = Rw[np.ix_(slots_B, slots_B)]
+            Corr_X = Rx[np.ix_(slots_A, slots_B)]
 
         # Assemble full correlation:
         Corr = np.block([[Corr_A, Corr_X],
@@ -217,5 +256,3 @@ def generate_correlated_samples_gaussian(
             out[p.id] = samples
 
     return out
-
-

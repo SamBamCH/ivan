@@ -269,7 +269,7 @@ def main():
 
     for cid, group in contests_grouped:
         num_entries = len(group)
-        cname = group["Contest Name"].iloc[0]
+        cname = group["Contest Name"].iloc[0].strip()
         print(f"\n=== Contest {cid} (\"{cname}\") → {num_entries} entries ===")
 
         # Prompt weights once per contest

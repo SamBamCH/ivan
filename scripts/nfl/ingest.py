@@ -1,187 +1,94 @@
-#!/usr/bin/env python3
-"""
-scripts/mlb/ingest.py
-
-1) Discover all upcoming MLB draft groups (slates)
-2) Retrieve contest info (gameType, sdstring, contest name)
-3) Prompt user to choose one by draftGroupId
-4) Fetch that slate’s players and upsert into mlb_player
-5) Track relevant teams and fetch odds for them
-"""
-
-import sys
-import re
-from pathlib import Path
-import logging
-from datetime import datetime
-from dateutil import parser
 from ivan.database.session import init_db, get_session
-from sqlalchemy import delete
-from ivan.sports.nfl.models import NFLPlayer, NFLOdds
-from ivan.sports.common.draftkings import (
-    fetch_all_contests,
-    summarize_slates,
-    get_players_for_slate,
-)
-from ivan.sports.nfl.fpts_distribution_calculations import generate_and_fit_all
-from ivan.sports.common.odds import get_odds, parse_odds  # ← import your odds function
-from ivan.core.utils import normalize_name
+from ivan.sports.nfl.models import NFLOdds, NFLPlayer
+from ivan.sports.common.draftkings import ingest_players
+from ivan.sports.common.odds import get_odds, parse_odds
+from ivan.sports.nfl.refactor.player import fit_fpts_distributions
+import argparse
+from sqlalchemy import select, func
 
-logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
-
-_TEAM_RE = re.compile(r"\b[A-Z]{2,3}\b")
-
-def _extract_matchup_teams(comp: dict[str, object]) -> tuple[str|None, str|None]:
-    """
-    Try to extract (away, home) from the competition payload.
-    Priority 1: comp['name'] like 'TEN @ DEN'
-    Fallback:   scan for two team tokens in comp['name'] or nameDisplay
-    """
-    away = home = None
-
-    name = (comp or {}).get("name") or ""
-    # normalize common separators to '@'
-    normalized = (
-        name.replace(" vs. ", " @ ")
-            .replace(" vs ", " @ ")
-            .replace(" VS ", " @ ")
-            .replace(" at ", " @ ")
-            .replace(" AT ", " @ ")
-    )
-    if "@" in normalized:
-        parts = [p.strip() for p in normalized.split("@")]
-        if len(parts) == 2:
-            away, home = parts[0], parts[1]
-
-    if not (away and home):
-        # Fallback: try regex on name
-        tokens = _TEAM_RE.findall(name)
-        if len(tokens) >= 2:
-            away, home = tokens[0], tokens[-1]
-        else:
-            # Last fallback: nameDisplay array
-            nd = (comp or {}).get("nameDisplay") or []
-            vals = []
-            for item in nd:
-                if isinstance(item, dict):
-                    v = (item.get("value") or "").strip()
-                else:
-                    v = str(item).strip()
-                vals.extend(_TEAM_RE.findall(v))
-            if len(vals) >= 2:
-                away, home = vals[0], vals[-1]
-
-    # sanity: return None if they look invalid
-    if away == home:
-        return None, None
-    return away, home
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-def _derive_opponent_for_player(team: str|None, comp: dict) -> str|None:
-    if not team or not comp:
-        return None
-    away, home = _extract_matchup_teams(comp)
-    if not (away and home):
-        return None
-    if team == away:
-        return home
-    if team == home:
-        return away
-    # If team didn't match either side (rare formatting issues), give up gracefully
-    return None
+def parse_args():
+    p = argparse.ArgumentParser(description="ingest and update player odds")
+    p.add_argument("-p", action='store_true', help='Prelock flag, determines if we need to fetch DK payload or not.')
+    p.add_argument("--update-odds", type=str2bool, nargs='?', const=True, default=True, help="Update player odds")
+    return p.parse_args()
 
+#create session
+args = parse_args()
+engine = init_db('nfl')
+session = get_session(engine)
 
-def main():
-    # initialize database
-    engine = init_db("nfl", None)
-    session = get_session(engine)
-    logging.info("[ingest][1] ✔ Connected to database")
+#clear old data
+if args.p:
+    if args.update_odds:
+        #clear both player and odds
+        session.query(NFLOdds).delete(synchronize_session=False)
+        session.query(NFLPlayer).delete(synchronize_session=False)
+    else:
+        #clear player but not odds
+        session.query(NFLPlayer).delete(synchronize_session=False)
 
-    session.execute(delete(NFLPlayer))
-    session.execute(delete(NFLOdds))
-    session.commit()
-    logging.info("[ingest][2] ✔ Cleared nfl_player and nfl_odds tables")
-
-    # 1) fetch contests
-    contests = fetch_all_contests("nfl")
-    logging.info(f"[ingest][3] ✔ Pulled {len(contests)} contests from lobby endpoint")
-    if not contests:
-        logging.error("No contests returned from lobby endpoint")
-        sys.exit(1)
-
-    # 2) summarize slates
-    slate_info = summarize_slates(contests)
-
-    # 3) print menu for user
-    print("             Available NFL Slates:")
-    for i, (dg, info) in enumerate(slate_info.items(), start=1):
-        print(f"                {i:2}. DG={dg} | {info['gameType']:8} | entries={info['count']:2} | at {info['sdstring']} | '{info['name']}'")
-    print()
-
-    # 4) prompt user
-    choice = input(f"Select a slate 1–{len(slate_info)} (or Q to quit): ").strip().upper()
-    if choice == "Q":
-        sys.exit(0)
-    try:
-        idx = int(choice) - 1
-        dg = list(slate_info.keys())[idx]
-    except Exception:
-        logging.error("Invalid selection, exiting.")
-        sys.exit(1)
-
-    # 5) fetch & upsert players
-    players = get_players_for_slate(dg)
-    logging.info(f"[ingest][4] ✔ Pulled {len(players)} players for DG={dg}")
-
-    # ← ADDED: track all teams we pulled
-    relevant_teams = set()
-
-    for p in players:
-        # de-dupe some roster slots if needed
-        if p.get("rosterSlotId") == 70:
-            logging.debug(f"Skipping {p.get('displayName')} (rosterSlotId=70)")
-            continue
-
-        if p.get("status") == "OUT":
-            logging.debug(f"Skipping {p.get('displayName')} (status=OUT)")
-            continue
-
-        if p.get("status") == "IR":
-            logging.debug(f"Skipping {p.get('displayName')} (status=IR)")
-            continue
-
-        if p.get("status") == "D":
-            logging.debug(f"Skipping {p.get('displayName')} (status=D)")
-            continue
-
-        team = p.get("teamAbbreviation")
-        comp = p.get("competition") or {}
-        opp  = _derive_opponent_for_player(team, comp)
-
-        if team: relevant_teams.add(team)
-        if opp:  relevant_teams.add(opp)
-
+else:
+    if args.update_odds:
+        #clear odds but not player
+        session.query(NFLOdds).delete(synchronize_session=False)
+    else:
+        raise ValueError('-p and --update-odds both false, exiting...')
+        
+#ingest players from dk
+if args.p:
+    print('fetching players')
+    players = ingest_players('nfl', dedupe_by_name=False)
+    for player in players:
         dbp = NFLPlayer(
-            id             = p.get("draftableId"),
-            name           = normalize_name(p.get("displayName")),
-            team           = team,
-            opponent       = opp,  # <-- now populated for all players (including DST)
-            position       = p.get("position"),
-            roster_slot_id = p.get("rosterSlotId"),
-            gametime       = parser.isoparse(comp["startTime"]) if comp.get("startTime") else None,
-            salary         = p.get("salary"),
-            status         = p.get("status"),
+            id=player.dk_id,
+            name=player.name,
+            team=player.team,
+            opponent=player.opponent,
+            position=player.position,
+            roster_slot_id=player.roster_slot_id,
+            gametime=player.gametime,
+            salary=player.salary,
+            status=player.status
         )
         session.merge(dbp)
 
     session.commit()
-    logging.info(f"             Relevant teams to fetch odds for: {sorted(relevant_teams)} ({len(relevant_teams) // 2} games)")
-    logging.info("[ingest][5] ✔ Done ingesting players for selected slate.")
 
-    
+if args.update_odds:
+    #get odds
+    api_key = '6778304bde6b783356dc7fbfb04563c2' #TODO: hide this
+    relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
+    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
+    #parse and upsert odds
+    df_odds = parse_odds(odds)
+    records = df_odds.to_dict(orient='records')
+    session.bulk_insert_mappings(NFLOdds, records)
+    session.commit()
 
-    
-    
+if args.p:
+    #remove out players
+    session.query(NFLPlayer).filter(func.upper(NFLPlayer.status).in_(['OUT', 'IR'])).delete(synchronize_session=False)
+    # #remove players with no odds (check by name, not id, since we have 2 rows per player)
+    # players_with_odds = session.query(NFLOdds.player).distinct().all()
+    # players_with_odds_set = {p[0] for p in players_with_odds}
+    # # Delete both roster_slot_id rows if player name has no odds
+    # session.query(NFLPlayer).filter(~NFLPlayer.name.in_(players_with_odds_set)).delete(synchronize_session=False)
+    session.commit()
 
-if __name__ == "__main__":
-    main()
+#fit fpts for each player
+fit_fpts_distributions(session)
+
+#run team simulations to capture team dependence? overright the original FPTS values if we want to. Worried that this will bias the simulations too much, since this aspect will already be captured in the simulation. 
+
+#visualize slate
