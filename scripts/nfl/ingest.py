@@ -67,7 +67,7 @@ if args.p:
 
 if args.update_odds:
     #get odds
-    api_key = '6778304bde6b783356dc7fbfb04563c2' #TODO: hide this
+    api_key = '' #type THE-ODDS-API api key here
     relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
     odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
     #parse and upsert odds
