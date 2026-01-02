@@ -1,6 +1,6 @@
 # IVAN
 
-A comprehensive, multi-sport Daily Fantasy Sports (DFS) optimization and simulation framework built in Python. IVAN supports NBA, NFL, MLB, League of Legends (LoL), and MMA with advanced statistical modeling, lineup generation, Monte Carlo simulation, and contest analysis.
+A comprehensive, multi-sport Daily Fantasy Sports (DFS) optimization and simulation framework built in Python. IVAN supports NBA, NFL, MLB, League of Legends (LoL), and MMA with advanced statistical modeling, lineup generation, Monte Carlo simulation, and contest analysis. please note that the code probably sucks and I'm not a good programmer. you can feel free to let me know how much it sucks directly @sambamch@Gmail.com.
 
 ## 🚀 Overview
 
