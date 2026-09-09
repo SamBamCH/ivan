@@ -127,9 +127,11 @@ def _get_upcoming_events(sport, api_key):
     response = requests.get(url, params=params)
     if response.status_code == 200:
         return response.json()
-    else:
-        print(f"Error fetching upcoming events: {response.status_code} - {response.text}")
-        return None
+    if response.status_code in (401, 403):
+        # A dead or expired key is not transient; never let callers continue as if there were no games.
+        raise RuntimeError(f"the-odds-api rejected the API key ({response.status_code}): {response.text[:200]}")
+    print(f"Error fetching upcoming events: {response.status_code} - {response.text}")
+    return None
 
 
 def _get_event_odds(sport, api_key, event_id, markets=None):

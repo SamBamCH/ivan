@@ -34,29 +34,36 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 engine = init_db('nfl')
 session = get_session(engine)
 
-#clear old data
-if args.p:
-    if args.update_odds:
-        #clear both player and odds
-        session.query(NFLOdds).delete(synchronize_session=False)
-        session.query(NFLPlayer).delete(synchronize_session=False)
-    else:
-        #clear player but not odds
-        session.query(NFLPlayer).delete(synchronize_session=False)
-
-else:
-    if args.update_odds:
-        #clear odds but not player
-        session.query(NFLOdds).delete(synchronize_session=False)
-    else:
-        raise ValueError('-p and --update-odds both false, exiting...')
-        
-#ingest players from dk
+#Fetch everything first; only touch the database once both fetches succeeded, so a
+#failed DK or odds call (expired key, outage) leaves the previous slate intact.
+players = None
 if args.p:
     print('fetching players')
     players = ingest_players('nfl', dedupe_by_name=False, draft_group_id=args.draft_group)
+    if not players:
+        raise SystemExit('DraftKings returned no players for that slate; nothing changed.')
+
+records = None
+if args.update_odds:
+    api_key = require_env("ODDS_API_KEY")
+    if players is not None:
+        relevant_teams = {p.team for p in players if p.team}
+    else:
+        relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
+    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
+    df_odds = parse_odds(odds)
+    if df_odds is None or len(df_odds) == 0:
+        raise SystemExit('the-odds-api returned no odds (see the error above). '
+                         'Check ODDS_API_KEY and your plan at the-odds-api.com; nothing changed.')
+    records = df_odds.to_dict(orient='records')
+elif not args.p:
+    raise ValueError('-p and --update-odds both false, exiting...')
+
+#now write: clear what we are replacing, insert, commit once
+if players is not None:
+    session.query(NFLPlayer).delete(synchronize_session=False)
     for player in players:
-        dbp = NFLPlayer(
+        session.merge(NFLPlayer(
             id=player.dk_id,
             name=player.name,
             team=player.team,
@@ -66,30 +73,15 @@ if args.p:
             gametime=player.gametime,
             salary=player.salary,
             status=player.status
-        )
-        session.merge(dbp)
-
-    session.commit()
-
-if args.update_odds:
-    #get odds
-    api_key = require_env("ODDS_API_KEY")
-    relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
-    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
-    #parse and upsert odds
-    df_odds = parse_odds(odds)
-    records = df_odds.to_dict(orient='records')
+        ))
+if records is not None:
+    session.query(NFLOdds).delete(synchronize_session=False)
     session.bulk_insert_mappings(NFLOdds, records)
-    session.commit()
+session.commit()
 
 if args.p:
     #remove out players
     session.query(NFLPlayer).filter(func.upper(NFLPlayer.status).in_(['OUT', 'IR'])).delete(synchronize_session=False)
-    # #remove players with no odds (check by name, not id, since we have 2 rows per player)
-    # players_with_odds = session.query(NFLOdds.player).distinct().all()
-    # players_with_odds_set = {p[0] for p in players_with_odds}
-    # # Delete both roster_slot_id rows if player name has no odds
-    # session.query(NFLPlayer).filter(~NFLPlayer.name.in_(players_with_odds_set)).delete(synchronize_session=False)
     session.commit()
 
 #fit fpts for each player
