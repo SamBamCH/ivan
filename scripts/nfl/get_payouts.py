@@ -7,7 +7,7 @@ from sqlalchemy import distinct
 from sqlalchemy.exc import SQLAlchemyError
 
 from ivan.database.session import init_db, get_session
-from ivan.sports.mlb.models import HistoricalContest, ContestPayout
+from ivan.sports.nfl.models import HistoricalContest, ContestPayout
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from ivan.sports.nfl.team_level_calculations import _FPTS_WEIGHTS, _coerce_team_col, _ensure_position_group, _compute_fpts
+from ivan.database.session import read_sql as _read_sql
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLStat, NFLTeamWeekPositionalFPTS, NFLDSTGame
 
@@ -13,60 +15,14 @@ from ivan.sports.nfl.models import NFLStat, NFLTeamWeekPositionalFPTS, NFLDSTGam
 # Fantasy points weights for skill positions (not used for DST).
 # Keep in sync with your team-level calculations.
 # ---------------------------------------------------------------------
-_FPTS_WEIGHTS = {
-    'QB': {'passing_yards': .04, 'passing_tds': 4, 'interceptions': -2,
-           'rushing_yards': .1, 'rushing_tds': 6},
-    'RB': {'rushing_yards': .1, 'rushing_tds': 6, 'receptions': 1,
-           'receiving_yards': .1, 'receiving_tds': 6},
-    'WR': {'receptions': 1, 'receiving_yards': .1, 'receiving_tds': 6},
-    'TE': {'receptions': 1, 'receiving_yards': .1, 'receiving_tds': 6},
-}
 
 # ------------------------- helpers -----------------------------------
-
-def _read_sql(session: Session, stmt) -> pd.DataFrame:
-    with session.bind.connect() as conn:
-        return pd.read_sql(stmt, conn)
-
-def _coerce_team_col(df: pd.DataFrame) -> pd.DataFrame:
-    if 'recent_team' in df.columns:
-        return df
-    for cand in ('team', 'team_abbrev', 'defteam', 'def_team'):
-        if cand in df.columns:
-            return df.rename(columns={cand: 'recent_team'})
-    raise RuntimeError("Could not find a team column (recent_team/team/team_abbrev/defteam).")
 
 def _coerce_opp_col(df: pd.DataFrame) -> pd.DataFrame:
     for cand in ('opponent_team', 'opponent', 'opp_team', 'opp'):
         if cand in df.columns:
             return df.rename(columns={cand: 'opponent_team'})
     raise RuntimeError("Could not find opponent column (opponent_team/opponent/opp_team/opp).")
-
-def _ensure_position_group(df: pd.DataFrame) -> pd.Series:
-    if 'position_group' in df.columns:
-        return df['position_group']
-    pos = df.get('position', pd.Series(index=df.index, dtype='object')).astype(str).str.upper()
-    return pos.replace({
-        'QB':'QB', 'RB':'RB', 'HB':'RB', 'FB':'RB',
-        'WR':'WR',
-        'TE':'TE',
-        'K':'K',
-        'DST':'DST','DEF':'DST','D/ST':'DST'
-    })
-
-def _compute_fpts(df: pd.DataFrame) -> pd.Series:
-    fpts = pd.Series(0.0, index=df.index)
-    pos_group = _ensure_position_group(df)
-    for pos, weights in _FPTS_WEIGHTS.items():
-        mask = (pos_group == pos)
-        if not mask.any():
-            continue
-        cols = [c for c in weights if c in df.columns]
-        if not cols:
-            continue
-        block = df.loc[mask, cols]
-        fpts.loc[mask] = block.mul(pd.Series(weights), axis=1).sum(axis=1)
-    return fpts
 
 def _pick_qb(g: pd.DataFrame) -> Optional[float]:
     qb = g[g['position_group'] == 'QB'].copy()

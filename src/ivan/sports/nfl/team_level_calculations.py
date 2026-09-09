@@ -7,6 +7,7 @@ from copulas.multivariate import VineCopula
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ivan.database.session import read_sql as _read_sql
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLStat
 
@@ -20,32 +21,42 @@ _FPTS_WEIGHTS = {
     'TE': {'receptions': 1, 'receiving_yards': .1, 'receiving_tds': 6},
 }
 
-def _read_sql(session: Session, stmt) -> pd.DataFrame:
-    """Always hand pandas a real Connection (SQLAlchemy 2.x safe)."""
-    with session.bind.connect() as conn:
-        return pd.read_sql(stmt, conn)
+def _coerce_team_col(df: pd.DataFrame) -> pd.DataFrame:
+    if 'recent_team' in df.columns:
+        return df
+    for cand in ('team', 'team_abbrev', 'defteam', 'def_team'):
+        if cand in df.columns:
+            return df.rename(columns={cand: 'recent_team'})
+    raise RuntimeError("Could not find a team column (recent_team/team/team_abbrev/defteam).")
+
+
+def _ensure_position_group(df: pd.DataFrame) -> pd.Series:
+    if 'position_group' in df.columns:
+        return df['position_group']
+    pos = df.get('position', pd.Series(index=df.index, dtype='object')).astype(str).str.upper()
+    return pos.replace({
+        'QB':'QB', 'RB':'RB', 'HB':'RB', 'FB':'RB',
+        'WR':'WR',
+        'TE':'TE',
+        'K':'K',
+        'DST':'DST','DEF':'DST','D/ST':'DST'
+    })
+
 
 def _compute_fpts(df: pd.DataFrame) -> pd.Series:
     fpts = pd.Series(0.0, index=df.index)
+    pos_group = _ensure_position_group(df)
     for pos, weights in _FPTS_WEIGHTS.items():
-        mask = df['position_group'] == pos
+        mask = (pos_group == pos)
         if not mask.any():
             continue
-        cols = [s for s in weights if s in df.columns]
+        cols = [c for c in weights if c in df.columns]
         if not cols:
             continue
         block = df.loc[mask, cols]
         fpts.loc[mask] = block.mul(pd.Series(weights), axis=1).sum(axis=1)
     return fpts
 
-def _coerce_team_col(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize team column to 'recent_team' if needed."""
-    if 'recent_team' in df.columns:
-        return df
-    for cand in ('team', 'team_abbrev'):
-        if cand in df.columns:
-            return df.rename(columns={cand: 'recent_team'})
-    raise RuntimeError("Could not find a team column (recent_team/team/team_abbrev).")
 
 def build_team_models(db_url: str, model_dir: Path) -> dict[str, VineCopula]:
     """

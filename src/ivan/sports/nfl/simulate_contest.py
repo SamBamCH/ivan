@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
+from ivan.core.utils import coerce_player_ids as _coerce_player_ids
 from ivan.sports.nfl.paths import MODELS_DIR, DIAG_DIR
 from ivan.sports.nfl.models import HistoricalContest, ContestPayout, Lineup, LineupSimulationResult
 from ivan.sports.nfl.sample_field import (
@@ -18,7 +19,7 @@ from ivan.sports.nfl.sample_field import (
 )
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 # Reuse your MLB payout scaler (sport-agnostic)
-from ivan.sports.mlb.payouts import scale_payouts_correctly
+from ivan.sports.common.payouts import scale_payouts_correctly
 
 # --- DIAGNOSTICS: recap, CSVs, and plots for the sampled field ----------------
 import matplotlib.pyplot as plt
@@ -274,21 +275,6 @@ def recap_and_plots_for_sampled_field(
 
     print(f"\nDiagnostics saved to: {outdir}")
 
-
-def _coerce_player_ids(val) -> List[int]:
-    import json as _json
-    if val is None:
-        return []
-    if isinstance(val, list):
-        return [int(x) for x in val]
-    if isinstance(val, str):
-        try:
-            data = _json.loads(val)
-            if isinstance(data, list):
-                return [int(x) for x in data]
-        except Exception:
-            return []
-    return []
 
 def _expand_sampled_field(
         session: Session,

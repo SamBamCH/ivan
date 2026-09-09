@@ -16,7 +16,8 @@ from ivan.database.session import init_db, get_session, Base
 from ivan.sports.mlb.models import LineupSimulationResult, MLBPlayer, HistoricalContest, ContestPayout
 from ivan.sports.mlb.sample_lineups import sample_lineups_fast
 from ivan.sports.mlb.payouts import load_and_scale_payouts_from_db
-from ivan.core.utils import project_root, match_contest_id
+from ivan.core.utils import project_root
+from ivan.sports.mlb.utils import match_contest_id
 
 
 class DummyPlayer:

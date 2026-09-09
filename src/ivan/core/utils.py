@@ -9,9 +9,6 @@ import unicodedata
 import pandas as pd
 import matplotlib as plt
 
-from ivan.sports.mlb.models import MLBPlayer
-from sqlalchemy.exc import NoResultFound
-from ivan.sports.mlb.models import HistoricalContest
 
 def parse_game_time(game_info, timezone="US/Eastern", lock_offset_hours=0):
     """
@@ -279,101 +276,35 @@ def show_player_exposures(
         print(f"{name:<25} {team:<10} {owner_pct:7.1f} {expo_pct:7.1f}")
 
 
-PITCHER_POS = {"SP", "RP", "P"}
-
-def show_team_exposures(
-    session: Session,
-    lineup_id_lists: list[list[int]],
-    stack_size: int = 3
-) -> None:
-    """
-    Prints each team's stack‐exposure:
-      Team       Count   Expo%
-    Only counts a lineup if it contains at least `stack_size`
-    non-pitchers from that team.
-    """
-    total = len(lineup_id_lists)
-    if total == 0:
-        print("No lineups to show.")
-        return
-
-    # 1) bulk fetch all players we'll need
-    all_pids = {pid for lineup in lineup_id_lists for pid in lineup}
-    players = (
-        session
-        .query(MLBPlayer)
-        .filter(MLBPlayer.id.in_(all_pids))
-        .all()
-    )
-    player_map = {p.id: p for p in players}
-
-    # 2) for each lineup, count non-pitchers per team,
-    #    then only increment that team if count >= stack_size
-    team_count = defaultdict(int)
-    for lineup in lineup_id_lists:
-        per_team = defaultdict(int)
-        for pid in lineup:
-            p = player_map.get(pid)
-            if p and p.position not in PITCHER_POS:
-                per_team[p.team] += 1
-        for team, cnt in per_team.items():
-            if cnt >= stack_size:
-                team_count[team] += 1
-
-    # 3) print results
-    header = f"{'Team':<10} {'Count':>6} {'Expo%':>7}"
-    print(f"\n stack counts for each team counting only {stack_size} and larger: ")
-    print("\n" + header)
-    print("-" * len(header))
-    for team, cnt in sorted(team_count.items(), key=lambda kv: kv[1], reverse=True):
-        expo_pct = cnt / total * 100
-        print(f"{team:<10} {cnt:6d} {expo_pct:7.1f}")
-
 PROJECT_ROOT: Path = project_root()
+import json
+import numpy as np
 
-def match_contest_id(session, orig_id: int, name: str) -> int:
-    """
-    1) Try to find a HistoricalContest row for `orig_id`.
-    2) If not found, try to find the most recent row where name == `name`,
-       ordering by HistoricalContest.date DESC.
-    3) If still not found, raise ValueError.
 
-    Returns the contest_id that should be used for lookup (e.g. payouts).
-    """
-    # 1) force a plain Python int
-    orig_cid = int(orig_id)
+def coerce_player_ids(val) -> list[int]:
+    """Lineup.player_ids_list may come back as a list or a JSON string; normalise to list[int]."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [int(x) for x in val]
+    if isinstance(val, str):
+        try:
+            data = json.loads(val)
+        except Exception:
+            return []
+        if isinstance(data, list):
+            return [int(x) for x in data]
+    return []
 
-    # 2) direct lookup by ID
-    row = (
-        session
-        .query(HistoricalContest)
-        .filter(HistoricalContest.contest_id == orig_cid)
-        .one_or_none()
-    )
-    if row is not None:
-        return orig_cid
 
-    # 3) fallback by name only → pick the “most recent” by date descending
-    fallback = (
-        session
-        .query(HistoricalContest)
-        .filter(HistoricalContest.name == name)
-        .order_by(HistoricalContest.date.desc())
-        .first()
-    )
-    if fallback is not None:
-        print(
-            f"⚠️  contest_id={orig_cid} not found; "
-            f"using HistoricalContest ID={fallback.contest_id} "
-            f"(latest match by name='{name}')."
-        )
-        return fallback.contest_id
-
-    # 4) neither direct nor name‐based match succeeded
-    raise ValueError(
-        f"No HistoricalContest for contest_id={orig_cid}, "
-        f"and no rows with name='{name}'."
-    )
+def calculate_gini(values) -> float:
+    """Gini coefficient of a non-negative sample (ownership / exposure concentration)."""
+    v = np.sort(np.asarray(values, dtype=float).ravel())
+    n = v.size
+    if n < 2 or v.sum() == 0:
+        return 0.0
+    index = np.arange(1, n + 1)
+    return float(np.clip((2 * np.sum(index * v)) / (n * v.sum()) - (n + 1) / n, 0.0, 1.0))
 
 def map_team_name_to_abbreviation(full_team_name):
     """

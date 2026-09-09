@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from scipy import sparse as sp
 from scipy.spatial.distance import pdist, squareform
 
+from ivan.core.utils import coerce_player_ids as _coerce_player_ids
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.sample_field import (
     sample_showdown_field_learned,
@@ -49,23 +50,6 @@ def _detect_slate_type(session: Session) -> str:
     if 511 in slot_ids or 512 in slot_ids:
         return 'showdown'
     return 'classic'
-
-
-def _coerce_player_ids(val) -> list[int]:
-    """Parse JSON player_ids_list from database."""
-    import json
-    if val is None:
-        return []
-    if isinstance(val, list):
-        return [int(x) for x in val]
-    if isinstance(val, str):
-        try:
-            data = json.loads(val)
-            if isinstance(data, list):
-                return [int(x) for x in data]
-        except Exception:
-            return []
-    return []
 
 
 def _compute_exposures_from_counts(

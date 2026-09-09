@@ -18,7 +18,8 @@ from ivan.sports.mlb.models import (
     Lineup,
 )
 from ivan.sports.mlb.selection import choose_lineup_ids
-from ivan.core.utils import show_player_exposures, show_team_exposures
+from ivan.core.utils import show_player_exposures
+from ivan.sports.mlb.utils import show_team_exposures
 
 SALARY_CAP = 50000
 

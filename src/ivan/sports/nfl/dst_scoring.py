@@ -3,11 +3,8 @@
 from __future__ import annotations
 import pandas as pd
 from sqlalchemy import text
+from ivan.database.session import read_sql as _read_sql
 from ivan.database.session import init_db, get_session
-
-def _read_sql(session, stmt) -> pd.DataFrame:
-    with session.bind.connect() as conn:
-        return pd.read_sql(stmt, conn)
 
 def _pa_bonus(pa: int) -> int:
     if pa == 0: return 10

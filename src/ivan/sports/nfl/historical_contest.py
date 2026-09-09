@@ -9,6 +9,7 @@ import pandas as pd
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ivan.core.utils import calculate_gini
 from ivan.database.session import init_db, get_session
 from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe
 from ivan.core.utils import normalize_name
@@ -30,16 +31,6 @@ _SHOWDOWN_LINEUP_REGEX = re.compile(r"(CPT|FLEX)\s+([A-Za-z\s\.''-]+?)(?=\s+(?:C
 # ==============================================================================
 
 BINS = 20  # Fixed-width histogram bins
-
-def calculate_gini(values: List[float]) -> float:
-    """Calculate Gini coefficient for ownership concentration."""
-    if not values or len(values) < 2:
-        return 0.0
-    sorted_values = np.array(sorted(values))
-    n = len(sorted_values)
-    index = np.arange(1, n + 1)
-    return (2 * np.sum(index * sorted_values)) / (n * np.sum(sorted_values)) - (n + 1) / n
-
 
 def compute_histograms(
     projections: np.ndarray,

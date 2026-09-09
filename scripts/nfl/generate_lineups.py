@@ -8,6 +8,7 @@ from pathlib import Path
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn,MofNCompleteColumn
 from rich.console import Console
 
+from ivan.core.utils import coerce_player_ids as _coerce_player_ids
 from ivan.core.config import config_path
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import Lineup
@@ -19,22 +20,6 @@ SCRIPT_NAME = Path(sys.argv[0]).stem
 
 def _prefix(script: str, proc_no: int, sub_no: int) -> str:
     return f"[{script}][{proc_no}][{sub_no}]"
-
-def _coerce_player_ids(val): 
-    if val is None:
-        return []
-    if isinstance(val, list):
-        return [int(x) for x in val]
-    if isinstance(val, str):
-        try:
-            data = json.loads(val)
-            if isinstance(data, list):
-                return [int(x) for x in data]
-            
-        except Exception:
-            return []
-        
-    return []
 
 def worker(worker_id: int, num_lineups: int, config_path: str, total_workers: int, q: Queue):
     """Updated worker with diversity strategy for parallel showdown generation."""

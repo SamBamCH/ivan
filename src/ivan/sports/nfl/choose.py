@@ -6,7 +6,6 @@ from scipy.spatial.distance import pdist, squareform
 from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.models import LineupSimulationResult, NFLPlayer, Lineup
-from ivan.core.utils import show_player_exposures, show_team_exposures
 
 # put near your imports
 import os

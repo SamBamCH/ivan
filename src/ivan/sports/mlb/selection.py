@@ -6,7 +6,8 @@ from scipy.spatial.distance import pdist, squareform
 from sqlalchemy.orm import Session
 
 from ivan.sports.mlb.models import LineupSimulationResult, MLBPlayer
-from ivan.core.utils import show_player_exposures, show_team_exposures
+from ivan.core.utils import show_player_exposures
+from ivan.sports.mlb.utils import show_team_exposures
 
 # put near your imports
 import os

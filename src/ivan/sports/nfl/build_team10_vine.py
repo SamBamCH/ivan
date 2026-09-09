@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import pyvinecopulib as pv
 
+from ivan.database.session import read_sql as _read_sql
 from ivan.database.session import init_db, get_session
 
 TEAM10 = ["QB","RB1","RB2","WR1","WR2","WR3","TE1","TE2","K","DST"]
@@ -16,10 +17,6 @@ class Team10Vine:
     cols: List[str]
     vine: pv.Vinecop
     n_obs: int
-
-def _read_sql(session: Session, sql: str) -> pd.DataFrame:
-    with session.bind.connect() as c:
-        return pd.read_sql(text(sql), c)
 
 def _zero_aware_u(col: pd.Series) -> np.ndarray:
     x = pd.to_numeric(col, errors="coerce").replace([np.inf,-np.inf], np.nan).fillna(0.0)

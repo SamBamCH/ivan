@@ -1,7 +1,7 @@
 
 # src/ivan/database/session.py
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 from abc import ABCMeta
@@ -62,6 +62,17 @@ def get_session(engine):
     """
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return SessionLocal()
+
+def read_sql(session, stmt):
+    """
+    pandas.read_sql against the session's engine using a real Connection
+    (SQLAlchemy 2.x safe). Accepts a raw SQL string or a Core statement.
+    """
+    import pandas as pd
+    if isinstance(stmt, str):
+        stmt = text(stmt)
+    with session.bind.connect() as conn:
+        return pd.read_sql(stmt, conn)
 
 def safe_commit(session, max_tries=5):
     for i in range(max_tries):

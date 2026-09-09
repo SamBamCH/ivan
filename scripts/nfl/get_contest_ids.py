@@ -11,7 +11,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 from ivan.database.session import init_db, get_session
-from ivan.sports.mlb.models import HistoricalContest
+from ivan.sports.nfl.models import HistoricalContest
 from ivan.sports.common.draftkings import get_upcoming_contest_ids
 
 

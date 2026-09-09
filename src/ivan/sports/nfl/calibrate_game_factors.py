@@ -6,14 +6,11 @@ from sqlalchemy import text
 import scipy.stats as st
 from scipy.optimize import minimize
 
+from ivan.database.session import read_sql as _read_sql
 from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.database.session import init_db, get_session
 
 TEAM10 = ["QB","RB1","RB2","WR1","WR2","WR3","TE1","TE2","K","DST"]
-
-def _read_sql(session: Session, sql: str) -> pd.DataFrame:
-    with session.bind.connect() as c:
-        return pd.read_sql(text(sql), c)
 
 def _target_cross_spearman(session: Session) -> pd.DataFrame:
     df = _read_sql(session, """

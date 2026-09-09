@@ -32,6 +32,7 @@ import numpy as np
 from scipy import sparse as sp
 from sqlalchemy.orm import Session
 
+from ivan.core.utils import calculate_gini, coerce_player_ids as _coerce_player_ids
 from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
@@ -483,32 +484,6 @@ def compute_contest_features_from_lineups(
         'entry_fee': entry_fee,
         'ownership_gini': ownership_gini,
     }
-
-
-def calculate_gini(values: np.ndarray) -> float:
-    """Calculate Gini coefficient for concentration."""
-    if len(values) < 2:
-        return 0.0
-    sorted_vals = np.sort(values)
-    n = len(sorted_vals)
-    index = np.arange(1, n + 1)
-    gini = (2 * np.sum(index * sorted_vals)) / (n * np.sum(sorted_vals)) - (n + 1) / n
-    return float(np.clip(gini, 0.0, 1.0))
-
-def _coerce_player_ids(val) -> List[int]:
-    """Extract player IDs from various formats (list, JSON string, etc)."""
-    if val is None:
-        return []
-    if isinstance(val, list):
-        return [int(x) for x in val]
-    if isinstance(val, str):
-        try:
-            data = json.loads(val)
-            if isinstance(data, list):
-                return [int(x) for x in data]
-        except Exception:
-            return []
-    return []
 
 
 def build_lineup_matrix(session: Session):

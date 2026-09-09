@@ -32,6 +32,7 @@ import argparse
 import json
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from ivan.core.utils import coerce_player_ids as _coerce_player_ids
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 
@@ -51,22 +52,6 @@ ROSTER_SLOT_MAP = {
 
 # Which slots should count as receivers for classic QB stacks
 CLASSIC_PASS_CATCHERS = {RB, WR, TE}
-
-
-def _coerce_player_ids(val) -> List[int]:
-    """Handle JSON column variations (already-parsed list vs stored as str)."""
-    if val is None:
-        return []
-    if isinstance(val, list):
-        return [int(x) for x in val]
-    if isinstance(val, str):
-        try:
-            data = json.loads(val)
-            if isinstance(data, list):
-                return [int(x) for x in data]
-        except Exception:
-            return []
-    return []
 
 
 def _get_team_from_player(p: NFLPlayer) -> Optional[str]:
