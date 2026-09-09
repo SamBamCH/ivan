@@ -24,6 +24,9 @@
   button { font:inherit; padding:8px 16px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer }
   button:hover { filter:brightness(1.1) } button[disabled] { opacity:.45; cursor:not-allowed }
   button.danger { background:var(--bad); border-color:var(--bad) } button.small { padding:4px 10px; font-size:13px }
+  button.ghost { background:#fff; color:var(--bad); border-color:var(--bad) }
+  .resets { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px }
+  .wide { overflow-x:auto }
   form.inline { display:inline }
   input[type=file] { font:inherit }
   .step { display:grid; grid-template-columns:1fr auto; gap:6px 24px; align-items:start }
@@ -52,7 +55,7 @@
 <body>
 <header><nav>
   <a class="brand" href="/">Ivan · NFL</a>
-  <a href="/">Pipeline</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
+  <a href="/">Pipeline</a><a href="/players">Players</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
 </nav></header>
 <main>
   {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}

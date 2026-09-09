@@ -185,3 +185,43 @@ def slate_status(session) -> dict:
     owned = session.execute(text("SELECT count(*) FROM nfl_player WHERE ownership_proj IS NOT NULL AND ownership_proj > 0")).scalar()
     return {"players": players, "teams": teams_list, "first_game": first, "last_game": last,
             "lineups": lineups, "sims": [{"contest": c, "rows": n} for c, n in sims], "players_with_ownership": owned}
+
+
+RESETS = {
+    "sims":    ("Clear simulation results", ["lineup_simulation_results"]),
+    "lineups": ("Clear lineups and simulation results", ["lineup_simulation_results", "lineup"]),
+}
+
+
+def reset_working(session, what: str) -> dict:
+    """
+    Delete this slate's generated state (what = 'sims' | 'lineups'). Same as
+    scripts/nfl/clear_sims.py / clear_all.py. VACUUMs afterwards when the freed
+    pages are a meaningful share of the file, so the DB does not balloon.
+    """
+    _, tables = RESETS[what]
+    counts = {}
+    for t in tables:
+        counts[t] = session.execute(text(f"DELETE FROM {t}")).rowcount
+    session.commit()
+    pages, free = (session.execute(text("PRAGMA page_count")).scalar(),
+                   session.execute(text("PRAGMA freelist_count")).scalar())
+    if pages and free / pages > 0.25:
+        session.close()
+        with session.get_bind().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM"))
+    return counts
+
+
+PLAYER_COLUMNS = ["name", "team", "opponent", "position", "roster_slot_id", "salary", "status",
+                  "fpts_mean", "fpts_std", "fpts_p10", "fpts_p50", "fpts_p90", "ownership_proj", "gametime", "id"]
+
+
+def players_frame(session) -> pd.DataFrame:
+    """The slate's player pool, one row per DK draftable (showdown has CPT and FLEX rows)."""
+    df = pd.read_sql(text("SELECT * FROM nfl_player"), session.get_bind())
+    if df.empty:
+        return df
+    df["slot"] = df["roster_slot_id"].map({511: "CPT", 512: "FLEX", 66: "QB", 67: "RB", 68: "WR", 69: "TE", 71: "DST"}).fillna(df["roster_slot_id"].astype(str))
+    order = [c for c in ["slot"] + PLAYER_COLUMNS if c in df.columns] + [c for c in df.columns if c not in PLAYER_COLUMNS + ["slot"]]
+    return df[order].sort_values(["roster_slot_id", "salary"], ascending=[True, False]).reset_index(drop=True)

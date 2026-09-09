@@ -13,7 +13,7 @@ from typing import Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -23,7 +23,7 @@ from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.jobs import JobRunner
 from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR,
-                                   entries_summary, slate_status, slates)
+                                   RESETS, entries_summary, players_frame, reset_working, slate_status, slates)
 
 HERE = Path(__file__).parent
 engine = init_db("nfl")
@@ -190,6 +190,33 @@ async def run_step(key: str, request: Request):
         runner.submit(name, cmd, meta={"step": key, "form": form})
     note = f"Started: {step.title}." if ahead == 0 else f"Queued: {step.title} (behind {ahead} job{'s' if ahead > 1 else ''})."
     return _redirect("/", note)
+
+
+@app.post("/reset/{what}")
+def reset(what: str):
+    if what not in RESETS:
+        raise HTTPException(404)
+    if runner.active():
+        return _redirect("/", "A job is running; wait for it to finish (or cancel it) before clearing.")
+    counts = _with_db(lambda s: reset_working(s, what))
+    return _redirect("/", "Cleared " + ", ".join(f"{n:,} rows from {t}" for t, n in counts.items()) + ".")
+
+
+@app.get("/players", response_class=HTMLResponse)
+def players(request: Request):
+    df = _with_db(players_frame)
+    cols = [c for c in ["slot", "name", "team", "opponent", "position", "salary", "status", "fpts_mean", "fpts_std",
+                        "fpts_p10", "fpts_p50", "fpts_p90", "ownership_proj"] if c in df.columns]
+    return templates.TemplateResponse(request, "players.html", _ctx(request, cols=cols, rows=df[cols].to_dict("records") if len(df) else [],
+                                                                      total=len(df), status=_with_db(slate_status)))
+
+
+@app.get("/players.csv")
+def players_csv():
+    df = _with_db(players_frame)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    return Response(df.to_csv(index=False), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="players.{stamp}.csv"'})
 
 
 @app.get("/jobs", response_class=HTMLResponse)

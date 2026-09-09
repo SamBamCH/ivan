@@ -38,12 +38,7 @@ chmod 750 "$HOME_DIR" "$DST"
 sudo -u "$SVC" -H bash -c "cd '$DST' && rm -rf venv && deploy/bootstrap_server.sh"
 
 # 4) sandboxed unit
-sed "s|__ROOT__|$DST|g; s|__USER__|$SVC|g; s|__HOME__|$HOME_DIR|g" "$DST/deploy/ivan-web.service" \
-  > /etc/systemd/system/ivan-web.service
-systemctl daemon-reload
-systemctl enable --now ivan-web
-sleep 3
-systemctl --no-pager --lines=0 status ivan-web | head -3
+"$DST/deploy/install_unit.sh"
 
 # 5) port 8000 only over Tailscale
 if command -v ufw >/dev/null; then

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Players · Ivan{% endblock %}
+{% block content %}
+<h1>Players <span class="muted small">{{ total }} rows</span></h1>
+<div class="card">
+  {% if rows %}
+    <p><a href="/players.csv"><button class="small">Download CSV (all columns)</button></a>
+       <span class="muted small">Projections are fantasy points; ownership is the projected % of the field.</span></p>
+    <div class="wide"><table>
+      <tr>{% for c in cols %}<th {% if c not in ('slot','name','team','opponent','position','status') %}class="num"{% endif %}>{{ {'fpts_mean':'proj','fpts_std':'std','fpts_p10':'p10','fpts_p50':'p50','fpts_p90':'p90','ownership_proj':'own %','roster_slot_id':'slot'}.get(c, c) }}</th>{% endfor %}</tr>
+      {% for r in rows %}
+      <tr>{% for c in cols %}
+        {% set v = r[c] %}
+        {% if c == 'salary' %}<td class="num">{{ '{:,}'.format(v|int) }}</td>
+        {% elif c in ('slot','name','team','opponent','position','status') %}<td>{{ v if v == v and v is not none else '' }}</td>
+        {% else %}<td class="num">{{ '%.1f'|format(v) if v == v and v is not none else '' }}</td>{% endif %}
+      {% endfor %}</tr>
+      {% endfor %}
+    </table></div>
+  {% else %}
+    <p class="muted">No slate loaded — run step 1.</p>
+  {% endif %}
+</div>
+{% endblock %}

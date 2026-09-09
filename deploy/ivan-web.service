@@ -40,7 +40,8 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
+# @resources stays allowed: Python calls prlimit64 at interpreter start and the runner nices jobs
+SystemCallFilter=~@privileged
 CapabilityBoundingSet=
 AmbientCapabilities=
 

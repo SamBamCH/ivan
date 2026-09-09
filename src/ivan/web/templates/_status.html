@@ -10,6 +10,11 @@
       <ul class="plain small">{% for s in status.sims %}<li>{{ s.contest }} <span class="muted">({{ '{:,}'.format(s.rows) }} rows)</span></li>{% endfor %}</ul>
     {% else %}<p class="muted">Nothing simulated yet.</p>{% endif %}
     {% if status.players_with_ownership == 0 %}<p class="warn small">No ownership projections on this slate.</p>{% endif %}
+    <div class="resets">
+      <form method="post" action="/reset/sims" onsubmit="return confirm('Delete all simulation results for this slate? Lineups are kept.')"><button class="ghost small" {% if active %}disabled{% endif %}>Clear sim results</button></form>
+      <form method="post" action="/reset/lineups" onsubmit="return confirm('Delete ALL generated lineups and simulation results for this slate? You will need to run steps 3 and 4 again.')"><button class="ghost small" {% if active %}disabled{% endif %}>Clear lineups + sims</button></form>
+      {% if active %}<span class="muted small">disabled while a job is running</span>{% endif %}
+    </div>
   {% else %}
     <p class="muted">No slate loaded yet — run step 1.</p>
   {% endif %}
