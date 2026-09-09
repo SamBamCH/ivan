@@ -15,7 +15,11 @@ git clone git@github.com:SamBamCH/ivan.git ~/ivan
 ~/ivan/deploy/bootstrap_server.sh --service     # venv, deps, dirs, empty DB, systemd unit
 nano ~/ivan/.env                                # ODDS_API_KEY=...
 sudo systemctl restart ivan-web
+sudo ufw allow 8000/tcp                         # Ubuntu's firewall drops the port by default
 ```
+
+Symptom of a missed `ufw` step: the UI answers on the server's own `curl localhost:8000`
+but browsers on the LAN time out (not "connection refused").
 
 `bootstrap_server.sh` is safe to re-run after a `git pull`. Without `--service` it only
 prepares the checkout; start the UI by hand with `venv/bin/python scripts/nfl/serve.py`.
