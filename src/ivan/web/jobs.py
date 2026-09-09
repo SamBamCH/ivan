@@ -26,6 +26,8 @@ from pathlib import Path
 from queue import Queue
 from typing import Optional
 
+from dotenv import dotenv_values
+
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
@@ -163,10 +165,12 @@ class JobRunner:
         cmd = job.cmd
         if self.nice and shutil.which("nice"):
             cmd = ["nice", "-n", str(self.nice), *cmd]
+        # Re-read .env for every job so an edited key applies without restarting the server.
+        env = {**self.env, **{k: v for k, v in dotenv_values(self.cwd / ".env").items() if v is not None}}
         with open(self.log_path(job), "w", buffering=1) as log:
             log.write(f"$ {' '.join(job.cmd)}\n\n")
             try:
-                proc = subprocess.Popen(cmd, cwd=self.cwd, env=self.env,
+                proc = subprocess.Popen(cmd, cwd=self.cwd, env=env,
                                         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 self._procs[job.id] = proc
                 job.pid = proc.pid

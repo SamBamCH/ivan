@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import sys
 import logging
+import argparse
 import requests
+from datetime import datetime, timedelta
 
 from sqlalchemy import distinct
 from sqlalchemy.exc import SQLAlchemyError
@@ -60,14 +62,21 @@ def upsert_payouts_for_contest(db_session, contest_id, payload):
         logger.error(f" ✗ DB error inserting payouts for {contest_id}: {e}")
 
 
-def fetch_and_store_all_payouts():
+def fetch_and_store_all_payouts(days: int | None = 1):
+    """
+    Fetch payout tables for contests that don't have one yet. By default only
+    contests starting within the last `days` days or later: older contests that
+    DK no longer serves would otherwise be re-queried on every run.
+    """
     # 1) Init DB + session
     engine = init_db("nfl")
     db     = get_session(engine)
 
-    # 2) Query all contest_ids and all payout contest_ids
-    all_contests = db.query(HistoricalContest.contest_id).all()
-    all_contests = {row.contest_id for row in all_contests}
+    # 2) Query contest_ids (recent/upcoming unless days is None) and all payout contest_ids
+    q = db.query(HistoricalContest.contest_id)
+    if days is not None:
+        q = q.filter(HistoricalContest.date >= datetime.now() - timedelta(days=days))
+    all_contests = {row.contest_id for row in q.all()}
 
     existing = db.query(distinct(ContestPayout.contest_id)).all()
     existing = {row[0] for row in existing if row[0] is not None}
@@ -92,4 +101,8 @@ def fetch_and_store_all_payouts():
     logger.info("Done.")
 
 if __name__ == "__main__":
-    fetch_and_store_all_payouts()
+    ap = argparse.ArgumentParser(description="Fetch DK payout tables for contests missing one")
+    ap.add_argument("--days", type=int, default=1, help="only contests starting within the last N days or later (default 1)")
+    ap.add_argument("--all", action="store_true", help="every contest without payouts, however old")
+    a = ap.parse_args()
+    fetch_and_store_all_payouts(days=None if a.all else a.days)

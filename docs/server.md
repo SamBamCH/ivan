@@ -13,7 +13,7 @@ On the server:
 sudo apt install python3-venv sqlite3 rsync
 git clone git@github.com:SamBamCH/ivan.git ~/ivan
 ~/ivan/deploy/bootstrap_server.sh --service     # venv, deps, dirs, empty DB, systemd unit
-nano ~/ivan/.env                                # ODDS_API_KEY=...
+nano ~/ivan/.env                                # ODDS_API_KEY=...  (read fresh for every job; no restart needed)
 sudo systemctl restart ivan-web
 sudo ufw allow 8000/tcp                         # Ubuntu's firewall drops the port by default
 ```
