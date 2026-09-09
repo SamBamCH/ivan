@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Jobs · Ivan{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<div class="card">
+{% if jobs %}
+<table>
+  <tr><th>Status</th><th>Job</th><th>Started</th><th class="num">Took</th><th></th></tr>
+  {% for j in jobs %}
+  <tr><td><span class="badge {{ j.status }}">{{ j.status }}</span></td><td>{{ j.name }}</td>
+      <td>{{ j.started|time }}</td><td class="num">{{ j.duration|dur }}</td><td><a href="/jobs/{{ j.id }}">log</a></td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Nothing has run yet.</p>{% endif %}
+</div>
+{% endblock %}

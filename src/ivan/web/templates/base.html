@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Ivan · NFL{% endblock %}</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+  :root { --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2e2; --bg:#f7f7f5; --card:#fff; --accent:#1f5fbf; --ok:#1a7f37; --bad:#b42318; --warn:#9a6700; }
+  * { box-sizing:border-box }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+  header { background:#fff; border-bottom:1px solid var(--line) }
+  nav { max-width:1000px; margin:0 auto; padding:12px 20px; display:flex; gap:22px; align-items:baseline }
+  nav .brand { font-weight:700; font-size:18px; margin-right:auto; text-decoration:none; color:var(--ink) }
+  nav a { color:var(--accent); text-decoration:none } nav a:hover { text-decoration:underline }
+  main { max-width:1000px; margin:0 auto; padding:20px }
+  h1 { font-size:22px; margin:0 0 14px } h2 { font-size:17px; margin:0 0 10px } h3 { font-size:16px; margin:0 0 6px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin-bottom:16px }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px } @media (max-width:760px) { .grid { grid-template-columns:1fr } }
+  .grid .card { margin:0 }
+  .muted { color:var(--muted) } .small { font-size:13px } .warn { color:var(--warn) } .bad { color:var(--bad) }
+  .flash { background:#eef4ff; border:1px solid #c9dbfb; border-radius:8px; padding:10px 14px; margin-bottom:16px }
+  .help { color:var(--muted); font-size:13px; margin:6px 0 0 }
+  button { font:inherit; padding:8px 16px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer }
+  button:hover { filter:brightness(1.1) } button[disabled] { opacity:.45; cursor:not-allowed }
+  button.danger { background:var(--bad); border-color:var(--bad) } button.small { padding:4px 10px; font-size:13px }
+  form.inline { display:inline }
+  input[type=file] { font:inherit }
+  .step { display:grid; grid-template-columns:1fr auto; gap:6px 24px; align-items:start }
+  .step h3, .step p, .step .fields { grid-column:1 } .step button { grid-column:2; grid-row:1 / span 3; align-self:center; min-width:110px; padding:12px 20px }
+  .step .num { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center; border-radius:50%; background:var(--ink); color:#fff; font-size:13px; margin-right:8px }
+  .fields { display:flex; flex-wrap:wrap; gap:10px 22px; margin-top:8px }
+  .fields label { display:flex; flex-direction:column; gap:3px; font-size:14px }
+  .fields label.check { flex-direction:row; align-items:center; gap:6px }
+  .fields input[type=number] { width:130px; padding:5px 8px; font:inherit; border:1px solid #cfcfcf; border-radius:5px }
+  .fields small { color:var(--muted) }
+  .jobhead { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px }
+  .badge { font-size:12px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; background:#eee; color:#444 }
+  .badge.running { background:#dbeafe; color:#1e40af } .badge.done { background:#dcfce7; color:var(--ok) }
+  .badge.failed { background:#fee2e2; color:var(--bad) } .badge.queued { background:#fef3c7; color:var(--warn) }
+  .progress { font-weight:600; color:var(--accent) }
+  pre.log { background:#111; color:#e6e6e6; border-radius:6px; padding:12px; font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; max-height:340px; overflow:auto; white-space:pre-wrap; margin:0 }
+  pre.log.full { max-height:none }
+  table { border-collapse:collapse; width:100% } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px }
+  th { color:var(--muted); font-weight:600; font-size:13px } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums }
+  .bar { display:inline-block; height:8px; background:var(--accent); border-radius:4px; vertical-align:middle; margin-right:6px }
+  ul.plain { list-style:none; padding:0; margin:6px 0 } ul.plain li { padding:2px 0 }
+</style>
+</head>
+<body>
+<header><nav>
+  <a class="brand" href="/">Ivan · NFL</a>
+  <a href="/">Pipeline</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
+</nav></header>
+<main>
+  {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<script>
+  // keep log boxes scrolled to the bottom as they refresh
+  const pin = el => el.querySelectorAll('pre.log').forEach(l => l.scrollTop = l.scrollHeight);
+  document.addEventListener('htmx:afterSwap', e => pin(e.target)); pin(document);
+</script>
+</body>
+</html>

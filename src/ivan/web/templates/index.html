@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid">
+  {% include "_status.html" %}
+  <div class="card">
+    <h2>Your entries file</h2>
+    {% if entries %}
+      <p>Uploaded {{ entries.mtime|time }} · <b>{{ entries.total }}</b> entries in {{ entries.contests|length }} contest(s)</p>
+      {% if entries.error %}<p class="bad small">{{ entries.error }}</p>{% endif %}
+      <ul class="plain small">{% for c in entries.contests %}<li>{{ c['Contest Name'] }} <span class="muted">× {{ c.entries }}</span></li>{% endfor %}</ul>
+    {% else %}
+      <p class="muted">None yet.</p>
+    {% endif %}
+    <form method="post" action="/upload" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".csv,text/csv" required>
+      <button>Upload</button>
+    </form>
+    <p class="help">Export your entries from DraftKings (the same CSV you'd use to upload lineups). Steps 4 and 5 use this file; re-upload if you add or remove entries.</p>
+  </div>
+</section>
+
+{% include "_job.html" %}
+
+<h2>Pipeline — run top to bottom</h2>
+{% for step in steps %}
+<form class="card step" method="post" action="/run/{{ step.key }}">
+  <h3><span class="num">{{ loop.index }}</span>{{ step.title }}</h3>
+  <p class="muted">{{ step.blurb }}</p>
+  <div class="fields">
+    {% for f in step.fields %}
+      {% if f.kind == 'checkbox' %}
+        <label class="check"><input type="checkbox" name="{{ f.name }}" {% if f.default %}checked{% endif %}> {{ f.label }}{% if f.help %} <small>— {{ f.help }}</small>{% endif %}</label>
+      {% else %}
+        <label><span>{{ f.label }}</span><input type="number" name="{{ f.name }}" value="{{ f.default }}" step="{{ f.step }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %}>{% if f.help %}<small>{{ f.help }}</small>{% endif %}</label>
+      {% endif %}
+    {% endfor %}
+    {% if step.needs_entries and not entries %}<span class="warn small">Upload an entries file first.</span>{% endif %}
+  </div>
+  <button {% if step.needs_entries and not entries %}disabled{% endif %}>Run</button>
+</form>
+{% endfor %}
+
+{% if outputs %}
+<div class="card">
+  <h2>Latest output</h2>
+  <ul class="plain">{% for o in outputs %}<li><a href="/downloads/{{ o.name }}">{{ o.name }}</a> <span class="muted small">{{ o.kind }} · {{ o.mtime|time }}</span></li>{% endfor %}</ul>
+  <p class="small"><a href="/exposures">View exposures</a> · <a href="/downloads">All downloads</a></p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,16 @@
+<div id="job" class="card" hx-get="{{ poll_url }}" hx-trigger="every {{ '2s' if job and job.is_active else '10s' }}" hx-swap="outerHTML">
+  {% if job %}
+    <div class="jobhead">
+      <span class="badge {{ job.status }}">{{ job.status }}</span>
+      <b>{{ job.name }}</b>
+      <span class="muted small">{% if job.started %}started {{ job.started|time }} · {{ job.duration|dur }}{% else %}waiting{% endif %}</span>
+      {% if progress %}<span class="progress">{{ progress }}</span>{% endif %}
+      {% if job.is_active %}<form class="inline" method="post" action="/jobs/{{ job.id }}/cancel"><button class="danger small">Cancel</button></form>{% endif %}
+      {% if not full %}<a class="small" href="/jobs/{{ job.id }}">full log</a>{% endif %}
+    </div>
+    {% if queued %}<p class="muted small">Queued next: {% for q in queued %}{{ q.name }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+    <pre class="log {{ 'full' if full }}">{{ log }}</pre>
+  {% else %}
+    <p class="muted">Nothing has run yet.</p>
+  {% endif %}
+</div>

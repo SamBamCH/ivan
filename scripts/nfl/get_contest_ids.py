@@ -6,9 +6,6 @@ from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import HistoricalContest

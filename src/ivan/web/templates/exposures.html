@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Exposures · Ivan{% endblock %}
+{% block content %}
+<h1>Exposures</h1>
+{% if not picked %}
+  <div class="card"><p class="muted">No chosen lineups yet — run step 5.</p></div>
+{% else %}
+  <div class="card">
+    <form method="get" class="inline">
+      <label>Run: <select name="file" onchange="this.form.submit()">
+        {% for f in files %}<option value="{{ f.name }}" {% if f.name == picked.name %}selected{% endif %}>{{ f.stamp }} — {{ f.mtime|time }}</option>{% endfor %}
+      </select></label>
+    </form>
+    {% if siblings %}<span class="small"> · Upload files: {% for s in siblings %}<a href="/downloads/{{ s.name }}">{{ s.kind }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}
+  </div>
+  {% for g in groups %}
+  <div class="card">
+    <h2>{{ g.name }} <span class="muted small">({{ g.rows|length }} players)</span></h2>
+    <table>
+      <tr><th>Player</th><th>Team</th><th>Pos</th><th class="num">Salary</th><th>Exposure</th><th class="num">Proj</th><th class="num">Own</th></tr>
+      {% for r in g.rows %}
+      <tr><td>{{ r.name }}</td><td>{{ r.team }}</td><td>{{ r.position }}</td><td class="num">{{ '{:,}'.format(r.salary|int) }}</td>
+          <td><span class="bar" style="width:{{ (r.exposure * 120)|round|int }}px"></span>{{ r.exposure|pct }}</td>
+          <td class="num">{{ '%.1f'|format(r.projection) }}</td><td class="num">{{ '%.1f'|format(r.ownership) }}%</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

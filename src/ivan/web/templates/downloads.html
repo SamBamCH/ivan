@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Downloads · Ivan{% endblock %}
+{% block content %}
+<h1>Downloads</h1>
+<div class="card">
+{% if files %}
+<table>
+  <tr><th>File</th><th>What it is</th><th>Created</th><th class="num">Size</th></tr>
+  {% for f in files %}<tr><td><a href="/downloads/{{ f.name }}">{{ f.name }}</a></td><td>{{ f.kind }}</td><td>{{ f.mtime|time }}</td><td class="num">{{ f.size|kb }}</td></tr>{% endfor %}
+</table>
+<p class="help">A "DraftKings upload" file goes straight into DraftKings' lineup upload.</p>
+{% else %}<p class="muted">Nothing yet — run step 5 to produce upload files.</p>{% endif %}
+</div>
+{% endblock %}

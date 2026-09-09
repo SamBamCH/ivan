@@ -1,0 +1,16 @@
+<div id="status" class="card" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="outerHTML">
+  <h2>Slate in the database</h2>
+  {% if status.players %}
+    <p><b>{{ status.players }}</b> player rows · {{ status.teams|length }} teams
+       <span class="muted small">({{ status.teams|join(', ') }})</span></p>
+    <p class="small muted">Games {{ status.first_game|dt }}{% if status.last_game != status.first_game %} → {{ status.last_game|dt }}{% endif %}</p>
+    <p>Field: <b>{{ '{:,}'.format(status.lineups) }}</b> lineups</p>
+    {% if status.sims %}
+      <p>Simulated:</p>
+      <ul class="plain small">{% for s in status.sims %}<li>{{ s.contest }} <span class="muted">({{ '{:,}'.format(s.rows) }} rows)</span></li>{% endfor %}</ul>
+    {% else %}<p class="muted">Nothing simulated yet.</p>{% endif %}
+    {% if status.players_with_ownership == 0 %}<p class="warn small">No ownership projections on this slate.</p>{% endif %}
+  {% else %}
+    <p class="muted">No slate loaded yet — run step 1.</p>
+  {% endif %}
+</div>

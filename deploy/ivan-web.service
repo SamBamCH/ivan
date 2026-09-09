@@ -1,0 +1,19 @@
+# Rendered and installed by deploy/bootstrap_server.sh --service
+[Unit]
+Description=Ivan NFL web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/serve.py --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# pipeline jobs are nice'd by the runner; this keeps the UI itself responsive under load
+Nice=-2
+
+[Install]
+WantedBy=multi-user.target

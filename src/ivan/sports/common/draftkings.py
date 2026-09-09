@@ -1,3 +1,4 @@
+from __future__ import annotations   # annotations may name selenium types that are imported lazily
 import time
 import io
 import zipfile
@@ -10,10 +11,6 @@ from typing import List, Dict, Any, Optional
 import requests
 import pandas as pd
 from pandas.errors import EmptyDataError
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from http.client import RemoteDisconnected
 from requests.exceptions import RequestException
 import pytz
@@ -83,6 +80,11 @@ def build_requests_session(profile_dir: str, headless: bool = False) -> requests
     Launch Chrome with your real profile, ensure you're logged in,
     copy cookies + UA into a requests.Session.
     """
+    # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
     opts = Options()
     # run non-headless so Chrome can fully load the persisted profile/cookies
     if headless:
@@ -137,6 +139,11 @@ def build_requests_session(profile_dir: str, headless: bool = False) -> requests
 
 def _cookies_to_requests_session(driver: webdriver.Chrome) -> requests.Session:
     """Copy all visible cookies + user agent from Selenium into a requests.Session."""
+    # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
     sess = requests.Session()
 
     # exact browser UA matters for some bot defenses
@@ -177,6 +184,11 @@ def build_requests_session_from_chrome(user_data_dir: str,
     Launch Chrome using your real profile. Navigate to the lobby first to trigger SSO/bot cookies,
     then copy cookies+UA into a requests.Session and return it.
     """
+    # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
     opts = Options()
     # IMPORTANT: Use your actual profile so you're already logged in
     opts.add_argument(f"--user-data-dir={user_data_dir}")
