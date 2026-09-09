@@ -40,11 +40,10 @@ sudo -u "$SVC" -H bash -c "cd '$DST' && rm -rf venv && deploy/bootstrap_server.s
 # 4) sandboxed unit
 "$DST/deploy/install_unit.sh"
 
-# 5) port 8000 only over Tailscale
+# 5) the UI port only over Tailscale (the app also binds to the Tailscale IP, so this is belt and braces)
 if command -v ufw >/dev/null; then
-  ufw delete allow 8000/tcp >/dev/null 2>&1 || true
-  ufw allow in on tailscale0 to any port 8000 proto tcp comment 'ivan web UI (tailnet only)' >/dev/null
-  echo "ufw: 8000 allowed on tailscale0 only"
+  ufw allow in on tailscale0 to any port 80 proto tcp comment 'ivan web UI (tailnet only)' >/dev/null
+  echo "ufw: 80 allowed on tailscale0"
 fi
 
 echo

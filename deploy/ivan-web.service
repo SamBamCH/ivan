@@ -10,7 +10,9 @@ Type=simple
 User=__USER__
 Group=__USER__
 WorkingDirectory=__ROOT__
-ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/serve.py --host 0.0.0.0 --port 8000
+# host/port are rendered by deploy/install_unit.sh: the Tailscale IP on port 80, so the app is
+# only reachable over the tailnet regardless of firewall state, and http://<name>/ needs no port.
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/serve.py --host __HOST__ --port __PORT__
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -42,8 +44,9 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 # @resources stays allowed: Python calls prlimit64 at interpreter start and the runner nices jobs
 SystemCallFilter=~@privileged
-CapabilityBoundingSet=
-AmbientCapabilities=
+# the only capability: bind port 80 as an unprivileged user
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target

@@ -45,9 +45,17 @@ Host ivan-server
 scripts/nfl/sync_to_server.sh ivan-server
 ```
 
-The UI is then at `http://pratt-server:8000` (MagicDNS) or `http://<tailscale ip>:8000` from any
-device on the tailnet. Optionally point a public DNS record such as `ivan.prattflix.com` at the
-server's Tailscale IP for a friendlier name; it resolves everywhere but only routes on the tailnet.
+The app binds to the server's Tailscale IP on port 80 (`install_unit.sh` detects it), so it is
+unreachable from the LAN or the internet by construction. Names:
+
+- `http://ivan.prattflix.com` — a public `A` record (DNS only) pointing at the Tailscale IP. Resolves
+  everywhere, routes only on the tailnet; the URL to give people. On the home LAN, Pi-hole's
+  `*.prattflix.com` wildcard must be overridden with a local record for this name.
+- `https://pratt-server.tail6f8004.ts.net` — `sudo tailscale serve --bg http://<tailscale ip>:80`
+  after enabling HTTPS certificates in the Tailscale admin console. Needs MagicDNS on the client.
+
+`tailscale serve` only answers for the node's own MagicDNS names, which is why the custom domain
+goes straight to the app instead.
 
 ## Keeping it in sync
 

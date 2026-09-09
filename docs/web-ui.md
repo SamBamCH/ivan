@@ -7,7 +7,7 @@ between your devices and the server. One-time setup:
 
 1. Accept the Tailscale invite Sam sends you (email) and install the Tailscale app on the
    computer you'll use (tailscale.com/download). Sign in with the same account you accepted with.
-2. With Tailscale connected, open `http://pratt-server:8000` in your browser. Bookmark it.
+2. With Tailscale connected, open **http://ivan.prattflix.com** in your browser. Bookmark it.
 
 If the page won't load, check that Tailscale shows "Connected". That's the whole security model:
 no Tailscale, no site.
