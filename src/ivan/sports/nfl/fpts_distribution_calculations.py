@@ -12,7 +12,6 @@ from sqlalchemy.inspection import inspect
 import joblib
 from tqdm.auto import tqdm
 import logging
-logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefmt="%Y-%m-%d %H:%M:%S")   
 
 
 # ivan imports
