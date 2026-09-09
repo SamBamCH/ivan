@@ -1,6 +1,0 @@
-README.md
-setup.py
-src/ivan.egg-info/PKG-INFO
-src/ivan.egg-info/SOURCES.txt
-src/ivan.egg-info/dependency_links.txt
-src/ivan.egg-info/top_level.txt
