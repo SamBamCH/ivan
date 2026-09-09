@@ -16,17 +16,14 @@ import os
 import json
 import pandas as pd
 from collections import Counter
+from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Tuple
 
 from ivan.core.config import load_config
 from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.database.session import init_db, get_session
-# Robust import: prefer NFL impl, fall back to generic selector if needed.
-try:
-    from ivan.sports.nfl.choose import choose_lineup_ids  # type: ignore
-except Exception:
-    from ivan.sports.mlb.selection import choose_lineup_ids  # type: ignore
+from ivan.sports.nfl.choose import choose_lineup_ids
 
 from ivan.sports.nfl.models import Lineup, NFLPlayer
 
@@ -69,6 +66,33 @@ def prompt_weights_for_contest(
     w_roi  = prompt_float(f"  Weight on avg_roi_win? ", last_weights["avg_roi_win"])
     w_div  = prompt_float(f"  Diversity λ? ", last_weights["diversity_lambda"])
     return {"cash_pct": w_cash, "avg_roi_win": w_roi, "diversity_lambda": w_div}
+
+
+def _build_weights_resolver(args, defaults: dict[str, float]):
+    """
+    Per-contest weight resolution, highest priority first:
+      --weights-json {"<contest id or name>": {...}}  >  --weights-json {"default": {...}}
+      >  --cash-pct / --avg-roi-win / --diversity-lambda  >  interactive prompt.
+    Any CLI weight, a weights file, or --no-prompt makes the run non-interactive.
+    """
+    overrides: dict = {}
+    if args.weights_json:
+        raw = args.weights_json
+        overrides = json.loads(Path(raw).read_text() if Path(raw).exists() else raw)
+    flags = {k: v for k, v in (("cash_pct", args.cash_pct),
+                               ("avg_roi_win", args.avg_roi_win),
+                               ("diversity_lambda", args.diversity_lambda)) if v is not None}
+    non_interactive = args.no_prompt or bool(flags) or bool(overrides)
+
+    def weights_for(cid: int, cname: str, last: dict[str, float]) -> dict[str, float]:
+        per = overrides.get(str(cid)) or overrides.get(cname) or {}
+        if per or non_interactive:
+            w = {**defaults, **flags, **overrides.get("default", {}), **per}
+            print(f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
+            return w
+        return prompt_weights_for_contest(cid, cname, last)
+
+    return weights_for
 
 
 def _rs(p: NFLPlayer) -> int | None:
@@ -218,12 +242,21 @@ def main():
                         type=str,
                         default=str(OUTPUT_DIR / "chosen_entries.csv"),
                         help="Base filename for output CSV(s). We'll append .classic/.showdown and a timestamp.")
+    parser.add_argument("--entries", default=None,
+                        help="Entries CSV (default: paths.entries_csv from config, or $IVAN_ENTRIES_CSV)")
+    w = parser.add_argument_group("weights (any of these disables the interactive prompt)")
+    w.add_argument("--cash-pct", type=float, default=None, help="Weight on cash_pct for every contest")
+    w.add_argument("--avg-roi-win", type=float, default=None, help="Weight on avg_roi_win for every contest")
+    w.add_argument("--diversity-lambda", type=float, default=None, help="Diversity lambda for every contest")
+    w.add_argument("--weights-json", default=None,
+                   help='JSON file or literal: {"default": {...}, "<contest id>": {...}} keyed by contest id or name')
+    w.add_argument("--no-prompt", action="store_true", help="Use defaults for anything not given; never prompt")
     args = parser.parse_args()
 
     cfg = load_config("nfl")
 
     # Entries CSV (default: first 10 cols which match Showdown; Classic has more but we only need BASE_COLS)
-    entries_fp = cfg["paths"]["entries_csv"]
+    entries_fp = args.entries or cfg["paths"]["entries_csv"]
     print(f"Loading entries from {entries_fp}…")
     df_raw = pd.read_csv(entries_fp, engine="python", header=0, usecols=range(10), dtype=str, keep_default_na=False)
 
@@ -242,8 +275,9 @@ def main():
     df_raw["Contest ID"] = df_raw["Contest ID"].astype(int)
     contests_grouped = df_raw.groupby("Contest ID", sort=False)
 
-    # Default weights (prompted once per contest)
+    # Default weights; resolved once per contest from CLI/JSON, or prompted when interactive
     last_weights = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1}
+    weights_for = _build_weights_resolver(args, last_weights)
 
     # DB session
     engine = init_db("nfl")
@@ -272,9 +306,9 @@ def main():
         cname = group["Contest Name"].iloc[0].strip()
         print(f"\n=== Contest {cid} (\"{cname}\") → {num_entries} entries ===")
 
-        # Prompt weights once per contest
+        # Resolve weights once per contest
         if cid not in prompted_contests:
-            w = prompt_weights_for_contest(cid, cname, last_weights)
+            w = weights_for(cid, cname, last_weights)
             last_weights = w
             prompted_contests.add(cid)
         else:
@@ -415,6 +449,17 @@ def main():
         _print_exposures(df_cl_expo, header=f"[Classic exposures] (n={total_classic_entries} Classic lineups)", by_col="position")
     else:
         print("\n[Classic exposures] No classic lineups selected.")
+
+    # Exposures as data, next to the chosen-entries CSVs (consumed by the web UI)
+    frames = []
+    if total_sd_entries > 0 and sd_counts:
+        frames.append(df_sd_expo.assign(format="showdown"))
+    if total_classic_entries > 0 and classic_counts:
+        frames.append(df_cl_expo.assign(format="classic"))
+    if frames:
+        out_expo = f"{root}.exposures.{ts}{ext}"
+        pd.concat(frames, ignore_index=True).to_csv(out_expo, index=False)
+        print(f"✅ Wrote exposures → {out_expo}")
 
 
 if __name__ == "__main__":
