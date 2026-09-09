@@ -98,7 +98,8 @@ laptop (producer)                          server (consumer)
 - **Never synced**: `nfl_player`, `odds`, `projection_snapshot`, `lineup`,
   `lineup_simulation_results` — the server's own slate state.
 - `overnight.py` runs the sync automatically when `IVAN_SYNC_HOST` is set (in `.env`).
-- Server setup is `deploy/bootstrap_server.sh [--service]`; see [docs/server.md](docs/server.md).
+- The server runs the UI as an unprivileged user in a sandboxed unit, reachable only over
+  Tailscale; setup is `deploy/harden_server.sh`. See [docs/server.md](docs/server.md).
 
 ## Producer-only work
 

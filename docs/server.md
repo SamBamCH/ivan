@@ -5,37 +5,53 @@ pre-lock steps on its own SQLite file, and receives history and models from the 
 laptop. It never scrapes contest results or trains models, so it needs no Chrome, no
 DraftKings login, and only the thin `requirements-server.txt`.
 
+## Access model
+
+The UI is reachable only over Tailscale. Port 8000 is allowed in `ufw` on the `tailscale0`
+interface alone, so nothing is exposed to the internet and there is no login to maintain:
+being on the tailnet *is* the login. Give someone access by inviting them to the tailnet
+(Tailscale admin console → Users → Invite; the free plan covers three users), and remove it by
+removing them there.
+
+The service runs as the unprivileged user `ivan` (no `sudo`, no `docker`) under a sandboxed
+systemd unit: the filesystem is read-only to it except `data/` and its cache, no new
+privileges, private `/tmp`, empty capability set. A bug in the app or in a model pickle can
+touch this app's own state and nothing else on the box.
+
 ## First-time setup
 
-On the server:
+On the server, as your admin user:
 
 ```bash
 sudo apt install python3-venv sqlite3 rsync
 git clone git@github.com:SamBamCH/ivan.git ~/ivan
-~/ivan/deploy/bootstrap_server.sh --service     # venv, deps, dirs, empty DB, systemd unit
-nano ~/ivan/.env                                # ODDS_API_KEY=...  (read fresh for every job; no restart needed)
-sudo systemctl restart ivan-web
-sudo ufw allow 8000/tcp                         # Ubuntu's firewall drops the port by default
+sudo ~/ivan/deploy/harden_server.sh      # creates user ivan, moves the checkout to /opt/ivan/app,
+                                          # builds the venv, installs the sandboxed unit, ufw rule
+sudo -u ivan nano /opt/ivan/app/.env      # ODDS_API_KEY=...  (read fresh for every job; no restart needed)
 ```
 
-Symptom of a missed `ufw` step: the UI answers on the server's own `curl localhost:8000`
-but browsers on the LAN time out (not "connection refused").
+From the laptop, add an ssh alias for the service user (same key as your admin user) and push
+the reference data:
 
-`bootstrap_server.sh` is safe to re-run after a `git pull`. Without `--service` it only
-prepares the checkout; start the UI by hand with `venv/bin/python scripts/nfl/serve.py`.
-
-From the producer laptop, push the reference data once:
+```
+# ~/.ssh/config
+Host ivan-server
+    HostName <server LAN or Tailscale IP>
+    User ivan
+    IdentityFile ~/.ssh/id_ed25519
+```
 
 ```bash
-scripts/nfl/sync_to_server.sh server           # any ssh host alias works
+scripts/nfl/sync_to_server.sh ivan-server
 ```
 
-The UI is then at `http://<server>:8000`. It has no login — reach it over the LAN or
-Tailscale, not the public internet.
+The UI is then at `http://pratt-server:8000` (MagicDNS) or `http://<tailscale ip>:8000` from any
+device on the tailnet. Optionally point a public DNS record such as `ivan.prattflix.com` at the
+server's Tailscale IP for a friendlier name; it resolves everywhere but only routes on the tailnet.
 
 ## Keeping it in sync
 
-The laptop's `overnight.py` pushes automatically when `IVAN_SYNC_HOST=server` is in its
+The laptop's `overnight.py` pushes automatically when `IVAN_SYNC_HOST=ivan-server` is in its
 `.env`. What moves:
 
 - **Reference tables** — everything except `nfl_player`, `odds`, `projection_snapshot`,
@@ -61,17 +77,20 @@ per worker; 16 GB of RAM is comfortable. Jobs run under `nice -n 10`, so other s
 
 | | |
 |---|---|
-| `~/ivan/data/nfl/nfl_history.sqlite` | the server's database |
-| `~/ivan/data/nfl/input/web/` | uploaded entries files (`entries.csv` is the current one) |
-| `~/ivan/data/nfl/output/web/` | chosen-entries and exposures CSVs served on the Downloads page |
-| `~/ivan/data/nfl/jobs/` | one `.log` and `.json` per job |
-| `~/ivan/data/nfl/sync/` | the last received reference bundle |
+| `/opt/ivan/app/data/nfl/nfl_history.sqlite` | the server's database |
+| `/opt/ivan/app/data/nfl/input/web/` | uploaded entries files (`entries.csv` is the current one) |
+| `/opt/ivan/app/data/nfl/output/web/` | chosen-entries and exposures CSVs served on the Downloads page |
+| `/opt/ivan/app/data/nfl/jobs/` | one `.log` and `.json` per job |
+| `/opt/ivan/app/data/nfl/sync/` | the last received reference bundle |
 | `journalctl -u ivan-web -f` | server log |
 
 ## Updating code
 
+From the laptop, push the checkout and bounce the service (the unit restarts on its own):
+
 ```bash
-cd ~/ivan && git pull && deploy/bootstrap_server.sh && sudo systemctl restart ivan-web
+rsync -az --delete --exclude /venv --exclude /data --exclude /.env ./ ivan-server:/opt/ivan/app/
+ssh ivan-server 'cd /opt/ivan/app && deploy/bootstrap_server.sh && fuser -k -KILL 8000/tcp'
 ```
 
 `requirements-server.txt` is generated, not hand-edited. After changing imports on the

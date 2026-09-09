@@ -1,7 +1,20 @@
 # Using the Ivan web UI
 
-Open the address you were given (something like `http://server:8000`). Everything is on one
-page, and the steps go top to bottom.
+## Getting in
+
+The site isn't on the public internet; it's reachable through Tailscale, a private network
+between your devices and the server. One-time setup:
+
+1. Accept the Tailscale invite Sam sends you (email) and install the Tailscale app on the
+   computer you'll use (tailscale.com/download). Sign in with the same account you accepted with.
+2. With Tailscale connected, open `http://pratt-server:8000` in your browser. Bookmark it.
+
+If the page won't load, check that Tailscale shows "Connected". That's the whole security model:
+no Tailscale, no site.
+
+## Around the page
+
+Everything is on one page, and the steps go top to bottom.
 
 ## Before you start: your entries file
 
