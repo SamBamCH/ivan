@@ -47,7 +47,7 @@ def main():
     print("→ Building player‐level models")
     build_player_models(args.db_url, model_dir) 
 
-    _years = [2023,2024]  # add more as needed (e.g., 2019..2023)
+    _years = [2023,2024,2025]  # add more as needed (e.g., 2019..2023)
     nrows = build_dst_game_table(args.db_url, years=_years)
     print(f"   wrote {nrows} rows to nfl_dst_game")
 

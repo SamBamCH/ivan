@@ -29,7 +29,7 @@ from ivan.sports.nba.models import (
     LineupSimulationResult,
     NBAPlayer,
 )
-from ivan.sports.nba.refactor.pre_lock.player import generate_player_samples
+from ivan.sports.nba.pre_lock.player import generate_player_samples
 from ivan.sports.mlb.payouts import scale_payouts_correctly
 
 

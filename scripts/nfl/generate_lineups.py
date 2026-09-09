@@ -42,38 +42,8 @@ def worker(worker_id: int, num_lineups: int, config_path: str, total_workers: in
 
     with open(config_path, "r") as f:
         config = json.load(f)
-    
-    # *** NEW: Inject worker-specific diversity config ***
-    if "showdown" in config and "lineup_generation" in config["showdown"]:
-        sd_cfg = config["showdown"]["lineup_generation"]
-        
-        # Unique seed per worker
-        base_seed = sd_cfg.get("seed", 42)
-        sd_cfg["seed"] = base_seed + worker_id * 10000
-        
-        # Stratify salary targets across workers
-        if total_workers > 1:
-            min_global = sd_cfg.get("min_cap_drop", 0)
-            max_global = sd_cfg.get("max_cap_drop", 2000)
-            
-            strata_width = (max_global - min_global) / total_workers
-            sd_cfg["min_cap_drop"] = int(min_global + worker_id * strata_width)
-            sd_cfg["max_cap_drop"] = int(min_global + (worker_id + 1) * strata_width)
-            
-            # Vary jitter by worker (scale from 1.0x to 1.3x across workers)
-            base_jitter = sd_cfg.get("jitter", 0.10)
-            jitter_scale = 1.0 + (0.3 * worker_id / max(1, total_workers - 1))
-            sd_cfg["jitter"] = base_jitter * jitter_scale
-            
-            # Vary cap drop exponent (scale from 0.7x to 1.3x across workers)
-            base_exp = sd_cfg.get("cap_drop_exponent", 2.0)
-            exp_scale = 0.7 + (0.6 * worker_id / max(1, total_workers - 1))
-            sd_cfg["cap_drop_exponent"] = base_exp * exp_scale
-        
-        # REMOVED: Print statement here - causes messy output before Rich starts
-        # Progress bar will show worker config in its description instead
 
-    q.put(("start", worker_id, num_lineups, f"seed={sd_cfg.get('seed', 42)}"))
+    q.put(("start", worker_id, num_lineups, "seed=42"))
 
     def on_progress(delta: int, note: str | None = None):
         q.put(("advance", worker_id, delta, note or ""))

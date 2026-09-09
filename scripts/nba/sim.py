@@ -1,6 +1,6 @@
-from ivan.sports.nba.refactor.pre_lock.lineup import generate_lineups, deduplicate_lineups
-from ivan.sports.nba.refactor.pre_lock.slate import simulate_one_slate, choose_lineups_for_slate
-from ivan.sports.nba.refactor.cli import print_exposures, analyze_lineups
+from ivan.sports.nba.pre_lock.lineup import generate_lineups, deduplicate_lineups
+from ivan.sports.nba.pre_lock.slate import simulate_one_slate, choose_lineups_for_slate
+from ivan.sports.nba.cli import print_exposures, analyze_lineups
 from ivan.database.session import init_db, get_session
 from sqlalchemy import text
 import argparse

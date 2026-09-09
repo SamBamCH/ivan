@@ -117,7 +117,8 @@ _NAME_OVERRIDES = {
     'jabari smith': 'jabari smith jr',
     'trey murphy': 'trey murphy iii',
     'jaime jaquez': 'jaime jaquez jr',
-    'kevin porter': 'kevin porter jr'
+    'kevin porter': 'kevin porter jr',
+    'andres borregales': 'andy borregales'
     # add more mappings as needed...
 }
 

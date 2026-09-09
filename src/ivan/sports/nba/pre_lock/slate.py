@@ -25,13 +25,13 @@ from ivan.sports.nba.models import (
     LineupSimulationResult,
     NBAPlayer,
 )
-from ivan.sports.nba.refactor.pre_lock.contest import (
+from ivan.sports.nba.pre_lock.contest import (
     simulate_one_contest,
     sample_field_with_projection_model,
     choose_lineups_for_contest,
 )
-from ivan.sports.nba.refactor.pre_lock.payouts import fetch_and_store_all_payouts
-from ivan.sports.nba.refactor.cli import (
+from ivan.sports.nba.pre_lock.payouts import fetch_and_store_all_payouts
+from ivan.sports.nba.cli import (
     plot_field_sampling_diagnostics,
     print_exposures,
     print_exposures_from_counts,

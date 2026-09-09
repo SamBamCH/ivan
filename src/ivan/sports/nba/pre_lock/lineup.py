@@ -19,12 +19,12 @@ from sqlalchemy.orm import Session
 from ivan.database.session import init_db, get_session
 from ivan.sports.nba.models import NBAPlayer, Lineup
 from ivan.sports.nba.utils import _coerce_positions, _cfg
-from ivan.sports.nba.refactor.pre_lock.lineup_generation import (
+from ivan.sports.nba.pre_lock.lineup_generation import (
     FieldPlayer,
     generate_single_classic_lineup,
     SLOT_NAMES,
 )
-from ivan.sports.nba.refactor.pre_lock.player import generate_player_samples
+from ivan.sports.nba.pre_lock.player import generate_player_samples
 
 BATCH_COMMIT_SIZE = 100
 FPTS_MIN = 15

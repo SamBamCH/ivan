@@ -10,7 +10,7 @@ This module contains pre-lock (before games start) functionality:
 - player: Player utilities (re-exports from fpts_samples)
 """
 
-from ivan.sports.nba.refactor.pre_lock.lineup_generation import (
+from ivan.sports.nba.pre_lock.lineup_generation import (
     FieldPlayer,
     ROSTER_STRUCTURE,
     SLOT_NAMES,
@@ -18,19 +18,19 @@ from ivan.sports.nba.refactor.pre_lock.lineup_generation import (
     generate_single_classic_lineup,
 )
 
-from ivan.sports.nba.refactor.pre_lock.player import generate_player_samples
+from ivan.sports.nba.pre_lock.player import generate_player_samples
 
-from ivan.sports.nba.refactor.pre_lock.lineup import (
+from ivan.sports.nba.pre_lock.lineup import (
     generate_lineups,
     deduplicate_lineups,
 )
 
-from ivan.sports.nba.refactor.pre_lock.slate import (
+from ivan.sports.nba.pre_lock.slate import (
     simulate_one_slate,
     choose_lineups_for_slate,
 )
 
-from ivan.sports.nba.refactor.pre_lock.contest import (
+from ivan.sports.nba.pre_lock.contest import (
     sample_field,
     sample_field_with_projection_model,
     simulate_one_contest,
