@@ -73,3 +73,9 @@ per worker; 16 GB of RAM is comfortable. Jobs run under `nice -n 10`, so other s
 ```bash
 cd ~/ivan && git pull && deploy/bootstrap_server.sh && sudo systemctl restart ivan-web
 ```
+
+`requirements-server.txt` is generated, not hand-edited. After changing imports on the
+pre-lock path or retraining models with a new library, regenerate it on the laptop with
+`venv/bin/python deploy/derive_server_requirements.py` (it imports every pre-lock module
+*and* unpickles every model file, because scikit-learn only shows up at load time), commit,
+and re-run the bootstrap on the server.
