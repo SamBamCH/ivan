@@ -31,7 +31,7 @@ venv/bin/python scripts/nfl/create_db.py
 echo "database: $ROOT/data/nfl/nfl_history.sqlite"
 
 if [[ "${1:-}" == "--service" ]]; then
-  sed "s|__ROOT__|$ROOT|g; s|__USER__|$USER|g" deploy/ivan-web.service | sudo tee /etc/systemd/system/ivan-web.service >/dev/null
+  sed "s|__ROOT__|$ROOT|g; s|__USER__|$USER|g; s|__HOME__|$HOME|g" deploy/ivan-web.service | sudo tee /etc/systemd/system/ivan-web.service >/dev/null
   sudo systemctl daemon-reload
   sudo systemctl enable --now ivan-web
   sleep 1; sudo systemctl --no-pager --lines=0 status ivan-web | head -3

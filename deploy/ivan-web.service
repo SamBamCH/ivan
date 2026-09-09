@@ -1,19 +1,48 @@
-# Rendered and installed by deploy/bootstrap_server.sh --service
+# Rendered and installed by deploy/harden_server.sh (or bootstrap_server.sh --service).
+# The service runs as an unprivileged user and can only write under data/ and its cache.
 [Unit]
 Description=Ivan NFL web UI
-After=network-online.target
+After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=__USER__
+Group=__USER__
 WorkingDirectory=__ROOT__
 ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/serve.py --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
-# pipeline jobs are nice'd by the runner; this keeps the UI itself responsive under load
+Environment=XDG_CACHE_HOME=__HOME__/.cache
+Environment=MPLCONFIGDIR=__HOME__/.cache/matplotlib
+UMask=0027
+# pipeline jobs are nice'd by the runner; keep the UI itself responsive
 Nice=-2
+
+# --- sandbox: read-only system, writable only where the app keeps state ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=__ROOT__/data __HOME__/.cache
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target

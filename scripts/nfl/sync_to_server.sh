@@ -6,7 +6,7 @@
 #
 # Usage:  scripts/nfl/sync_to_server.sh [ssh-host]      (default host: server)
 # Env:    IVAN_NFL_DB      source sqlite file   (default: data/nfl/nfl_history.sqlite)
-#         IVAN_REMOTE_ROOT checkout on the host (default: ivan, relative to remote $HOME)
+#         IVAN_REMOTE_ROOT checkout on the host (default: /opt/ivan/app)
 #         BUNDLE_ONLY=1    build the bundle and stop; print its path (for testing)
 set -euo pipefail
 
@@ -14,7 +14,7 @@ HOST="${1:-server}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DB="${IVAN_NFL_DB:-$ROOT/data/nfl/nfl_history.sqlite}"
 MODELS="$ROOT/data/nfl/models"
-REMOTE_ROOT="${IVAN_REMOTE_ROOT:-ivan}"
+REMOTE_ROOT="${IVAN_REMOTE_ROOT:-/opt/ivan/app}"
 STAGE="$(mktemp -d)"
 [[ "${BUNDLE_ONLY:-0}" == "1" ]] || trap 'rm -rf "$STAGE"' EXIT
 
