@@ -19,8 +19,9 @@ Click **Run** on each, wait for the job box to say **done**, then move to the ne
 The job box shows the live log; if another job is still running, yours waits in line.
 
 1. **Ingest the slate** — pulls the players and salaries for the upcoming slate and the
-   betting odds for each player, and turns those into a projected range of fantasy points.
-   Run this first. Run it again close to lock if you want the latest odds.
+   betting odds for each player, turns those into a projected range of fantasy points, and
+   projects how popular each player will be (ownership). Run this first. Run it again close
+   to lock if you want the latest odds; ownership refreshes with it.
 2. **Fetch contests & payouts** — looks up the contests on DraftKings and how they pay out.
    Needed before simulating.
 3. **Generate the field** — builds a big pool of possible lineups. 10,000 is a good default.

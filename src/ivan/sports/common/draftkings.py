@@ -18,7 +18,6 @@ import re
 from ivan.core.utils import normalize_name
 from dateutil import parser
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

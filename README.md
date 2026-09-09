@@ -42,7 +42,7 @@ Run these top to bottom. Each is one script; the web UI is just buttons for the 
 
 | # | Step | Command | What it does |
 |---|---|---|---|
-| 1 | Ingest the slate | `python scripts/nfl/ingest.py -p --update-odds true` | Players + salaries from DraftKings, player odds from the-odds-api, then fits each player's FPTS distribution. `-p` (pre-lock) re-fetches the player pool; drop it to refresh odds only. |
+| 1 | Ingest the slate | `python scripts/nfl/ingest.py -p --update-odds true` | Players + salaries from DraftKings, player odds from the-odds-api, fits each player's FPTS distribution, then projects ownership by sampling a field of noisy-optimal lineups and snapshots projections for training. `-p` (pre-lock) re-fetches the player pool; drop it to refresh odds only. `--no-ownership` / `--no-snapshot` skip those tails; `scripts/nfl/project_ownership.py` re-runs them alone. |
 | 2 | Contests & payouts | `python scripts/nfl/get_contest_ids.py && python scripts/nfl/get_payouts.py` | Upcoming DK contests and their payout tables. The simulator needs a payout table for every contest in your entries file. |
 | 3 | Generate the field | `python scripts/nfl/generate_lineups.py 10000 8` | `<lineups> <parallel workers>`. Correlated player samples → ILP → the pool of candidate lineups the simulator picks from. Deduplicates at the end. |
 | 4 | Simulate | `python scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-c 10000] [-d]` | For each contest in the entries CSV: sample an opposing field with the duplication model, simulate `-n` outcomes, score every candidate lineup (cash %, ROI, rank). `-c` caps the simulated field size; `-d` allows duplicate lineups in classic. |
@@ -117,7 +117,8 @@ DraftKings Chrome profile.
 
 `config/nfl.json` is machine-independent and tracked. Paths in it are relative to the repo
 root. Model tuning lives there too (`field`, `pool`, `sampling`, `simulation`,
-`classic.lineup_generation`, `dupe_model_simple`).
+`classic.lineup_generation`, `dupe_model_simple`), and `ownership.num_lineups` /
+`ownership.num_simulations` control how many sampled lineups ownership is estimated from.
 
 Environment (`.env` at the repo root is loaded automatically):
 

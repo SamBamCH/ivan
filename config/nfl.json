@@ -3,6 +3,10 @@
     "entries_csv": "data/nfl/input/entries.csv"
   },
   "solver": {},
+  "ownership": {
+    "num_lineups": 1000,
+    "num_simulations": 1
+  },
   "field": {
     "target_unique_ratio": 0.2,
     "max_unique": null

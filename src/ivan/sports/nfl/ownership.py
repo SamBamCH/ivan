@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from scipy import sparse as sp
 from scipy.spatial.distance import pdist, squareform
 
-from ivan.core.utils import coerce_player_ids as _coerce_player_ids
-from ivan.sports.nfl.models import NFLPlayer, Lineup
+from ivan.core.utils import coerce_player_ids as _coerce_player_ids, normalize_name
+from ivan.sports.nfl.models import NFLPlayer, Lineup, ProjectionSnapshot
 from ivan.sports.nfl.sample_field import (
     sample_showdown_field_learned,
     sample_classic_field_learned,
@@ -417,7 +417,8 @@ def project_ownership(
     logger.info(f"[ownership] Detected slate type: {slate_type}")
     
     # 2. Generate lineups and count exposures
-    num_lineups = config.get('ownership_num_lineups', 1000)
+    own_cfg = config.get("ownership", {})
+    num_lineups = int(own_cfg.get("num_lineups", config.get("ownership_num_lineups", 1000)))
     
     logger.info(f"[ownership] Generating {num_lineups} lineups to estimate ownership")
     
@@ -631,3 +632,61 @@ def clear_ownership(session: Session) -> int:
     session.commit()
     logger.info(f"[ownership] Cleared ownership for {result} players")
     return result
+
+
+def snapshot_projections(session: Session) -> int:
+    """
+    Snapshot every NFLPlayer's projection and ownership for this slate's date.
+    Training (historical_contest.py) joins these to contest results later, so run it
+    after distributions and ownership are final. Re-running replaces the same date.
+    """
+    players = session.query(NFLPlayer).all()
+    if not players:
+        logger.warning("[snapshot] no players in nfl_player; nothing to snapshot")
+        return 0
+    snapshot_date = min(p.gametime for p in players if p.gametime)
+    records, names = [], set()
+    for p in players:
+        norm = normalize_name(p.name)
+        names.add(norm)
+        records.append({
+            "id": p.id, "snapshot_date": snapshot_date, "player_name": p.name, "normalized_name": norm,
+            "team": p.team, "opponent": p.opponent, "position": p.position, "salary": p.salary,
+            "roster_slot_id": p.roster_slot_id,
+            "fpts_mean": p.fpts_mean or 0.0, "fpts_median": p.fpts_p50 or 0.0, "fpts_std": p.fpts_std or 0.0,
+            "ownership_proj": p.ownership_proj or 0.0,
+        })
+    (session.query(ProjectionSnapshot)
+            .filter(ProjectionSnapshot.snapshot_date == snapshot_date,
+                    ProjectionSnapshot.normalized_name.in_(names))
+            .delete(synchronize_session=False))
+    session.bulk_insert_mappings(ProjectionSnapshot, records)
+    session.commit()
+    logger.info(f"[snapshot] wrote {len(records)} projection rows for {snapshot_date.date()}")
+    return len(records)
+
+
+def project_and_snapshot(
+    session: Session,
+    config: dict,
+    *,
+    num_lineups: Optional[int] = None,
+    num_simulations: Optional[int] = None,
+    snapshot: bool = True,
+) -> Dict[int, float]:
+    """
+    The pre-lock ownership step: project ownership from field sampling using
+    config["ownership"] (num_lineups, num_simulations), optionally overridden,
+    then snapshot projections for training. Raises if nothing was projected so a
+    silent all-zero ownership can't slip through to the simulator.
+    """
+    own_cfg = dict(config.get("ownership", {}))
+    if num_lineups is not None:
+        own_cfg["num_lineups"] = num_lineups
+    sims = int(num_simulations if num_simulations is not None else own_cfg.get("num_simulations", 1))
+    ownership = project_ownership(session, config={**config, "ownership": own_cfg}, num_simulations=sims)
+    if not ownership:
+        raise RuntimeError("ownership projection produced no players; see log above")
+    if snapshot:
+        snapshot_projections(session)
+    return ownership

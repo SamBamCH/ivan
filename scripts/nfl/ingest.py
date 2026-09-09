@@ -5,6 +5,7 @@ from ivan.sports.common.draftkings import ingest_players
 from ivan.sports.common.odds import get_odds, parse_odds
 from ivan.sports.nfl.refactor.player import fit_fpts_distributions
 import argparse
+import logging
 from sqlalchemy import select, func
 
 def str2bool(v):
@@ -22,10 +23,13 @@ def parse_args():
     p = argparse.ArgumentParser(description="ingest and update player odds")
     p.add_argument("-p", action='store_true', help='Prelock flag, determines if we need to fetch DK payload or not.')
     p.add_argument("--update-odds", type=str2bool, nargs='?', const=True, default=True, help="Update player odds")
+    p.add_argument("--no-ownership", action='store_true', help="Skip ownership projection after fitting distributions")
+    p.add_argument("--no-snapshot", action='store_true', help="Skip the projection snapshot used for model training")
     return p.parse_args()
 
 #create session
 args = parse_args()
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 engine = init_db('nfl')
 session = get_session(engine)
 
@@ -89,6 +93,12 @@ if args.p:
 
 #fit fpts for each player
 fit_fpts_distributions(session)
+
+#project ownership from field sampling (needs only the fitted distributions), then snapshot
+if not args.no_ownership:
+    from ivan.core.config import load_config
+    from ivan.sports.nfl.ownership import project_and_snapshot
+    project_and_snapshot(session, load_config("nfl"), snapshot=not args.no_snapshot)
 
 #run team simulations to capture team dependence? overright the original FPTS values if we want to. Worried that this will bias the simulations too much, since this aspect will already be captured in the simulation. 
 

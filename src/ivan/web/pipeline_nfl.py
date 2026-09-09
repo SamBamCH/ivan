@@ -82,7 +82,7 @@ def _contests_progress(s) -> str:
 STEPS: list[Step] = [
     Step(
         key="ingest", title="Ingest the slate",
-        blurb="Pulls players and salaries from DraftKings, player odds from the-odds-api, and fits each player's fantasy-point distribution. Run this first, and again close to lock if you want fresh odds.",
+        blurb="Pulls players and salaries from DraftKings and player odds from the-odds-api, fits each player's fantasy-point distribution, then projects ownership by sampling a field of lineups. Run this first, and again close to lock for fresh odds and ownership.",
         fields=[Field("prelock", "Re-fetch players from DraftKings", "checkbox", True,
                       help="Leave on. Turn off only to refresh odds without touching the player pool."),
                 Field("update_odds", "Update odds", "checkbox", True)],
