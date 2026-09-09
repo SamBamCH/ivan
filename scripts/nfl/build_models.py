@@ -18,6 +18,7 @@ warnings.simplefilter("ignore", pd.errors.SettingWithCopyWarning)
 from scipy.stats import kstest, anderson_ksamp
 from sqlalchemy.orm import Session
 
+from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.sports.nfl.player_level_calculations import build_models as build_player_models
 from ivan.sports.nfl.build_team10_vine import build_team10_vine
 from ivan.sports.nfl.calibrate_game_factors import calibrate_game_factors
@@ -38,7 +39,7 @@ from ivan.database.session import init_db, get_session
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--db-url',    default=None)
-    parser.add_argument('--model-dir', default='data/nfl/models')
+    parser.add_argument('--model-dir', default=MODELS_DIR)
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir)

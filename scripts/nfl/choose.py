@@ -19,6 +19,8 @@ from collections import Counter
 from datetime import datetime
 from typing import List, Dict, Tuple
 
+from ivan.core.config import load_config
+from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.database.session import init_db, get_session
 # Robust import: prefer NFL impl, fall back to generic selector if needed.
 try:
@@ -214,13 +216,11 @@ def main():
     parser = argparse.ArgumentParser(description="Choose lineups and write DK-formatted CSVs (Classic & Showdown).")
     parser.add_argument("-o", "--output_csv",
                         type=str,
-                        default="data/nfl/output/chosen_entries.csv",
+                        default=str(OUTPUT_DIR / "chosen_entries.csv"),
                         help="Base filename for output CSV(s). We'll append .classic/.showdown and a timestamp.")
     args = parser.parse_args()
 
-    here = os.path.dirname(__file__)
-    cfg_fp = os.path.abspath(os.path.join(here, "../../config/nfl.json"))
-    cfg = json.load(open(cfg_fp, encoding="utf-8"))
+    cfg = load_config("nfl")
 
     # Entries CSV (default: first 10 cols which match Showdown; Classic has more but we only need BASE_COLS)
     entries_fp = cfg["paths"]["entries_csv"]

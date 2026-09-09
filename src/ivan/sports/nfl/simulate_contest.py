@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
+from ivan.sports.nfl.paths import MODELS_DIR, DIAG_DIR
 from ivan.sports.nfl.models import HistoricalContest, ContestPayout, Lineup, LineupSimulationResult
 from ivan.sports.nfl.sample_field import (
     sample_field,
@@ -42,7 +43,7 @@ import re
 
 # Add this function near the top (after imports):
 def clean_old_diagnostics(
-    diagnostics_root: str | Path = "data/nfl/diagnostics",
+    diagnostics_root: str | Path = DIAG_DIR,
     days_to_keep: int = 7
 ):
     """Remove diagnostic folders older than days_to_keep."""
@@ -147,7 +148,7 @@ def recap_and_plots_for_sampled_field(
     counts_by_lineup: dict[int, int],
     lineup_ix: list[list[int]],
     unique_pids: list[int],
-    outdir: str | Path = "data/nfl/diagnostics",
+    outdir: str | Path = DIAG_DIR,
     top_n_print: int = 10,
     top_n_plot: int = 30,
 ):
@@ -370,7 +371,7 @@ def _load_and_scale_payouts_from_db(
 def _build_player_samples_matrix(
         session: Session,
         pid_to_idx: Dict[int, int],
-        model_dir: str | Path = "data/nfl/models",
+        model_dir: str | Path = MODELS_DIR,
         n_samples: int = 1000,
 ) -> np.ndarray:
     """
@@ -562,7 +563,7 @@ def simulate_one_contest(
         counts_by_lineup=counts_by_lineup,
         lineup_ix=lineup_ix,
         unique_pids=unique_pids,
-        outdir="data/nfl/diagnostics",
+        outdir=DIAG_DIR,
         top_n_print=10,
         top_n_plot=30,
     )
@@ -583,7 +584,7 @@ def simulate_one_contest(
     P, num_sims = _build_player_samples_matrix(
         session=session,
         pid_to_idx=pid_to_idx,
-        model_dir="data/nfl/models",
+        model_dir=MODELS_DIR,
         n_samples=num_sims
     )
 

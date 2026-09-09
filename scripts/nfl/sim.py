@@ -6,20 +6,23 @@ import pandas as pd
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.console import Console
 
+from ivan.core.config import config_path, load_config
 from ivan.database.session import init_db, get_session, Base
 from ivan.sports.nfl.simulate_contest import simulate_one_contest  
 
 def parse_args():
     p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
-    p.add_argument("--config", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../config/nfl.json")))
+    p.add_argument("--config", default=str(config_path("nfl")), help="path to nfl json config file")
+    p.add_argument("--entries", default=None, help="entries CSV (default: paths.entries_csv from config, or $IVAN_ENTRIES_CSV)")
     p.add_argument("-n", type=int, default=1000, help="Number of simulation samples per contest (default: 1000)")
     p.add_argument("-c", type=int, default=10000, help="Field cap (default: 100)")
-    p.add_argument("-d", type=bool, default=False, help="Allow duplicates in classic slates (default: False)")
+    p.add_argument("-d", action="store_true", help="Allow duplicates in classic slates (default: False)")
     return p.parse_args()
 
 def main():
     args = parse_args()
-    cfg   = json.load(open(args.config, encoding="utf-8"))
+    cfg   = load_config("nfl", args.config)
+    entries_csv = args.entries or cfg["paths"]["entries_csv"]
 
     engine  = init_db("nfl", cfg.get("database_url"))
     Base.metadata.create_all(engine)
@@ -33,7 +36,7 @@ def main():
     console.print()
 
     df = pd.read_csv(
-        cfg["paths"]["entries_csv"],
+        entries_csv,
         engine="python",
         usecols=["Contest ID", "Contest Name"],
         dtype={"Contest ID": str, "Contest Name": str},

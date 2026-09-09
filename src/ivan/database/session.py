@@ -7,6 +7,7 @@ from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 from abc import ABCMeta
 import time
 from sqlalchemy.exc import OperationalError
+from dotenv import load_dotenv
 
 class BaseModelMeta(DeclarativeMeta, ABCMeta):
     """Metaclass that merges SQLAlchemy’s DeclarativeMeta and ABCMeta."""
@@ -18,12 +19,16 @@ Base = declarative_base(metaclass=BaseModelMeta)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 DB_DIR = os.path.join(PROJECT_ROOT, 'data')
 
+# .env at the project root may carry per-machine overrides (IVAN_<SPORT>_DB_URL)
+load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
+
 
 def init_db(sport: str, db_url: str = None):
     """
     Initialize and return an SQLAlchemy Engine.
-    If db_url is provided, use it directly. Otherwise, default to sqlite:///{DB_DIR}/{sport}/{sport}_history.sqlite
+    Resolution order: explicit db_url -> $IVAN_<SPORT>_DB_URL -> sqlite:///{DB_DIR}/{sport}/{sport}_history.sqlite
     """
+    db_url = db_url or os.environ.get(f"IVAN_{sport.upper()}_DB_URL")
     if db_url:
         engine = create_engine(db_url,                                 
                                connect_args={

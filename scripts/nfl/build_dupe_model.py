@@ -23,6 +23,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
+from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import (
     ShowdownPlayer,
@@ -34,7 +35,7 @@ from ivan.sports.nfl.models import (
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
-MODEL_DIR = Path("models/nfl")
+MODEL_DIR = MODELS_DIR
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 

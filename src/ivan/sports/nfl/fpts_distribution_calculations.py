@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s", datefm
 
 
 # ivan imports
+from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.sports.nfl.player_level_calculations import (
     position_configs,
     continuous_dists,
@@ -64,7 +65,7 @@ def _load_kicker_params(model_dir: Path) -> dict:
 
 # Odds handling
 DEFAULT_ONE_SIDE_VIG = 0.05  # 5% haircut if the opposing side is missing
-DEFAULT_MARKET_WEIGHTS_PATH = Path(r"D:\ivan\data\nfl\models\market_weights.json")
+DEFAULT_MARKET_WEIGHTS_PATH = MODELS_DIR / "market_weights.json"
 _MARKET_WEIGHTS_CACHE: dict | None = None
 
 # DST odds formula defaults (fallback if calibration file not available)
@@ -201,7 +202,8 @@ def _load_market_weights(path: Path = DEFAULT_MARKET_WEIGHTS_PATH) -> dict:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 _MARKET_WEIGHTS_CACHE = json.load(f)
-        except Exception:
+        except FileNotFoundError:
+            logging.warning(f"[odds] market weights file not found at {path}; using equal book weights")
             _MARKET_WEIGHTS_CACHE = {}
     return _MARKET_WEIGHTS_CACHE
 
@@ -766,7 +768,7 @@ def _implied_team_totals(total: float, home_spread: float) -> tuple[float, float
     return home_tt, away_tt
 
 
-def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_spread: float, is_team_home: bool, model_dir: Path = Path("data/nfl/models")) -> tuple[float, float]:
+def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_spread: float, is_team_home: bool, model_dir: Path = MODELS_DIR) -> tuple[float, float]:
     """Calibrated mapping from implied totals/spread to a DST Normal(mean, std)."""
     home_tt, away_tt = _implied_team_totals(total, home_spread)
 
@@ -794,7 +796,7 @@ def _dst_normal_params_from_lines(team: str, opponent: str, total: float, home_s
 
     return mean, std
 
-def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int, model_dir: Path = Path("data/nfl/models")) -> np.ndarray:
+def _sample_dst_fpts(session: Session, team: str | None, opponent: str | None, n_samples: int, model_dir: Path = MODELS_DIR) -> np.ndarray:
     """Project DST points from NFLGameOdds when available; otherwise fall back to historical averages."""
     rng = np.random.default_rng()
     logging.debug(f"[update_odds][generate_and_fit_all][simulate_player_fpts][2] player pos-DST, trying to match {team} vs {opponent}")
@@ -971,7 +973,7 @@ def simulate_player_fpts(
 
     if pos == 'K':
         # Load calibrated kicker params (with fallback to defaults)
-        kicker_params = _load_kicker_params(Path("data/nfl/models"))
+        kicker_params = _load_kicker_params(MODELS_DIR)
 
         # Try team-specific params if available
         if player.team and player.team in kicker_params.get("by_team", {}):
@@ -985,7 +987,7 @@ def simulate_player_fpts(
         return st.gamma.rvs(shape, scale=scale, size=n_samples).astype(float)
 
     if pos == 'DST':
-        return _sample_dst_fpts(session, player.team, player.opponent, n_samples, Path("data/nfl/models"))
+        return _sample_dst_fpts(session, player.team, player.opponent, n_samples, MODELS_DIR)
 
 
     stats = position_configs[pos]['stats']

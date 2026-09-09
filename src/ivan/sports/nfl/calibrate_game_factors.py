@@ -6,6 +6,7 @@ from sqlalchemy import text
 import scipy.stats as st
 from scipy.optimize import minimize
 
+from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.database.session import init_db, get_session
 
 TEAM10 = ["QB","RB1","RB2","WR1","WR2","WR3","TE1","TE2","K","DST"]
@@ -108,4 +109,4 @@ def calibrate_game_factors(model_dir: str | Path, sims: int = 40000):
     return out
 
 if __name__ == "__main__":
-    calibrate_game_factors("data/nfl/models")
+    calibrate_game_factors(MODELS_DIR)

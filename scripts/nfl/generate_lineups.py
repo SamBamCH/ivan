@@ -8,6 +8,7 @@ from pathlib import Path
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn,MofNCompleteColumn
 from rich.console import Console
 
+from ivan.core.config import config_path
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import Lineup
 from ivan.sports.nfl.generate_lineups_logic import generate_and_store_field_lineups
@@ -190,7 +191,7 @@ def main():
     p = argparse.ArgumentParser(description="Generate and store NFL field lineups (multi-job)")
     p.add_argument("num_lineups", type=int, help="Total number of lineups to generate")
     p.add_argument("num_jobs", type=int, help="how many parallel jobs to split across")
-    p.add_argument("-c", "--config", default="config/nfl.json", help="path to nfl json config file")
+    p.add_argument("-c", "--config", default=str(config_path("nfl")), help="path to nfl json config file")
     args = p.parse_args()
 
     base = args.num_lineups // args.num_jobs

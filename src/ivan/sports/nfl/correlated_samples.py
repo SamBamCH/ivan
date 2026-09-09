@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_
 import pyvinecopulib as pv
 
+from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.sports.nfl.models import NFLPlayer
 
 # Player marginals
@@ -22,7 +23,7 @@ QB_SLOT, RB_SLOT, WR_SLOT, TE_SLOT, DST_SLOT = 66, 67, 68, 69, 71
 
 def generate_correlated_samples_gaussian(
     session: Session,
-    model_dir: str | Path = "data/nfl/models",
+    model_dir: str | Path = MODELS_DIR,
     n_samples: int = 1000,
     seed: int | None = None,
     use_hgv20: bool = False,  # Default to team-specific now

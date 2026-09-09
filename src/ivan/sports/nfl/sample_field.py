@@ -32,6 +32,7 @@ import numpy as np
 from scipy import sparse as sp
 from sqlalchemy.orm import Session
 
+from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
@@ -127,7 +128,7 @@ FLEX_SLOT = 512
 # MODEL LOADING
 # ==============================================================================
 
-def load_showdown_models(model_dir: str | Path = "models/nfl"):
+def load_showdown_models(model_dir: str | Path = MODELS_DIR):
     """Load trained showdown duplication models from disk.
     
     Loads the 2-stage model built by build_dupe_model.py:
@@ -1254,7 +1255,7 @@ def sample_showdown_field_learned(
     field_size: int,
     config: dict,
     contest_id: Optional[int] = None,
-    model_dir: str | Path = "models/nfl",
+    model_dir: str | Path = MODELS_DIR,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Sample showdown field using trained duplication models with diversity control.
@@ -1417,7 +1418,7 @@ def sample_classic_field_learned(
     entry_fee: Optional[float] = None,
     num_games: Optional[int] = None,
     ownership_gini: Optional[float] = None,
-    model_dir: str | Path = "data/nfl/models",
+    model_dir: str | Path = MODELS_DIR,
     allow_duplicates: bool = True,
 ) -> Tuple[Dict[int, int], Dict]:
     """

@@ -1,61 +1,53 @@
 {
-  "database_url": "sqlite:////home/sam-pratt/ivan/data/nfl/nfl_history.sqlite",
-  "market_weights": "/home/sam-pratt/ivan/data/nfl/models/market_weights.json",
   "paths": {
-    "entries_csv": "/home/sam-pratt/ivan/data/nfl/input/entries.csv"
+    "entries_csv": "data/nfl/input/entries.csv"
   },
-  "solver": {
-    "glpk_path": "/home/sam-pratt/ivan/glpk-4.65/w64/glpsol.exe"
-  },         
-
+  "solver": {},
   "field": {
-    "target_unique_ratio": 0.20,                 
-    "max_unique": null                           
+    "target_unique_ratio": 0.2,
+    "max_unique": null
   },
-  "randomness": 0.50,
+  "randomness": 0.5,
   "pool": {
-    "size": 10000,                                
-    "embed_dims": 32,                            
-    "beta_fpts": 0.2,                            
+    "size": 10000,
+    "embed_dims": 32,
+    "beta_fpts": 0.2,
     "seed": 42
   },
-
   "dupe_model_simple": {
-    "a0": -1.5,                                  
-    "a_fpts": 2.4,                               
+    "a0": -1.5,
+    "a_fpts": 2.4,
     "a_cpt": 1.8,
-    "a_remain": 2,                             
-    "dup_sharpness": 1.6,                        
-    "lam_floor_frac": 0.02,                      
+    "a_remain": 2,
+    "dup_sharpness": 1.6,
+    "lam_floor_frac": 0.02,
     "min_count": 1,
     "stochastic_rounding": true
   },
-
   "independent_draws": {
     "n_sims": 96
   },
-
-    "showdown": {},
-    "sampling": {
-      "n_samples": 100,
-      "alpha": 0.0,
-      "n_jobs": 8,
-      "jitter": 0.70,
-      "rho_game": 0.0,
-      "kicker_rho": 0.40,
-      "kicker_shape": 6.5,
-      "kicker_scale": 1.2,
-      "min_fpts": 1,
-      "validation_samples": 10
-    },
-    "simulation": {
-      "n_samples": 1000,
-      "alpha": 0.10,
-      "n_jobs": 8,
-      "jitter": 0.03,
-      "min_fpts": 1,
-      "validation_samples": 10
-    },
+  "showdown": {},
+  "sampling": {
+    "n_samples": 100,
+    "alpha": 0.0,
+    "n_jobs": 8,
+    "jitter": 0.7,
+    "rho_game": 0.0,
+    "kicker_rho": 0.4,
+    "kicker_shape": 6.5,
+    "kicker_scale": 1.2,
+    "min_fpts": 1,
+    "validation_samples": 10
+  },
+  "simulation": {
+    "n_samples": 1000,
+    "alpha": 0.1,
+    "n_jobs": 8,
+    "jitter": 0.03,
+    "min_fpts": 1,
+    "validation_samples": 10
+  },
   "classic": {
     "lineup_generation": {
       "n_samples": 5000,

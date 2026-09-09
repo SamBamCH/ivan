@@ -1,3 +1,4 @@
+from ivan.core.config import require_env
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLOdds, NFLPlayer
 from ivan.sports.common.draftkings import ingest_players
@@ -67,7 +68,7 @@ if args.p:
 
 if args.update_odds:
     #get odds
-    api_key = 'eeb089601e8f82e903326d7bb8c70af3' #TODO: hide this
+    api_key = require_env("ODDS_API_KEY")
     relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
     odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
     #parse and upsert odds

@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
+from ivan.sports.nfl.paths import CHROME_PROFILE_DIR
 from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import (
@@ -232,7 +233,7 @@ def run_pipeline(
 
 def main() -> None:
     run_pipeline(
-        user_data_dir="/home/sam-pratt/ivan/chrome-selenium/dk-profile",
+        user_data_dir=str(CHROME_PROFILE_DIR),
         profile_directory="Default",  # or "Profile 1", etc.
         headless=False,
     )

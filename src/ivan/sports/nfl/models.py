@@ -21,19 +21,12 @@ from sqlalchemy import (
 from sqlalchemy.ext.automap import automap_base
 
 from dataclasses import dataclass
-import json
-from pathlib import Path
 from ivan.core.player import BasePlayer
 from ivan.core.lineup import BaseLineup
-from ivan.core.utils          import PROJECT_ROOT
-from ivan.database.session import init_db
 
 nfl_metadata = MetaData()
 NFLBase = declarative_base(metadata=nfl_metadata)
 
-# ── 1) load your DB URL & init engine ────────────────────────────────────────
-cfg    = json.load(open(Path(PROJECT_ROOT) / "config" / "nfl.json", encoding="utf-8"))
-engine = init_db("nfl", cfg["database_url"])
 
 class NFLStat(NFLBase):
     __tablename__ = 'nfl_stats'
