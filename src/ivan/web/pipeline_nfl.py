@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -60,6 +61,27 @@ def _script(name: str) -> list[str]:
     return [PYTHON, str(SCRIPTS / name)]
 
 
+_slate_cache: dict = {"at": 0.0, "items": []}
+
+
+def slates(max_age: float = 120) -> list[dict]:
+    """Upcoming DK slates, cached briefly so page loads don't hammer DraftKings."""
+    if time.time() - _slate_cache["at"] > max_age:
+        from ivan.sports.common.draftkings import SUPPORTED_GAME_TYPES, list_slates
+        items = list_slates("nfl")
+        for s in items:
+            s["supported"] = s["game_type"] in SUPPORTED_GAME_TYPES
+        _slate_cache.update(at=time.time(), items=items)
+    return _slate_cache["items"]
+
+
+def _require_slate(form: dict) -> str:
+    dg = str(form.get("draft_group", "")).strip()
+    if not dg.isdigit():
+        raise ValueError("Pick a slate first. The list under step 1 loads from DraftKings.")
+    return dg
+
+
 def _players_progress(s) -> str:
     n, teams = s.execute(text("SELECT count(*), count(DISTINCT team) FROM nfl_player")).one()
     return f"{n} player rows across {teams} teams"
@@ -86,7 +108,8 @@ STEPS: list[Step] = [
         fields=[Field("prelock", "Re-fetch players from DraftKings", "checkbox", True,
                       help="Leave on. Turn off only to refresh odds without touching the player pool."),
                 Field("update_odds", "Update odds", "checkbox", True)],
-        build=lambda f: [_script("ingest.py") + (["-p"] if _flag(f, "prelock") else [])
+        build=lambda f: [_script("ingest.py")
+                         + (["-p", "--draft-group", _require_slate(f)] if _flag(f, "prelock") else [])
                          + ["--update-odds", "true" if _flag(f, "update_odds") else "false"]],
         progress=_players_progress,
     ),

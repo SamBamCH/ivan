@@ -23,6 +23,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="ingest and update player odds")
     p.add_argument("-p", action='store_true', help='Prelock flag, determines if we need to fetch DK payload or not.')
     p.add_argument("--update-odds", type=str2bool, nargs='?', const=True, default=True, help="Update player odds")
+    p.add_argument("--draft-group", type=int, default=None, help="DK draft group id of the slate to ingest; skips the interactive slate prompt")
     p.add_argument("--no-ownership", action='store_true', help="Skip ownership projection after fitting distributions")
     p.add_argument("--no-snapshot", action='store_true', help="Skip the projection snapshot used for model training")
     return p.parse_args()
@@ -53,7 +54,7 @@ else:
 #ingest players from dk
 if args.p:
     print('fetching players')
-    players = ingest_players('nfl', dedupe_by_name=False)
+    players = ingest_players('nfl', dedupe_by_name=False, draft_group_id=args.draft_group)
     for player in players:
         dbp = NFLPlayer(
             id=player.dk_id,

@@ -23,7 +23,7 @@ from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.jobs import JobRunner
 from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR,
-                                   entries_summary, slate_status)
+                                   entries_summary, slate_status, slates)
 
 HERE = Path(__file__).parent
 engine = init_db("nfl")
@@ -148,6 +148,15 @@ def partial_job(request: Request, id: Optional[str] = None, tail: int = 40):
     return templates.TemplateResponse(request, "_job.html", _ctx(request, **_job_view(id, tail)))
 
 
+@app.get("/partials/slates", response_class=HTMLResponse)
+def partial_slates(request: Request, refresh: int = 0):
+    try:
+        items, err = slates(max_age=0 if refresh else 120), None
+    except Exception as e:
+        items, err = [], f"Couldn't load slates from DraftKings: {e}"
+    return templates.TemplateResponse(request, "_slates.html", _ctx(request, slates=items, slates_error=err))
+
+
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     data = await file.read()
@@ -171,7 +180,10 @@ async def run_step(key: str, request: Request):
     if step.needs_entries and not CURRENT_ENTRIES.exists():
         return _redirect("/", f"'{step.title}' needs an entries file. Upload one first.")
     form = {k: str(v) for k, v in (await request.form()).items()}
-    cmds = step.build(form)
+    try:
+        cmds = step.build(form)
+    except ValueError as e:
+        return _redirect("/", str(e))
     ahead = len(runner.active())
     for i, cmd in enumerate(cmds):
         name = step.title if len(cmds) == 1 else f"{step.title} ({i + 1}/{len(cmds)})"

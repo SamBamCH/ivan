@@ -18,7 +18,8 @@ If you add or remove entries on DraftKings later, export and upload again.
 Click **Run** on each, wait for the job box to say **done**, then move to the next one.
 The job box shows the live log; if another job is still running, yours waits in line.
 
-1. **Ingest the slate** — pulls the players and salaries for the upcoming slate and the
+1. **Ingest the slate** — pick the slate from the list (it loads from DraftKings; only
+   Showdown and Classic slates are shown), then Run. This pulls the players and salaries and the
    betting odds for each player, turns those into a projected range of fantasy points, and
    projects how popular each player will be (ownership). Run this first. Run it again close
    to lock if you want the latest odds; ownership refreshes with it.

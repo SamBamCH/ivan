@@ -1,0 +1,17 @@
+<div id="slates" class="slates">
+  {% if slates_error %}
+    <span class="bad small">{{ slates_error }}</span>
+    <a class="small" href="#" hx-get="/partials/slates?refresh=1" hx-target="#slates" hx-swap="outerHTML">retry</a>
+  {% else %}
+    <label><span>Slate</span>
+      <select name="draft_group">
+        <option value="">— pick a slate —</option>
+        {% for s in slates if s.supported %}
+          <option value="{{ s.id }}">{{ s.start }} · {{ s.game_type }} · {{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <small>Showdown and Classic slates only.
+        <a href="#" hx-get="/partials/slates?refresh=1" hx-target="#slates" hx-swap="outerHTML">refresh</a></small>
+    </label>
+  {% endif %}
+</div>

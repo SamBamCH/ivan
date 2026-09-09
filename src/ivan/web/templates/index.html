@@ -34,6 +34,9 @@
         <label><span>{{ f.label }}</span><input type="number" name="{{ f.name }}" value="{{ f.default }}" step="{{ f.step }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %}>{% if f.help %}<small>{{ f.help }}</small>{% endif %}</label>
       {% endif %}
     {% endfor %}
+    {% if step.key == 'ingest' %}
+      <div id="slates" hx-get="/partials/slates" hx-trigger="load" hx-swap="outerHTML"><span class="muted small">Loading slates from DraftKings…</span></div>
+    {% endif %}
     {% if step.needs_entries and not entries %}<span class="warn small">Upload an entries file first.</span>{% endif %}
   </div>
   <button {% if step.needs_entries and not entries %}disabled{% endif %}>Run</button>

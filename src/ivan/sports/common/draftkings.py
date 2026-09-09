@@ -502,32 +502,50 @@ class Player:
         self.status = status
 
     
-def ingest_players(sport, dedupe_by_name=True):
+SUPPORTED_GAME_TYPES = ("Classic", "Showdown Captain Mode")
+
+
+def list_slates(sport) -> list[dict]:
+    """
+    Upcoming DraftKings slates (draft groups) for a sport, in DK's order.
+    Each item: {"id", "game_type", "contests", "start", "name"}.
+    """
+    slate_info = summarize_slates(fetch_all_contests(sport))
+    return [{"id": dg, "game_type": info["gameType"], "contests": info["count"],
+             "start": info["sdstring"], "name": info["name"]} for dg, info in slate_info.items()]
+
+
+def _prompt_for_slate(sport, slates: list[dict]) -> int:
+    """Interactive slate selection for terminal use; exits on Q or bad input."""
+    print(f"             Available {sport.upper()} Slates:")
+    for i, s in enumerate(slates, start=1):
+        print(f"                {i:2}. DG={s['id']} | {s['game_type']:8} | entries={s['contests']:2} | at {s['start']} | '{s['name']}'")
+    print()
+    choice = input(f"Select a slate 1–{len(slates)} (or Q to quit): ").strip().upper()
+    if choice == "Q":
+        sys.exit(0)
+    try:
+        return slates[int(choice) - 1]["id"]
+    except Exception:
+        sys.exit(1)
+
+
+def ingest_players(sport, dedupe_by_name=True, draft_group_id=None):
     """
     pull all draftables from draftkings for a draft group id. (slate)
     returns player objects for upsert in main script
-    
+
     Args:
         sport: Sport key ('nba', 'nfl', etc.)
         dedupe_by_name: If True, only keep first occurrence of each player name.
                         If False, keep all roster slots (e.g., NFL showdown CPT/FLEX).
+        draft_group_id: Ingest this slate without prompting (web UI / scripted runs).
+                        When None, list the slates and ask on stdin as before.
     """
-    contests = fetch_all_contests(sport)
-    slate_info = summarize_slates(contests)
-
-    print("             Available NBA Slates:")
-    for i, (dg, info) in enumerate(slate_info.items(), start=1):
-        print(f"                {i:2}. DG={dg} | {info['gameType']:8} | entries={info['count']:2} | at {info['sdstring']} | '{info['name']}'")
-    print()
-        # 4) prompt user
-    choice = input(f"Select a slate 1–{len(slate_info)} (or Q to quit): ").strip().upper()
-    if choice == "Q":
-        sys.exit(0)
-    try:
-        idx = int(choice) - 1
-        dg = list(slate_info.keys())[idx]
-    except Exception:
-        sys.exit(1)
+    if draft_group_id is None:
+        dg = _prompt_for_slate(sport, list_slates(sport))
+    else:
+        dg = int(draft_group_id)
 
     players = get_players_for_slate(dg)
 
