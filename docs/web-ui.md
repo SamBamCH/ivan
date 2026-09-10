@@ -75,8 +75,11 @@ The tabs underneath show its work:
 
 ## After step 5
 
-- **Exposures** (top menu) shows how often each player appears across your chosen lineups,
-  grouped by CPT/FLEX (showdown) or position (classic).
+- **Exposures** (top menu) shows the lineups step 5 chose and how often each player appears
+  in them. Pick the run at the top, then *Overall* or a single contest. For each contest
+  there is a table of its lineups (players, salary, projection, team split, stacks such as
+  "QB darnold +2 with opp 1", and the simulated cash % and ROI), followed by player
+  exposure across the lineups in view, grouped by CPT/FLEX (showdown) or position (classic).
 - **Downloads** has the file to give back to DraftKings — the one labelled *DraftKings upload*.
   Upload it through DraftKings' lineup upload and check that the entries look right.
 - You can re-run step 5 with different weights as many times as you like; each run makes a new

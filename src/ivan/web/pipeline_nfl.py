@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -19,6 +20,7 @@ from sqlalchemy import text
 
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nfl.models import ContestSimReport
+from ivan.sports.nfl.stacks import describe_lineup
 from ivan.sports.nfl.paths import INPUT_DIR, OUTPUT_DIR
 
 PYTHON = sys.executable
@@ -316,3 +318,116 @@ def corr_css(v) -> str:
     v = max(-1.0, min(1.0, float(v)))
     a = abs(v) ** 0.8 * 0.85
     return f"background:rgba(31,95,191,{a:.2f})" if v >= 0 else f"background:rgba(180,35,24,{a:.2f})"
+
+
+# ------------------------------------------------------------------ chosen lineups (step 5 output)
+OUTPUT_KINDS = {"showdown": "DraftKings upload (showdown)", "classic": "DraftKings upload (classic)",
+                "exposures": "Exposures", "lineups": "Chosen lineups (detail)"}
+CLASSIC_SLOT_ORDER = ["QB", "RB", "WR", "TE", "FLEX", "DST"]
+
+
+def output_files() -> list[dict]:
+    """Every CSV step 5 has written to the web output dir, newest first."""
+    files = sorted(WEB_OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    out = []
+    for p in files:
+        parts = p.name.split(".")
+        kind = parts[1] if len(parts) >= 4 else ""
+        out.append({"name": p.name, "kind": OUTPUT_KINDS.get(kind, kind), "key": kind, "size": p.stat().st_size,
+                    "mtime": p.stat().st_mtime, "stamp": parts[2] if len(parts) >= 4 else ""})
+    return out
+
+
+def chosen_runs() -> list[dict]:
+    """Step 5 runs (one per timestamp) with the files each produced, newest first."""
+    runs: dict[str, dict] = {}
+    for f in output_files():
+        if not f["stamp"]:
+            continue
+        r = runs.setdefault(f["stamp"], {"stamp": f["stamp"], "mtime": f["mtime"], "files": {}})
+        r["files"][f["key"]] = f["name"]
+        r["mtime"] = max(r["mtime"], f["mtime"])
+    return sorted(runs.values(), key=lambda r: r["mtime"], reverse=True)
+
+
+def _clean(df: pd.DataFrame) -> pd.DataFrame:
+    """NaN -> None so templates can test `is not none`."""
+    return df.astype(object).where(pd.notnull(df), None)
+
+
+def _players_text(players: list[dict], fmt: str) -> str:
+    """'CPT darnold · FLEX smithnjigba, kupp, ...' / 'QB x · RB a, b · WR ... · DST d'."""
+    parts, last = [], None
+    for p in players:
+        if p["slot"] != last:
+            parts.append([p["slot"], []])
+            last = p["slot"]
+        parts[-1][1].append(p["name"])
+    return " · ".join(f"{slot} {', '.join(names)}" for slot, names in parts)
+
+
+def chosen_view(lineups_csv: Path, contest_id: Optional[str]) -> dict:
+    """
+    Exposures and lineup detail for one step-5 run, over every contest
+    (contest_id None) or one contest. Reads the chosen.lineups CSV.
+    """
+    df = pd.read_csv(lineups_csv, dtype={"entry_id": str, "contest_id": str, "contest_name": str})
+    contests = (df.drop_duplicates(["contest_id", "entry_id"])
+                  .groupby(["contest_id", "contest_name"], sort=False).size().reset_index(name="entries"))
+    contests = [{"id": r["contest_id"], "name": r["contest_name"], "entries": int(r["entries"])} for _, r in contests.iterrows()]
+    if contest_id and contest_id not in {c["id"] for c in contests}:
+        contest_id = None
+    scope = df if not contest_id else df[df["contest_id"] == contest_id]
+    n = int(scope[["contest_id", "entry_id"]].drop_duplicates().shape[0])
+    fmt = str(scope["format"].iloc[0]) if len(scope) else "showdown"
+    scope = scope.assign(group=scope["slot"].where(scope["format"] == "showdown", scope["position"]))
+
+    # exposures: how many of the n lineups each player is in, grouped by CPT/FLEX or position
+    exp = (scope.groupby(["group", "player_id"], sort=False)
+                .agg(name=("name", "first"), team=("team", "first"), position=("position", "first"),
+                     salary=("salary", "first"), projection=("projection", "first"), ownership=("ownership", "first"),
+                     count=("entry_id", "nunique")).reset_index())
+    exp["exposure"] = exp["count"] / max(n, 1)
+    groups = []
+    for g in sorted(exp["group"].unique(), key=lambda x: GROUP_ORDER.index(x) if x in GROUP_ORDER else 99):
+        sub = exp[exp["group"] == g].sort_values(["exposure", "salary"], ascending=[False, False])
+        groups.append({"name": g, "rows": _clean(sub).to_dict("records")})
+
+    # lineups, per contest, in the order step 5 wrote them
+    lineups = []
+    for (cid, cname), sub in scope.groupby(["contest_id", "contest_name"], sort=False):
+        rows = []
+        for i, (eid, lu) in enumerate(sub.groupby("entry_id", sort=False), 1):
+            lu = lu.sort_values("slot_no")
+            players = _clean(lu).to_dict("records")
+            d = describe_lineup(players)
+            rows.append({"n": i, "entry_id": eid, "lineup_id": int(lu["lineup_id"].iloc[0]),
+                         "players_text": _players_text(players, fmt),
+                         "salary": int(lu["salary"].fillna(0).sum()), "projection": float(lu["projection"].fillna(0).sum()),
+                         "teams": d["teams"], "stacks": d["stacks"],
+                         "cash_pct": players[0].get("cash_pct"), "avg_roi": players[0].get("avg_roi")})
+        lineups.append({"id": cid, "name": cname, "rows": rows,
+                        "mean_cash": _mean([r["cash_pct"] for r in rows]), "mean_roi": _mean([r["avg_roi"] for r in rows])})
+
+    return {"contests": contests, "contest_id": contest_id, "n_lineups": n, "format": fmt,
+            "groups": groups, "lineups": lineups, "legacy": False}
+
+
+def _mean(xs) -> Optional[float]:
+    xs = [float(x) for x in xs if x is not None and x == x]
+    return sum(xs) / len(xs) if xs else None
+
+
+def legacy_exposures_view(exposures_csv: Path) -> dict:
+    """Runs from before the per-lineup file existed: overall exposures only."""
+    df = pd.read_csv(exposures_csv)
+    if "roster_slot" in df.columns and "format" in df.columns:
+        df["group"] = df["roster_slot"].where(df["format"] == "showdown", df["position"])
+    else:
+        df["group"] = df["position"]
+    groups = []
+    for g in sorted(df["group"].dropna().unique(), key=lambda x: GROUP_ORDER.index(x) if x in GROUP_ORDER else 99):
+        sub = df[df["group"] == g].sort_values("exposure", ascending=False)
+        groups.append({"name": g, "rows": _clean(sub).to_dict("records")})
+    return {"contests": [], "contest_id": None, "n_lineups": None, "format": None,
+            "groups": groups, "lineups": [], "legacy": True}

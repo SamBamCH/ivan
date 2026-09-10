@@ -93,17 +93,19 @@ def choose_lineup_ids(
         remaining.remove(best)
 
     top_q = np.argsort(-q)[:num_lineups]
-    _fill(stats, n_results, n_after_roi, n_valid, N, raw[top_q], raw[selected], selected, weights, len(missing_players))
+    _fill(stats, n_results, n_after_roi, n_valid, N, raw[top_q], raw[selected], selected, weights, len(missing_players),
+          by_lineup={sims[i].lineup_id: {"cash_pct": float(raw[i, 0]), "avg_roi": float(raw[i, 1])} for i in selected})
     return [sims[i].lineup_id for i in selected]
 
 
-def _fill(stats, n_results, n_after_roi, n_valid, n_unique, top_raw, sel_raw, selected, weights, n_missing):
+def _fill(stats, n_results, n_after_roi, n_valid, n_unique, top_raw, sel_raw, selected, weights, n_missing, by_lineup=None):
     if stats is None:
         return
     top_raw, sel_raw = np.asarray(top_raw, dtype=float).reshape(-1, 2), np.asarray(sel_raw, dtype=float).reshape(-1, 2)
     stats.update({
         "results": n_results, "after_roi_filter": n_after_roi, "valid": n_valid, "unique": n_unique,
         "missing_players": n_missing, "chosen": len(selected), "weights": dict(weights),
+        "by_lineup": by_lineup or {},                      # lineup_id -> {cash_pct, avg_roi} of the picks
         "top_quality_roi": float(top_raw[:, 1].mean()) if len(top_raw) else None,
         "top_quality_cash": float(top_raw[:, 0].mean()) if len(top_raw) else None,
         "chosen_roi": float(sel_raw[:, 1].mean()) if len(sel_raw) else None,

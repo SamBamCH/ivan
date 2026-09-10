@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -22,8 +21,9 @@ from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.jobs import JobRunner
 from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR, WEIGHT_KEYS,
-                                   WEIGHT_LABELS, RESETS, choose_rows, contest_report, contest_reports, corr_css,
-                                   entries_summary, players_frame, report_view, reset_working, slate_status, slates)
+                                   WEIGHT_LABELS, RESETS, choose_rows, chosen_runs, chosen_view, contest_report,
+                                   contest_reports, corr_css, entries_summary, legacy_exposures_view, output_files,
+                                   players_frame, report_view, reset_working, slate_status, slates, OUTPUT_KINDS)
 
 HERE = Path(__file__).parent
 engine = init_db("nfl")
@@ -79,26 +79,28 @@ def _fmt_kb(n) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
 
-def _fmt_money(x, places=2) -> str:
+def _num_or_none(x):
     try:
-        return f"${float(x):,.{places}f}"
+        v = float(x)
     except (TypeError, ValueError):
-        return ""
+        return None
+    return v if v == v else None          # NaN -> None
+
+
+def _fmt_money(x, places=2) -> str:
+    v = _num_or_none(x)
+    return "" if v is None else f"${v:,.{places}f}"
 
 
 def _fmt_num(x, places=1) -> str:
-    try:
-        return f"{float(x):,.{places}f}"
-    except (TypeError, ValueError):
-        return ""
+    v = _num_or_none(x)
+    return "" if v is None else f"{v:,.{places}f}"
 
 
 def _fmt_pct1(x, places=1) -> str:
     """A fraction as a percentage."""
-    try:
-        return f"{float(x) * 100:.{places}f}%"
-    except (TypeError, ValueError):
-        return ""
+    v = _num_or_none(x)
+    return "" if v is None else f"{v * 100:.{places}f}%"
 
 
 templates.env.filters.update(time=_fmt_time, dur=_fmt_dur, dt=_fmt_dt, pct=_fmt_pct, kb=_fmt_kb,
@@ -123,16 +125,7 @@ def _redirect(to: str, msg: Optional[str] = None) -> RedirectResponse:
     return RedirectResponse(f"{to}?msg={quote(msg)}" if msg else to, status_code=303)
 
 
-def _outputs() -> list[dict]:
-    files = sorted(WEB_OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-    kinds = {"showdown": "DraftKings upload (showdown)", "classic": "DraftKings upload (classic)", "exposures": "Exposures"}
-    out = []
-    for p in files:
-        parts = p.name.split(".")
-        kind = parts[1] if len(parts) >= 4 else ""
-        out.append({"name": p.name, "kind": kinds.get(kind, kind), "size": p.stat().st_size,
-                    "mtime": p.stat().st_mtime, "stamp": parts[2] if len(parts) >= 4 else ""})
-    return out
+_outputs = output_files
 
 
 def _job_view(job_id: Optional[str], tail: int) -> dict:
@@ -260,23 +253,17 @@ def job_cancel(job_id: str):
 
 
 @app.get("/exposures", response_class=HTMLResponse)
-def exposures(request: Request, file: Optional[str] = None):
-    files = [o for o in _outputs() if o["kind"] == "Exposures"]
-    if not files:
-        return templates.TemplateResponse(request, "exposures.html", _ctx(request, files=[], picked=None, groups=[], siblings=[]))
-    picked = next((f for f in files if f["name"] == file), files[0])
-    df = pd.read_csv(WEB_OUTPUT_DIR / picked["name"])
-    if "roster_slot" in df.columns and "format" in df.columns:
-        df["group"] = df["roster_slot"].where(df["format"] == "showdown", df["position"])
+def exposures(request: Request, run: Optional[str] = None, contest: Optional[str] = None, file: Optional[str] = None):
+    runs = [r for r in chosen_runs() if "lineups" in r["files"] or "exposures" in r["files"]]
+    if not runs:
+        return templates.TemplateResponse(request, "exposures.html", _ctx(request, runs=[], picked=None, view=None))
+    picked = next((r for r in runs if r["stamp"] == run or (file and file in r["files"].values())), runs[0])
+    if "lineups" in picked["files"]:
+        view = chosen_view(WEB_OUTPUT_DIR / picked["files"]["lineups"], (contest or "").strip() or None)
     else:
-        df["group"] = df["position"]
-    order = ["CPT", "FLEX", "QB", "RB", "WR", "TE", "DST"]
-    groups = []
-    for g in sorted(df["group"].dropna().unique(), key=lambda x: order.index(x) if x in order else 99):
-        sub = df[df["group"] == g].sort_values("exposure", ascending=False)
-        groups.append({"name": g, "rows": sub.to_dict("records")})
-    siblings = [o for o in _outputs() if o["stamp"] == picked["stamp"] and o["kind"] != "Exposures"]
-    return templates.TemplateResponse(request, "exposures.html", _ctx(request, files=files, picked=picked, groups=groups, siblings=siblings))
+        view = legacy_exposures_view(WEB_OUTPUT_DIR / picked["files"]["exposures"])
+    uploads = [(OUTPUT_KINDS[k], picked["files"][k]) for k in ("showdown", "classic") if k in picked["files"]]
+    return templates.TemplateResponse(request, "exposures.html", _ctx(request, runs=runs, picked=picked, view=view, uploads=uploads))
 
 
 @app.get("/contests", response_class=HTMLResponse)

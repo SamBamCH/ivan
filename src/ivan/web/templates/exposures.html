@@ -5,23 +5,51 @@
 {% if not picked %}
   <div class="card"><p class="muted">No chosen lineups yet — run step 5.</p></div>
 {% else %}
+  {% set scope = (view.contests | selectattr('id', 'equalto', view.contest_id) | first) if view.contest_id else none %}
   <div class="card">
     <form method="get" class="inline">
-      <label>Run: <select name="file" onchange="this.form.submit()">
-        {% for f in files %}<option value="{{ f.name }}" {% if f.name == picked.name %}selected{% endif %}>{{ f.stamp }} — {{ f.mtime|time }}</option>{% endfor %}
+      <label>Run: <select name="run" onchange="this.form.submit()">
+        {% for r in runs %}<option value="{{ r.stamp }}" {% if r.stamp == picked.stamp %}selected{% endif %}>{{ r.stamp }} — {{ r.mtime|time }}</option>{% endfor %}
       </select></label>
+      {% if view.contests %}
+      &nbsp; <label>Show: <select name="contest" onchange="this.form.submit()">
+        <option value="">Overall — {{ view.contests|sum(attribute='entries') }} entries in {{ view.contests|length }} contest(s)</option>
+        {% for c in view.contests %}<option value="{{ c.id }}" {% if c.id == view.contest_id %}selected{% endif %}>{{ c.name }} — {{ c.entries }} entries</option>{% endfor %}
+      </select></label>
+      {% endif %}
     </form>
-    {% if siblings %}<span class="small"> · Upload files: {% for s in siblings %}<a href="/downloads/{{ s.name }}">{{ s.kind }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}
+    {% if uploads %}<span class="small"> · Upload files: {% for label, name in uploads %}<a href="/downloads/{{ name }}">{{ label }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}
+    {% if view.legacy %}<p class="help">This run predates per-contest detail; only overall exposures are available. Re-run step 5 to get lineups and per-contest exposures.</p>{% endif %}
   </div>
-  {% for g in groups %}
+
+  {% for c in view.lineups %}
+  <div class="card">
+    <details {% if view.contest_id or view.lineups|length == 1 %}open{% endif %}>
+    <summary>{{ c.name }} <span class="muted small">— {{ c.rows|length }} lineups{% if c.mean_roi is not none %} · mean simulated cash {{ c.mean_cash|pct1 }}, ROI {{ c.mean_roi|pct1 }}{% endif %}</span></summary>
+    <div class="wide"><table class="compact">
+      <tr><th class="num">#</th><th>Entry</th><th style="min-width:300px">Lineup</th><th class="num">Salary</th><th class="num">Proj</th><th>Teams</th><th style="min-width:280px">Stacks</th><th class="num">Cash %</th><th class="num">ROI</th></tr>
+      {% for r in c.rows %}
+      <tr><td class="num">{{ r.n }}</td><td class="muted small">{{ r.entry_id }}</td><td class="small">{{ r.players_text }}</td>
+          <td class="num">{{ '{:,}'.format(r.salary) }}</td><td class="num">{{ r.projection|num(1) }}</td>
+          <td class="small" style="white-space:nowrap">{{ r.teams }}</td><td class="small">{{ r.stacks|join('; ') }}</td>
+          <td class="num">{{ r.cash_pct|pct1 }}</td><td class="num">{{ r.avg_roi|pct1 }}</td></tr>
+      {% endfor %}
+    </table></div>
+    </details>
+  </div>
+  {% endfor %}
+
+  <h2 style="margin-top:6px">Player exposure {% if view.n_lineups %}<span class="muted small">— {% if scope %}{{ scope.name }}{% else %}all contests{% endif %}, {{ view.n_lineups }} lineups</span>{% endif %}</h2>
+  {% for g in view.groups %}
   <div class="card">
     <h2>{{ g.name }} <span class="muted small">({{ g.rows|length }} players)</span></h2>
     <table>
-      <tr><th>Player</th><th>Team</th><th>Pos</th><th class="num">Salary</th><th>Exposure</th><th class="num">Proj</th><th class="num">Own</th></tr>
+      <tr><th>Player</th><th>Team</th><th>Pos</th><th class="num">Salary</th><th>Exposure</th>{% if not view.legacy %}<th class="num">Lineups</th>{% endif %}<th class="num">Proj</th><th class="num">Own</th></tr>
       {% for r in g.rows %}
-      <tr><td>{{ r.name }}</td><td>{{ r.team }}</td><td>{{ r.position }}</td><td class="num">{{ '{:,}'.format(r.salary|int) }}</td>
+      <tr><td>{{ r.name }}</td><td>{{ r.team }}</td><td>{{ r.position }}</td><td class="num">{{ '{:,}'.format(r.salary|int) if r.salary is not none else '' }}</td>
           <td><span class="bar" style="width:{{ (r.exposure * 120)|round|int }}px"></span>{{ r.exposure|pct }}</td>
-          <td class="num">{{ '%.1f'|format(r.projection) }}</td><td class="num">{{ '%.1f'|format(r.ownership) }}%</td></tr>
+          {% if not view.legacy %}<td class="num">{{ r.count }} / {{ view.n_lineups }}</td>{% endif %}
+          <td class="num">{{ r.projection|num(1) }}</td><td class="num">{{ r.ownership|num(1) }}{% if r.ownership is not none %}%{% endif %}</td></tr>
       {% endfor %}
     </table>
   </div>

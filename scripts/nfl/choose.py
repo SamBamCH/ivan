@@ -8,6 +8,9 @@ Choose lineups for each contest and write CSVs in DraftKings format.
 - ALSO prints exposure DataFrames for all chosen lineups:
   - Showdown: separated by roster_slot (CPT, FLEX)
   - Classic: grouped by position (QB, RB, WR, TE, DST)
+- Writes, next to the upload files, an exposures CSV and a per-lineup detail CSV
+  (one row per player per chosen entry, with the lineup's simulated cash % and
+  ROI) that the web UI's Exposures page reads.
 """
 
 from __future__ import annotations
@@ -299,6 +302,20 @@ def main():
     classic_counts: Counter[int] = Counter()
     classic_info: Dict[int, Dict[str, object]] = {}
 
+    # Per-lineup detail: one row per player per chosen entry
+    lineup_rows: List[Dict[str, object]] = []
+
+    def _detail_rows(base_data, fmt: str, lid: int, slots: List[str], assigned: List[NFLPlayer]):
+        sim = stats.get("by_lineup", {}).get(lid, {})
+        for k, (slot, pl) in enumerate(zip(slots, assigned)):
+            lineup_rows.append({
+                "entry_id": base_data[0], "contest_name": base_data[1], "contest_id": base_data[2],
+                "entry_fee": base_data[3], "format": fmt, "lineup_id": lid, "slot_no": k, "slot": slot,
+                "player_id": pl.id, "name": _name(pl), "team": _team(pl), "opponent": getattr(pl, "opponent", None),
+                "position": _pos(pl), "salary": _sal(pl), "projection": pl.fpts_mean, "ownership": pl.ownership_proj,
+                "cash_pct": sim.get("cash_pct"), "avg_roi": sim.get("avg_roi"),
+            })
+
     for cid, group in contests_grouped:
         num_entries = len(group)
         cname = group["Contest Name"].iloc[0].strip()
@@ -358,6 +375,7 @@ def main():
                 assigned = assign_player_order_showdown(objs, POSITION_ORDER_SD)
                 slots = [f"{_name(pl)} ({pl.id})" for pl in assigned]
                 df_out_sd.loc[len(df_out_sd)] = base_data + slots
+                _detail_rows(base_data, "showdown", lid, POSITION_ORDER_SD, assigned)
 
                 # EXPO: showdown by roster_slot
                 total_sd_entries += 1
@@ -379,6 +397,7 @@ def main():
                 assigned = assign_player_order_classic(objs)
                 slots = [f"{_name(pl)} ({pl.id})" for pl in assigned]
                 df_out_classic.loc[len(df_out_classic)] = base_data + slots
+                _detail_rows(base_data, "classic", lid, POSITION_ORDER_CLASSIC, assigned)
 
                 # EXPO: classic by position (player base position)
                 total_classic_entries += 1
@@ -470,6 +489,10 @@ def main():
         out_expo = f"{root}.exposures.{ts}{ext}"
         pd.concat(frames, ignore_index=True).to_csv(out_expo, index=False)
         print(f"✅ Wrote exposures → {out_expo}")
+    if lineup_rows:
+        out_detail = f"{root}.lineups.{ts}{ext}"
+        pd.DataFrame(lineup_rows).to_csv(out_detail, index=False)
+        print(f"✅ Wrote per-lineup detail → {out_detail}")
 
 
 if __name__ == "__main__":
