@@ -158,7 +158,7 @@ src/ivan/
 ├── sports/{nba,mlb,lol}/   other sports
 └── web/                    FastAPI app, job runner, NFL pipeline definition, templates
 config/                     per-sport JSON config
-deploy/                     server bootstrap + systemd unit
+deploy/                     server bootstrap, systemd unit, push.sh (deploy + restart)
 docs/                       web-ui.md (for users), server.md (for operators)
 ```
 

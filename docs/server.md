@@ -94,12 +94,16 @@ per worker; 16 GB of RAM is comfortable. Jobs run under `nice -n 10`, so other s
 
 ## Updating code
 
-From the laptop, push the checkout and bounce the service (the unit restarts on its own):
+From the laptop, one command pushes the checkout and bounces the service:
 
 ```bash
-rsync -az --delete --exclude /venv --exclude /data --exclude /.env ./ ivan-server:/opt/ivan/app/
-ssh ivan-server 'cd /opt/ivan/app && deploy/bootstrap_server.sh && fuser -k -KILL 80/tcp'
+deploy/push.sh              # rsync (minus venv, data, .env) -> bootstrap -> restart -> check
 ```
+
+It restarts by killing the unit's main PID (`systemctl show ivan-web -p MainPID`) and
+letting `Restart=always` bring it back. Don't use `fuser -k 80/tcp` for this: the
+hardened unit hides the socket's owner from user `ivan`, so it finds nothing and the old
+process keeps running. The restart drops any job in progress.
 
 `requirements-server.txt` is generated, not hand-edited. After changing imports on the
 pre-lock path or retraining models with a new library, regenerate it on the laptop with
