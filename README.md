@@ -46,14 +46,15 @@ Run these top to bottom. Each is one script; the web UI is just buttons for the 
 | 2 | Contests & payouts | `python scripts/nfl/get_contest_ids.py && python scripts/nfl/get_payouts.py [--days N \| --all]` | Upcoming DK contests and their payout tables. The simulator needs a payout table for every contest in your entries file. Payouts are fetched only for contests starting within the last day or later; `--all` re-queries old ones too. |
 | 3 | Generate the field | `python scripts/nfl/generate_lineups.py 10000 8` | `<lineups> <parallel workers>`. Correlated player samples → ILP → the pool of candidate lineups the simulator picks from. Deduplicates at the end. |
 | 4 | Simulate | `python scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-c 10000] [-d]` | For each contest in the entries CSV: sample an opposing field with the duplication model, simulate `-n` outcomes, score every candidate lineup (cash %, ROI, rank), replacing earlier results for that contest. `-c` caps the simulated field size; `-d` allows duplicate lineups in classic. Each contest also gets a report (`contest_sim_report` table and `data/nfl/diagnostics/contest_*/report.json`) of the sampled field, the payout scaling and the invariants it checked; the web UI's Contests page renders it. |
-| 5 | Choose | `python scripts/nfl/choose.py [--entries file.csv] [--no-prompt] [--cash-pct .5 --avg-roi-win .5 --diversity-lambda .1] [-o base.csv]` | Picks lineups per contest from the sim results and writes DK-format upload CSVs, an exposures CSV and a per-lineup detail CSV (one row per player per entry with the lineup's simulated cash % and ROI; the web UI's Exposures page reads it). With no weight flags it prompts per contest; any weight flag, `--weights-json`, or `--no-prompt` makes it non-interactive. |
+| 5 | Choose | `python scripts/nfl/choose.py [--entries file.csv] [--no-prompt] [--cash-pct .5 --avg-roi-win .5 --diversity-lambda .1] [-o base.csv]` | Picks lineups per contest from the sim results and writes DK-format upload CSVs, an exposures CSV, a per-lineup detail CSV (one row per player per entry with the lineup's simulated cash % and ROI) and a chooser-diagnostics JSON (every candidate's cash %, ROI, quality and map position, the picks and the greedy trace); the web UI's Exposures and Choose pages read them. With no weight flags it prompts per contest; any weight flag, `--weights-json`, or `--no-prompt` makes it non-interactive. |
 
 The entries file is the CSV you export from DraftKings for the contests you have entered
 (`Entry ID, Contest Name, Contest ID, Entry Fee, …`). By default it is read from
 `config/nfl.json → paths.entries_csv` (`data/nfl/input/entries.csv`); override with
 `--entries` or `IVAN_ENTRIES_CSV`.
 
-Outputs land in `data/nfl/output/` as `chosen_entries.<showdown|classic|exposures|lineups>.<timestamp>.csv`.
+Outputs land in `data/nfl/output/` as `chosen_entries.<showdown|classic|exposures|lineups>.<timestamp>.csv`
+plus `chosen_entries.choose.<timestamp>.json`.
 
 `--weights-json` takes a file or a literal, keyed by contest id or contest name with an
 optional `"default"`:

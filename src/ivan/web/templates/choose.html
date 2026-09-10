@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Choose · Ivan{% endblock %}
+{% block content %}
+<h1>How the lineups were chosen</h1>
+{% if not picked %}
+  <div class="card"><p class="muted">Nothing to show yet — run step 5. Each run records what the chooser saw: every candidate lineup's simulated cash % and ROI, the map of how alike the lineups are, and the picks it made in order.</p></div>
+{% else %}
+{% set v = view %}
+<div class="card">
+  <form method="get" class="inline">
+    <label>Run: <select name="run" onchange="this.form.submit()">
+      {% for r in runs %}<option value="{{ r.stamp }}" {% if r.stamp == picked.stamp %}selected{% endif %}>{{ r.stamp }} — {{ r.mtime|time }}</option>{% endfor %}
+    </select></label>
+    &nbsp; <label>Contest: <select name="contest" onchange="this.form.submit()">
+      {% for c in v.contests %}<option value="{{ c.id }}" {% if c.id == v.contest_id %}selected{% endif %}>{{ c.name }} — {{ c.entries }} entries</option>{% endfor %}
+    </select></label>
+  </form>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ '{:,}'.format(v.n_candidates) }}</div><div class="l">candidate lineups</div><div class="s">simulated for this contest, duplicates removed{% if v.n_shown < v.n_candidates %}; {{ '{:,}'.format(v.n_shown) }} drawn below{% endif %}</div></div>
+    <div class="tile"><div class="v">{{ v.entries }}</div><div class="l">picks to make</div><div class="s">one per entry</div></div>
+    <div class="tile"><div class="v">{{ v.weights.cash_pct }} / {{ v.weights.avg_roi_win }}</div><div class="l">weight on cash % / ROI</div><div class="s">what "quality" means here</div></div>
+    <div class="tile"><div class="v">{{ v['lambda'] }}</div><div class="l">diversity λ</div><div class="s">how much being different is worth</div></div>
+    <div class="tile"><div class="v">{{ v.chosen.roi|pct1 }} · {{ v.chosen.cash|pct1 }}</div><div class="l">picked: mean ROI · cash %</div><div class="s">quality alone would give {{ v.top.roi|pct1 }} · {{ v.top.cash|pct1 }}</div></div>
+    <div class="tile"><div class="v">{{ v.overlap }} of {{ v.chosen.n }}</div><div class="l">picks that quality alone would also make</div><div class="s">the rest were taken for diversity</div></div>
+    {% if v.spread.chosen is not none %}<div class="tile"><div class="v">{{ v.spread.chosen|num(2) }} vs {{ v.spread.top_quality|num(2) }}</div><div class="l">spread of the picks vs quality-only picks</div><div class="s">mean distance between lineups, 0–1 (all candidates: {{ v.spread.all|num(2) }})</div></div>{% endif %}
+  </div>
+  <p class="help">The chooser scores every candidate on <b>quality</b> (a weighted blend of its simulated cash % and ROI, each scaled 0–1 across the candidates), takes the best one, and then repeatedly takes the lineup with the highest <i>quality + λ × distance from the lineups already picked</i>. Distance is measured between the lineups' simulated point totals across all simulations: two lineups that boom and bust together are close, even if they share few players.</p>
+</div>
+
+<p class="legend"><svg width="14" height="12"><circle cx="7" cy="6" r="3" fill="#8a8a8a" opacity=".6"/></svg> candidate lineup (darker = higher quality) &nbsp;
+  <svg width="14" height="12"><circle cx="7" cy="6" r="5" fill="#1f5fbf"/></svg> picked, numbered in order &nbsp;
+  <svg width="14" height="12"><circle cx="7" cy="6" r="5" fill="none" stroke="#d97706" stroke-width="1.8"/></svg> would be picked on quality alone &nbsp;
+  <svg width="18" height="12"><line x1="1" y1="6" x2="17" y2="6" stroke="#d97706" stroke-dasharray="4 4"/></svg> equal quality under these weights</p>
+<div class="grid">
+  <div class="card">
+    <h2>1 · What "best" means</h2>
+    <div class="chart">{{ v.quality_svg|safe }}</div>
+    <p class="caption">Every candidate by its simulated cash % and average ROI. The dashed lines join lineups of equal quality under this contest's weights, so "better" is perpendicular to them. Orange rings are the {{ v.top.n }} that quality alone would take; blue dots are the actual picks, numbered in order. Where a blue dot sits well inside the frontier, diversity won.</p>
+  </div>
+  <div class="card">
+    <h2>2 · The solution space</h2>
+    <div class="chart">{{ v.map_svg|safe }}</div>
+    <p class="caption">The same candidates laid out so that lineups whose simulated totals move together sit close ({{ (v.explained_variance[0] + v.explained_variance[1])|pct1 }} of the differences between lineups are captured by these two axes). Quality-only picks cluster in one region; the diversity term spreads the blue picks across the map so your entries don't all win and lose in the same simulations.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>3 · The greedy walk</h2>
+  <div class="chart">{{ v.walk_svg|safe }}</div>
+  <p class="caption">Each bar is one pick: the dark part is the lineup's quality, the light part is the diversity bonus (λ × its mean distance from the earlier picks) that won it the spot. The dashed line is the quality of the k-th best lineup on quality alone, so the gap down to the dark bar is what each pick gave up to be different. Raise λ and the light parts grow while the dark parts fall.</p>
+</div>
+
+<div class="card">
+  <h2>The picks, in order</h2>
+  <div class="wide"><table class="compact">
+    <tr><th class="num">#</th><th>Lineup</th><th class="num">Cash %</th><th class="num">ROI</th><th class="num">Quality</th><th class="num">Diversity</th><th class="num">Bonus</th><th class="num">Score</th><th>Quality alone?</th></tr>
+    {% for r in v.rows %}
+    <tr><td class="num">{{ r.pick }}</td><td class="small">{{ r.players or ('lineup ' ~ r.lineup_id) }}</td>
+        <td class="num">{{ r.cash|pct1 }}</td><td class="num">{{ r.roi|pct1 }}</td><td class="num">{{ r.q|num(3) }}</td>
+        <td class="num">{{ r.div|num(3) }}</td><td class="num">{{ r.bonus|num(3) }}</td><td class="num">{{ r.score|num(3) }}</td>
+        <td class="small">{{ 'also a quality pick' if r.in_top else 'diversity pick' }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+{% endblock %}

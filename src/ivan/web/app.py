@@ -21,7 +21,7 @@ from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.jobs import JobRunner
 from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR, WEIGHT_KEYS,
-                                   WEIGHT_LABELS, RESETS, choose_rows, chosen_runs, chosen_view, contest_report,
+                                   WEIGHT_LABELS, RESETS, choose_rows, choose_view, chosen_runs, chosen_view, contest_report,
                                    contest_reports, corr_css, entries_summary, legacy_exposures_view, output_files,
                                    players_frame, report_view, reset_working, slate_status, slates, OUTPUT_KINDS)
 
@@ -285,6 +285,17 @@ def contest_json(contest_id: int):
     return JSONResponse(report)
 
 
+@app.get("/choose", response_class=HTMLResponse)
+def choose_page(request: Request, run: Optional[str] = None, contest: Optional[str] = None):
+    runs = [r for r in chosen_runs() if "choose" in r["files"]]
+    if not runs:
+        return templates.TemplateResponse(request, "choose.html", _ctx(request, runs=[], picked=None, view=None))
+    picked = next((r for r in runs if r["stamp"] == run), runs[0])
+    lineups = WEB_OUTPUT_DIR / picked["files"]["lineups"] if "lineups" in picked["files"] else None
+    view = choose_view(WEB_OUTPUT_DIR / picked["files"]["choose"], lineups, (contest or "").strip() or None)
+    return templates.TemplateResponse(request, "choose.html", _ctx(request, runs=runs, picked=picked, view=view))
+
+
 @app.get("/downloads", response_class=HTMLResponse)
 def downloads(request: Request):
     return templates.TemplateResponse(request, "downloads.html", _ctx(request, files=_outputs()))
@@ -292,9 +303,9 @@ def downloads(request: Request):
 
 @app.get("/downloads/{name}")
 def download(name: str):
-    if "/" in name or "\\" in name or not name.endswith(".csv"):
+    if "/" in name or "\\" in name or not (name.endswith(".csv") or name.endswith(".json")):
         raise HTTPException(404)
     path = WEB_OUTPUT_DIR / name
     if not path.is_file():
         raise HTTPException(404)
-    return FileResponse(path, media_type="text/csv", filename=name)
+    return FileResponse(path, media_type="text/csv" if name.endswith(".csv") else "application/json", filename=name)

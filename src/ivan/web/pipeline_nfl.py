@@ -21,6 +21,7 @@ from sqlalchemy import text
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nfl.models import ContestSimReport
 from ivan.sports.nfl.stacks import describe_lineup
+from ivan.web.charts import bars_svg, iso_quality_lines, scatter_svg
 from ivan.sports.nfl.paths import INPUT_DIR, OUTPUT_DIR
 
 PYTHON = sys.executable
@@ -322,13 +323,14 @@ def corr_css(v) -> str:
 
 # ------------------------------------------------------------------ chosen lineups (step 5 output)
 OUTPUT_KINDS = {"showdown": "DraftKings upload (showdown)", "classic": "DraftKings upload (classic)",
-                "exposures": "Exposures", "lineups": "Chosen lineups (detail)"}
+                "exposures": "Exposures", "lineups": "Chosen lineups (detail)", "choose": "Chooser diagnostics (JSON)"}
 CLASSIC_SLOT_ORDER = ["QB", "RB", "WR", "TE", "FLEX", "DST"]
 
 
 def output_files() -> list[dict]:
     """Every CSV step 5 has written to the web output dir, newest first."""
-    files = sorted(WEB_OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(list(WEB_OUTPUT_DIR.glob("*.csv")) + list(WEB_OUTPUT_DIR.glob("*.json")),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
     out = []
     for p in files:
         parts = p.name.split(".")
@@ -431,3 +433,83 @@ def legacy_exposures_view(exposures_csv: Path) -> dict:
         groups.append({"name": g, "rows": _clean(sub).to_dict("records")})
     return {"contests": [], "contest_id": None, "n_lineups": None, "format": None,
             "groups": groups, "lineups": [], "legacy": True}
+
+
+# ------------------------------------------------------------------ the chooser, visualised
+def _pct(v: float) -> str:
+    return f"{v * 100:.0f}%"
+
+
+def _pct_signed(v: float) -> str:
+    return f"{v * 100:+.0f}%"
+
+
+def choose_view(choose_json: Path, lineups_csv: Optional[Path], contest_id: Optional[str]) -> dict:
+    """
+    What the chooser did for one contest of one step-5 run: the quality plane
+    (cash % vs ROI with the weight direction), the solution-space map (PCA of
+    the simulated point traces), the greedy walk, and the picks in order.
+    """
+    data = json.loads(choose_json.read_text())
+    contests = [{"id": cid, "name": d["contest_name"], "entries": d["entries"]} for cid, d in data.items()]
+    if not contests:
+        return {"contests": []}
+    if contest_id not in data:
+        contest_id = contests[0]["id"]
+    d = data[contest_id]
+    pts = d["points"]
+    w = d["weights"]
+    w1, w2 = float(w.get("cash_pct", 0)), float(w.get("avg_roi_win", 1))
+    lam = float(d["lambda"])
+
+    order = sorted(range(len(pts)), key=lambda i: pts[i]["q"])
+    shade = {i: k / max(1, len(pts) - 1) for k, i in enumerate(order)}
+
+    def kind(p):
+        return "pick" if p["pick"] else ("top" if p["top"] else "cand")
+
+    def title(p):
+        t = f"lineup {p['lineup_id']} · cash {p['cash'] * 100:.1f}% · ROI {p['roi'] * 100:+.0f}% · quality {p['q']:.2f}"
+        return t + (f" · pick {p['pick']}" if p["pick"] else (" · in the top by quality alone, not picked" if p["top"] else ""))
+
+    def mark(p, i, x, y):
+        return {"x": x, "y": y, "kind": kind(p), "shade": shade[i],
+                "label": str(p["pick"]) if p["pick"] and p["pick"] <= 30 else None, "title": title(p)}
+
+    quality_svg = scatter_svg([mark(p, i, p["cash"], p["roi"]) for i, p in enumerate(pts)],
+                              xlabel="cash % (share of simulations in the money)", ylabel="average ROI per simulation",
+                              xfmt=_pct, yfmt=_pct_signed,
+                              iso_lines=iso_quality_lines(w1, w2, d["norm"]["cash"], d["norm"]["roi"]))
+    evr = d.get("explained_variance", [0, 0])
+    map_svg = scatter_svg([mark(p, i, p["x"], p["y"]) for i, p in enumerate(pts)],
+                          xlabel=f"map axis 1 ({evr[0]:.0%} of the differences between lineups)",
+                          ylabel=f"map axis 2 ({evr[1]:.0%})", xfmt=lambda v: f"{v:.0f}", yfmt=lambda v: f"{v:.0f}")
+    tops_q = sorted((p["q"] for p in pts if p["top"]), reverse=True)
+    walk_svg = bars_svg(d["trace"], lam, tops_q)
+
+    picks = [p for p in pts if p["pick"]]
+    tops = [p for p in pts if p["top"]]
+    overlap = len({p["lineup_id"] for p in picks} & {p["lineup_id"] for p in tops})
+
+    players_by_lid: dict[int, str] = {}
+    if lineups_csv and lineups_csv.exists():
+        df = pd.read_csv(lineups_csv, dtype={"contest_id": str, "entry_id": str})
+        sub = df[df["contest_id"] == contest_id]
+        for lid, lu in sub.groupby("lineup_id", sort=False):
+            lu = lu.sort_values("slot_no").drop_duplicates("slot_no")
+            players_by_lid[int(lid)] = _players_text(_clean(lu).to_dict("records"), str(lu["format"].iloc[0]))
+    by_lid = {p["lineup_id"]: p for p in pts}
+    top_ids = {p["lineup_id"] for p in tops}
+    rows = []
+    for t in d["trace"]:
+        p = by_lid.get(t["lineup_id"], {})
+        rows.append({"pick": t["pick"], "lineup_id": t["lineup_id"], "players": players_by_lid.get(int(t["lineup_id"]), ""),
+                     "cash": p.get("cash"), "roi": p.get("roi"), "q": t["q"], "div": t["div"], "bonus": lam * t["div"],
+                     "score": t["score"], "in_top": t["lineup_id"] in top_ids})
+
+    return {"contests": contests, "contest_id": contest_id, "name": d["contest_name"], "entries": d["entries"],
+            "n_candidates": d["n_candidates"], "n_shown": d["n_shown"], "weights": w, "lambda": lam,
+            "chosen": {"cash": _mean([p["cash"] for p in picks]), "roi": _mean([p["roi"] for p in picks]), "n": len(picks)},
+            "top": {"cash": _mean([p["cash"] for p in tops]), "roi": _mean([p["roi"] for p in tops]), "n": len(tops)},
+            "overlap": overlap, "spread": d["spread"], "explained_variance": evr,
+            "quality_svg": quality_svg, "map_svg": map_svg, "walk_svg": walk_svg, "rows": rows}

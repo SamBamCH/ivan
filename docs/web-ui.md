@@ -76,10 +76,16 @@ The tabs underneath show its work:
 ## After step 5
 
 - **Exposures** (top menu) shows the lineups step 5 chose and how often each player appears
-  in them. Pick the run at the top, then *Overall* or a single contest. For each contest
-  there is a table of its lineups (players, salary, projection, team split, stacks such as
-  "QB darnold +2 with opp 1", and the simulated cash % and ROI), followed by player
-  exposure across the lineups in view, grouped by CPT/FLEX (showdown) or position (classic).
+  in them. Pick the run at the top, then *Overall* or a single contest. With a contest
+  selected you get its lineups (players, salary, projection, team split, stacks such as
+  "QB darnold +2 with opp 1", and the simulated cash % and ROI); *Overall* shows one summary
+  line per contest instead. Below that is player exposure across the lineups in view,
+  grouped by CPT/FLEX (showdown) or position (classic).
+- **Choose** (top menu) shows how step 5 picked, per contest: every candidate lineup on a
+  cash % vs ROI plane with the weight direction drawn in, the same lineups on a map where
+  lineups that win and lose together sit close, the greedy walk (quality vs diversity bonus
+  for each pick), and the picks in order. Use it to see what changing the weights or the
+  diversity setting actually does.
 - **Downloads** has the file to give back to DraftKings — the one labelled *DraftKings upload*.
   Upload it through DraftKings' lineup upload and check that the entries look right.
 - You can re-run step 5 with different weights as many times as you like; each run makes a new

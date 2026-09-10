@@ -84,18 +84,65 @@ def choose_lineup_ids(
 
     # greedy: best quality first, then quality + lambda * mean distance to the picks so far
     num_lineups = min(num_lineups, N)
-    selected = [int(np.argmax(q))]
+    first = int(np.argmax(q))
+    selected = [first]
+    trace = [{"pick": 1, "lineup_id": sims[first].lineup_id, "q": float(q[first]), "div": 0.0, "score": float(q[first])}]
     remaining = set(range(N)) - set(selected)
     while len(selected) < num_lineups and remaining:
         div = dist_mat[:, selected].mean(axis=1)
         best = max(remaining, key=lambda j: q[j] + lam * div[j])
         selected.append(best)
         remaining.remove(best)
+        trace.append({"pick": len(selected), "lineup_id": sims[best].lineup_id, "q": float(q[best]),
+                      "div": float(div[best]), "score": float(q[best] + lam * div[best])})
 
-    top_q = np.argsort(-q)[:num_lineups]
+    top_q = [int(i) for i in np.argsort(-q)[:num_lineups]]
     _fill(stats, n_results, n_after_roi, n_valid, N, raw[top_q], raw[selected], selected, weights, len(missing_players),
           by_lineup={sims[i].lineup_id: {"cash_pct": float(raw[i, 0]), "avg_roi": float(raw[i, 1])} for i in selected})
+    if stats is not None:
+        stats["viz"] = _viz(sims, raw, q, dist_mat, fpts_matrix, selected, top_q, trace, lam, weights, (mins, maxs))
     return [sims[i].lineup_id for i in selected]
+
+
+def _viz(sims, raw, q, dist_mat, fpts_matrix, selected, top_q, trace, lam, weights, norm, max_points=1500, seed=0) -> dict:
+    """
+    What the chooser saw, for plotting: every candidate's cash %, ROI and
+    quality; a 2-D map of the simulated-points space (PCA of the fpts traces,
+    so distance on the map is roughly the diversity distance); which candidates
+    were picked (and in what order) or would have been picked on quality alone;
+    the greedy trace; and how spread out each set is. Candidates are subsampled
+    to max_points for the page, keeping every pick and quality-only pick.
+    """
+    N = len(sims)
+    Xc = fpts_matrix - fpts_matrix.mean(axis=0, keepdims=True)
+    U, S, _ = np.linalg.svd(Xc, full_matrices=False)
+    coords = U[:, :2] * S[:2] if S.size >= 2 else np.zeros((N, 2))
+    var = S ** 2
+    evr = (var / var.sum()).tolist() if var.sum() > 0 else [0.0, 0.0]
+
+    pick_order = {idx: k + 1 for k, idx in enumerate(selected)}
+    top_set = set(top_q)
+    keep = set(selected) | top_set
+    pool = [i for i in range(N) if i not in keep]
+    if len(keep) + len(pool) > max_points:
+        pool = [int(i) for i in np.random.default_rng(seed).choice(pool, size=max(0, max_points - len(keep)), replace=False)]
+    points = [{"lineup_id": sims[i].lineup_id, "cash": float(raw[i, 0]), "roi": float(raw[i, 1]), "q": float(q[i]),
+               "x": float(coords[i, 0]), "y": float(coords[i, 1]), "pick": pick_order.get(i), "top": i in top_set}
+              for i in sorted(keep | set(pool))]
+
+    def mean_pair(idx) -> Optional[float]:
+        idx = list(idx)
+        if len(idx) < 2:
+            return None
+        sub = dist_mat[np.ix_(idx, idx)]
+        return float(sub[np.triu_indices(len(idx), 1)].mean())
+
+    return {"n_candidates": N, "n_shown": len(points), "weights": dict(weights), "lambda": lam,
+            "explained_variance": [float(evr[0]), float(evr[1]) if len(evr) > 1 else 0.0],
+            "norm": {"cash": [float(norm[0][0]), float(norm[1][0])], "roi": [float(norm[0][1]), float(norm[1][1])]},
+            "points": points, "trace": trace,
+            "spread": {"chosen": mean_pair(selected), "top_quality": mean_pair(top_q),
+                       "all": float(dist_mat[np.triu_indices(N, 1)].mean()) if N > 1 else None}}
 
 
 def _fill(stats, n_results, n_after_roi, n_valid, n_unique, top_raw, sel_raw, selected, weights, n_missing, by_lineup=None):

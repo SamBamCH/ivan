@@ -182,10 +182,17 @@
     <p class="warn small">Sampled independently (no game-level correlation): {% for x in r.independent %}{{ x.name }} ({{ x.team }}, {{ x.reason }}){{ '; ' if not loop.last }}{% endfor %}</p>
   {% endif %}
 </div>
-{% for g in r.games %}
+{% if r.games|length > 1 %}
 <div class="card">
-  <details {% if loop.first %}open{% endif %}>
-  <summary>{{ g.teams[0] }} vs {{ g.teams[1] }} <span class="muted small">— {{ g.n_players }} rows, {{ g.n_people }} players · correlation source: {% for t, v in g.sources.items() %}{{ t }} {{ v }}{{ ', ' if not loop.last }}{% endfor %} · largest error {{ g.max_abs_error|num(3) }}, mean {{ g.mean_abs_error|num(3) }} · SPD adjustment ≤ {{ g.spd_adjustment_max|num(3) }}</span></summary>
+  <label>Game: <select id="game-pick">
+    {% for g in r.games %}<option value="{{ loop.index0 }}">{{ g.teams[0] }} vs {{ g.teams[1] }} — largest error {{ g.max_abs_error|num(3) }}</option>{% endfor %}
+  </select></label>
+</div>
+{% endif %}
+{% for g in r.games %}
+<div class="card game" data-game="{{ loop.index0 }}" {% if not loop.first %}hidden{% endif %}>
+  <h2>{{ g.teams[0] }} vs {{ g.teams[1] }}</h2>
+  <p class="muted small">{{ g.n_players }} rows, {{ g.n_people }} players · correlation source: {% for t, v in g.sources.items() %}{{ t }} {{ v }}{{ ', ' if not loop.last }}{% endfor %} · largest error {{ g.max_abs_error|num(3) }}, mean {{ g.mean_abs_error|num(3) }} · SPD adjustment ≤ {{ g.spd_adjustment_max|num(3) }}</p>
   <h3>Players: projected vs sampled</h3>
   <div class="wide"><table class="compact">
     <tr><th>Player</th><th>Team</th><th>Slot</th><th>Depth</th><th class="num">Proj mean</th><th class="num">Sampled</th><th class="num">z</th><th class="num">Proj sd</th><th class="num">Sampled</th><th class="num">ratio</th></tr>
@@ -224,9 +231,14 @@
   <table class="compact" style="width:auto"><tr><th>Pair</th><th class="num">Target</th><th class="num">Sampled</th></tr>
   {% for x in g.pooled_pairs %}<tr><td class="small">{{ x.a }} × {{ x.b }} ({{ x.a_team }} {{ x.a_slot }})</td><td class="num">{{ '%+.2f'|format(x.target) }}</td><td class="num">{{ '%+.2f'|format(x.sampled) }}</td></tr>{% endfor %}</table>
   {% endif %}
-  </details>
 </div>
 {% endfor %}
+<script>
+  const gamePick = document.getElementById('game-pick');
+  if (gamePick) gamePick.addEventListener('change', () => {
+    document.querySelectorAll('.game').forEach(el => el.hidden = (el.dataset.game !== gamePick.value));
+  });
+</script>
 </section>
 
 <script>

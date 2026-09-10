@@ -76,12 +76,13 @@
   .legend { color:var(--muted); font-size:12px; margin:4px 0 8px }
   .hist td.b { width:60% } .hist .bar { height:12px }
   details > summary { cursor:pointer; font-weight:600; margin-bottom:8px }
+  .chart svg { display:block; margin:0 auto } .caption { color:var(--muted); font-size:13px; margin:8px 0 0 }
 </style>
 </head>
 <body>
 <header><nav>
   <a class="brand" href="/">Ivan · NFL</a>
-  <a href="/">Pipeline</a><a href="/players">Players</a><a href="/contests">Contests</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
+  <a href="/">Pipeline</a><a href="/players">Players</a><a href="/contests">Contests</a><a href="/choose">Choose</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
 </nav></header>
 <main>
   {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}

@@ -304,6 +304,8 @@ def main():
 
     # Per-lineup detail: one row per player per chosen entry
     lineup_rows: List[Dict[str, object]] = []
+    # What the chooser saw per contest (candidates, picks, greedy trace): for the web UI's Choose page
+    choose_viz: Dict[str, dict] = {}
 
     def _detail_rows(base_data, fmt: str, lid: int, slots: List[str], assigned: List[NFLPlayer]):
         sim = stats.get("by_lineup", {}).get(lid, {})
@@ -349,6 +351,8 @@ def main():
         if not chosen_ids:
             print(f"  ⚠️  No lineups chosen for contest {cid}. Skipping.")
             continue
+        if stats.get("viz"):
+            choose_viz[str(cid)] = {"contest_name": cname, "entries": num_entries, **stats["viz"]}
         print(f"  chosen {stats['chosen']}: mean ROI {stats['chosen_roi']:+.1%}, cash {stats['chosen_cash']:.1%}"
               f"  (top-{stats['chosen']} by quality alone: ROI {stats['top_quality_roi']:+.1%}, cash {stats['top_quality_cash']:.1%})")
 
@@ -493,6 +497,10 @@ def main():
         out_detail = f"{root}.lineups.{ts}{ext}"
         pd.DataFrame(lineup_rows).to_csv(out_detail, index=False)
         print(f"✅ Wrote per-lineup detail → {out_detail}")
+    if choose_viz:
+        out_viz = f"{root}.choose.{ts}.json"
+        Path(out_viz).write_text(json.dumps(choose_viz))
+        print(f"✅ Wrote chooser diagnostics → {out_viz}")
 
 
 if __name__ == "__main__":
