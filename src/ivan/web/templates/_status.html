@@ -6,8 +6,8 @@
     <p class="small muted">Games {{ status.first_game|dt }}{% if status.last_game != status.first_game %} → {{ status.last_game|dt }}{% endif %}</p>
     <p>Field: <b>{{ '{:,}'.format(status.lineups) }}</b> lineups</p>
     {% if status.sims %}
-      <p>Simulated:</p>
-      <ul class="plain small">{% for s in status.sims %}<li>{{ s.contest }} <span class="muted">({{ '{:,}'.format(s.rows) }} rows)</span></li>{% endfor %}</ul>
+      <p>Simulated <span class="small">(<a href="/contests">contest details</a>)</span>:</p>
+      <ul class="plain small">{% for s in status.sims %}<li>{{ s.contest }} <span class="muted">({{ '{:,}'.format(s.rows) }} lineups)</span></li>{% endfor %}</ul>
     {% else %}<p class="muted">Nothing simulated yet.</p>{% endif %}
     {% if status.players_with_ownership == 0 %}<p class="warn small">No ownership projections on this slate.</p>{% endif %}
     <div class="resets">

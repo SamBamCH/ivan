@@ -16,6 +16,9 @@ def main():
         sess.execute(text("DELETE FROM lineup_simulation_results"))
         sess.commit()
         print("✅ lineup_simulation_results has been emptied.")
+        sess.execute(text("DELETE FROM contest_sim_report"))
+        sess.commit()
+        print("✅ contest_sim_report has been emptied.")
     except Exception as e:
         sess.rollback()
         print(f"❌ Error clearing table: {e}")

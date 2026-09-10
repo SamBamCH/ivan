@@ -49,13 +49,39 @@
   table { border-collapse:collapse; width:100% } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px }
   th { color:var(--muted); font-weight:600; font-size:13px } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums }
   .bar { display:inline-block; height:8px; background:var(--accent); border-radius:4px; vertical-align:middle; margin-right:6px }
+  .bar.own { background:#bbb }
   ul.plain { list-style:none; padding:0; margin:6px 0 } ul.plain li { padding:2px 0 }
+  /* per-contest weights (step 5) */
+  table.weights { width:auto; margin-top:4px } table.weights td, table.weights th { padding:4px 8px }
+  table.weights input[type=number] { width:80px; padding:4px 6px; font:inherit; border:1px solid #cfcfcf; border-radius:5px }
+  table.weights tr.all td { background:#f3f3f1; font-style:italic }
+  table.weights .r { text-align:right; font-variant-numeric:tabular-nums }
+  /* contests page */
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; margin:8px 0 14px }
+  .tile { background:#fafaf8; border:1px solid var(--line); border-radius:6px; padding:8px 10px }
+  .tile .v { font-size:18px; font-weight:600; font-variant-numeric:tabular-nums } .tile .l { color:var(--muted); font-size:12px }
+  .tile .s { color:var(--muted); font-size:12px; margin-top:2px }
+  .verdict { display:inline-block; min-width:44px; text-align:center; font-size:11px; font-weight:700; padding:2px 6px; border-radius:10px; text-transform:uppercase }
+  .verdict.ok { background:#dcfce7; color:var(--ok) } .verdict.warn { background:#fef3c7; color:var(--warn) }
+  .verdict.bad { background:#fee2e2; color:var(--bad) } .verdict.info { background:#eee; color:#555 }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 14px }
+  .tabs button { background:#fff; color:var(--ink); border:1px solid var(--line); padding:6px 14px }
+  .tabs button.on { background:var(--ink); color:#fff; border-color:var(--ink) }
+  table.compact th, table.compact td { padding:3px 6px; font-size:13px }
+  table.heat { border-collapse:separate; border-spacing:1px; width:auto }
+  table.heat th { font-size:10px; font-weight:500; color:var(--ink); padding:2px 3px; white-space:nowrap; border:0 }
+  table.heat th.col { writing-mode:vertical-rl; transform:rotate(180deg); text-align:left; height:120px; vertical-align:bottom }
+  table.heat td { width:26px; height:20px; padding:0; text-align:center; font-size:9px; border:0; font-variant-numeric:tabular-nums }
+  table.heat td.diag { background:#e8e8e6 }
+  .legend { color:var(--muted); font-size:12px; margin:4px 0 8px }
+  .hist td.b { width:60% } .hist .bar { height:12px }
+  details > summary { cursor:pointer; font-weight:600; margin-bottom:8px }
 </style>
 </head>
 <body>
 <header><nav>
   <a class="brand" href="/">Ivan · NFL</a>
-  <a href="/">Pipeline</a><a href="/players">Players</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
+  <a href="/">Pipeline</a><a href="/players">Players</a><a href="/contests">Contests</a><a href="/exposures">Exposures</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
 </nav></header>
 <main>
   {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}

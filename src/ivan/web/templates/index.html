@@ -37,11 +37,33 @@
     {% if step.key == 'ingest' %}
       <div id="slates" hx-get="/partials/slates" hx-trigger="load" hx-swap="outerHTML"><span class="muted small">Loading slates from DraftKings…</span></div>
     {% endif %}
+    {% if step.key == 'choose' and weights_rows %}
+      <div class="wide" style="flex-basis:100%">
+        <table class="weights">
+          <tr><th>Contest</th><th class="r">Entries</th>{% for k in weight_keys %}<th>{{ weight_labels[k] }}</th>{% endfor %}</tr>
+          <tr class="all"><td>Set every contest to</td><td></td>
+            {% for k in weight_keys %}<td><input type="number" step="0.05" min="0" placeholder="all" data-all="{{ k }}"></td>{% endfor %}</tr>
+          {% for r in weights_rows %}
+          <tr><td>{{ r.name }}{% if r.saved %} <span class="muted small" title="weights from your last run">·</span>{% endif %}</td><td class="r">{{ r.entries }}</td>
+            {% for k in weight_keys %}<td><input type="number" step="0.05" min="0" name="w-{{ r.id }}-{{ k }}" value="{{ r.weights[k] }}"></td>{% endfor %}</tr>
+          {% endfor %}
+        </table>
+        <p class="help">Typical: cash-heavy (cash 0.8 / ROI 0.2) for double-ups and small fields, ROI-heavy for big tournaments. Diversity 0.1 keeps a little variety; 0.5 spreads entries far apart.</p>
+      </div>
+    {% endif %}
     {% if step.needs_entries and not entries %}<span class="warn small">Upload an entries file first.</span>{% endif %}
   </div>
   <button {% if step.needs_entries and not entries %}disabled{% endif %}>Run</button>
 </form>
 {% endfor %}
+
+<script>
+  // "Set every contest to" row copies its value into every contest's input for that weight
+  document.querySelectorAll('input[data-all]').forEach(all => all.addEventListener('input', () => {
+    const form = all.closest('form');
+    form.querySelectorAll(`input[name$="-${all.dataset.all}"]`).forEach(i => i.value = all.value);
+  }));
+</script>
 
 {% if outputs %}
 <div class="card">

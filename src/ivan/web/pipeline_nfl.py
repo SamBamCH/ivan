@@ -7,6 +7,7 @@ coarse progress from the database while they run.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -17,6 +18,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from ivan.core.utils import PROJECT_ROOT
+from ivan.sports.nfl.models import ContestSimReport
 from ivan.sports.nfl.paths import INPUT_DIR, OUTPUT_DIR
 
 PYTHON = sys.executable
@@ -24,6 +26,11 @@ SCRIPTS = PROJECT_ROOT / "scripts" / "nfl"
 WEB_INPUT_DIR = INPUT_DIR / "web"
 WEB_OUTPUT_DIR = OUTPUT_DIR / "web"
 CURRENT_ENTRIES = WEB_INPUT_DIR / "entries.csv"
+WEIGHTS_FILE = WEB_INPUT_DIR / "weights.json"        # per-contest choose weights, remembered between runs
+
+WEIGHT_KEYS = ("cash_pct", "avg_roi_win", "diversity_lambda")
+WEIGHT_LABELS = {"cash_pct": "Cash %", "avg_roi_win": "ROI", "diversity_lambda": "Diversity"}
+DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1}
 
 
 @dataclass
@@ -142,19 +149,62 @@ STEPS: list[Step] = [
     ),
     Step(
         key="choose", title="Choose lineups",
-        blurb="Picks the best lineups for each contest from the simulation results and writes a DraftKings upload file. Weights say what 'best' means.",
-        fields=[Field("cash_pct", "Weight on cash %", default=0.5, min=0, step="0.05"),
-                Field("avg_roi_win", "Weight on ROI", default=0.5, min=0, step="0.05"),
-                Field("diversity_lambda", "Diversity", default=0.1, min=0, step="0.05",
-                      help="Higher = more different lineups across your entries.")],
+        blurb="Picks the best lineups for each contest from the simulation results and writes a DraftKings upload file. "
+              "The weights say what 'best' means, per contest: cash % (how often a lineup cashes), ROI (how much it wins "
+              "when it wins) and diversity (higher = more different lineups across that contest's entries). "
+              "Your last weights for each contest are remembered.",
         needs_entries=True,
-        build=lambda f: [_script("choose.py") + ["--entries", str(CURRENT_ENTRIES), "--no-prompt",
-                                                 "--cash-pct", str(_num(f, "cash_pct", 0.5, float)),
-                                                 "--avg-roi-win", str(_num(f, "avg_roi_win", 0.5, float)),
-                                                 "--diversity-lambda", str(_num(f, "diversity_lambda", 0.1, float)),
-                                                 "-o", str(WEB_OUTPUT_DIR / "chosen.csv")]],
+        build=lambda f: _build_choose(f),
     ),
 ]
+
+
+def load_weights() -> dict:
+    """Saved per-contest weights, keyed by contest id (strings), plus 'default'."""
+    try:
+        data = json.loads(WEIGHTS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def choose_rows(entries: Optional[dict]) -> list[dict]:
+    """One row per contest in the entries file with the weights to prefill: saved, else default."""
+    if not entries or entries.get("error"):
+        return []
+    saved = load_weights()
+    rows = []
+    for c in entries["contests"]:
+        cid = str(c["Contest ID"]).strip()
+        w = {**DEFAULT_WEIGHTS, **{k: v for k, v in saved.get(cid, {}).items() if k in WEIGHT_KEYS}}
+        rows.append({"id": cid, "name": c["Contest Name"], "entries": c["entries"], "weights": w, "saved": cid in saved})
+    return rows
+
+
+def _build_choose(form: dict) -> list[list[str]]:
+    """Read the per-contest weight inputs, remember them, and hand choose.py a weights file."""
+    entries = entries_summary()
+    if not entries or entries.get("error"):
+        raise ValueError("Upload an entries file first.")
+    weights = {k: v for k, v in load_weights().items() if k != "default"}
+    for row in choose_rows(entries):
+        w = dict(row["weights"])
+        for key in WEIGHT_KEYS:
+            raw = str(form.get(f"w-{row['id']}-{key}", "")).strip()
+            if raw == "":
+                continue
+            try:
+                val = float(raw)
+            except ValueError:
+                raise ValueError(f"'{raw}' is not a number ({WEIGHT_LABELS[key]} for {row['name']}).")
+            if val < 0:
+                raise ValueError(f"{WEIGHT_LABELS[key]} for {row['name']} must be 0 or more.")
+            w[key] = val
+        weights[row["id"]] = w
+    WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    WEIGHTS_FILE.write_text(json.dumps({"default": DEFAULT_WEIGHTS, **weights}, indent=1))
+    return [_script("choose.py") + ["--entries", str(CURRENT_ENTRIES), "--no-prompt",
+                                    "--weights-json", str(WEIGHTS_FILE), "-o", str(WEB_OUTPUT_DIR / "chosen.csv")]]
 STEP_BY_KEY = {s.key: s for s in STEPS}
 
 
@@ -188,8 +238,8 @@ def slate_status(session) -> dict:
 
 
 RESETS = {
-    "sims":    ("Clear simulation results", ["lineup_simulation_results"]),
-    "lineups": ("Clear lineups and simulation results", ["lineup_simulation_results", "lineup"]),
+    "sims":    ("Clear simulation results", ["lineup_simulation_results", "contest_sim_report"]),
+    "lineups": ("Clear lineups and simulation results", ["lineup_simulation_results", "contest_sim_report", "lineup"]),
 }
 
 
@@ -225,3 +275,44 @@ def players_frame(session) -> pd.DataFrame:
     df["slot"] = df["roster_slot_id"].map({511: "CPT", 512: "FLEX", 66: "QB", 67: "RB", 68: "WR", 69: "TE", 71: "DST"}).fillna(df["roster_slot_id"].astype(str))
     order = [c for c in ["slot"] + PLAYER_COLUMNS if c in df.columns] + [c for c in df.columns if c not in PLAYER_COLUMNS + ["slot"]]
     return df[order].sort_values(["roster_slot_id", "salary"], ascending=[True, False]).reset_index(drop=True)
+
+
+# ------------------------------------------------------------------ contest reports
+GROUP_ORDER = ["CPT", "FLEX", "QB", "RB", "WR", "TE", "K", "DST"]
+
+
+def contest_reports(session) -> list[dict]:
+    """Simulated contests with a report, newest first."""
+    rows = session.query(ContestSimReport).order_by(ContestSimReport.created_at.desc()).all()
+    return [{"id": r.contest_id, "name": r.contest_name, "created_at": r.created_at,
+             "counts": (r.report or {}).get("check_counts", {})} for r in rows]
+
+
+def contest_report(session, contest_id: int) -> Optional[dict]:
+    row = session.get(ContestSimReport, contest_id)
+    return row.report if row else None
+
+
+def report_view(report: dict) -> dict:
+    """Derived, display-only groupings for contests.html."""
+    f = report.get("field", {})
+    groups: dict[str, list] = {}
+    for r in f.get("exposures", []):
+        groups.setdefault(r.get("slot") or r.get("pos") or "?", []).append(r)
+    ordered = sorted(groups.items(), key=lambda kv: GROUP_ORDER.index(kv[0]) if kv[0] in GROUP_ORDER else 99)
+    max_hist = max((h["lineups"] for h in f.get("dupe_hist", [])), default=1)
+    checks = report.get("checks", [])
+    rank = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
+    return {"exposure_groups": [{"name": k, "rows": v} for k, v in ordered],
+            "max_hist": max_hist,
+            "checks_sorted": sorted(checks, key=lambda c: rank.get(c["status"], 9)),
+            "attention": [c for c in checks if c["status"] in ("bad", "warn")]}
+
+
+def corr_css(v) -> str:
+    """Cell background for a correlation in [-1, 1]: blue positive, red negative."""
+    if v is None:
+        return ""
+    v = max(-1.0, min(1.0, float(v)))
+    a = abs(v) ** 0.8 * 0.85
+    return f"background:rgba(31,95,191,{a:.2f})" if v >= 0 else f"background:rgba(180,35,24,{a:.2f})"

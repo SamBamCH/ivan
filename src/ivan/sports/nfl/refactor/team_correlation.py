@@ -9,11 +9,15 @@ from __future__ import annotations
 from typing import Dict, Tuple, Optional
 from collections import defaultdict
 
+import logging
+
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.models import NFLStat
+
+log = logging.getLogger(__name__)
 
 # Standard slot labels matching the simulation structure
 TEAM10_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1", "TE2", "K", "DST"]
@@ -122,7 +126,7 @@ def build_team_correlation(
     ).all()
     
     if not stats:
-        print(f"  No historical data for {team}, using identity correlation")
+        log.debug(f"  No historical data for {team}, using identity correlation")
         return np.eye(10), False
     
     # Convert to DataFrame
@@ -159,7 +163,7 @@ def build_team_correlation(
             all_game_slot_fpts.append(slot_fpts)
     
     if len(all_game_slot_fpts) < min_games:
-        print(f"  Only {len(all_game_slot_fpts)} valid games for {team} (need {min_games}), using identity correlation")
+        log.debug(f"  Only {len(all_game_slot_fpts)} valid games for {team} (need {min_games}), using identity correlation")
         return np.eye(10), False
     
     # Stack into matrix: (n_games, 10)
@@ -188,7 +192,7 @@ def build_team_correlation(
                 corr[i, j] = rho
                 corr[j, i] = rho
     
-    print(f"  Built correlation for {team} from {len(all_game_slot_fpts)} games across {df['season'].nunique()} seasons")
+    log.debug(f"  Built correlation for {team} from {len(all_game_slot_fpts)} games across {df['season'].nunique()} seasons")
     return corr, True
 
 
@@ -301,7 +305,7 @@ def build_cross_team_correlation(
             X_b.append(slot_fpts_b)
     
     if len(X_a) < min_matchups:
-        print(f"  Only {len(X_a)} h2h matchups for {team_a} vs {team_b}, using defaults")
+        log.debug(f"  Only {len(X_a)} h2h matchups for {team_a} vs {team_b}, using defaults")
         return _default_cross_correlation(), False
     
     X_a = np.array(X_a)
@@ -325,7 +329,7 @@ def build_cross_team_correlation(
             if not np.isnan(rho):
                 cross_corr[i, j] = rho
     
-    print(f"  Built cross-correlation for {team_a} vs {team_b} from {len(X_a)} matchups")
+    log.debug(f"  Built cross-correlation for {team_a} vs {team_b} from {len(X_a)} matchups")
     return cross_corr, True
 
 

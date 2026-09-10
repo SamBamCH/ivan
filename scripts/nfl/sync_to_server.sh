@@ -19,7 +19,7 @@ STAGE="$(mktemp -d)"
 [[ "${BUNDLE_ONLY:-0}" == "1" ]] || trap 'rm -rf "$STAGE"' EXIT
 
 # Per-slate working tables: owned by whichever machine is running the slate.
-WORKING="'nfl_player','odds','projection_snapshot','lineup','lineup_simulation_results'"
+WORKING="'nfl_player','odds','projection_snapshot','lineup','lineup_simulation_results','contest_sim_report'"
 
 # 1) consistent snapshot, safe even if another process is mid-write
 sqlite3 "$DB" "VACUUM INTO '$STAGE/snapshot.sqlite'"

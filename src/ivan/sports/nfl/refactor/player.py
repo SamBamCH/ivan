@@ -17,6 +17,45 @@ STATS = {
 SHOWDOWN_SLOTS = {511, 512}
 CLASSIC_SLOTS = {67, 68, 69, 70, 71}
 
+# Depth-chart slots the correlation model knows about (TEAM10 in correlated_samples):
+# how many of each base position get their own slot; deeper players are pooled
+# into the last one.
+SLOT_CAPS = {"QB": 1, "RB": 2, "WR": 3, "TE": 2, "K": 1, "DST": 1}
+
+
+def assign_slots(session) -> int:
+    """
+    Set NFLPlayer.slot_label (QB, RB1, RB2, WR1..WR3, TE1, TE2, K, DST) from each
+    team's projected depth chart, so the correlated sampler can place every
+    player in its slot-structured covariance. CPT and FLEX rows of the same
+    player share a label. Returns the number of rows labelled. Must run after
+    fpts_mean is populated; players without a projection sort last.
+    """
+    players = session.query(NFLPlayer).filter(NFLPlayer.team.isnot(None)).all()
+
+    by_name: dict[tuple, list] = {}
+    for p in players:
+        base = (p.position or "").upper()
+        if base not in SLOT_CAPS or not p.name:
+            continue
+        by_name.setdefault((p.team, base, p.name), []).append(p)
+
+    buckets: dict[tuple, list] = {}
+    for (team, base, name), rows in by_name.items():
+        proj = [r.fpts_mean for r in rows if r.fpts_mean is not None]
+        buckets.setdefault((team, base), []).append((max(proj) if proj else float("-inf"), name, rows))
+
+    labelled = 0
+    for (team, base), group in buckets.items():
+        group.sort(key=lambda t: t[0], reverse=True)
+        for depth, (_, _, rows) in enumerate(group, start=1):
+            label = base if SLOT_CAPS[base] == 1 else f"{base}{min(depth, SLOT_CAPS[base])}"
+            for r in rows:
+                r.slot_label = label
+                labelled += 1
+    session.commit()
+    return labelled
+
 # Odds filtering thresholds
 # Prices more extreme than these are likely data errors (American odds)
 MIN_PRICE = -1000  # Exclude odds like -1000 (implies 90%+ prob, usually bad data)
@@ -160,10 +199,9 @@ def fit_fpts_distributions(session):
         players = _dedupe_classic_players(session, players)
 
     rng = np.random.default_rng(42)
-    
+    fitted = 0
+
     for player in players:
-        print(f'processing player {player.name}')
-        
         # DST: use simple salary-based projection for now
         if player.position == 'DST':
             dst_samples = _fit_dst_by_salary(player, rng)
@@ -171,9 +209,9 @@ def fit_fpts_distributions(session):
             player.fpts_dist_name = 'norm'
             player.fpts_dist_params = (float(mu), float(sigma))
             _populate_fpts_stats(player, dst_samples)
-            print(f'{player.name} (DST): salary={player.salary}, mu={mu:.2f}, sigma={sigma:.2f}')
             session.commit()
-            continue            
+            fitted += 1
+            continue
         
         # Get player historical stats
         historical_stats = session.query(NFLStat).filter(
@@ -315,12 +353,13 @@ def fit_fpts_distributions(session):
         player.fpts_dist_params = (float(mu), float(sigma))
         _populate_fpts_stats(player, fpts_samples)
         session.commit()
-    
+        fitted += 1
+
     # Clean up: remove players with no fpts distribution
     players_without_fpts = session.query(NFLPlayer).filter(
         NFLPlayer.fpts_dist_params.is_(None)
     ).all()
-    
+
 
     if players_without_fpts:
         print(f"\nRemoving {len(players_without_fpts)} players with no fpts distribution:")
@@ -328,5 +367,33 @@ def fit_fpts_distributions(session):
             print(f"  - {p.name} ({p.position})")
             session.delete(p)
         session.commit()
+
+    # A captain scores exactly 1.5x the same player's FLEX line (the sampler
+    # applies the multiplier), so the CPT row carries the FLEX row's fit. The
+    # salary-based DST fit would otherwise see the 1.5x captain salary.
+    synced = _sync_captain_rows(session)
+
+    # Depth-chart slots drive the game-level correlation structure; without
+    # them every player would be sampled independently.
+    labelled = assign_slots(session)
+    print(f"\nFitted {fitted} players; {synced} captain rows copied from FLEX; "
+          f"{labelled} rows given depth-chart slots for correlation.")
+
+
+def _sync_captain_rows(session) -> int:
+    players = session.query(NFLPlayer).all()
+    flex = {p.name: p for p in players if p.roster_slot_id == 512}
+    fpts_cols = [c.name for c in NFLPlayer.__table__.columns if c.name.startswith("fpts_")]
+    synced = 0
+    for p in players:
+        src = flex.get(p.name) if p.roster_slot_id == 511 else None
+        if src is None:
+            continue
+        for col in fpts_cols:
+            setattr(p, col, getattr(src, col))
+        synced += 1
+    if synced:
+        session.commit()
+    return synced
 
 

@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Contests · Ivan{% endblock %}
+{% block content %}
+<h1>Contests</h1>
+{% if not picked %}
+  <div class="card"><p class="muted">No simulated contests yet — run step 4. Each simulated contest gets a report here: the field that was sampled, how the payouts were scaled, and the checks the simulator ran on itself.</p></div>
+{% else %}
+{% set c = report.contest %}{% set f = report.field %}{% set p = report.payouts %}{% set s = report.simulation %}{% set r = report.correlation %}
+<div class="card">
+  <form method="get" class="inline">
+    <label>Contest: <select name="id" onchange="this.form.submit()">
+      {% for x in contests %}<option value="{{ x.id }}" {% if x.id == picked.id %}selected{% endif %}>{{ x.name }}{% if x.counts.bad %} — {{ x.counts.bad }} failed check(s){% elif x.counts.warn %} — {{ x.counts.warn }} warning(s){% endif %}</option>{% endfor %}
+    </select></label>
+  </form>
+  <span class="small muted"> · simulated {{ picked.created_at|dt }} · <a href="/contests/{{ picked.id }}.json">raw report (JSON)</a></span>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ c.mode }}</div><div class="l">{{ c.contest_type }} · id {{ c.id }}</div></div>
+    <div class="tile"><div class="v">{{ c.entry_fee|money }}</div><div class="l">entry fee</div></div>
+    <div class="tile"><div class="v">{{ '{:,}'.format(c.total_entries) }} → {{ '{:,}'.format(c.simulated_size) }}</div><div class="l">real field → simulated field</div></div>
+    <div class="tile"><div class="v">{{ c.num_sims }}</div><div class="l">simulations</div></div>
+    <div class="tile"><div class="v">{{ '{:,}'.format(c.candidates) }}</div><div class="l">candidate lineups (step 3)</div></div>
+    <div class="tile"><div class="v">{{ c.seconds|num(0) }}s</div><div class="l">run time</div></div>
+    <div class="tile"><div class="v">
+      {% for k in ('ok','warn','bad') if report.check_counts[k] %}<span class="verdict {{ k }}">{{ report.check_counts[k] }} {{ k }}</span> {% endfor %}
+    </div><div class="l">checks</div></div>
+  </div>
+  {% if view.attention %}
+    <table class="compact">
+      {% for ch in view.attention %}<tr><td style="width:60px"><span class="verdict {{ ch.status }}">{{ ch.status }}</span></td><td><b>{{ ch.name }}</b> — {{ ch.detail }}</td></tr>{% endfor %}
+    </table>
+  {% else %}<p class="small" style="color:var(--ok)">All checks passed.</p>{% endif %}
+</div>
+
+<div class="tabs">
+  <button data-tab="checks" class="on">Checks</button><button data-tab="field">Field</button><button data-tab="payouts">Payouts</button>
+  <button data-tab="sim">Simulation</button><button data-tab="corr">Correlation</button>
+</div>
+
+<!-- ===================================================== checks -->
+<section id="tab-checks">
+<div class="card">
+  <h2>What the simulator verified about itself</h2>
+  <table class="compact">
+    <tr><th>Status</th><th>Check</th><th>Detail</th></tr>
+    {% for ch in view.checks_sorted %}<tr><td><span class="verdict {{ ch.status }}">{{ ch.status }}</span></td><td style="white-space:nowrap">{{ ch.name }}</td><td>{{ ch.detail }}</td></tr>{% endfor %}
+  </table>
+  <p class="help">ok = as expected · warn = look at it · bad = the simulation result should not be trusted · info = a modelling assumption worth knowing.</p>
+</div>
+</section>
+
+<!-- ===================================================== field -->
+<section id="tab-field" hidden>
+<div class="card">
+  <h2>The sampled field</h2>
+  <p class="muted small">The opposing field is {{ '{:,}'.format(f.entries) }} entries drawn (with replacement) from the {{ '{:,}'.format(f.candidates) }} candidate lineups, with duplication learned from history
+    ({{ f.sampler.sampler }}{% if f.sampler.model_mode %}, {{ f.sampler.model_mode }} duplication model{% endif %}; ownership input: {{ f.sampler.ownership.source if f.sampler.ownership else 'n/a' }}).
+    Only lineups that were drawn into the field get simulation results, so step 5 chooses among these {{ '{:,}'.format(f.unique) }}.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ '{:,}'.format(f.unique) }}</div><div class="l">unique lineups</div><div class="s">{{ f.unique_share|pct1 }} of the field · {{ f.candidates_scored_share|pct1 }} of candidates</div></div>
+    <div class="tile"><div class="v">{{ f.dupe_rate|pct1 }}</div><div class="l">dupe rate</div><div class="s">{{ '{:,}'.format(f.solo) }} lineups appear once</div></div>
+    <div class="tile"><div class="v">{{ f.max_dupes }}</div><div class="l">most copies of one lineup</div><div class="s">p50 / p90 / p99: {{ f.dupe_quantiles.p50|num(0) }} / {{ f.dupe_quantiles.p90|num(0) }} / {{ f.dupe_quantiles.p99|num(0) }}</div></div>
+    {% if f.ownership_calibration.corr is not none %}
+    <div class="tile"><div class="v">{{ f.ownership_calibration.corr|num(2) }}</div><div class="l">exposure vs projected ownership</div><div class="s">mean |diff| {{ f.ownership_calibration.mean_abs_diff_pct|num(1) }} pts, largest {{ f.ownership_calibration.max_abs_diff_pct|num(1) }}</div></div>
+    {% endif %}
+    {% if f.sampler.dupe_model and f.sampler.dupe_model.stage1_quantiles %}
+    <div class="tile"><div class="v">{{ f.sampler.dupe_model.stage1_quantiles.median|num(1) }} / {{ f.sampler.dupe_model.stage1_quantiles.max|num(0) }}</div><div class="l">predicted dupes: median / max</div><div class="s">for the real {{ '{:,}'.format(c.total_entries) }}-entry contest</div></div>
+    {% endif %}
+  </div>
+  <div class="grid">
+    <div>
+      <h3>Copies per lineup</h3>
+      <table class="compact hist">
+        <tr><th>Copies</th><th class="b">Lineups</th><th class="num">Entries</th></tr>
+        {% for h in f.dupe_hist %}<tr><td>{{ h.label }}</td><td class="b"><span class="bar" style="width:{{ (h.lineups / view.max_hist * 100)|round|int }}%"></span>{{ '{:,}'.format(h.lineups) }}</td><td class="num">{{ '{:,}'.format(h.entries) }}</td></tr>{% endfor %}
+      </table>
+    </div>
+    <div>
+      <h3>Most duplicated lineups</h3>
+      <table class="compact">
+        <tr><th class="num">Copies</th><th>Lineup</th><th class="num">Salary</th></tr>
+        {% for t in f.top_lineups %}<tr><td class="num">{{ t.dupes }}</td><td class="small">{{ t.players|join(', ') }}</td><td class="num">{{ '{:,}'.format(t.salary) }}</td></tr>{% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+{% for g in view.exposure_groups %}
+<div class="card">
+  <h2>{{ g.name }} <span class="muted small">({{ g.rows|length }} players) — field exposure <span class="bar" style="width:24px"></span> vs projected ownership <span class="bar own" style="width:24px"></span></span></h2>
+  <div class="wide"><table class="compact">
+    <tr><th>Player</th><th>Team</th><th>Pos</th><th>Depth</th><th class="num">Salary</th><th class="num">Proj</th><th style="min-width:240px">In the field</th><th class="num">Own %</th><th class="num">Δ pts</th></tr>
+    {% for x in g.rows %}
+    <tr><td>{{ x.name }}</td><td>{{ x.team }}</td><td>{{ x.pos }}</td><td class="muted">{{ x.depth_slot or '' }}</td>
+        <td class="num">{{ '{:,}'.format(x.salary|int) if x.salary else '' }}</td><td class="num">{{ x.fpts_mean|num(1) }}</td>
+        <td><span class="bar" style="width:{{ (x.exposure_pct * 1.6)|round|int }}px"></span>{{ x.exposure_pct|num(1) }}%
+            {% if x.ownership_pct is not none %}<br><span class="bar own" style="width:{{ (x.ownership_pct * 1.6)|round|int }}px"></span><span class="muted small">{{ x.ownership_pct|num(1) }}%</span>{% endif %}</td>
+        <td class="num">{{ x.ownership_pct|num(1) if x.ownership_pct is not none else '' }}</td>
+        <td class="num {% if x.delta_pct is not none and (x.delta_pct > 8 or x.delta_pct < -8) %}warn{% endif %}">{{ '%+.1f'|format(x.delta_pct) if x.delta_pct is not none else '' }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endfor %}
+</section>
+
+<!-- ===================================================== payouts -->
+<section id="tab-payouts" hidden>
+{% set o = p.original %}{% set sc = p.scaled %}
+<div class="card">
+  <h2>Payouts: DraftKings table → simulated field</h2>
+  <p class="muted small">Each simulated rank stands for {{ p.real_places_per_rank|num(1) }} real places and pays their average prize, so the pool scales exactly with the field, the same share of entries cashes, and the prize curve keeps its shape. First place in the simulation is the average of the real top {{ p.first_place_represents }} prizes — the simulation cannot resolve finishes finer than that.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ o.prize_pool|money(0) }} → {{ sc.prize_pool|money }}</div><div class="l">prize pool</div><div class="s">target {{ p.target_pool|money }} · off by {{ (p.pool_error * 100)|num(3) }}%</div></div>
+    <div class="tile"><div class="v">{{ o.rake|pct1 }} → {{ sc.rake|pct1 }}</div><div class="l">rake</div><div class="s">buy-ins {{ o.buy_ins|money(0) }} → {{ sc.buy_ins|money }}</div></div>
+    <div class="tile"><div class="v">{{ '{:,}'.format(o.paid_places) }} → {{ '{:,}'.format(sc.paid_places) }}</div><div class="l">paid places</div><div class="s">{{ o.paid_share|pct1 }} → {{ sc.paid_share|pct1 }} of the field</div></div>
+    <div class="tile"><div class="v">{{ o.first_place|money(0) }} → {{ sc.first_place|money }}</div><div class="l">first place</div><div class="s">{{ o.first_share|pct1 }} → {{ sc.first_share|pct1 }} of the pool</div></div>
+    <div class="tile"><div class="v">{{ o.min_cash|money }} → {{ sc.min_cash|money }}</div><div class="l">minimum cash</div></div>
+  </div>
+  <h3>Prize curve: share of the pool paid to the top …</h3>
+  <table class="compact" style="width:auto">
+    <tr><th></th>{% for k in o.curve %}<th class="num">top {{ k }}%</th>{% endfor %}</tr>
+    <tr><td>real contest</td>{% for k, v in o.curve.items() %}<td class="num">{{ v|pct1 }}</td>{% endfor %}</tr>
+    <tr><td>simulated</td>{% for k, v in sc.curve.items() %}<td class="num">{{ v|pct1 }}</td>{% endfor %}</tr>
+  </table>
+</div>
+<div class="grid">
+  <div class="card">
+    <h3>Real contest ({{ '{:,}'.format(o.field_size) }} entries, {{ o.tiers|length }} tiers)</h3>
+    <div class="wide"><table class="compact">
+      <tr><th>Ranks</th><th class="num">Places</th><th class="num">Payout</th><th class="num">Tier pool</th></tr>
+      {% for t in o.tiers %}<tr><td>{{ t.min }}{% if t.max != t.min %}–{{ t.max }}{% endif %}</td><td class="num">{{ '{:,}'.format(t.max - t.min + 1) }}</td><td class="num">{{ t.amount|money }}</td><td class="num">{{ ((t.max - t.min + 1) * t.amount)|money(0) }}</td></tr>{% endfor %}
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>Simulated field ({{ '{:,}'.format(sc.field_size) }} entries, {{ sc.tiers|length }} tiers)</h3>
+    <div class="wide"><table class="compact">
+      <tr><th>Ranks</th><th class="num">Places</th><th class="num">Payout</th><th class="num">Tier pool</th></tr>
+      {% for t in sc.tiers %}<tr><td>{{ t.min }}{% if t.max != t.min %}–{{ t.max }}{% endif %}</td><td class="num">{{ '{:,}'.format(t.max - t.min + 1) }}</td><td class="num">{{ t.amount|money }}</td><td class="num">{{ t.pool|money }}</td></tr>{% endfor %}
+    </table></div>
+  </div>
+</div>
+</section>
+
+<!-- ===================================================== simulation -->
+<section id="tab-sim" hidden>
+<div class="card">
+  <h2>Simulation</h2>
+  <p class="muted small">{{ s.n_sims }} simulations × {{ '{:,}'.format(s.entries) }} entries in {{ s.seconds|num(1) }}s on {{ s.workers }} workers. In every simulation the whole field is scored from one correlated draw, ranked, and paid from the scaled table; ties split the pooled prize of their rank range.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ s.conservation.max_abs_error|money(4) }}</div><div class="l">largest payout-conservation error</div><div class="s">every sim should pay exactly {{ s.conservation.expected_pool|money }}</div></div>
+    <div class="tile"><div class="v">{{ s.field_roi|pct1 }}</div><div class="l">mean ROI of the whole field</div><div class="s">expected {{ s.expected_field_roi|pct1 }} (the rake)</div></div>
+    <div class="tile"><div class="v">{{ s.winning_score.p50|num(1) }}</div><div class="l">winning score (median)</div><div class="s">p10 {{ s.winning_score.p10|num(1) }} · p90 {{ s.winning_score.p90|num(1) }}</div></div>
+    <div class="tile"><div class="v">{{ s.cash_line_score.p50|num(1) }}</div><div class="l">cash line (median)</div><div class="s">score of rank {{ '{:,}'.format(s.paid_places) }} · p10 {{ s.cash_line_score.p10|num(1) }} · p90 {{ s.cash_line_score.p90|num(1) }}</div></div>
+    <div class="tile"><div class="v">{{ s.entry_score.mean|num(1) }} ± {{ s.entry_score.std|num(1) }}</div><div class="l">entry score, mean ± sd</div></div>
+    <div class="tile"><div class="v">{{ s.lineup_roi.p50|pct1 }}</div><div class="l">median lineup ROI</div><div class="s">p10 {{ s.lineup_roi.p10|pct1 }} · p90 {{ s.lineup_roi.p90|pct1 }} · {{ '{:,}'.format(s.lineups_positive_roi) }} of {{ '{:,}'.format(s.lineup_roi.n) }} positive</div></div>
+    <div class="tile"><div class="v">{{ s.lineup_cash_pct.p50|pct1 }}</div><div class="l">median lineup cash %</div><div class="s">p10 {{ s.lineup_cash_pct.p10|pct1 }} · p90 {{ s.lineup_cash_pct.p90|pct1 }}</div></div>
+  </div>
+  {% if s.players_without_samples %}<p class="bad small">Players in the field with no sampled scores: {% for x in s.players_without_samples %}{{ x.name }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+</div>
+{% for title, rows in [('Best lineups by average ROI', s.top_by_roi), ('Best lineups by cash %', s.top_by_cash)] %}
+<div class="card">
+  <h3>{{ title }}</h3>
+  <div class="wide"><table class="compact">
+    <tr><th>Lineup</th><th class="num">Copies in field</th><th class="num">Cash %</th><th class="num">Avg ROI</th><th class="num">Win %</th><th class="num">Mean rank</th><th class="num">Mean score</th></tr>
+    {% for x in rows %}<tr><td class="small">{{ x.players|join(', ') }}</td><td class="num">{{ x.dupes }}</td><td class="num">{{ x.cash_pct|pct1 }}</td><td class="num">{{ x.avg_roi|pct1 }}</td><td class="num">{{ x.win_pct|pct1 }}</td><td class="num">{{ x.mean_rank|num(0) }}</td><td class="num">{{ x.mean_score|num(1) }}</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endfor %}
+</section>
+
+<!-- ===================================================== correlation -->
+<section id="tab-corr" hidden>
+<div class="card">
+  <h2>Correlation engine</h2>
+  <p class="muted small">Each simulation draws every player in a game from one multivariate normal: means and spreads from the fitted distributions, correlations by depth-chart slot from that team's history ({{ r.method }}), scaled by randomness {{ r.randomness|num(2) }}. The tables compare what was actually drawn with those targets; with {{ r.n_samples }} samples a correlation is only known to about ±{{ r.standard_error|num(3) }}.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ r.n_correlated }} / {{ r.n_independent }}</div><div class="l">rows correlated / independent</div><div class="s">{{ r.games|length }} game(s)</div></div>
+    <div class="tile"><div class="v">{{ r.max_abs_error|num(3) if r.max_abs_error is not none else '—' }}</div><div class="l">largest |sampled − target| correlation</div><div class="s">mean {{ r.mean_abs_error|num(3) }} · noise ~{{ r.standard_error|num(3) }}</div></div>
+    <div class="tile"><div class="v">{{ r.max_mean_z|num(1) }} se</div><div class="l">largest mean deviation</div><div class="s">sampled spread / expected: {{ r.std_ratio_min|num(2) }}–{{ r.std_ratio_max|num(2) }}</div></div>
+    {% if r.cpt_flex.pairs %}<div class="tile"><div class="v">{{ r.cpt_flex.ratio_min|num(3) }}–{{ r.cpt_flex.ratio_max|num(3) }}</div><div class="l">captain ÷ FLEX (should be 1.500)</div><div class="s">{{ r.cpt_flex.pairs }} players · correlation ≥ {{ r.cpt_flex.min_corr|num(4) }}</div></div>{% endif %}
+    {% if r.pooled.pairs %}<div class="tile"><div class="v">{{ r.pooled.max_sampled|num(2) }}</div><div class="l">largest correlation between two players sharing a depth slot</div><div class="s">{{ r.pooled.pairs }} such pairs</div></div>{% endif %}
+  </div>
+  {% if r.independent %}
+    <p class="warn small">Sampled independently (no game-level correlation): {% for x in r.independent %}{{ x.name }} ({{ x.team }}, {{ x.reason }}){{ '; ' if not loop.last }}{% endfor %}</p>
+  {% endif %}
+</div>
+{% for g in r.games %}
+<div class="card">
+  <details {% if loop.first %}open{% endif %}>
+  <summary>{{ g.teams[0] }} vs {{ g.teams[1] }} <span class="muted small">— {{ g.n_players }} rows, {{ g.n_people }} players · correlation source: {% for t, v in g.sources.items() %}{{ t }} {{ v }}{{ ', ' if not loop.last }}{% endfor %} · largest error {{ g.max_abs_error|num(3) }}, mean {{ g.mean_abs_error|num(3) }} · SPD adjustment ≤ {{ g.spd_adjustment_max|num(3) }}</span></summary>
+  <h3>Players: projected vs sampled</h3>
+  <div class="wide"><table class="compact">
+    <tr><th>Player</th><th>Team</th><th>Slot</th><th>Depth</th><th class="num">Proj mean</th><th class="num">Sampled</th><th class="num">z</th><th class="num">Proj sd</th><th class="num">Sampled</th><th class="num">ratio</th></tr>
+    {% for x in g.players %}<tr><td>{{ x.name }}</td><td>{{ x.team }}</td><td>{{ x.slot }}</td><td>{{ x.depth_slot }}</td>
+      <td class="num">{{ x.expected_mean|num(2) }}</td><td class="num">{{ x.sample_mean|num(2) }}</td><td class="num {% if x.mean_z is not none and (x.mean_z > 4 or x.mean_z < -4) %}warn{% endif %}">{{ '%+.1f'|format(x.mean_z) if x.mean_z is not none else '' }}</td>
+      <td class="num">{{ x.expected_std|num(2) }}</td><td class="num">{{ x.sample_std|num(2) }}</td><td class="num">{{ x.std_ratio|num(2) if x.std_ratio is not none else '' }}</td></tr>{% endfor %}
+  </table></div>
+  <h3>Correlation matrix: target above the diagonal, sampled below</h3>
+  <p class="legend">Values ×100. Blue positive, red negative. One column per player (captain rows share the FLEX row's draw).</p>
+  <div class="wide"><table class="heat">
+    <tr><th></th>{% for l in g.labels %}<th class="col">{{ l.name }} ({{ l.team }} {{ l.depth_slot }})</th>{% endfor %}</tr>
+    {% for l in g.labels %}{% set i = loop.index0 %}
+    <tr><th>{{ l.name }} ({{ l.team }} {{ l.depth_slot }})</th>
+      {% for m in g.labels %}{% set j = loop.index0 %}
+        {% if i == j %}<td class="diag"></td>
+        {% elif j > i %}<td style="{{ g.target[i][j]|corr_css }}" title="target {{ l.name }} × {{ m.name }}: {{ g.target[i][j] }}">{{ (g.target[i][j] * 100)|round|int }}</td>
+        {% else %}<td style="{{ g.sampled[i][j]|corr_css }}" title="sampled {{ l.name }} × {{ m.name }}: {{ g.sampled[i][j] }}">{{ (g.sampled[i][j] * 100)|round|int }}</td>{% endif %}
+      {% endfor %}</tr>
+    {% endfor %}
+  </table></div>
+  <div class="grid" style="margin-top:14px">
+    <div>
+      <h3>Strongest modelled relationships</h3>
+      <table class="compact"><tr><th>Pair</th><th class="num">Target</th><th class="num">Sampled</th></tr>
+      {% for x in g.strongest_pairs %}<tr><td class="small">{{ x.a }} ({{ x.a_team }} {{ x.a_slot }}) × {{ x.b }} ({{ x.b_team }} {{ x.b_slot }})</td><td class="num">{{ '%+.2f'|format(x.target) }}</td><td class="num">{{ '%+.2f'|format(x.sampled) }}</td></tr>{% endfor %}</table>
+    </div>
+    <div>
+      <h3>Largest sampling errors</h3>
+      <table class="compact"><tr><th>Pair</th><th class="num">Target</th><th class="num">Sampled</th></tr>
+      {% for x in g.largest_errors %}<tr><td class="small">{{ x.a }} ({{ x.a_team }} {{ x.a_slot }}) × {{ x.b }} ({{ x.b_team }} {{ x.b_slot }})</td><td class="num">{{ '%+.2f'|format(x.target) }}</td><td class="num">{{ '%+.2f'|format(x.sampled) }}</td></tr>{% endfor %}</table>
+    </div>
+  </div>
+  {% if g.pooled_pairs %}
+  <h3 style="margin-top:14px">Players sharing a depth slot</h3>
+  <p class="legend">Different players pooled into the same slot (a team's 3rd and 4th WR are both WR3). They get the team's adjacent-depth correlation, not the slot's own 1.0.</p>
+  <table class="compact" style="width:auto"><tr><th>Pair</th><th class="num">Target</th><th class="num">Sampled</th></tr>
+  {% for x in g.pooled_pairs %}<tr><td class="small">{{ x.a }} × {{ x.b }} ({{ x.a_team }} {{ x.a_slot }})</td><td class="num">{{ '%+.2f'|format(x.target) }}</td><td class="num">{{ '%+.2f'|format(x.sampled) }}</td></tr>{% endfor %}</table>
+  {% endif %}
+  </details>
+</div>
+{% endfor %}
+</section>
+
+<script>
+  const tabs = document.querySelectorAll('.tabs button');
+  const show = name => {
+    tabs.forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+    document.querySelectorAll('section[id^="tab-"]').forEach(s => s.hidden = (s.id !== 'tab-' + name));
+    history.replaceState(null, '', '#' + name);
+  };
+  tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
+  const want = location.hash.slice(1);
+  if ([...tabs].some(b => b.dataset.tab === want)) show(want);
+</script>
+{% endif %}
+{% endblock %}

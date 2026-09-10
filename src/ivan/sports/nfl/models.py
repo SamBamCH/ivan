@@ -354,6 +354,21 @@ class LineupSimulationResult(NFLBase):
         index=True
     )
 
+class ContestSimReport(NFLBase):
+    """
+    One row per simulated contest: everything simulate_one_contest knew about
+    the run (field sample, payout scaling, invariants, correlation check) as a
+    JSON document, so a person can verify the sim after the fact. Per-slate
+    working data, like lineup_simulation_results; never synced between machines.
+    """
+    __tablename__ = "contest_sim_report"
+
+    contest_id   = Column(Integer, primary_key=True)
+    contest_name = Column(String, nullable=False)
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    report       = Column(JSON, nullable=False)
+
+
 class NFLTeamWeekPositionalFPTS(NFLBase):
     __tablename__ = "nfl_team_week_positional_fpts"
 

@@ -5,7 +5,6 @@ step, no auth (run it on a LAN or behind Tailscale). One job at a time.
 """
 from __future__ import annotations
 
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +12,7 @@ from typing import Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -22,8 +21,9 @@ from ivan.database.session import get_session, init_db
 from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.jobs import JobRunner
-from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR,
-                                   RESETS, entries_summary, players_frame, reset_working, slate_status, slates)
+from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR, WEIGHT_KEYS,
+                                   WEIGHT_LABELS, RESETS, choose_rows, contest_report, contest_reports, corr_css,
+                                   entries_summary, players_frame, report_view, reset_working, slate_status, slates)
 
 HERE = Path(__file__).parent
 engine = init_db("nfl")
@@ -79,7 +79,30 @@ def _fmt_kb(n) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
 
-templates.env.filters.update(time=_fmt_time, dur=_fmt_dur, dt=_fmt_dt, pct=_fmt_pct, kb=_fmt_kb)
+def _fmt_money(x, places=2) -> str:
+    try:
+        return f"${float(x):,.{places}f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_num(x, places=1) -> str:
+    try:
+        return f"{float(x):,.{places}f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_pct1(x, places=1) -> str:
+    """A fraction as a percentage."""
+    try:
+        return f"{float(x) * 100:.{places}f}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+templates.env.filters.update(time=_fmt_time, dur=_fmt_dur, dt=_fmt_dt, pct=_fmt_pct, kb=_fmt_kb,
+                             money=_fmt_money, num=_fmt_num, pct1=_fmt_pct1, corr_css=corr_css)
 
 
 def _with_db(fn):
@@ -133,9 +156,10 @@ def _job_view(job_id: Optional[str], tail: int) -> dict:
 # ------------------------------------------------------------------- pages
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
+    entries = entries_summary()
     return templates.TemplateResponse(request, "index.html", _ctx(
-        request, status=_with_db(slate_status), entries=entries_summary(),
-        outputs=_outputs()[:3], **_job_view(None, 40)))
+        request, status=_with_db(slate_status), entries=entries, weights_rows=choose_rows(entries),
+        weight_keys=WEIGHT_KEYS, weight_labels=WEIGHT_LABELS, outputs=_outputs()[:3], **_job_view(None, 40)))
 
 
 @app.get("/partials/status", response_class=HTMLResponse)
@@ -253,6 +277,25 @@ def exposures(request: Request, file: Optional[str] = None):
         groups.append({"name": g, "rows": sub.to_dict("records")})
     siblings = [o for o in _outputs() if o["stamp"] == picked["stamp"] and o["kind"] != "Exposures"]
     return templates.TemplateResponse(request, "exposures.html", _ctx(request, files=files, picked=picked, groups=groups, siblings=siblings))
+
+
+@app.get("/contests", response_class=HTMLResponse)
+def contests(request: Request, id: Optional[int] = None):
+    rows = _with_db(contest_reports)
+    if not rows:
+        return templates.TemplateResponse(request, "contests.html", _ctx(request, contests=[], picked=None, report=None))
+    picked = next((r for r in rows if r["id"] == id), rows[0])
+    report = _with_db(lambda s: contest_report(s, picked["id"])) or {}
+    return templates.TemplateResponse(request, "contests.html", _ctx(
+        request, contests=rows, picked=picked, report=report, view=report_view(report)))
+
+
+@app.get("/contests/{contest_id}.json")
+def contest_json(contest_id: int):
+    report = _with_db(lambda s: contest_report(s, contest_id))
+    if report is None:
+        raise HTTPException(404, "no report for that contest")
+    return JSONResponse(report)
 
 
 @app.get("/downloads", response_class=HTMLResponse)

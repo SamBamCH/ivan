@@ -63,7 +63,7 @@ The laptop's `overnight.py` pushes automatically when `IVAN_SYNC_HOST=ivan-serve
 `.env`. What moves:
 
 - **Reference tables** — everything except `nfl_player`, `odds`, `projection_snapshot`,
-  `lineup`, `lineup_simulation_results` (and MLB tables), with their explicit indexes.
+  `lineup`, `lineup_simulation_results`, `contest_sim_report` (and MLB tables), with their explicit indexes.
   Dumped from a `VACUUM INTO` snapshot, gzipped (~24 MB), and loaded on the server by
   `scripts/nfl/import_reference.sh` with drop-and-replace per table.
 - **`data/nfl/models/`** — rsync with `--delete` (minus `archive/`), so unchanged pickles cost
@@ -98,7 +98,7 @@ From the laptop, push the checkout and bounce the service (the unit restarts on 
 
 ```bash
 rsync -az --delete --exclude /venv --exclude /data --exclude /.env ./ ivan-server:/opt/ivan/app/
-ssh ivan-server 'cd /opt/ivan/app && deploy/bootstrap_server.sh && fuser -k -KILL 8000/tcp'
+ssh ivan-server 'cd /opt/ivan/app && deploy/bootstrap_server.sh && fuser -k -KILL 80/tcp'
 ```
 
 `requirements-server.txt` is generated, not hand-edited. After changing imports on the

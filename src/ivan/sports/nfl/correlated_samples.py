@@ -1,259 +1,252 @@
 from __future__ import annotations
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Any
+from collections import defaultdict
+from typing import Dict, Tuple
 
-import json, joblib, numpy as np
-import scipy.stats as st
+import json
+import numpy as np
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
-import pyvinecopulib as pv
 
 from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.sports.nfl.models import NFLPlayer
 
-# Player marginals
-try:
-    from ivan.sports.nfl.fpts_distribution_calculations import load_models as load_player_models, simulate_player_fpts
-except Exception:
-    from ivan.sports.nfl.stat_distribution_calculations import load_models as load_player_models, simulate_player_fpts
+TEAM10 = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1", "TE2", "K", "DST"]
+SLOT_IDX = {s: i for i, s in enumerate(TEAM10)}
+CPT_SLOT = 511
+CPT_MULTIPLIER = 1.5
 
-TEAM10 = ["QB","RB1","RB2","WR1","WR2","WR3","TE1","TE2","K","DST"]
-QB_SLOT, RB_SLOT, WR_SLOT, TE_SLOT, DST_SLOT = 66, 67, 68, 69, 71
+# Fallback sigma per slot when a player has no fitted distribution.
+SLOT_SIGMA_DEFAULT = {
+    "QB": 6.0, "RB1": 6.0, "RB2": 5.5, "WR1": 6.5, "WR2": 6.0, "WR3": 5.5,
+    "TE1": 5.5, "TE2": 5.0, "K": 3.0, "DST": 6.0,
+}
+
+
+def _spearman_to_pearson(Rs: np.ndarray) -> np.ndarray:
+    """Bivariate-normal relationship between Spearman and Pearson correlation."""
+    return 2.0 * np.sin(np.clip(np.pi * Rs / 6.0, -np.pi / 2, np.pi / 2))
+
+
+def _near_spd(A: np.ndarray) -> np.ndarray:
+    """
+    Nearest well-conditioned correlation matrix: symmetrise, floor the
+    eigenvalues, then rescale back to a unit diagonal so the projection does
+    not change any player's variance.
+    """
+    B = (A + A.T) / 2
+    eigval, eigvec = np.linalg.eigh(B)
+    eigval[eigval < 1e-8] = 1e-8
+    C = (eigvec * eigval) @ eigvec.T
+    d = np.sqrt(np.diag(C))
+    C = C / np.outer(d, d)
+    np.fill_diagonal(C, 1.0)
+    return C
+
+
+# Two *different* players pooled into the same depth slot (a team's third and
+# fourth WR both carry WR3) are not the same player: instead of the slot's
+# self-correlation of 1.0 they get the team's adjacent-depth correlation.
+POOLED_NEIGHBOUR = {"RB1": ("RB1", "RB2"), "RB2": ("RB1", "RB2"), "WR1": ("WR1", "WR2"), "WR2": ("WR2", "WR3"),
+                    "WR3": ("WR2", "WR3"), "TE1": ("TE1", "TE2"), "TE2": ("TE1", "TE2")}
+
+
+def _pooled_pair_corr(Rw: np.ndarray, slot: str) -> float:
+    pair = POOLED_NEIGHBOUR.get(slot)
+    return float(Rw[SLOT_IDX[pair[0]], SLOT_IDX[pair[1]]]) if pair else 0.0
+
+
+def _separate_pooled_players(requested: np.ndarray, team_players: list, offset: int, Rw: np.ndarray) -> int:
+    """In place: same-slot pairs of different people get the pooled correlation. Returns pairs changed."""
+    changed = 0
+    for i in range(len(team_players)):
+        for j in range(i + 1, len(team_players)):
+            a, b = team_players[i], team_players[j]
+            if a.slot_label == b.slot_label and a.name != b.name:
+                requested[offset + i, offset + j] = requested[offset + j, offset + i] = _pooled_pair_corr(Rw, a.slot_label)
+                changed += 1
+    return changed
+
+
+def _mu_sigma(p: NFLPlayer, default_sigma: float) -> Tuple[float, float]:
+    prm = tuple(p.fpts_dist_params) if isinstance(p.fpts_dist_params, list) else p.fpts_dist_params
+    mu = float(p.fpts_mean if p.fpts_mean is not None else (prm[0] if prm else 0.0))
+    sd = float(prm[1]) if (prm and len(prm) >= 2 and prm[1] is not None) else float(default_sigma)
+    return mu, sd
+
 
 def generate_correlated_samples_gaussian(
     session: Session,
     model_dir: str | Path = MODELS_DIR,
     n_samples: int = 1000,
     seed: int | None = None,
-    use_hgv20: bool = False,  # Default to team-specific now
-    use_team_specific_corr: bool = True,  # NEW: use team-specific correlations from historical data
+    use_hgv20: bool = False,
+    use_team_specific_corr: bool = True,
     randomness: float = 1.0,
-) -> Dict[int, np.ndarray]:
+    return_diagnostics: bool = False,
+) -> Dict[int, np.ndarray] | Tuple[Dict[int, np.ndarray], dict]:
     """
-    Simpler sampler: treat all fpts marginals as Normal(μ_i, σ_i) and draw
-    a single multivariate normal per *game* using a slot-structured covariance.
+    Treat every player's fantasy points as Normal(mu, sigma) and draw one
+    multivariate normal per *game* with a slot-structured covariance: a 10x10
+    within-team correlation for each side plus a 10x10 cross-team block.
 
-    Requires NFLPlayer.slot_label ∈ {QB,RB1,RB2,WR1,WR2,WR3,TE1,TE2,K,DST}.
-    Players deeper than modeled slots should have been pooled at fit time.
+    Players need NFLPlayer.slot_label in TEAM10 (set by assign_slots at ingest)
+    and a paired opponent on the slate; anything else is sampled independently.
+    Captain rows (roster_slot_id 511) are the same draw times 1.5.
 
-    Args:
-        use_team_specific_corr: If True (default), build correlation matrices from each team's
-                                historical data. This captures team-specific offensive structures.
-        use_hgv20: If True (and use_team_specific_corr=False), use HGV-20 vine copula correlations.
-        randomness: Controls distribution spread (0.0 = deterministic at median, 1.0 = full distribution).
-                    Values are clamped to [0.0, 1.0].
+    randomness scales the spread (0 = every sample at the mean, 1 = full
+    distribution). With return_diagnostics=True the second return value records
+    what was actually sampled, so a run can be verified afterwards:
+
+        {"n_samples", "randomness", "method",
+         "games": [{"teams", "player_ids", "slots", "mu", "sigma",
+                    "requested_corr", "corr", "sources"}],
+         "independent": [{"id", "reason"}]}
+
+    where `requested_corr` is the correlation assembled from the model and
+    `corr` is what was sampled from after clipping and the SPD projection.
     """
-    from pathlib import Path
-    import numpy as np
-    import scipy.stats as st
-    from collections import defaultdict
-
     rng = np.random.default_rng(seed)
     model_dir = Path(model_dir)
-
-    # Clamp randomness to [0.0, 1.0]
     randomness = float(np.clip(randomness, 0.0, 1.0))
 
-    # --- 1) load all players on the slate with means/sigmas/slot_label ---
-    q = session.query(NFLPlayer)
-    players = q.all()
+    players = session.query(NFLPlayer).all()
     if not players:
-        return {}
+        return ({}, {"games": [], "independent": []}) if return_diagnostics else {}
 
-    # Build (team -> opp) via first seen opponent
-    team_to_opp = {}
-    by_team = defaultdict(list)
+    team_to_opp: Dict[str, str] = {}
+    by_team: Dict[str, list] = defaultdict(list)
     for p in players:
         by_team[p.team].append(p)
         if p.team not in team_to_opp and p.opponent:
             team_to_opp[p.team] = p.opponent
 
-    seen = set()
-    matchups = []
+    seen, matchups = set(), []
     for t, o in team_to_opp.items():
-        if not o: 
+        if not o:
             continue
         a, b = sorted([t, o])
-        if (a, b) in seen: 
+        if (a, b) in seen:
             continue
-        seen.add((a, b)); matchups.append((a, b))
+        seen.add((a, b))
+        matchups.append((a, b))
 
-    # --- 2) slot-slot correlations ---
-    TEAM10 = ["QB","RB1","RB2","WR1","WR2","WR3","TE1","TE2","K","DST"]
-    
-    # Spearman -> Pearson (bivariate normal relationship)
-    def s2p(Rs: np.ndarray) -> np.ndarray:
-        return 2.0 * np.sin(np.clip(np.pi * Rs / 6.0, -np.pi/2, np.pi/2))
-
-    # Cache for team-specific correlations (avoid recomputing)
-    team_corr_cache: Dict[str, np.ndarray] = {}
-    cross_corr_cache: Dict[Tuple[str, str], np.ndarray] = {}
-    
+    # --- correlation source -----------------------------------------------------------
+    team_corr_cache: Dict[str, Tuple[np.ndarray, bool]] = {}
+    cross_corr_cache: Dict[Tuple[str, str], Tuple[np.ndarray, bool]] = {}
+    Rw = Rx = None
     if use_team_specific_corr:
-        # Import team correlation builder
         from ivan.sports.nfl.refactor.team_correlation import build_team_correlation, build_cross_team_correlation
-        print("Using team-specific correlations from historical data")
+        method = "team_specific"
     elif use_hgv20:
-        # compute once from your HGV-20 (vine+factors) the two 10x10 Spearman matrices
         from .correlated_sampling_validation import print_hgv20_spearman
         hgv = print_hgv20_spearman(model_dir, n=20_000)
-
-        # Accept (within, cross) or (within, cross, order) or a dict
-        if isinstance(hgv, tuple):
-            if len(hgv) == 2:
-                Rw_S, Rx_S = hgv
-            elif len(hgv) >= 3:
-                Rw_S, Rx_S = hgv[0], hgv[1]
-            else:
-                raise RuntimeError("print_hgv20_spearman returned an unexpected tuple length.")
+        if isinstance(hgv, tuple) and len(hgv) >= 2:
+            Rw_S, Rx_S = hgv[0], hgv[1]
         elif isinstance(hgv, dict):
-            Rw_S = np.asarray(hgv["within"], dtype=float)
-            Rx_S = np.asarray(hgv["cross"], dtype=float)
+            Rw_S, Rx_S = np.asarray(hgv["within"], float), np.asarray(hgv["cross"], float)
         else:
             raise RuntimeError("print_hgv20_spearman returned an unexpected type.")
-            
-        Rw = s2p(Rw_S)
-        Rx = s2p(Rx_S)
+        Rw, Rx = _spearman_to_pearson(Rw_S), _spearman_to_pearson(Rx_S)
         np.fill_diagonal(Rw, 1.0)
+        method = "hgv20"
     else:
-        # Or load a JSON/NPZ you precomputed and checked in
-        d = json.loads((Path(model_dir) / "team10_spearman.json").read_text())
-        Rw_S = np.array(d["within"], float)
-        Rx_S = np.array(d["cross"], float)
-        Rw = s2p(Rw_S)
-        Rx = s2p(Rx_S)
+        d = json.loads((model_dir / "team10_spearman.json").read_text())
+        Rw, Rx = _spearman_to_pearson(np.array(d["within"], float)), _spearman_to_pearson(np.array(d["cross"], float))
         np.fill_diagonal(Rw, 1.0)
+        method = "team10_spearman.json"
 
-    slot_idx = {s:i for i,s in enumerate(TEAM10)}
+    def within(team: str) -> Tuple[np.ndarray, str]:
+        if not use_team_specific_corr:
+            return Rw, method
+        if team not in team_corr_cache:
+            R_S, ok = build_team_correlation(session, team)
+            R = _spearman_to_pearson(R_S)
+            np.fill_diagonal(R, 1.0)
+            team_corr_cache[team] = (R, ok)
+        R, ok = team_corr_cache[team]
+        return R, ("history" if ok else "identity")
 
-    # --- 3) sample per game ---
+    def cross(a: str, b: str) -> Tuple[np.ndarray, str]:
+        if not use_team_specific_corr:
+            return Rx, method
+        key = (a, b) if a < b else (b, a)
+        if key not in cross_corr_cache:
+            R_S, ok = build_cross_team_correlation(session, a, b)
+            cross_corr_cache[key] = (_spearman_to_pearson(R_S), ok)
+        R, ok = cross_corr_cache[key]
+        return R, ("history" if ok else "default")
+
+    def sort_team(pl: list) -> list:
+        seq = []
+        for s in TEAM10:
+            group = [p for p in pl if p.slot_label == s]
+            group.sort(key=lambda p: (p.fpts_mean if p.fpts_mean is not None else -1e9), reverse=True)
+            seq.extend(group)
+        return seq
+
+    # --- one multivariate normal per game ----------------------------------------------
     out: Dict[int, np.ndarray] = {}
-
-    def near_spd(A: np.ndarray) -> np.ndarray:
-        # Simple Higham projection (very small & fast for d<=40)
-        B = (A + A.T) / 2
-        eigval, eigvec = np.linalg.eigh(B)
-        eigval[eigval < 1e-8] = 1e-8
-        return (eigvec * eigval) @ eigvec.T
-
+    games: list[dict] = []
     for a, b in matchups:
-        A = [p for p in by_team.get(a, []) if p.slot_label in slot_idx]
-        B = [p for p in by_team.get(b, []) if p.slot_label in slot_idx]
-        if not A and not B:
-            continue
-
-        # Order players (stable): slot order first, then by mean desc within slot
-        def sort_team(pl):
-            d = {}
-            for s in TEAM10:
-                group = [p for p in pl if p.slot_label == s]
-                group.sort(key=lambda p: (p.fpts_mean if p.fpts_mean is not None else -1e9), reverse=True)
-                for p in group:
-                    d.setdefault(s, []).append(p)
-            # Flatten but keep slot blocks in TEAM10 order
-            seq = []
-            for s in TEAM10:
-                seq.extend(d.get(s, []))
-            return seq
-
-        A = sort_team(A); B = sort_team(B)
+        A = sort_team([p for p in by_team.get(a, []) if p.slot_label in SLOT_IDX])
+        B = sort_team([p for p in by_team.get(b, []) if p.slot_label in SLOT_IDX])
         players_game = A + B
         if not players_game:
             continue
 
-        # Build μ and σ, falling back to slot-level sigma if missing
-        mu = []
-        sigma = []
-        slot_sigma_default = {
-            "QB": 6.0, "RB1": 6.0, "RB2": 5.5, "WR1": 6.5, "WR2": 6.0, "WR3": 5.5,
-            "TE1": 5.5, "TE2": 5.0, "K": 3.0, "DST": 6.0,
-        }
+        mu, sigma = [], []
         for p in players_game:
-            # fpts_dist_params for norm is (mu, sigma)
-            prm = tuple(p.fpts_dist_params) if isinstance(p.fpts_dist_params, list) else p.fpts_dist_params
-            mu_i = float(p.fpts_mean if p.fpts_mean is not None else (prm[0] if prm else 0.0))
-            sd_i = float(prm[1]) if (prm and len(prm) >= 2 and prm[1] is not None) else float(slot_sigma_default[p.slot_label])
-            mu.append(mu_i); sigma.append(sd_i)
-        mu = np.array(mu, dtype=float)
-        sigma = np.array(sigma, dtype=float)
+            m, s = _mu_sigma(p, SLOT_SIGMA_DEFAULT[p.slot_label])
+            mu.append(m)
+            sigma.append(s)
+        mu, sigma = np.array(mu, float), np.array(sigma, float)
 
-        # Build the *correlation* matrix by slots — block structure:
-        dA, dB = len(A), len(B)
-        # Map each player to its slot index (first occurrence uses the slot's corr; extra players in same slot share that corr)
-        slots_A = [slot_idx[p.slot_label] for p in A]
-        slots_B = [slot_idx[p.slot_label] for p in B]
+        slots_A = [SLOT_IDX[p.slot_label] for p in A]
+        slots_B = [SLOT_IDX[p.slot_label] for p in B]
+        Rw_a, src_a = within(a)
+        Rw_b, src_b = within(b)
+        Rx_ab, src_x = cross(a, b)
+        requested = np.block([[Rw_a[np.ix_(slots_A, slots_A)], Rx_ab[np.ix_(slots_A, slots_B)]],
+                              [Rx_ab[np.ix_(slots_A, slots_B)].T, Rw_b[np.ix_(slots_B, slots_B)]]])
+        pooled = _separate_pooled_players(requested, A, 0, Rw_a) + _separate_pooled_players(requested, B, len(A), Rw_b)
+        corr = _near_spd(np.clip(requested, -0.999, 0.999))
+        np.fill_diagonal(requested, 1.0)
 
-        # Get correlation matrices (team-specific or generic)
-        if use_team_specific_corr:
-            # Build/retrieve team-specific correlations
-            if a not in team_corr_cache:
-                Rw_a_S, _ = build_team_correlation(session, a)
-                team_corr_cache[a] = s2p(Rw_a_S)
-                np.fill_diagonal(team_corr_cache[a], 1.0)
-            if b not in team_corr_cache:
-                Rw_b_S, _ = build_team_correlation(session, b)
-                team_corr_cache[b] = s2p(Rw_b_S)
-                np.fill_diagonal(team_corr_cache[b], 1.0)
-            
-            cross_key = (a, b) if a < b else (b, a)
-            if cross_key not in cross_corr_cache:
-                Rx_S, _ = build_cross_team_correlation(session, a, b)
-                cross_corr_cache[cross_key] = s2p(Rx_S)
-            
-            Rw_a = team_corr_cache[a]
-            Rw_b = team_corr_cache[b]
-            Rx_ab = cross_corr_cache[cross_key]
-            
-            # Within-team corr for A and B (using team-specific matrices)
-            Corr_A = Rw_a[np.ix_(slots_A, slots_A)]
-            Corr_B = Rw_b[np.ix_(slots_B, slots_B)]
-            # Cross-team corr
-            Corr_X = Rx_ab[np.ix_(slots_A, slots_B)]
-        else:
-            # Use generic (HGV20 or JSON) correlations
-            Corr_A = Rw[np.ix_(slots_A, slots_A)]
-            Corr_B = Rw[np.ix_(slots_B, slots_B)]
-            Corr_X = Rx[np.ix_(slots_A, slots_B)]
-
-        # Assemble full correlation:
-        Corr = np.block([[Corr_A, Corr_X],
-                         [Corr_X.T, Corr_B]])
-        # Clamp numeric noise and project to SPD if needed
-        Corr = np.clip(Corr, -0.999, 0.999)
-        Corr = near_spd(Corr)
-
-        # Covariance Σ = D * Corr * D
         D = np.diag(sigma)
-        Sigma = D @ Corr @ D
-
-        # Apply randomness scaling to covariance (scale variance by randomness²)
-        Sigma_scaled = Sigma * (randomness ** 2)
-
-        # Sample
-        Z = rng.multivariate_normal(mean=np.zeros(len(players_game)), cov=Sigma_scaled, size=n_samples)
-        X = (Z + mu)  # broadcasting: add μ row-wise
-
-        # Store back by player id (apply 1.5x multiplier for captains)
+        Sigma = (D @ corr @ D) * (randomness ** 2)
+        Z = rng.multivariate_normal(mean=np.zeros(len(players_game)), cov=Sigma, size=n_samples)
+        X = Z + mu
         for j, p in enumerate(players_game):
             samples = X[:, j].astype(np.float32, copy=False)
-            # Apply 1.5x multiplier for captain slot (roster_slot_id == 511)
-            if p.roster_slot_id == 511:
-                samples = samples * 1.5
-            out[p.id] = samples
+            out[p.id] = samples * CPT_MULTIPLIER if p.roster_slot_id == CPT_SLOT else samples
 
-    # Teams with no paired opponent: fall back to independent N(μ,σ)
+        if return_diagnostics:
+            games.append({
+                "teams": [a, b],
+                "player_ids": [int(p.id) for p in players_game],
+                "slots": [p.slot_label for p in players_game],
+                "mu": mu.tolist(), "sigma": sigma.tolist(),
+                "requested_corr": np.round(requested, 4).tolist(),
+                "corr": np.round(corr, 4).tolist(),
+                "sources": {a: src_a, b: src_b, "cross": src_x},
+                "pooled_pairs": pooled,
+            })
+
+    # --- everyone else: independent N(mu, sigma) ---------------------------------------
+    independent: list[dict] = []
     for p in players:
-        if p.id not in out:
-            prm = tuple(p.fpts_dist_params) if isinstance(p.fpts_dist_params, list) else p.fpts_dist_params
-            mu_i = float(p.fpts_mean if p.fpts_mean is not None else (prm[0] if prm else 0.0))
-            sd_i = float(prm[1]) if (prm and len(prm) >= 2 and prm[1] is not None) else 6.0
-            # Apply randomness scaling to standard deviation
-            sd_scaled = sd_i * randomness
-            samples = rng.normal(loc=mu_i, scale=sd_scaled, size=n_samples).astype(np.float32, copy=False)
-            # Apply 1.5x multiplier for captain slot (roster_slot_id == 511)
-            if p.roster_slot_id == 511:
-                samples = samples * 1.5
-            out[p.id] = samples
+        if p.id in out:
+            continue
+        mu_i, sd_i = _mu_sigma(p, 6.0)
+        samples = rng.normal(loc=mu_i, scale=sd_i * randomness, size=n_samples).astype(np.float32, copy=False)
+        out[p.id] = samples * CPT_MULTIPLIER if p.roster_slot_id == CPT_SLOT else samples
+        if return_diagnostics:
+            reason = ("no depth-chart slot label" if p.slot_label not in SLOT_IDX
+                      else "no opponent on the slate" if not any(p.team in m for m in matchups)
+                      else "not placed in a game")
+            independent.append({"id": int(p.id), "reason": reason, "mu": mu_i, "sigma": sd_i})
 
+    if return_diagnostics:
+        return out, {"n_samples": int(n_samples), "randomness": randomness, "method": method,
+                     "games": games, "independent": independent}
     return out

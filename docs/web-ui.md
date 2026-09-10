@@ -41,12 +41,37 @@ The job box shows the live log; if another job is still running, yours waits in 
 3. **Generate the field** — builds a big pool of possible lineups. 10,000 is a good default.
    "Parallel workers" is how many CPU cores to use; more is faster.
 4. **Simulate your contests** — needs your entries file. Simulates each contest thousands of
-   times and scores every candidate lineup. This is the slow step.
+   times and scores every candidate lineup. This is the slow step. Re-running it replaces the
+   previous results. Every simulated contest gets a page under **Contests** (see below).
 5. **Choose lineups** — needs your entries file. Picks the lineups to submit, one per entry.
-   The three weights say what you care about:
+   Each contest in your entries file gets its own row of weights, which say what you care
+   about in that contest:
    - *Cash %* — how often the lineup cashes.
    - *ROI* — how much it wins when it wins.
    - *Diversity* — higher spreads your entries across more different lineups.
+
+   A cash-heavy mix (say cash 0.8 / ROI 0.2) suits double-ups and small fields; ROI-heavy
+   suits big tournaments. The *Set every contest to* row fills a column for all contests.
+   Your last weights for each contest are remembered and prefilled next time.
+
+## Checking a simulation: the Contests page
+
+**Contests** (top menu) has one report per simulated contest; pick the contest from the
+drop-down. The top of the page lists anything the simulator flagged about its own run.
+The tabs underneath show its work:
+
+- **Checks** — every invariant the simulator verified: payouts add up in every simulation,
+  ties split prizes correctly, the field's average return equals the rake, sampled player
+  scores match their projections, the correlation between players matches the model, and so
+  on. *ok* is as expected, *warn* is worth a look, *bad* means don't trust that contest's
+  results (and usually says what to re-run).
+- **Field** — the opposing field that was simulated: how duplicated it is, the most-duplicated
+  lineups, and each player's share of the field next to their projected ownership.
+- **Payouts** — the real DraftKings payout table next to the scaled one the simulator paid
+  from, with the prize pool, rake, paid places and prize curve before and after scaling.
+- **Simulation** — winning and cash-line scores, and the candidate lineups that did best.
+- **Correlation** — for each game, every player's projected vs sampled mean and spread, and
+  the target vs sampled correlation matrix, so you can see the correlation model working.
 
 ## After step 5
 

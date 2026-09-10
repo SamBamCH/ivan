@@ -1155,67 +1155,9 @@ def _player_has_any_odds(session: Session, player_name: str) -> bool:
     q = session.query(exists().where(NFLOdds.player == player_name))
     return bool(q.scalar())
 
-# Example (assumed) slot caps; keep your existing SLOTS mapping if defined elsewhere.
-SLOTS = {
-    "QB": 1,
-    "RB": 2,
-    "WR": 3,
-    "TE": 2,
-    "K": 1,
-    "DST": 1,
-}
+# Depth-chart slot assignment now lives with the current fitter.
+from ivan.sports.nfl.refactor.player import assign_slots  # noqa: E402
 
-def _base_pos(pos: str | None) -> str:
-    """Normalize to base position."""
-    if not pos:
-        return ""
-    pos_up = pos.upper()
-    # If your CPT row has position like 'WR' too, this is fine.
-    # If CPT shows as 'CPT' or similar, you may need to pull a separate field.
-    return pos_up
-
-def assign_slots(session: Session) -> None:
-    # get all active players with a team
-    players = session.query(NFLPlayer).filter(NFLPlayer.team.isnot(None)).all()
-
-    # 1) Group raw rows by (team, base_pos, player.name) so CPT+FLEX for same name stay together
-    name_groups: dict[Tuple[str, str, str], List[NFLPlayer]] = defaultdict(list)
-    for p in players:
-        base = _base_pos(p.position)
-        if base not in ("QB", "RB", "WR", "TE", "K", "DST"):
-            continue
-        if not p.name:
-            # If some rows are missing name, skip or handle however you prefer
-            continue
-        name_groups[(p.team, base, p.name)].append(p)
-
-    # 2) For each (team, base) bucket, build a unique-name list with a sort key
-    buckets: dict[Tuple[str, str], List[Tuple[str, float, List[NFLPlayer]]]] = defaultdict(list)
-    for (team, base, name), rows in name_groups.items():
-        # Sort key: projected mean. Use the best available projection among the two rows.
-        # If you need to prefer FLEX to avoid CPT multipliers, adjust here.
-        proj_candidates = [r.fpts_mean for r in rows if r.fpts_mean is not None]
-        sort_key = max(proj_candidates) if proj_candidates else float("-inf")
-        buckets[(team, base)].append((name, sort_key, rows))
-
-    # 3) Within each (team, base) bucket, sort by projection and assign depth slots
-    for (team, base), group in buckets.items():
-        # sort by projected mean (desc)
-        group.sort(key=lambda t: t[1], reverse=True)
-
-        cap = SLOTS[base]
-        for i, (name, _, rows) in enumerate(group, start=1):
-            depth = min(i, cap)  # pool deeper guys into the last modeled slot
-            if base in ("K", "DST", "QB"):
-                slot_label = base
-            else:
-                slot_label = f"{base}{depth}"  # RB1/RB2, WR1/WR2/WR3, TE1/TE2
-
-            # 4) Apply the same slot_label to ALL rows for this name (CPT + FLEX)
-            for r in rows:
-                r.slot_label = slot_label  # ensure NFLPlayer has this column
-
-    session.commit()
 
 def _has_anytime_odds(session: Session, player_name: str) -> bool:
     q = session.query(exists().where(and_(NFLOdds.player == player_name, NFLOdds.market == "player_anytime_td")))

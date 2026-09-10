@@ -45,7 +45,7 @@ Run these top to bottom. Each is one script; the web UI is just buttons for the 
 | 1 | Ingest the slate | `python scripts/nfl/ingest.py -p --update-odds true` | Players + salaries from DraftKings, player odds from the-odds-api, fits each player's FPTS distribution, then projects ownership by sampling a field of noisy-optimal lineups and snapshots projections for training. `-p` (pre-lock) re-fetches the player pool and prompts for the slate; `--draft-group <id>` skips the prompt. Drop `-p` to refresh odds only. `--no-ownership` / `--no-snapshot` skip those tails; `scripts/nfl/project_ownership.py` re-runs them alone. |
 | 2 | Contests & payouts | `python scripts/nfl/get_contest_ids.py && python scripts/nfl/get_payouts.py [--days N \| --all]` | Upcoming DK contests and their payout tables. The simulator needs a payout table for every contest in your entries file. Payouts are fetched only for contests starting within the last day or later; `--all` re-queries old ones too. |
 | 3 | Generate the field | `python scripts/nfl/generate_lineups.py 10000 8` | `<lineups> <parallel workers>`. Correlated player samples → ILP → the pool of candidate lineups the simulator picks from. Deduplicates at the end. |
-| 4 | Simulate | `python scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-c 10000] [-d]` | For each contest in the entries CSV: sample an opposing field with the duplication model, simulate `-n` outcomes, score every candidate lineup (cash %, ROI, rank). `-c` caps the simulated field size; `-d` allows duplicate lineups in classic. |
+| 4 | Simulate | `python scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-c 10000] [-d]` | For each contest in the entries CSV: sample an opposing field with the duplication model, simulate `-n` outcomes, score every candidate lineup (cash %, ROI, rank), replacing earlier results for that contest. `-c` caps the simulated field size; `-d` allows duplicate lineups in classic. Each contest also gets a report (`contest_sim_report` table and `data/nfl/diagnostics/contest_*/report.json`) of the sampled field, the payout scaling and the invariants it checked; the web UI's Contests page renders it. |
 | 5 | Choose | `python scripts/nfl/choose.py [--entries file.csv] [--no-prompt] [--cash-pct .5 --avg-roi-win .5 --diversity-lambda .1] [-o base.csv]` | Picks lineups per contest from the sim results and writes DK-format upload CSVs plus an exposures CSV. With no weight flags it prompts per contest; any weight flag, `--weights-json`, or `--no-prompt` makes it non-interactive. |
 
 The entries file is the CSV you export from DraftKings for the contests you have entered
@@ -69,8 +69,9 @@ optional `"default"`:
 python scripts/nfl/serve.py            # http://<host>:8000
 ```
 
-A single page with the five steps as forms, an entries-file upload, a live log of the
-running job, and pages for exposures, downloads (the DK upload files) and job history.
+A single page with the five steps as forms (step 5 takes choose weights per contest and
+remembers them), an entries-file upload, a live log of the running job, and pages for the
+per-contest simulation reports, exposures, downloads (the DK upload files) and job history.
 It shells out to the scripts above and runs **one job at a time**, `nice`d, which is also
 what keeps SQLite happy. There is no authentication: bind it to a LAN or Tailscale address.
 
@@ -96,7 +97,7 @@ laptop (producer)                          server (consumer)
 - **Synced** (`scripts/nfl/sync_to_server.sh [host]`): every table except the per-slate
   working set, plus their indexes, plus `data/nfl/models/`. About 24 MB gzipped.
 - **Never synced**: `nfl_player`, `odds`, `projection_snapshot`, `lineup`,
-  `lineup_simulation_results` — the server's own slate state.
+  `lineup_simulation_results`, `contest_sim_report` — the server's own slate state.
 - `overnight.py` runs the sync automatically when `IVAN_SYNC_HOST` is set (in `.env`).
 - The server runs the UI as an unprivileged user in a sandboxed unit, reachable only over
   Tailscale; setup is `deploy/harden_server.sh`. See [docs/server.md](docs/server.md).
@@ -140,7 +141,7 @@ data/nfl/
 ├── input/entries.csv       default entries file (web uploads: input/web/)
 ├── output/                 chosen-entries and exposures CSVs (web: output/web/)
 ├── models/                 pickles from build_models.py / build_dupe_model.py
-├── diagnostics/            per-contest simulation diagnostics (pruned by sim.py)
+├── diagnostics/            per-contest simulation reports (report.json; pruned by sim.py)
 └── jobs/                   web UI job logs
 ```
 

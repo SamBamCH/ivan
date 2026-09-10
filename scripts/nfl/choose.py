@@ -87,9 +87,7 @@ def _build_weights_resolver(args, defaults: dict[str, float]):
     def weights_for(cid: int, cname: str, last: dict[str, float]) -> dict[str, float]:
         per = overrides.get(str(cid)) or overrides.get(cname) or {}
         if per or non_interactive:
-            w = {**defaults, **flags, **overrides.get("default", {}), **per}
-            print(f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
-            return w
+            return {**defaults, **flags, **overrides.get("default", {}), **per}
         return prompt_weights_for_contest(cid, cname, last)
 
     return weights_for
@@ -304,7 +302,7 @@ def main():
     for cid, group in contests_grouped:
         num_entries = len(group)
         cname = group["Contest Name"].iloc[0].strip()
-        print(f"\n=== Contest {cid} (\"{cname}\") → {num_entries} entries ===")
+        print(f"\n=== Contest {cid} \"{cname}\" → {num_entries} entries ===")
 
         # Resolve weights once per contest
         if cid not in prompted_contests:
@@ -313,17 +311,29 @@ def main():
             prompted_contests.add(cid)
         else:
             w = last_weights
+        print(f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
 
         # Choose lineup IDs
+        stats: dict = {}
         chosen_ids = choose_lineup_ids(
             session=session,
             weights=w,
             num_lineups=num_entries,
-            contest_name=cname
+            contest_name=cname,
+            stats=stats,
         )
+        if stats:
+            print(f"  candidates: {stats['results']:,} simulated"
+                  + (f" → {stats['after_roi_filter']:,} with ROI ≥ 0" if stats['after_roi_filter'] != stats['results'] else "")
+                  + (f" → {stats['valid']:,} with all players still on the slate" if stats['valid'] != stats['after_roi_filter'] else "")
+                  + f" → {stats['unique']:,} unique")
+            if stats["missing_players"]:
+                print(f"  ⚠️  {stats['missing_players']} player id(s) in simulated lineups are no longer on the slate")
         if not chosen_ids:
-            print(f"⚠️  No lineups chosen for contest {cid}. Skipping.")
+            print(f"  ⚠️  No lineups chosen for contest {cid}. Skipping.")
             continue
+        print(f"  chosen {stats['chosen']}: mean ROI {stats['chosen_roi']:+.1%}, cash {stats['chosen_cash']:.1%}"
+              f"  (top-{stats['chosen']} by quality alone: ROI {stats['top_quality_roi']:+.1%}, cash {stats['top_quality_cash']:.1%})")
 
         # Load lineups and players
         lineups = session.query(Lineup).filter(Lineup.id.in_(chosen_ids)).all()
