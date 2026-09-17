@@ -1,8 +1,28 @@
+from dataclasses import dataclass, field
+
 from ivan.sports.nfl.models import NFLPlayer, NFLStat, NFLOdds
-from ivan.sports.nfl.refactor.stat import fit_stat_distribution, StatDistribution, sample_stat
+from ivan.sports.nfl.refactor.stat import (
+    MARKET_TO_STAT, StatDistribution, _get_anytime_td_prob_from_odds,
+    clear_neighbor_cache, fit_stat_distribution, position_logs, sample_stat,
+)
+from ivan.sports.nfl.refactor.volume import VolumeModel
 import pandas as pd
 import numpy as np
 import scipy.stats as st
+
+# DraftKings scoring weights
+FPTS_WEIGHTS = {
+    'passing_yards': 0.04,
+    'passing_tds': 4.0,
+    'passing_interceptions': -1.0,
+    'rushing_yards': 0.1,
+    'rushing_tds': 6.0,
+    'receptions': 1.0,
+    'receiving_yards': 0.1,
+    'receiving_tds': 6.0,
+    'fg_made': 4.2,
+    'pat_made': 1.0,
+}
 
 STATS = {
     'QB': ['passing_yards', 'passing_tds', 'passing_interceptions', 'rushing_yards', 'rushing_tds'],
@@ -190,9 +210,34 @@ def _fit_dst_by_salary(player: NFLPlayer, rng: np.random.Generator, n_samples: i
     return samples
 
 
+@dataclass
+class _Pending:
+    """A player between the two fitting passes."""
+    player: NFLPlayer
+    odds_df: pd.DataFrame
+    history: list
+    p_td: float | None
+    dists: dict[str, StatDistribution] = field(default_factory=dict)
+
+
+def _has_market(odds_df: pd.DataFrame, stat: str) -> bool:
+    return bool(set(odds_df['market']) & set(MARKET_TO_STAT.get(stat, ())))
+
+
 def fit_fpts_distributions(session):
+    """
+    Fit every slate player's fantasy-point distribution.
+
+    Two passes. The first fits each stat the books price, calibrating a KDE of
+    the player's history to the posted lines, and records (salary, anytime-TD
+    probability, market-implied mean) for the slate's volume model. The second
+    fills the stats nobody prices from that model: salary and TD odds predict
+    the mean, and a neighbor pool of same-position player-seasons with that
+    role supplies the shape. Current odds always win; salary only speaks where
+    the market is silent.
+    """
     players = session.query(NFLPlayer).all()
-    
+
     # Dedupe for Classic slates
     if _is_classic_slate(players):
         print("Detected Classic slate - removing duplicate players")
@@ -200,7 +245,11 @@ def fit_fpts_distributions(session):
 
     rng = np.random.default_rng(42)
     fitted = 0
+    clear_neighbor_cache()
+    volume = VolumeModel()
+    pending: list[_Pending] = []
 
+    # ---- pass 1: market-priced stats -------------------------------------
     for player in players:
         # DST: use simple salary-based projection for now
         if player.position == 'DST':
@@ -212,117 +261,107 @@ def fit_fpts_distributions(session):
             session.commit()
             fitted += 1
             continue
-        
-        # Get player historical stats
-        historical_stats = session.query(NFLStat).filter(
-            NFLStat.player_display_name == player.name
-        ).all()
-        
-        has_historical = historical_stats and len(historical_stats) >= 5
-        
+
+        # A captain row is the FLEX row at 1.5x salary; it is copied from the
+        # FLEX fit below, and must not feed the salary model.
+        if player.roster_slot_id == 511:
+            continue
+
+        stats_to_model = STATS.get(player.position)
+        if not stats_to_model:
+            print(f'skipping {player.name}: no stat model for position {player.position}')
+            continue
+
         # Get player odds (only Over/Yes sides)
         odds = session.query(NFLOdds).filter(
             NFLOdds.player == player.name,
             NFLOdds.side.in_(['Over', 'Yes'])
         ).all()
-        
+
         # Filter out outlier odds (bad data from some sportsbooks)
         odds = _filter_outlier_odds(odds)
-        
+
         if not odds:
             print(f'skipping {player.name}: no odds found')
             continue
-        
-        # Check if we have any non-anytime TD odds
-        non_anytime_odds = [o for o in odds if 'anytime' not in o.market.lower()]
-        has_non_anytime_odds = len(non_anytime_odds) > 0
-        
-        # Skip only if we have neither historical stats nor non-anytime odds
-        if not has_historical and not has_non_anytime_odds:
-            print(f'skipping {player.name}: no historical stats and only anytime TD odds')
-            continue
-        
-        # If no player-specific historical stats but we have good odds, fall back to team/position
-        if not has_historical:
-            print(f'{player.name}: no player historical stats, using team/position fallback')
-            historical_stats = session.query(NFLStat).filter(
-                NFLStat.team == player.team,
-                NFLStat.position == player.position
-            ).all()
-            if not historical_stats or len(historical_stats) < 10:
-                print(f'skipping {player.name}: team/position fallback also insufficient')
-                continue
-        
+
         odds_df = pd.DataFrame([
-            {
-                'market': o.market,
-                'side': o.side,
-                'point': o.point,
-                'price': o.price
-            }
+            {'market': o.market, 'side': o.side, 'point': o.point, 'price': o.price}
             for o in odds
         ])
-        
-        stats_to_model = STATS.get(player.position)
-        stat_distributions: list[StatDistribution | None] = []
-        
-        # Fit each stat distribution - stat.py handles missing odds via neighbor lookup
+
+        history = session.query(NFLStat).filter(
+            NFLStat.player_display_name == player.name
+        ).all()
+
+        item = _Pending(player, odds_df, history, _get_anytime_td_prob_from_odds(odds_df))
         for stat in stats_to_model:
-            historical_stat_values = [
-                getattr(s, stat) for s in historical_stats 
-                if getattr(s, stat) is not None
-            ]
-            
-            result = fit_stat_distribution(
-                odds_df, 
-                historical_stat_values, 
-                stat,
-                session=session,  # Pass session for neighbor lookup
-                position=player.position  # Pass position for neighbor lookup
+            if not _has_market(odds_df, stat):
+                continue
+            hv = [getattr(h, stat) for h in history if getattr(h, stat) is not None]
+            sd = fit_stat_distribution(odds_df, hv, stat, session=session, position=player.position)
+            if sd is None or sd.num_odds_points == 0:
+                continue
+            item.dists[stat] = sd
+            mean = float(np.mean(sample_stat(sd, 4000, rng)))
+            volume.add(player.position, stat, player.salary, item.p_td, mean)
+        pending.append(item)
+
+    volume.fit()
+    print("Salary/TD-odds volume model (unpriced stats):")
+    print(volume.describe())
+
+    # ---- pass 2: unpriced stats, then the joint sample --------------------
+    for item in pending:
+        player = item.player
+        stats_to_model = STATS[player.position]
+
+        for stat in stats_to_model:
+            if stat in item.dists:
+                continue
+            hv = [getattr(h, stat) for h in item.history if getattr(h, stat) is not None]
+            target = volume.predict(player.position, stat, player.salary, item.p_td)
+            sd = fit_stat_distribution(
+                item.odds_df, hv, stat,
+                session=session, position=player.position, target_mean=target,
             )
-            stat_distributions.append(result)
-        
-        # Filter out None distributions
-        valid_stats = [(s, sd) for s, sd in zip(stats_to_model, stat_distributions) if sd is not None]
-        if not valid_stats:
+            if sd is not None:
+                item.dists[stat] = sd
+
+        stats_valid = [s for s in stats_to_model if s in item.dists]
+        if not stats_valid:
             print(f"no valid stat distributions for {player.name}; skipping")
             continue
-        
-        stats_to_model_valid = [s for s, _ in valid_stats]
-        stat_distributions_valid = [sd for _, sd in valid_stats]
-        
-        # Build correlation from historical stats (only valid stats)
+        dists_valid = [item.dists[s] for s in stats_valid]
+
+        # Dependence between stats: the player's own history when he has
+        # enough of it, otherwise every game log at his position.
         df_hist = pd.DataFrame({
-            stat: [getattr(s, stat) for s in historical_stats if getattr(s, stat) is not None]
-            for stat in stats_to_model_valid
-        })
-        df_hist = df_hist.dropna()
-        
+            stat: [getattr(h, stat) for h in item.history if getattr(h, stat) is not None]
+            for stat in stats_valid
+        }).dropna() if item.history else pd.DataFrame(columns=stats_valid)
+        if df_hist.shape[0] < 5:
+            logs = position_logs(session, player.position)
+            cols = [c for c in stats_valid if c in logs.columns]
+            df_hist = logs[cols].dropna() if len(cols) == len(stats_valid) else pd.DataFrame()
         if df_hist.shape[0] < 5:
             print(f"insufficient joint history for correlation: {player.name}")
             continue
-        
+
         corr = df_hist.corr(method='spearman').fillna(0.0).values
-        
+
         # Sample independent marginals
         n_samples = 10000
         rng = np.random.default_rng(42)
-        X = np.zeros((n_samples, len(stats_to_model_valid)), dtype=float)
-        for j, sd in enumerate(stat_distributions_valid):
+        X = np.zeros((n_samples, len(stats_valid)), dtype=float)
+        for j, sd in enumerate(dists_valid):
             X[:, j] = sample_stat(sd, n_samples, rng)
-        
-        # Impose dependence using Gaussian copula on ranks
-        U = np.zeros_like(X)
-        for j in range(X.shape[1]):
-            order = np.argsort(X[:, j])
-            ranks = np.empty_like(order)
-            ranks[order] = np.arange(n_samples)
-            U[:, j] = (ranks + 0.5) / n_samples
-        
+
+        # Impose dependence using a Gaussian copula on ranks
         L = np.linalg.cholesky(corr + 1e-6 * np.eye(corr.shape[0]))
         Z = rng.standard_normal(size=(n_samples, corr.shape[0])) @ L.T
         U_target = st.norm.cdf(Z)
-        
+
         X_dep = np.zeros_like(X)
         for j in range(X.shape[1]):
             x_sorted = np.sort(X[:, j])
@@ -330,23 +369,10 @@ def fit_fpts_distributions(session):
             inv_order = np.empty_like(order)
             inv_order[order] = np.arange(n_samples)
             X_dep[:, j] = x_sorted[inv_order]
-        
-        # Compute player FPTS using DraftKings scoring weights
-        FPTS_WEIGHTS = {
-            'passing_yards': 0.04,
-            'passing_tds': 4.0,
-            'passing_interceptions': -1.0,
-            'rushing_yards': 0.1,
-            'rushing_tds': 6.0,
-            'receptions': 1.0,
-            'receiving_yards': 0.1,
-            'receiving_tds': 6.0,
-            'fg_made': 4.2,
-            'pat_made': 1.0,
-        }
-        weights = np.array([FPTS_WEIGHTS.get(s, 0.0) for s in stats_to_model_valid], dtype=float)
+
+        weights = np.array([FPTS_WEIGHTS.get(s, 0.0) for s in stats_valid], dtype=float)
         fpts_samples = X_dep @ weights
-        
+
         # Fit normal to FPTS and populate all stats
         mu, sigma = st.norm.fit(fpts_samples)
         player.fpts_dist_name = 'norm'
@@ -355,11 +381,15 @@ def fit_fpts_distributions(session):
         session.commit()
         fitted += 1
 
+    # A captain scores exactly 1.5x the same player's FLEX line (the sampler
+    # applies the multiplier), so the CPT row carries the FLEX row's fit. The
+    # salary-based DST fit would otherwise see the 1.5x captain salary.
+    synced = _sync_captain_rows(session)
+
     # Clean up: remove players with no fpts distribution
     players_without_fpts = session.query(NFLPlayer).filter(
         NFLPlayer.fpts_dist_params.is_(None)
     ).all()
-
 
     if players_without_fpts:
         print(f"\nRemoving {len(players_without_fpts)} players with no fpts distribution:")
@@ -367,11 +397,6 @@ def fit_fpts_distributions(session):
             print(f"  - {p.name} ({p.position})")
             session.delete(p)
         session.commit()
-
-    # A captain scores exactly 1.5x the same player's FLEX line (the sampler
-    # applies the multiplier), so the CPT row carries the FLEX row's fit. The
-    # salary-based DST fit would otherwise see the 1.5x captain salary.
-    synced = _sync_captain_rows(session)
 
     # Depth-chart slots drive the game-level correlation structure; without
     # them every player would be sampled independently.
