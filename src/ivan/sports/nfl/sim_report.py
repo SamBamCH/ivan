@@ -331,7 +331,12 @@ def correlation_section(raw: Dict[int, np.ndarray], diag: dict, meta: Dict[int, 
         k = len(keep)
         off = ~np.eye(k, dtype=bool)
         err = np.abs(emp_c - tgt_c)
-        all_err.extend(err[off].tolist())
+        # DST rows built from the opponent's drawn score carry their dependence structurally; the
+        # requested matrix is not their target, so they stay out of the error statistics
+        structural = {int(x) for x in g.get("structural_ids", [])}
+        is_struct = np.array([ids[j] in structural for j in keep])
+        scored = off & ~is_struct[:, None] & ~is_struct[None, :]
+        all_err.extend(err[scored].tolist())
         labels = []
         for j in keep:
             m = meta.get(ids[j], {})
@@ -340,20 +345,23 @@ def correlation_section(raw: Dict[int, np.ndarray], diag: dict, meta: Dict[int, 
         pairs = []
         iu = np.triu_indices(k, 1)
         for a, b in zip(*iu):
+            st_pair = bool(is_struct[a] or is_struct[b])
             pairs.append({"a": labels[a]["name"], "a_team": labels[a]["team"], "a_slot": labels[a]["depth_slot"],
                           "b": labels[b]["name"], "b_team": labels[b]["team"], "b_slot": labels[b]["depth_slot"],
-                          "target": _f(tgt_c[a, b]), "sampled": _f(emp_c[a, b]), "error": _f(err[a, b])})
-        strongest = sorted(pairs, key=lambda p: -abs(p["target"] or 0))[:TOP_N]
-        worst = sorted(pairs, key=lambda p: -(p["error"] or 0))[:TOP_N]
+                          "target": _f(tgt_c[a, b]), "sampled": _f(emp_c[a, b]),
+                          "error": None if st_pair else _f(err[a, b]), "structural": st_pair})
+        strongest = sorted(pairs, key=lambda p: -abs(p["sampled"] or 0))[:TOP_N]
+        worst = sorted([p for p in pairs if not p["structural"]], key=lambda p: -(p["error"] or 0))[:TOP_N]
         # different people sharing a team and a depth slot (pooled deep players)
         pooled = [p for p in pairs if p["a_team"] == p["b_team"] and p["a_slot"] == p["b_slot"]]
 
         games_out.append({
             "teams": g["teams"], "sources": g.get("sources", {}), "n_players": len(ids), "n_people": k,
             "spd_adjustment_max": _f(np.abs(target - requested).max()) if target.size else 0.0,
-            "max_abs_error": _f(err[off].max()) if k > 1 else 0.0,
-            "mean_abs_error": _f(err[off].mean()) if k > 1 else 0.0,
+            "max_abs_error": _f(err[scored].max()) if scored.any() else 0.0,
+            "mean_abs_error": _f(err[scored].mean()) if scored.any() else 0.0,
             "players": players, "labels": labels,
+            "latent": g.get("latent"), "n_structural": int(len(structural)),
             "target": np.round(tgt_c, 3).tolist(), "sampled": np.round(emp_c, 3).tolist(),
             "strongest_pairs": strongest, "largest_errors": worst,
             "pooled_pairs": sorted(pooled, key=lambda p: -abs(p["sampled"] or 0)),
@@ -500,6 +508,25 @@ def build_checks(report: dict) -> List[dict]:
             if src.get("cross") == "default":
                 add("info", f"Cross-team correlation {teams}",
                     "neither team has 10 games with an opponent line in history: default cross-team assumptions (+0.15 offence-offence, -0.20 offence vs opposing DST)")
+            lat = g.get("latent")
+            if lat:
+                dst_rho = [p for p in g["players"] if p.get("depth_slot") == "DST"]
+                rho_txt = ""
+                if lat.get("corr"):
+                    rhos = []
+                    for p in dst_rho:
+                        c = lat["corr"].get(str(p["id"])) or lat["corr"].get(p["id"])
+                        if c:
+                            rhos.append(f"{p['team']} DST vs opponent points {c['opp_pts']:+.2f}")
+                    rho_txt = "; " + ", ".join(dict.fromkeys(rhos)) if rhos else ""
+                scores = ", ".join(f"{t} {lat['implied'][t]:.1f} implied -> {lat['points_mean'][t]:.1f} +- {lat['points_sd'][t]:.1f}"
+                                   for t in g["teams"] if t in lat.get("implied", {}))
+                add("ok", f"Game score latent {teams}",
+                    f"each universe draws both scores from the lines (total {lat['lines']['total']}); {scores}{rho_txt}; "
+                    f"DST = points-allowed bracket of that score + takeaways")
+            else:
+                add("warn", f"Game score latent {teams}",
+                    "no game lines or no DST model: DST sampled from its fitted distribution, not from the opponent's score")
         n = r.get("n_samples") or 0
         if r.get("max_abs_error") is not None and r.get("standard_error"):
             se = r["standard_error"]

@@ -57,7 +57,7 @@ def main():
     # DST mean from the game lines, shape from history (writes dst_odds_params.json)
     engine = init_db("nfl", args.db_url)
     params = fit_dst_odds_model(get_session(engine), model_dir)
-    print("   " + describe_dst_odds_model(params))
+    print("\n".join("   " + line for line in describe_dst_odds_model(params).splitlines()))
 
     # new: fixed-width team-week positional fpts table
     n_team_rows = build_team_positional_table(args.db_url)

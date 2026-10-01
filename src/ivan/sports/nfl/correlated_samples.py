@@ -5,13 +5,18 @@ from typing import Dict, Tuple
 
 import json
 import numpy as np
+import scipy.stats as st
 from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.paths import MODELS_DIR
 from ivan.sports.nfl.models import NFLPlayer
+from ivan.sports.nfl.refactor.team_correlation import TEAM10_SLOTS, PTS_SLOT, SLOT_IDX as _SLOT_IDX
+from ivan.sports.nfl.refactor.dst import (load_dst_odds_model, game_implied_totals,
+                                          team_points_from_latent, dst_from_latent)
 
-TEAM10 = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1", "TE2", "K", "DST"]
+TEAM10 = list(TEAM10_SLOTS)            # player depth slots
 SLOT_IDX = {s: i for i, s in enumerate(TEAM10)}
+PTS_IDX = _SLOT_IDX[PTS_SLOT]          # the team-points latent in the correlation matrices
 CPT_SLOT = 511
 CPT_MULTIPLIER = 1.5
 
@@ -74,12 +79,19 @@ def _mu_sigma(p: NFLPlayer, default_sigma: float) -> Tuple[float, float]:
     return mu, sd
 
 
+def _rank_corr(x: np.ndarray, y: np.ndarray) -> float:
+    if x.std() == 0 or y.std() == 0:
+        return 0.0
+    return float(np.corrcoef(st.rankdata(x), st.rankdata(y))[0, 1])
+
+
 def summarize_sampling(samples: Dict[int, np.ndarray], diag: dict, max_pairs_reported: int = 3) -> str:
     """
     Brief check that the draws carry the dependence that was asked for: per
     game, the realised Spearman correlation between every pair of sampled
-    players against the requested matrix, plus where each matrix came from.
-    Returns a few lines for printing.
+    players against the requested matrix, where each matrix came from, and
+    (when the game has lines) the simulated team scores with how the QB and
+    the DST move with them. Returns a few lines for printing.
     """
     from scipy.stats import spearmanr
     games = diag.get("games", [])
@@ -97,10 +109,34 @@ def summarize_sampling(samples: Dict[int, np.ndarray], diag: dict, max_pairs_rep
         # requested is Pearson of the latent normals; compare on the same scale
         req_s = (6.0 / np.pi) * np.arcsin(np.clip(requested, -1, 1) / 2.0)
         dev = np.abs(realised[iu] - req_s[iu])
+        structural = set(g.get("structural_ids", []))
+        if structural:
+            keep = np.array([ids[i] not in structural and ids[j] not in structural for i, j in zip(*iu)])
+            dev = np.where(keep, dev, 0.0)
         src = g.get("sources", {})
-        lines.append(f"  {g['teams'][0]}-{g['teams'][1]}: {len(ids)} players, mean |requested rho| {np.abs(req_s[iu]).mean():.2f}, "
+        a, b = g["teams"]
+        lines.append(f"  {a}-{b}: {len(ids)} players, mean |requested rho| {np.abs(req_s[iu]).mean():.2f}, "
                      f"max |realised - requested| {dev.max():.2f}, "
-                     f"sources {src.get(g['teams'][0])}/{src.get(g['teams'][1])}, cross {src.get('cross')}")
+                     f"sources {src.get(a)}/{src.get(b)}, cross {src.get('cross')}")
+        lat = g.get("latent")
+        if lat:
+            parts = []
+            for t in (a, b):
+                parts.append(f"{t} {lat['implied'][t]:.1f} implied -> {lat['points_mean'][t]:.1f} +- {lat['points_sd'][t]:.1f}")
+            lines.append(f"    team points: " + "; ".join(parts))
+            qb = {t: None for t in (a, b)}; dst = {t: None for t in (a, b)}
+            for pid, slot, team in zip(ids, g["slots"], g["player_teams"]):
+                c = lat["corr"].get(str(pid)) or lat["corr"].get(pid)
+                if c is None:
+                    continue
+                if slot == "QB" and qb[team] is None:
+                    qb[team] = c["own_pts"]
+                if slot == "DST" and dst[team] is None:
+                    dst[team] = c["opp_pts"]
+            fmt = lambda d: " ".join(f"{t} {v:+.2f}" for t, v in d.items() if v is not None)
+            lines.append(f"    QB vs own points rho {fmt(qb)}; DST vs opponent points rho {fmt(dst)}")
+        else:
+            lines.append(f"    no game lines: DST sampled from its fitted distribution, no team-points latent")
         k = int(np.argmax(dev))
         worst.append((dev.max(), g["teams"], g["slots"][iu[0][k]], g["slots"][iu[1][k]], req_s[iu][k], realised[iu][k]))
     worst.sort(reverse=True)
@@ -121,9 +157,16 @@ def generate_correlated_samples_gaussian(
     return_diagnostics: bool = False,
 ) -> Dict[int, np.ndarray] | Tuple[Dict[int, np.ndarray], dict]:
     """
-    Treat every player's fantasy points as Normal(mu, sigma) and draw one
-    multivariate normal per *game* with a slot-structured covariance: a 10x10
-    within-team correlation for each side plus a 10x10 cross-team block.
+    One correlated draw per *game*. Every offensive player and kicker is
+    Normal(mu, sigma) on a latent Gaussian with a slot-structured correlation:
+    a within-team matrix for each side plus a cross-team block. When the game
+    has lines and the DST model is fitted, the draw also carries one latent
+    per team for its points scored (implied total plus a historical residual),
+    correlated with that team's slots and the opponent's from history. Each
+    DST is then built inside the universe: the points-allowed bracket of the
+    opponent's drawn score plus takeaway points on the DST's own latent, so a
+    universe where an offense scores is the universe where the opposing DST
+    does not. Without lines a DST falls back to its fitted Normal.
 
     Players need NFLPlayer.slot_label in TEAM10 (set by assign_slots at ingest)
     and a paired opponent on the slate; anything else is sampled independently.
@@ -134,12 +177,15 @@ def generate_correlated_samples_gaussian(
     what was actually sampled, so a run can be verified afterwards:
 
         {"n_samples", "randomness", "method",
-         "games": [{"teams", "player_ids", "slots", "mu", "sigma",
-                    "requested_corr", "corr", "sources"}],
+         "games": [{"teams", "player_ids", "slots", "player_teams", "mu", "sigma",
+                    "requested_corr", "corr", "sources", "pooled_pairs",
+                    "latent": {"implied", "lines", "points_mean", "points_sd",
+                               "corr": {player_id: {"own_pts", "opp_pts"}}} | None}],
          "independent": [{"id", "reason"}]}
 
-    where `requested_corr` is the correlation assembled from the model and
-    `corr` is what was sampled from after clipping and the SPD projection.
+    where `requested_corr` is the player block of the correlation assembled
+    from the model and `corr` is what was sampled from after clipping and the
+    SPD projection (also the player block).
     """
     rng = np.random.default_rng(seed)
     model_dir = Path(model_dir)
@@ -220,6 +266,9 @@ def generate_correlated_samples_gaussian(
             seq.extend(group)
         return seq
 
+    # The game layer needs the fitted DST model (residual pools) and the lines.
+    dst_params = load_dst_odds_model(model_dir) if use_team_specific_corr else None
+
     # --- one multivariate normal per game ----------------------------------------------
     out: Dict[int, np.ndarray] = {}
     games: list[dict] = []
@@ -229,6 +278,7 @@ def generate_correlated_samples_gaussian(
         players_game = A + B
         if not players_game:
             continue
+        n_p = len(players_game)
 
         mu, sigma = [], []
         for p in players_game:
@@ -237,35 +287,77 @@ def generate_correlated_samples_gaussian(
             sigma.append(s)
         mu, sigma = np.array(mu, float), np.array(sigma, float)
 
-        slots_A = [SLOT_IDX[p.slot_label] for p in A]
-        slots_B = [SLOT_IDX[p.slot_label] for p in B]
         Rw_a, src_a = within(a)
         Rw_b, src_b = within(b)
         Rx_ab, src_x = cross(a, b)
-        requested = np.block([[Rw_a[np.ix_(slots_A, slots_A)], Rx_ab[np.ix_(slots_A, slots_B)]],
-                              [Rx_ab[np.ix_(slots_A, slots_B)].T, Rw_b[np.ix_(slots_B, slots_B)]]])
+        has_pts = Rw_a.shape[0] > PTS_IDX and Rw_b.shape[0] > PTS_IDX and Rx_ab.shape[0] > PTS_IDX
+        lines = game_implied_totals(session, a, b) if (dst_params is not None and has_pts) else None
+        implied = {a: lines["team_implied"], b: lines["opp_implied"]} if lines else None
+
+        # nodes: A's players, B's players, then (with lines) A's points and B's points
+        nodes = [(a, SLOT_IDX[p.slot_label]) for p in A] + [(b, SLOT_IDX[p.slot_label]) for p in B]
+        if implied:
+            nodes += [(a, PTS_IDX), (b, PTS_IDX)]
+        n = len(nodes)
+        requested = np.eye(n)
+        for i in range(n):
+            ti, si = nodes[i]
+            for j in range(i + 1, n):
+                tj, sj = nodes[j]
+                if ti == tj:
+                    r = (Rw_a if ti == a else Rw_b)[si, sj]
+                elif ti == a:
+                    r = Rx_ab[si, sj]
+                else:
+                    r = Rx_ab[sj, si]
+                requested[i, j] = requested[j, i] = r
         pooled = _separate_pooled_players(requested, A, 0, Rw_a) + _separate_pooled_players(requested, B, len(A), Rw_b)
         corr = _near_spd(np.clip(requested, -0.999, 0.999))
-        np.fill_diagonal(requested, 1.0)
 
-        D = np.diag(sigma)
-        Sigma = (D @ corr @ D) * (randomness ** 2)
-        Z = rng.multivariate_normal(mean=np.zeros(len(players_game)), cov=Sigma, size=n_samples)
-        X = Z + mu
+        Z = rng.multivariate_normal(mean=np.zeros(n), cov=corr, size=n_samples)
+        X = mu + sigma * randomness * Z[:, :n_p]
+
+        latent = None
+        if implied:
+            u_pts = {a: st.norm.cdf(Z[:, n_p]), b: st.norm.cdf(Z[:, n_p + 1])}
+            pts = {t: team_points_from_latent(dst_params, implied[t], u_pts[t], randomness) for t in (a, b)}
+            for j, p in enumerate(players_game):
+                if p.slot_label != "DST":
+                    continue
+                opp = b if p.team == a else a
+                X[:, j] = dst_from_latent(dst_params, implied[p.team], implied[opp],
+                                          u_opp_points=u_pts[opp], u_take=st.norm.cdf(Z[:, j]), randomness=randomness)
+            latent = {"implied": {t: round(float(implied[t]), 2) for t in (a, b)},
+                      "lines": {"total": lines["total"], "home_margin": lines["home_margin"]},
+                      "points_mean": {t: round(float(pts[t].mean()), 2) for t in (a, b)},
+                      "points_sd": {t: round(float(pts[t].std()), 2) for t in (a, b)},
+                      "corr": {}}
+            if return_diagnostics:
+                for j, p in enumerate(players_game):
+                    own, opp = (a, b) if p.team == a else (b, a)
+                    latent["corr"][int(p.id)] = {"own_pts": round(_rank_corr(X[:, j], pts[own]), 3),
+                                                 "opp_pts": round(_rank_corr(X[:, j], pts[opp]), 3)}
+
         for j, p in enumerate(players_game):
             samples = X[:, j].astype(np.float32, copy=False)
             out[p.id] = samples * CPT_MULTIPLIER if p.roster_slot_id == CPT_SLOT else samples
 
         if return_diagnostics:
+            np.fill_diagonal(requested, 1.0)
             games.append({
                 "teams": [a, b],
                 "player_ids": [int(p.id) for p in players_game],
                 "slots": [p.slot_label for p in players_game],
+                "player_teams": [p.team for p in players_game],
                 "mu": mu.tolist(), "sigma": sigma.tolist(),
-                "requested_corr": np.round(requested, 4).tolist(),
-                "corr": np.round(corr, 4).tolist(),
+                "requested_corr": np.round(requested[:n_p, :n_p], 4).tolist(),
+                "corr": np.round(corr[:n_p, :n_p], 4).tolist(),
                 "sources": {a: src_a, b: src_b, "cross": src_x},
                 "pooled_pairs": pooled,
+                "latent": latent,
+                # rows whose dependence is structural (DST built from the opponent's score), so the
+                # requested matrix is not their target: skip them in correlation error checks
+                "structural_ids": [int(p.id) for p in players_game if p.slot_label == "DST"] if latent else [],
             })
 
     # --- everyone else: independent N(mu, sigma) ---------------------------------------

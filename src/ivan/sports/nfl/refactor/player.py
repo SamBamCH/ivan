@@ -7,6 +7,7 @@ from ivan.sports.nfl.refactor.stat import (
 )
 from ivan.sports.nfl.refactor.volume import VolumeModel
 from ivan.sports.nfl.refactor.dst import project_dst_samples
+from ivan.sports.nfl.refactor.spread import load_sd_calibration, calibrate_spread, describe_sd_calibration, spread_factor
 import pandas as pd
 import numpy as np
 import scipy.stats as st
@@ -217,6 +218,21 @@ def _populate_fpts_stats(player: NFLPlayer, samples: np.ndarray) -> None:
     player.fpts_p99 = float(np.percentile(samples, 99))
 
 
+def _store_fit(player: NFLPlayer, samples: np.ndarray, cal: dict) -> None:
+    """
+    Finish a player's fit: widen the samples by the position's predictive-sd
+    factor (see refactor.spread), fit the Normal the sampler draws from, and
+    record both the model spread and the calibrated one.
+    """
+    model_sd = float(np.std(samples))
+    samples = calibrate_spread(samples, player.position, cal)
+    mu, sigma = st.norm.fit(samples)
+    player.fpts_dist_name = 'norm'
+    player.fpts_dist_params = (float(mu), float(sigma))
+    _populate_fpts_stats(player, samples)
+    player.fpts_std_model = model_sd
+
+
 def _fit_dst_by_salary(player: NFLPlayer, rng: np.random.Generator, n_samples: int = 10000) -> np.ndarray:
     """
     Fallback when the game has no lines: DST fpts samples scaled by salary.
@@ -275,6 +291,8 @@ def fit_fpts_distributions(session):
     rng = np.random.default_rng(42)
     fitted = 0
     clear_neighbor_cache()
+    cal = load_sd_calibration()
+    print(describe_sd_calibration(cal))
     volume = VolumeModel()
     pending: list[_Pending] = []
     # per-run validation tallies: stats priced by a market vs filled from the
@@ -296,15 +314,13 @@ def fit_fpts_distributions(session):
                 dst_samples, info = projected
                 tally["dst_lines"] += 1
                 print(f"DST {player.team} vs {player.opponent}: lines total={info['total']} "
-                      f"team={info['team_implied']} opp={info['opp_implied']} -> mean {info['mu']}")
+                      f"team={info['team_implied']} opp={info['opp_implied']} -> mean {info['mu']} "
+                      f"(bracket {info['bracket']} + takeaways {info['takeaways']})")
             else:
                 dst_samples = _fit_dst_by_salary(player, rng)
                 tally["dst_salary"] += 1
                 print(f"DST {player.team} vs {player.opponent}: no lines or no DST model, salary fallback")
-            mu, sigma = st.norm.fit(dst_samples)
-            player.fpts_dist_name = 'norm'
-            player.fpts_dist_params = (float(mu), float(sigma))
-            _populate_fpts_stats(player, dst_samples)
+            _store_fit(player, dst_samples, cal)
             session.commit()
             fitted += 1
             continue
@@ -419,11 +435,7 @@ def fit_fpts_distributions(session):
         weights = _fpts_weights(player, item.history, stats_valid)
         fpts_samples = X_dep @ weights
 
-        # Fit normal to FPTS and populate all stats
-        mu, sigma = st.norm.fit(fpts_samples)
-        player.fpts_dist_name = 'norm'
-        player.fpts_dist_params = (float(mu), float(sigma))
-        _populate_fpts_stats(player, fpts_samples)
+        _store_fit(player, fpts_samples, cal)
         session.commit()
         fitted += 1
         tally["by_pos"][player.position] = tally["by_pos"].get(player.position, 0) + 1
@@ -455,7 +467,8 @@ def fit_fpts_distributions(session):
     print(f"validation: {tally['priced']}/{n_stats} stat distributions priced by a market, "
           f"{tally['unpriced']} from the salary model | "
           f"K: {tally['k_market']} on the kicking-points market, {tally['k_salary']} salary | "
-          f"DST: {tally['dst_lines']} from game lines, {tally['dst_salary']} salary fallback")
+          f"DST: {tally['dst_lines']} from game lines, {tally['dst_salary']} salary fallback | "
+          f"predictive sd factors " + " ".join(f"{p} x{spread_factor(cal, p):.2f}" for p in ("QB", "RB", "WR", "TE", "K", "DST")))
 
 
 def _sync_captain_rows(session) -> int:

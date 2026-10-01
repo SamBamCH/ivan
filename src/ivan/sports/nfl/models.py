@@ -198,6 +198,7 @@ class NFLPlayer(NFLBase, BasePlayer):
     fpts_n          = Column(Integer, nullable=True)
     fpts_mean       = Column(Float, nullable=True)
     fpts_std        = Column(Float, nullable=True)
+    fpts_std_model  = Column(Float, nullable=True)   # spread of the fitted distribution before the predictive-sd calibration
     fpts_min        = Column(Float, nullable=True)
     fpts_max        = Column(Float, nullable=True)
     fpts_skew       = Column(Float, nullable=True)
@@ -548,6 +549,7 @@ class ProjectionSnapshot(NFLBase):
     fpts_mean = Column(Float, nullable=False)
     fpts_median = Column(Float, nullable=True)
     fpts_std = Column(Float, nullable=True)
+    fpts_std_model = Column(Float, nullable=True)   # model spread before calibration (null in older snapshots)
 
     ownership_proj = Column(Float, nullable=False)
 

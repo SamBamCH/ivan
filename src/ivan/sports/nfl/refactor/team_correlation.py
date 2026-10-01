@@ -1,11 +1,17 @@
 """
 Team-specific correlation matrices from historical game logs.
 
-Every team gets its own 10x10 within-team Spearman matrix over the depth-chart
-slots (QB, RB1-2, WR1-3, TE1-2, K, DST), so a scrambling-QB offense and a
-pocket-passing one carry different QB/RB and QB/WR dependence. Slot labels are
-assigned per team-season from full-season production, then tracked game by
-game. The DST slot is the team's DraftKings DST line from nfl_dst_game.
+Every team gets its own within-team Spearman matrix over the depth-chart
+slots (QB, RB1-2, WR1-3, TE1-2, K, DST) plus the team's own points scored
+(PTS), so a scrambling-QB offense and a pocket-passing one carry different
+QB/RB and QB/WR dependence, and every offensive slot carries its own loading
+on the team's score. Slot labels are assigned per team-season from
+full-season production, then tracked game by game.
+
+The DST slot is the *takeaway* part of the team's DraftKings DST line (sacks,
+turnovers, blocks, defensive and return touchdowns, safeties). The
+points-allowed bracket is not a slot: the sampler computes it from the
+opponent's PTS draw, so the two sides of a game share one score.
 
 Cross-team (game) correlation between A's slots and B's slots is estimated
 from every game each team played, not only their head-to-head meetings: A's
@@ -21,14 +27,20 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.sports.nfl.models import NFLStat, NFLDSTGame
+from ivan.database.session import read_sql
+from ivan.sports.nfl.models import NFLStat
+from ivan.sports.nfl.refactor.dst import pa_bonus_vec
 
 log = logging.getLogger(__name__)
 
-TEAM10_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1", "TE2", "K", "DST"]
-SLOT_IDX = {s: i for i, s in enumerate(TEAM10_SLOTS)}
+TEAM10_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1", "TE2", "K", "DST"]   # player slots
+PTS_SLOT = "PTS"                                                                    # the team's points scored
+TEAM_SLOTS = TEAM10_SLOTS + [PTS_SLOT]
+SLOT_IDX = {s: i for i, s in enumerate(TEAM_SLOTS)}
+N_SLOTS = len(TEAM_SLOTS)
 SLOT_CAPS = {"QB": 1, "RB": 2, "WR": 3, "TE": 2, "K": 1}
 
 MIN_GAMES_WITHIN = 10        # team-games before a within-team matrix is used
@@ -63,6 +75,7 @@ def league_slot_table(session: Session) -> pd.DataFrame:
     """
     Long table of every team-game slot line in history:
     columns season, week, team, opponent, slot, fpts. Built once per session.
+    DST rows carry takeaway points; PTS rows carry the team's score.
     """
     key = id(session.get_bind())
     if key in _SLOT_TABLE_CACHE:
@@ -80,12 +93,23 @@ def league_slot_table(session: Session) -> pd.DataFrame:
         g = tdf[tdf.player_name.isin(labels)].copy()
         g['slot'] = g.player_name.map(labels)
         parts.append(g[['season', 'week', 'team', 'opponent', 'slot', 'fantasy_points_ppr']].rename(columns={'fantasy_points_ppr': 'fpts'}))
-    dst = session.query(NFLDSTGame.season, NFLDSTGame.week, NFLDSTGame.team, NFLDSTGame.opponent, NFLDSTGame.dst_points
-                        ).filter(NFLDSTGame.dst_points.isnot(None)).all()
-    if dst:
-        d = pd.DataFrame(dst, columns=['season', 'week', 'team', 'opponent', 'fpts'])
-        d['slot'] = 'DST'
-        parts.append(d[['season', 'week', 'team', 'opponent', 'slot', 'fpts']])
+
+    dst = read_sql(session, text("SELECT season, week, team, opponent, dst_points, points_allowed FROM nfl_dst_game "
+                                 "WHERE dst_points IS NOT NULL AND points_allowed IS NOT NULL"))
+    if not dst.empty:
+        dst['fpts'] = dst.dst_points.astype(float) - pa_bonus_vec(dst.points_allowed)
+        dst['slot'] = 'DST'
+        parts.append(dst[['season', 'week', 'team', 'opponent', 'slot', 'fpts']])
+
+    sched = read_sql(session, text("SELECT season, week, home_team, away_team, home_score, away_score FROM nfl_schedule "
+                                   "WHERE home_score IS NOT NULL AND away_score IS NOT NULL"))
+    if not sched.empty:
+        home = pd.DataFrame({'season': sched.season, 'week': sched.week, 'team': sched.home_team,
+                             'opponent': sched.away_team, 'slot': PTS_SLOT, 'fpts': sched.home_score.astype(float)})
+        away = pd.DataFrame({'season': sched.season, 'week': sched.week, 'team': sched.away_team,
+                             'opponent': sched.home_team, 'slot': PTS_SLOT, 'fpts': sched.away_score.astype(float)})
+        parts.extend([home, away])
+
     table = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=['season', 'week', 'team', 'opponent', 'slot', 'fpts'])
     table = table.drop_duplicates(['season', 'week', 'team', 'slot'])
     _SLOT_TABLE_CACHE[key] = table
@@ -93,11 +117,11 @@ def league_slot_table(session: Session) -> pd.DataFrame:
 
 
 def _wide(table: pd.DataFrame) -> pd.DataFrame:
-    """(season, week, team) x TEAM10 slots, with the opponent as a column."""
+    """(season, week, team) x TEAM_SLOTS, with the opponent as a column."""
     if table.empty:
-        return pd.DataFrame(columns=['season', 'week', 'team', 'opponent'] + TEAM10_SLOTS)
+        return pd.DataFrame(columns=['season', 'week', 'team', 'opponent'] + TEAM_SLOTS)
     w = table.pivot_table(index=['season', 'week', 'team'], columns='slot', values='fpts', aggfunc='first')
-    w = w.reindex(columns=TEAM10_SLOTS)
+    w = w.reindex(columns=TEAM_SLOTS)
     opp = table.groupby(['season', 'week', 'team'])['opponent'].first()
     w['opponent'] = opp
     return w.reset_index()
@@ -122,14 +146,14 @@ def _pairwise_spearman(X: np.ndarray, Y: np.ndarray, min_obs: int) -> Tuple[np.n
 
 def build_team_correlation(session: Session, team: str, min_games: int = MIN_GAMES_WITHIN) -> Tuple[np.ndarray, bool]:
     """
-    10x10 within-team Spearman matrix for `team` from its own game logs, or
-    the identity (and False) when it has fewer than `min_games` games.
+    Within-team Spearman matrix over TEAM_SLOTS for `team` from its own game
+    logs, or the identity (and False) when it has fewer than `min_games` games.
     """
     w = _wide(league_slot_table(session))
-    X = w[w.team == team][TEAM10_SLOTS].to_numpy(float)
+    X = w[w.team == team][TEAM_SLOTS].to_numpy(float)
     if len(X) < min_games:
         log.debug(f"  {team}: {len(X)} games (need {min_games}), identity correlation")
-        return np.eye(10), False
+        return np.eye(N_SLOTS), False
     R, _ = _pairwise_spearman(X, X, MIN_PAIR_OBS)
     R = np.where(np.isnan(R), 0.0, R)
     np.fill_diagonal(R, 1.0)
@@ -139,29 +163,26 @@ def build_team_correlation(session: Session, team: str, min_games: int = MIN_GAM
 def build_cross_team_correlation(session: Session, team_a: str, team_b: str,
                                  min_games: int = MIN_GAMES_CROSS) -> Tuple[np.ndarray, bool]:
     """
-    10x10 cross matrix (A's slots x B's slots) for a game between A and B.
-
-    Pools A's slots vs its opponents' slots over A's games with B's opponents'
-    slots vs B's slots over B's games, weighting each pair by its observation
-    count and shrinking toward the league default with CROSS_SHRINK_GAMES
-    pseudo-observations. Falls back to the default (and False) when neither
-    side has `min_games` games with a matched opponent line.
+    Cross matrix [A slot i, B slot j] for a game between team_a and team_b,
+    pooled over every game each team played and shrunk toward the league
+    default. Returns (matrix, True) or (default, False) when neither team has
+    enough history.
     """
     w = _wide(league_slot_table(session))
     default = _default_cross_correlation()
-    opp = w.rename(columns={s: f"opp_{s}" for s in TEAM10_SLOTS})[['season', 'week', 'team'] + [f"opp_{s}" for s in TEAM10_SLOTS]]
+    opp = w.rename(columns={s: f"opp_{s}" for s in TEAM_SLOTS})[['season', 'week', 'team'] + [f"opp_{s}" for s in TEAM_SLOTS]]
 
     def team_vs_opponents(team: str) -> Tuple[np.ndarray, np.ndarray]:
         g = w[w.team == team].merge(opp, left_on=['season', 'week', 'opponent'], right_on=['season', 'week', 'team'],
                                     how='inner', suffixes=('', '_o'))
-        return g[TEAM10_SLOTS].to_numpy(float), g[[f"opp_{s}" for s in TEAM10_SLOTS]].to_numpy(float)
+        return g[TEAM_SLOTS].to_numpy(float), g[[f"opp_{s}" for s in TEAM_SLOTS]].to_numpy(float)
 
     Xa, Oa = team_vs_opponents(team_a)      # A's slots, A's opponents' slots
     Xb, Ob = team_vs_opponents(team_b)      # B's slots, B's opponents' slots
     if len(Xa) < min_games and len(Xb) < min_games:
         return default, False
 
-    num = np.zeros((10, 10)); den = np.zeros((10, 10))
+    num = np.zeros((N_SLOTS, N_SLOTS)); den = np.zeros((N_SLOTS, N_SLOTS))
     if len(Xa) >= min_games:
         R, N = _pairwise_spearman(Xa, Oa, MIN_PAIR_OBS)           # [A slot i, opponent slot j]
         ok = ~np.isnan(R); num[ok] += (R * N)[ok]; den[ok] += N[ok]
@@ -176,9 +197,10 @@ def build_cross_team_correlation(session: Session, team_a: str, team_b: str,
 def _default_cross_correlation() -> np.ndarray:
     """
     League default when a team has no history: offense vs opposing offense
-    slightly positive (game flow), offense vs opposing DST negative.
+    slightly positive (game flow), offense vs opposing takeaways negative,
+    takeaways vs opposing points negative, the two scores nearly independent.
     """
-    corr = np.zeros((10, 10))
+    corr = np.zeros((N_SLOTS, N_SLOTS))
     offense = ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'WR3', 'TE1', 'TE2']
     for s1 in offense:
         for s2 in offense:
@@ -186,6 +208,13 @@ def _default_cross_correlation() -> np.ndarray:
     for s in offense:
         corr[SLOT_IDX[s], SLOT_IDX['DST']] = -0.20
         corr[SLOT_IDX['DST'], SLOT_IDX[s]] = -0.20
+        corr[SLOT_IDX[s], SLOT_IDX[PTS_SLOT]] = 0.05
+        corr[SLOT_IDX[PTS_SLOT], SLOT_IDX[s]] = 0.05
+    corr[SLOT_IDX['DST'], SLOT_IDX[PTS_SLOT]] = -0.30
+    corr[SLOT_IDX[PTS_SLOT], SLOT_IDX['DST']] = -0.30
+    corr[SLOT_IDX['K'], SLOT_IDX[PTS_SLOT]] = -0.15
+    corr[SLOT_IDX[PTS_SLOT], SLOT_IDX['K']] = -0.15
+    corr[SLOT_IDX[PTS_SLOT], SLOT_IDX[PTS_SLOT]] = 0.05
     return corr
 
 

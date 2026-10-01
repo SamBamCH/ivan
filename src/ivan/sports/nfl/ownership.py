@@ -654,6 +654,7 @@ def snapshot_projections(session: Session) -> int:
             "team": p.team, "opponent": p.opponent, "position": p.position, "salary": p.salary,
             "roster_slot_id": p.roster_slot_id,
             "fpts_mean": p.fpts_mean or 0.0, "fpts_median": p.fpts_p50 or 0.0, "fpts_std": p.fpts_std or 0.0,
+            "fpts_std_model": p.fpts_std_model,
             "ownership_proj": p.ownership_proj or 0.0,
         })
     (session.query(ProjectionSnapshot)

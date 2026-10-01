@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ivan.core.utils import PROJECT_ROOT
-from ivan.database.session import get_session, init_db
+from ivan.database.session import add_missing_columns, get_session, init_db
 from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.jobs import JobRunner
@@ -35,6 +35,7 @@ async def _lifespan(_app: FastAPI):
     WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     WEB_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     NFLBase.metadata.create_all(engine)       # working tables on a fresh server; no-op otherwise
+    add_missing_columns(engine, NFLBase.metadata)   # columns added to the models since the tables were created
     yield
 
 

@@ -1,5 +1,5 @@
 from ivan.core.config import require_env
-from ivan.database.session import init_db, get_session
+from ivan.database.session import init_db, get_session, add_missing_columns
 from ivan.sports.nfl.models import NFLOdds, NFLPlayer, NFLGameOdds
 from ivan.sports.common.draftkings import ingest_players
 from ivan.sports.common.odds import get_odds, parse_odds, get_game_odds, parse_game_odds
@@ -32,6 +32,9 @@ def parse_args():
 args = parse_args()
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 engine = init_db('nfl')
+from ivan.sports.nfl.models import NFLBase
+for added in add_missing_columns(engine, NFLBase.metadata):
+    print(f'schema: added column {added}')
 session = get_session(engine)
 
 #Fetch everything first; only touch the database once both fetches succeeded, so a

@@ -87,3 +87,27 @@ def safe_commit(session, max_tries=5):
                 raise
     # if we reach here, we never succeeded
     raise RuntimeError("Could not commit after retries—DB still locked")
+
+
+def add_missing_columns(engine, metadata) -> list:
+    """
+    Add columns the models declare that an existing table lacks (there is no
+    migration tool here; SQLite's ALTER TABLE ADD COLUMN is a metadata-only
+    change). Tables that do not exist are left to create_all. Returns the
+    "table.column" names added.
+    """
+    from sqlalchemy import inspect
+    insp = inspect(engine)
+    added = []
+    for table in metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in existing:
+                continue
+            ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col.type.compile(engine.dialect)}'
+            with engine.begin() as conn:
+                conn.execute(text(ddl))
+            added.append(f"{table.name}.{col.name}")
+    return added
