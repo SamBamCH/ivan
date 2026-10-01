@@ -1,381 +1,197 @@
 """
-Build team-specific correlation matrices from historical data.
+Team-specific correlation matrices from historical game logs.
 
-Instead of using a single correlation structure for all teams, this module
-builds correlations from each team's actual historical game data to capture
-team-specific offensive structures and tendencies.
+Every team gets its own 10x10 within-team Spearman matrix over the depth-chart
+slots (QB, RB1-2, WR1-3, TE1-2, K, DST), so a scrambling-QB offense and a
+pocket-passing one carry different QB/RB and QB/WR dependence. Slot labels are
+assigned per team-season from full-season production, then tracked game by
+game. The DST slot is the team's DraftKings DST line from nfl_dst_game.
+
+Cross-team (game) correlation between A's slots and B's slots is estimated
+from every game each team played, not only their head-to-head meetings: A's
+slots against *its opponents'* slots, and B's opponents' slots against B's,
+pooled and shrunk toward the league default by sample size. Head-to-head games
+are in both pools.
 """
 from __future__ import annotations
-from typing import Dict, Tuple, Optional
-from collections import defaultdict
 
 import logging
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 from sqlalchemy.orm import Session
 
-from ivan.sports.nfl.models import NFLStat
+from ivan.sports.nfl.models import NFLStat, NFLDSTGame
 
 log = logging.getLogger(__name__)
 
-# Standard slot labels matching the simulation structure
 TEAM10_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1", "TE2", "K", "DST"]
+SLOT_IDX = {s: i for i, s in enumerate(TEAM10_SLOTS)}
+SLOT_CAPS = {"QB": 1, "RB": 2, "WR": 3, "TE": 2, "K": 1}
 
-# Position to slot prefix mapping
-POSITION_TO_SLOT_PREFIX = {
-    'QB': 'QB',
-    'RB': 'RB',
-    'WR': 'WR',
-    'TE': 'TE',
-    'K': 'K',
-    'DST': 'DST',
-}
+MIN_GAMES_WITHIN = 10        # team-games before a within-team matrix is used
+MIN_GAMES_CROSS = 10         # team-games before a cross matrix is used
+MIN_PAIR_OBS = 5             # observations for one pair before it is estimated
+CROSS_SHRINK_GAMES = 20      # pseudo-observations pulling a cross pair toward the default
+
+# One slot table per session: {id(session.bind): DataFrame}
+_SLOT_TABLE_CACHE: Dict[int, pd.DataFrame] = {}
+
+
+def clear_correlation_cache() -> None:
+    _SLOT_TABLE_CACHE.clear()
 
 
 def _assign_season_slot_labels(season_df: pd.DataFrame) -> Dict[str, str]:
+    """player_name -> slot for one team-season, ranked by season fantasy points (3+ games)."""
+    totals = season_df.groupby(['player_name', 'position']).agg(
+        total_fpts=('fantasy_points_ppr', 'sum'), games=('week', 'count')).reset_index()
+    totals = totals[totals.games >= 3]
+    out: Dict[str, str] = {}
+    for position, cap in SLOT_CAPS.items():
+        pos = totals[totals.position == position].sort_values('total_fpts', ascending=False)
+        for i, row in enumerate(pos.itertuples()):
+            if i >= cap:
+                break
+            out[row.player_name] = position if cap == 1 else f"{position}{i + 1}"
+    return out
+
+
+def league_slot_table(session: Session) -> pd.DataFrame:
     """
-    Assign slot labels (QB, RB1, RB2, WR1, etc.) to players for an entire season
-    based on their total fantasy_points_ppr across all games.
-    
-    This ensures slot assignments are stable - a player is WR1 for the season
-    even if they get outscored by WR3 in a specific game.
-    
-    Args:
-        season_df: DataFrame with all games for a team in a season
-        
-    Returns:
-        Dict mapping player_name -> slot_label
+    Long table of every team-game slot line in history:
+    columns season, week, team, opponent, slot, fpts. Built once per session.
     """
-    # Aggregate total fpts per player across the season
-    player_totals = season_df.groupby(['player_name', 'position']).agg({
-        'fantasy_points_ppr': 'sum',
-        'week': 'count'  # games played
-    }).reset_index()
-    player_totals.columns = ['player_name', 'position', 'total_fpts', 'games_played']
-    
-    # Require minimum games to be considered (avoid 1-game wonders)
-    min_games = 3
-    player_totals = player_totals[player_totals['games_played'] >= min_games]
-    
-    player_to_slot = {}
-    
-    for position in ['QB', 'RB', 'WR', 'TE', 'K']:
-        pos_players = player_totals[player_totals['position'] == position].copy()
-        if pos_players.empty:
+    key = id(session.get_bind())
+    if key in _SLOT_TABLE_CACHE:
+        return _SLOT_TABLE_CACHE[key]
+
+    rows = session.query(NFLStat.season, NFLStat.week, NFLStat.team, NFLStat.opponent_team,
+                         NFLStat.player_display_name, NFLStat.position, NFLStat.fantasy_points_ppr
+                         ).filter(NFLStat.fantasy_points_ppr.isnot(None), NFLStat.team.isnot(None)).all()
+    df = pd.DataFrame(rows, columns=['season', 'week', 'team', 'opponent', 'player_name', 'position', 'fantasy_points_ppr'])
+    parts = []
+    for (team, season), tdf in df.groupby(['team', 'season']):
+        labels = _assign_season_slot_labels(tdf)
+        if not labels:
             continue
-            
-        # Sort by total fantasy points descending (season-long production)
-        pos_players = pos_players.sort_values('total_fpts', ascending=False)
-        
-        # Assign slot labels based on season rank
-        for i, row in enumerate(pos_players.itertuples()):
-            if position == 'QB':
-                slot = 'QB' if i == 0 else None
-            elif position == 'RB':
-                slot = f'RB{i+1}' if i < 2 else None
-            elif position == 'WR':
-                slot = f'WR{i+1}' if i < 3 else None
-            elif position == 'TE':
-                slot = f'TE{i+1}' if i < 2 else None
-            elif position == 'K':
-                slot = 'K' if i == 0 else None
-            else:
-                slot = None
-                
-            if slot and slot in TEAM10_SLOTS:
-                player_to_slot[row.player_name] = slot
-    
-    return player_to_slot
+        g = tdf[tdf.player_name.isin(labels)].copy()
+        g['slot'] = g.player_name.map(labels)
+        parts.append(g[['season', 'week', 'team', 'opponent', 'slot', 'fantasy_points_ppr']].rename(columns={'fantasy_points_ppr': 'fpts'}))
+    dst = session.query(NFLDSTGame.season, NFLDSTGame.week, NFLDSTGame.team, NFLDSTGame.opponent, NFLDSTGame.dst_points
+                        ).filter(NFLDSTGame.dst_points.isnot(None)).all()
+    if dst:
+        d = pd.DataFrame(dst, columns=['season', 'week', 'team', 'opponent', 'fpts'])
+        d['slot'] = 'DST'
+        parts.append(d[['season', 'week', 'team', 'opponent', 'slot', 'fpts']])
+    table = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=['season', 'week', 'team', 'opponent', 'slot', 'fpts'])
+    table = table.drop_duplicates(['season', 'week', 'team', 'slot'])
+    _SLOT_TABLE_CACHE[key] = table
+    return table
 
 
-def _apply_slot_labels_to_game(game_df: pd.DataFrame, player_to_slot: Dict[str, str]) -> pd.DataFrame:
-    """
-    Apply pre-computed season-level slot labels to a single game.
-    """
-    game_df = game_df.copy()
-    game_df['slot_label'] = game_df['player_name'].map(player_to_slot)
-    return game_df
+def _wide(table: pd.DataFrame) -> pd.DataFrame:
+    """(season, week, team) x TEAM10 slots, with the opponent as a column."""
+    if table.empty:
+        return pd.DataFrame(columns=['season', 'week', 'team', 'opponent'] + TEAM10_SLOTS)
+    w = table.pivot_table(index=['season', 'week', 'team'], columns='slot', values='fpts', aggfunc='first')
+    w = w.reindex(columns=TEAM10_SLOTS)
+    opp = table.groupby(['season', 'week', 'team'])['opponent'].first()
+    w['opponent'] = opp
+    return w.reset_index()
 
 
-def build_team_correlation(
-    session: Session,
-    team: str,
-    min_games: int = 10,
-) -> Tuple[np.ndarray, bool]:
-    """
-    Build a 10x10 within-team correlation matrix from historical data.
-    
-    Slot labels are assigned at the SEASON level (based on total production),
-    then tracked game-by-game. This correctly captures variance - e.g., when
-    the WR1 (by season role) has a dud game while WR3 booms.
-    
-    Args:
-        session: DB session
-        team: Team abbreviation (e.g., 'SEA', 'KC')
-        min_games: Minimum games required to build correlation
-        
-    Returns:
-        (correlation_matrix, is_valid): 10x10 matrix and whether it's team-specific
-                                        If insufficient data, returns identity matrix
-    """
-    # Query historical stats for this team
-    stats = session.query(NFLStat).filter(
-        NFLStat.team == team,
-        NFLStat.fantasy_points_ppr.isnot(None)
-    ).all()
-    
-    if not stats:
-        log.debug(f"  No historical data for {team}, using identity correlation")
-        return np.eye(10), False
-    
-    # Convert to DataFrame
-    df = pd.DataFrame([{
-        'season': s.season,
-        'week': s.week,
-        'player_name': s.player_display_name,
-        'position': s.position,
-        'fantasy_points_ppr': s.fantasy_points_ppr,
-    } for s in stats])
-    
-    slot_idx = {s: i for i, s in enumerate(TEAM10_SLOTS)}
-    all_game_slot_fpts = []
-    
-    # Process each season separately for slot assignment
-    for season, season_df in df.groupby('season'):
-        # Assign slots based on full-season production
-        player_to_slot = _assign_season_slot_labels(season_df)
-        
-        if not player_to_slot:
-            continue
-        
-        # Now iterate through games in this season
-        for (_, week), game_df in season_df.groupby(['season', 'week']):
-            game_df = _apply_slot_labels_to_game(game_df, player_to_slot)
-            
-            # Extract fpts for each slot
-            slot_fpts = np.full(10, np.nan)
-            for _, row in game_df.iterrows():
-                slot = row['slot_label']
-                if slot and slot in slot_idx:
-                    slot_fpts[slot_idx[slot]] = row['fantasy_points_ppr']
-            
-            all_game_slot_fpts.append(slot_fpts)
-    
-    if len(all_game_slot_fpts) < min_games:
-        log.debug(f"  Only {len(all_game_slot_fpts)} valid games for {team} (need {min_games}), using identity correlation")
-        return np.eye(10), False
-    
-    # Stack into matrix: (n_games, 10)
-    X = np.array(all_game_slot_fpts)
-    
-    # Compute Spearman correlation, handling missing values
-    # Use pairwise complete observations
-    n_slots = 10
-    corr = np.eye(n_slots)
-    
-    from scipy.stats import spearmanr
-    
-    for i in range(n_slots):
-        for j in range(i + 1, n_slots):
-            # Get pairwise complete observations
-            mask = ~np.isnan(X[:, i]) & ~np.isnan(X[:, j])
-            if mask.sum() < 5:  # Need at least 5 observations
+def _pairwise_spearman(X: np.ndarray, Y: np.ndarray, min_obs: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Spearman between every column of X and every column of Y on pairwise-complete rows; also the counts."""
+    R = np.full((X.shape[1], Y.shape[1]), np.nan)
+    N = np.zeros_like(R, dtype=int)
+    for i in range(X.shape[1]):
+        for j in range(Y.shape[1]):
+            mask = ~np.isnan(X[:, i]) & ~np.isnan(Y[:, j])
+            n = int(mask.sum())
+            N[i, j] = n
+            if n < min_obs:
                 continue
-            
-            xi, xj = X[mask, i], X[mask, j]
-            
-            # Spearman correlation
-            rho, _ = spearmanr(xi, xj)
-            
-            if not np.isnan(rho):
-                corr[i, j] = rho
-                corr[j, i] = rho
-    
-    log.debug(f"  Built correlation for {team} from {len(all_game_slot_fpts)} games across {df['season'].nunique()} seasons")
-    return corr, True
+            rho, _ = spearmanr(X[mask, i], Y[mask, j])
+            if np.isfinite(rho):
+                R[i, j] = rho
+    return R, N
 
 
-def build_cross_team_correlation(
-    session: Session,
-    team_a: str,
-    team_b: str,
-    min_matchups: int = 3,
-) -> Tuple[np.ndarray, bool]:
+def build_team_correlation(session: Session, team: str, min_games: int = MIN_GAMES_WITHIN) -> Tuple[np.ndarray, bool]:
     """
-    Build a 10x10 cross-team correlation matrix from historical matchups.
-    
-    This captures how team A's performance correlates with team B's when they play.
-    For example: when team A's QB does well, team B's DST usually does poorly.
-    
-    NOTE: Direct head-to-head matchups are rare (usually 1-2 per season), so we
-    fall back to default assumptions more often. The within-team correlations
-    are more important and have more data.
-    
-    Args:
-        session: DB session
-        team_a: First team abbreviation
-        team_b: Second team abbreviation  
-        min_matchups: Minimum matchups required (default low since h2h is rare)
-        
-    Returns:
-        (correlation_matrix, is_valid): 10x10 matrix (team_a slots x team_b slots)
+    10x10 within-team Spearman matrix for `team` from its own game logs, or
+    the identity (and False) when it has fewer than `min_games` games.
     """
-    # For cross-team, we need FULL season data for slot assignment
-    # Then filter to just the head-to-head matchups
-    
-    # Get all stats for both teams to build season-level slot assignments
-    all_stats_a = session.query(NFLStat).filter(
-        NFLStat.team == team_a,
-        NFLStat.fantasy_points_ppr.isnot(None)
-    ).all()
-    
-    all_stats_b = session.query(NFLStat).filter(
-        NFLStat.team == team_b,
-        NFLStat.fantasy_points_ppr.isnot(None)
-    ).all()
-    
-    if not all_stats_a or not all_stats_b:
-        return _default_cross_correlation(), False
-    
-    # Convert to DataFrames
-    df_all_a = pd.DataFrame([{
-        'season': s.season,
-        'week': s.week,
-        'player_name': s.player_display_name,
-        'position': s.position,
-        'opponent_team': s.opponent_team,
-        'fantasy_points_ppr': s.fantasy_points_ppr,
-    } for s in all_stats_a])
-    
-    df_all_b = pd.DataFrame([{
-        'season': s.season,
-        'week': s.week,
-        'player_name': s.player_display_name,
-        'position': s.position,
-        'opponent_team': s.opponent_team,
-        'fantasy_points_ppr': s.fantasy_points_ppr,
-    } for s in all_stats_b])
-    
-    slot_idx = {s: i for i, s in enumerate(TEAM10_SLOTS)}
-    X_a, X_b = [], []
-    
-    # Process each season
-    for season in set(df_all_a['season']) & set(df_all_b['season']):
-        season_a = df_all_a[df_all_a['season'] == season]
-        season_b = df_all_b[df_all_b['season'] == season]
-        
-        # Build season-level slot assignments
-        slots_a = _assign_season_slot_labels(season_a)
-        slots_b = _assign_season_slot_labels(season_b)
-        
-        if not slots_a or not slots_b:
-            continue
-        
-        # Find head-to-head matchups this season
-        h2h_a = season_a[season_a['opponent_team'] == team_b]
-        h2h_b = season_b[season_b['opponent_team'] == team_a]
-        
-        # Find common (season, week) for h2h games
-        games_a = set(zip(h2h_a['season'], h2h_a['week']))
-        games_b = set(zip(h2h_b['season'], h2h_b['week']))
-        common_games = games_a & games_b
-        
-        for _, week in common_games:
-            game_a = h2h_a[h2h_a['week'] == week]
-            game_b = h2h_b[h2h_b['week'] == week]
-            
-            game_a = _apply_slot_labels_to_game(game_a, slots_a)
-            game_b = _apply_slot_labels_to_game(game_b, slots_b)
-            
-            slot_fpts_a = np.full(10, np.nan)
-            slot_fpts_b = np.full(10, np.nan)
-            
-            for _, row in game_a.iterrows():
-                slot = row['slot_label']
-                if slot and slot in slot_idx:
-                    slot_fpts_a[slot_idx[slot]] = row['fantasy_points_ppr']
-                    
-            for _, row in game_b.iterrows():
-                slot = row['slot_label']
-                if slot and slot in slot_idx:
-                    slot_fpts_b[slot_idx[slot]] = row['fantasy_points_ppr']
-            
-            X_a.append(slot_fpts_a)
-            X_b.append(slot_fpts_b)
-    
-    if len(X_a) < min_matchups:
-        log.debug(f"  Only {len(X_a)} h2h matchups for {team_a} vs {team_b}, using defaults")
-        return _default_cross_correlation(), False
-    
-    X_a = np.array(X_a)
-    X_b = np.array(X_b)
-    
-    # Compute cross-correlation
-    n_slots = 10
-    cross_corr = _default_cross_correlation()  # Start with defaults, update where we have data
-    
-    from scipy.stats import spearmanr
-    
-    for i in range(n_slots):
-        for j in range(n_slots):
-            mask = ~np.isnan(X_a[:, i]) & ~np.isnan(X_b[:, j])
-            if mask.sum() < 3:
-                continue
-            
-            xi, xj = X_a[mask, i], X_b[mask, j]
-            rho, _ = spearmanr(xi, xj)
-            
-            if not np.isnan(rho):
-                cross_corr[i, j] = rho
-    
-    log.debug(f"  Built cross-correlation for {team_a} vs {team_b} from {len(X_a)} matchups")
-    return cross_corr, True
+    w = _wide(league_slot_table(session))
+    X = w[w.team == team][TEAM10_SLOTS].to_numpy(float)
+    if len(X) < min_games:
+        log.debug(f"  {team}: {len(X)} games (need {min_games}), identity correlation")
+        return np.eye(10), False
+    R, _ = _pairwise_spearman(X, X, MIN_PAIR_OBS)
+    R = np.where(np.isnan(R), 0.0, R)
+    np.fill_diagonal(R, 1.0)
+    return R, True
+
+
+def build_cross_team_correlation(session: Session, team_a: str, team_b: str,
+                                 min_games: int = MIN_GAMES_CROSS) -> Tuple[np.ndarray, bool]:
+    """
+    10x10 cross matrix (A's slots x B's slots) for a game between A and B.
+
+    Pools A's slots vs its opponents' slots over A's games with B's opponents'
+    slots vs B's slots over B's games, weighting each pair by its observation
+    count and shrinking toward the league default with CROSS_SHRINK_GAMES
+    pseudo-observations. Falls back to the default (and False) when neither
+    side has `min_games` games with a matched opponent line.
+    """
+    w = _wide(league_slot_table(session))
+    default = _default_cross_correlation()
+    opp = w.rename(columns={s: f"opp_{s}" for s in TEAM10_SLOTS})[['season', 'week', 'team'] + [f"opp_{s}" for s in TEAM10_SLOTS]]
+
+    def team_vs_opponents(team: str) -> Tuple[np.ndarray, np.ndarray]:
+        g = w[w.team == team].merge(opp, left_on=['season', 'week', 'opponent'], right_on=['season', 'week', 'team'],
+                                    how='inner', suffixes=('', '_o'))
+        return g[TEAM10_SLOTS].to_numpy(float), g[[f"opp_{s}" for s in TEAM10_SLOTS]].to_numpy(float)
+
+    Xa, Oa = team_vs_opponents(team_a)      # A's slots, A's opponents' slots
+    Xb, Ob = team_vs_opponents(team_b)      # B's slots, B's opponents' slots
+    if len(Xa) < min_games and len(Xb) < min_games:
+        return default, False
+
+    num = np.zeros((10, 10)); den = np.zeros((10, 10))
+    if len(Xa) >= min_games:
+        R, N = _pairwise_spearman(Xa, Oa, MIN_PAIR_OBS)           # [A slot i, opponent slot j]
+        ok = ~np.isnan(R); num[ok] += (R * N)[ok]; den[ok] += N[ok]
+    if len(Xb) >= min_games:
+        R, N = _pairwise_spearman(Ob, Xb, MIN_PAIR_OBS)           # [opponent slot i, B slot j]
+        ok = ~np.isnan(R); num[ok] += (R * N)[ok]; den[ok] += N[ok]
+    cross = (num + CROSS_SHRINK_GAMES * default) / (den + CROSS_SHRINK_GAMES)
+    log.debug(f"  cross {team_a} x {team_b}: {len(Xa)} + {len(Xb)} games")
+    return cross, True
 
 
 def _default_cross_correlation() -> np.ndarray:
     """
-    Default cross-team correlation assumptions when insufficient data.
-    
-    Generally:
-    - Offensive players on opposite teams have slight positive correlation (game flow)
-    - Offensive players negatively correlate with opposing DST
+    League default when a team has no history: offense vs opposing offense
+    slightly positive (game flow), offense vs opposing DST negative.
     """
-    n = 10
-    corr = np.zeros((n, n))
-    
-    # Slot indices
-    slot_idx = {s: i for i, s in enumerate(TEAM10_SLOTS)}
-    
-    # Small positive correlation between all offensive players (game flow/shootouts)
-    offense_slots = ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'WR3', 'TE1', 'TE2']
-    for s1 in offense_slots:
-        for s2 in offense_slots:
-            corr[slot_idx[s1], slot_idx[s2]] = 0.15
-    
-    # Negative correlation with opposing DST
-    dst_idx = slot_idx['DST']
-    for s in offense_slots:
-        corr[slot_idx[s], dst_idx] = -0.20
-        corr[dst_idx, slot_idx[s]] = -0.20
-    
+    corr = np.zeros((10, 10))
+    offense = ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'WR3', 'TE1', 'TE2']
+    for s1 in offense:
+        for s2 in offense:
+            corr[SLOT_IDX[s1], SLOT_IDX[s2]] = 0.15
+    for s in offense:
+        corr[SLOT_IDX[s], SLOT_IDX['DST']] = -0.20
+        corr[SLOT_IDX['DST'], SLOT_IDX[s]] = -0.20
     return corr
 
 
-def get_team_correlations(
-    session: Session,
-    team_a: str,
-    team_b: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Get all correlation matrices needed for a matchup.
-    
-    Returns:
-        (corr_a, corr_b, corr_cross): Within-team corr for A, B, and cross-team
-    """
+def get_team_correlations(session: Session, team_a: str, team_b: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(within A, within B, A x B cross) for a matchup."""
     corr_a, _ = build_team_correlation(session, team_a)
     corr_b, _ = build_team_correlation(session, team_b)
     corr_cross, _ = build_cross_team_correlation(session, team_a, team_b)
-    
     return corr_a, corr_b, corr_cross
-

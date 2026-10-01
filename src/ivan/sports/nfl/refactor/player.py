@@ -6,6 +6,7 @@ from ivan.sports.nfl.refactor.stat import (
     clear_neighbor_cache, fit_stat_distribution, position_logs, sample_stat,
 )
 from ivan.sports.nfl.refactor.volume import VolumeModel
+from ivan.sports.nfl.refactor.dst import project_dst_samples
 import pandas as pd
 import numpy as np
 import scipy.stats as st
@@ -20,16 +21,48 @@ FPTS_WEIGHTS = {
     'receptions': 1.0,
     'receiving_yards': 0.1,
     'receiving_tds': 6.0,
-    'fg_made': 4.2,
-    'pat_made': 1.0,
+    # Kickers: kicker_pts is the books' kicking points (3 per FG, 1 per PAT);
+    # DraftKings adds 1 for a 40-49 yard FG and 2 for 50+, so fg_made carries
+    # only that distance bonus, per kicker (see _kicker_fg_bonus).
+    'kicker_pts': 1.0,
+    'fg_made': 0.65,
 }
+
+# League-average DraftKings distance bonus per made FG (2022-2025: 3.59-3.67
+# points per FG, i.e. 0.59-0.67 above the flat 3) and how many of a kicker's
+# own FGs it takes to move the prior as far as the league does.
+FG_BONUS_LEAGUE = 0.65
+FG_BONUS_PRIOR_KICKS = 30.0
+
+
+def _kicker_fg_bonus(history: list) -> float:
+    """Expected DK points above 3 per made FG for this kicker, shrunk to the league."""
+    made = bonus = 0.0
+    for h in history:
+        fg = h.fg_made or 0.0
+        if not fg:
+            continue
+        pts = (3.0 * ((h.fg_made_0_19 or 0.0) + (h.fg_made_20_29 or 0.0) + (h.fg_made_30_39 or 0.0))
+               + 4.0 * (h.fg_made_40_49 or 0.0) + 5.0 * ((h.fg_made_50_59 or 0.0) + (h.fg_made_60_ or 0.0)))
+        if pts <= 0:
+            continue          # distance split missing for this game
+        made += fg
+        bonus += pts - 3.0 * fg
+    return (bonus + FG_BONUS_LEAGUE * FG_BONUS_PRIOR_KICKS) / (made + FG_BONUS_PRIOR_KICKS)
+
+
+def _fpts_weights(player: NFLPlayer, history: list, stats: list[str]) -> np.ndarray:
+    w = np.array([FPTS_WEIGHTS.get(s, 0.0) for s in stats], dtype=float)
+    if player.position == 'K' and 'fg_made' in stats:
+        w[stats.index('fg_made')] = _kicker_fg_bonus(history)
+    return w
 
 STATS = {
     'QB': ['passing_yards', 'passing_tds', 'passing_interceptions', 'rushing_yards', 'rushing_tds'],
     'RB': ['rushing_yards', 'rushing_tds', 'receptions', 'receiving_yards'],
     'WR': ['receptions', 'receiving_yards', 'receiving_tds'],
     'TE': ['receptions', 'receiving_yards', 'receiving_tds'],
-    'K':  ['fg_made', 'pat_made'],
+    'K':  ['kicker_pts', 'fg_made'],
     'DST': ['def_tds', 'def_sacks', 'def_interceptions', 'special_teams_tds', 'points_allowed'] 
 }
 
@@ -186,13 +219,9 @@ def _populate_fpts_stats(player: NFLPlayer, samples: np.ndarray) -> None:
 
 def _fit_dst_by_salary(player: NFLPlayer, rng: np.random.Generator, n_samples: int = 10000) -> np.ndarray:
     """
-    Generate DST fpts samples scaled by salary.
-    Higher salary = slightly higher projection.
-    
-    DST salaries typically range from ~2000 to ~4000.
-    Average DST scores around 6-8 fpts with high variance.
-    
-    Returns the samples array for further processing.
+    Fallback when the game has no lines: DST fpts samples scaled by salary.
+    Classic DST salaries run 2000-4000; showdown FLEX salaries run higher and
+    saturate this, which is why the lines are preferred (see refactor.dst).
     """
     # Normalize salary to a 0-1 scale (assuming 2000-4500 range)
     salary_norm = (player.salary - 2000) / 2500
@@ -248,23 +277,36 @@ def fit_fpts_distributions(session):
     clear_neighbor_cache()
     volume = VolumeModel()
     pending: list[_Pending] = []
+    # per-run validation tallies: stats priced by a market vs filled from the
+    # salary model, and where each K/DST projection came from
+    tally = {"priced": 0, "unpriced": 0, "by_pos": {}, "dst_lines": 0, "dst_salary": 0, "k_market": 0, "k_salary": 0}
 
     # ---- pass 1: market-priced stats -------------------------------------
     for player in players:
-        # DST: use simple salary-based projection for now
+        # A captain row is the FLEX row at 1.5x salary; it is copied from the
+        # FLEX fit below, and must not feed the salary model.
+        if player.roster_slot_id == 511:
+            continue
+
+        # DST: mean from the game lines with history-shaped residuals; salary
+        # only when the lines are missing.
         if player.position == 'DST':
-            dst_samples = _fit_dst_by_salary(player, rng)
+            projected = project_dst_samples(session, player.team, player.opponent, rng)
+            if projected is not None:
+                dst_samples, info = projected
+                tally["dst_lines"] += 1
+                print(f"DST {player.team} vs {player.opponent}: lines total={info['total']} "
+                      f"team={info['team_implied']} opp={info['opp_implied']} -> mean {info['mu']}")
+            else:
+                dst_samples = _fit_dst_by_salary(player, rng)
+                tally["dst_salary"] += 1
+                print(f"DST {player.team} vs {player.opponent}: no lines or no DST model, salary fallback")
             mu, sigma = st.norm.fit(dst_samples)
             player.fpts_dist_name = 'norm'
             player.fpts_dist_params = (float(mu), float(sigma))
             _populate_fpts_stats(player, dst_samples)
             session.commit()
             fitted += 1
-            continue
-
-        # A captain row is the FLEX row at 1.5x salary; it is copied from the
-        # FLEX fit below, and must not feed the salary model.
-        if player.roster_slot_id == 511:
             continue
 
         stats_to_model = STATS.get(player.position)
@@ -303,8 +345,11 @@ def fit_fpts_distributions(session):
             if sd is None or sd.num_odds_points == 0:
                 continue
             item.dists[stat] = sd
+            tally["priced"] += 1
             mean = float(np.mean(sample_stat(sd, 4000, rng)))
             volume.add(player.position, stat, player.salary, item.p_td, mean)
+        if player.position == 'K':
+            tally["k_market" if 'kicker_pts' in item.dists else "k_salary"] += 1
         pending.append(item)
 
     volume.fit()
@@ -327,6 +372,7 @@ def fit_fpts_distributions(session):
             )
             if sd is not None:
                 item.dists[stat] = sd
+                tally["unpriced"] += 1
 
         stats_valid = [s for s in stats_to_model if s in item.dists]
         if not stats_valid:
@@ -370,7 +416,7 @@ def fit_fpts_distributions(session):
             inv_order[order] = np.arange(n_samples)
             X_dep[:, j] = x_sorted[inv_order]
 
-        weights = np.array([FPTS_WEIGHTS.get(s, 0.0) for s in stats_valid], dtype=float)
+        weights = _fpts_weights(player, item.history, stats_valid)
         fpts_samples = X_dep @ weights
 
         # Fit normal to FPTS and populate all stats
@@ -380,6 +426,7 @@ def fit_fpts_distributions(session):
         _populate_fpts_stats(player, fpts_samples)
         session.commit()
         fitted += 1
+        tally["by_pos"][player.position] = tally["by_pos"].get(player.position, 0) + 1
 
     # A captain scores exactly 1.5x the same player's FLEX line (the sampler
     # applies the multiplier), so the CPT row carries the FLEX row's fit. The
@@ -401,8 +448,14 @@ def fit_fpts_distributions(session):
     # Depth-chart slots drive the game-level correlation structure; without
     # them every player would be sampled independently.
     labelled = assign_slots(session)
-    print(f"\nFitted {fitted} players; {synced} captain rows copied from FLEX; "
-          f"{labelled} rows given depth-chart slots for correlation.")
+    n_stats = tally["priced"] + tally["unpriced"]
+    by_pos = " ".join(f"{p} {n}" for p, n in sorted(tally["by_pos"].items()))
+    print(f"\nFitted {fitted} players ({by_pos}; DST {tally['dst_lines'] + tally['dst_salary']}); "
+          f"{synced} captain rows copied from FLEX; {labelled} rows given depth-chart slots for correlation.")
+    print(f"validation: {tally['priced']}/{n_stats} stat distributions priced by a market, "
+          f"{tally['unpriced']} from the salary model | "
+          f"K: {tally['k_market']} on the kicking-points market, {tally['k_salary']} salary | "
+          f"DST: {tally['dst_lines']} from game lines, {tally['dst_salary']} salary fallback")
 
 
 def _sync_captain_rows(session) -> int:

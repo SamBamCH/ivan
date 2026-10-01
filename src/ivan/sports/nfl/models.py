@@ -320,12 +320,20 @@ class Lineup(NFLBase, BaseLineup):
 
 
 class NFLDSTGame(NFLBase):
+    """DraftKings DST points per team-game; rebuilt by dst_scoring.build_dst_game_table."""
     __tablename__ = "nfl_dst_game"
     season   = Column(Integer, primary_key=True)
     week     = Column(Integer, primary_key=True)
     team     = Column(String,  primary_key=True)
+    season_type = Column(String, nullable=True)
     opponent = Column(String)
     dst_points = Column(Float)
+    points_allowed = Column(Float, nullable=True)
+    sacks     = Column(Float, nullable=True)
+    takeaways = Column(Float, nullable=True)
+    blocks    = Column(Float, nullable=True)
+    def_tds   = Column(Float, nullable=True)
+    safeties  = Column(Float, nullable=True)
 
 class LineupSimulationResult(NFLBase):
     __tablename__ = "lineup_simulation_results"

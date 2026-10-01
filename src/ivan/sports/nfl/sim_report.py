@@ -499,7 +499,7 @@ def build_checks(report: dict) -> List[dict]:
                     f"no history in nfl_stats for {', '.join(identity)}: identity matrix (players on that team sampled independently of each other)")
             if src.get("cross") == "default":
                 add("info", f"Cross-team correlation {teams}",
-                    "fewer than 3 head-to-head games in history: default assumptions (+0.15 offence-offence, -0.20 offence vs opposing DST)")
+                    "neither team has 10 games with an opponent line in history: default cross-team assumptions (+0.15 offence-offence, -0.20 offence vs opposing DST)")
         n = r.get("n_samples") or 0
         if r.get("max_abs_error") is not None and r.get("standard_error"):
             se = r["standard_error"]

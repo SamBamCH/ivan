@@ -1,13 +1,39 @@
+"""
+Pull nflverse reference data into the history database.
+
+Everything here is a full refresh of a reference table: seasons run from
+FIRST_SEASON through the season in progress, so a weekly run picks up the
+latest completed week without anyone editing a season list.
+"""
+from datetime import date
+
 import nflreadpy as nfl
-from ivan.sports.nfl.refactor.historical.data_clean import calculate_kicker_fantasy_points, calculate_kicker_pts
 import pandas as pd
-from ivan.sports.nfl.models import NFLStat
+from sqlalchemy import inspect as sa_inspect, text
+
 from ivan.core.utils import normalize_name
+from ivan.sports.nfl.models import NFLStat
+from ivan.sports.nfl.refactor.historical.data_clean import (
+    calculate_kicker_fantasy_points, calculate_kicker_pts,
+)
 
-from sqlalchemy import inspect as sa_inspect
+FIRST_SEASON = 2022
 
-def fetch_boxscores(session):
-    df = nfl.load_player_stats(seasons=[2022, 2023, 2024, 2025]).to_pandas()
+
+def current_season(today: date | None = None) -> int:
+    """NFL season in progress: the calendar year from August on, else the previous one."""
+    today = today or date.today()
+    return today.year if today.month >= 8 else today.year - 1
+
+
+def seasons_to_fetch(today: date | None = None) -> list[int]:
+    return list(range(FIRST_SEASON, current_season(today) + 1))
+
+
+def fetch_boxscores(session, seasons: list[int] | None = None) -> int:
+    """Upsert nflverse weekly player stats into nfl_stats. Returns rows seen."""
+    seasons = seasons or seasons_to_fetch()
+    df = nfl.load_player_stats(seasons=seasons).to_pandas()
     kicker_mask = (df['position_group'] == 'SPEC') & (df['position'] == 'K')
     df.loc[kicker_mask, 'position_group'] = 'K'
 
@@ -42,6 +68,27 @@ def fetch_boxscores(session):
             session.add(NFLStat(**data))
 
     session.commit()
+    return len(df)
 
-    
 
+SCHEDULE_COLS = ['game_id', 'season', 'game_type', 'week', 'gameday', 'home_team', 'away_team',
+                 'home_score', 'away_score', 'spread_line', 'total_line']
+
+
+def fetch_schedules(session, seasons: list[int] | None = None) -> int:
+    """
+    Rebuild nfl_schedule from nflverse: one row per game with the final score
+    and the closing market (spread_line is the home team's expected margin,
+    positive when the home side is favored; total_line is the game total).
+    Unplayed games of the current season are kept with NULL scores so the
+    upcoming week's lines are available too. Returns rows written.
+    """
+    seasons = seasons or seasons_to_fetch()
+    df = nfl.load_schedules(seasons).to_pandas()
+    df = df[SCHEDULE_COLS].copy()
+    df['gameday'] = df['gameday'].astype(str)
+    engine = session.get_bind()
+    with engine.begin() as con:
+        df.to_sql('nfl_schedule', con, if_exists='replace', index=False)
+        con.execute(text("CREATE INDEX IF NOT EXISTS ix_nfl_schedule_season_week ON nfl_schedule(season, week)"))
+    return len(df)

@@ -23,6 +23,8 @@ from ivan.sports.nfl.player_level_calculations import build_models as build_play
 from ivan.sports.nfl.build_team10_vine import build_team10_vine
 from ivan.sports.nfl.calibrate_game_factors import calibrate_game_factors
 from ivan.sports.nfl.dst_scoring import build_dst_game_table
+from ivan.sports.nfl.refactor.dst import fit_dst_odds_model, describe_dst_odds_model
+from ivan.sports.nfl.refactor.historical.data_fetch import seasons_to_fetch
 from ivan.sports.nfl.team_level_calculations   import build_team_models, _compute_fpts
 from ivan.sports.nfl.build_team_positional_table import build_team_positional_table
 from ivan.sports.nfl.slate_models import build_slate_models
@@ -48,9 +50,14 @@ def main():
     print("→ Building player‐level models")
     build_player_models(args.db_url, model_dir) 
 
-    _years = [2023,2024,2025]  # add more as needed (e.g., 2019..2023)
+    _years = seasons_to_fetch()   # every season in nfl_stats through the one in progress
     nrows = build_dst_game_table(args.db_url, years=_years)
     print(f"   wrote {nrows} rows to nfl_dst_game")
+
+    # DST mean from the game lines, shape from history (writes dst_odds_params.json)
+    engine = init_db("nfl", args.db_url)
+    params = fit_dst_odds_model(get_session(engine), model_dir)
+    print("   " + describe_dst_odds_model(params))
 
     # new: fixed-width team-week positional fpts table
     n_team_rows = build_team_positional_table(args.db_url)

@@ -64,6 +64,31 @@ optional `"default"`:
  "193391004": {"diversity_lambda": 0.3}}
 ```
 
+### Kickers and defenses
+
+Kickers are fit like everyone else, from their markets: `player_kicking_points`
+(3 per FG, 1 per PAT) sets the centre and `player_field_goals` the FG count;
+DraftKings' distance bonus (+1 for 40-49 yards, +2 for 50+) is added per made
+FG at the kicker's own historical rate, shrunk to the league's 0.65. A defense
+has no market, so its mean comes from the game lines: a fit of historical
+DraftKings DST points on the two implied totals (`dst_odds_params.json`,
+written by `build_models.py`), with residuals bootstrapped from the closest
+historical games so the skew and the -4 floor survive. Without lines it falls
+back to a salary scale. The ingest prints one validation line saying how many
+stat distributions came from a market versus the salary model and where each
+K/DST projection came from; `generate_lineups.py` prints a per-game check that
+the sampled correlation matches the team and cross-team history it asked for.
+
+### Backtesting projections
+
+Every ingest snapshots the slate's projections. `python scripts/nfl/backtest_projections.py
+[--since 2025-09-01] [--positions K,DST]` scores them against the DraftKings
+points the players actually produced (from `nfl_stats` and `nfl_dst_game`):
+bias, error, rank correlation, whether the stated spread covers outcomes, and
+a tercile table per position. The overnight job keeps `nfl_stats`,
+`nfl_schedule` (scores and closing lines) and `nfl_dst_game` current through
+the season in progress.
+
 ## Web UI
 
 ```bash

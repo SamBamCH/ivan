@@ -1,8 +1,8 @@
 from ivan.core.config import require_env
 from ivan.database.session import init_db, get_session
-from ivan.sports.nfl.models import NFLOdds, NFLPlayer
+from ivan.sports.nfl.models import NFLOdds, NFLPlayer, NFLGameOdds
 from ivan.sports.common.draftkings import ingest_players
-from ivan.sports.common.odds import get_odds, parse_odds
+from ivan.sports.common.odds import get_odds, parse_odds, get_game_odds, parse_game_odds
 from ivan.sports.nfl.refactor.player import fit_fpts_distributions
 import argparse
 import logging
@@ -56,6 +56,13 @@ if args.update_odds:
         raise SystemExit('the-odds-api returned no odds (see the error above). '
                          'Check ODDS_API_KEY and your plan at the-odds-api.com; nothing changed.')
     records = df_odds.to_dict(orient='records')
+    # Game lines (spread, total, moneyline) for every upcoming game: the DST
+    # projection and the per-game diagnostics read them from game_odds.
+    game_odds_json, _ = get_game_odds("americanfootball_nfl", api_key, markets="h2h,spreads,totals")
+    df_game_odds = parse_game_odds(game_odds_json) if game_odds_json else None
+    if df_game_odds is None or df_game_odds.empty:
+        print('the-odds-api returned no game lines; DST projections will fall back to salary.')
+        df_game_odds = None
 elif not args.p:
     raise ValueError('-p and --update-odds both false, exiting...')
 
@@ -77,6 +84,11 @@ if players is not None:
 if records is not None:
     session.query(NFLOdds).delete(synchronize_session=False)
     session.bulk_insert_mappings(NFLOdds, records)
+if args.update_odds and df_game_odds is not None:
+    df_game_odds = df_game_odds.drop_duplicates(subset=["game_id", "bookmaker", "market", "outcome_name", "point", "last_update"])
+    session.query(NFLGameOdds).filter(NFLGameOdds.game_id.in_(df_game_odds['game_id'].unique().tolist())).delete(synchronize_session=False)
+    session.bulk_insert_mappings(NFLGameOdds, df_game_odds.to_dict(orient="records"))
+    print(f"game lines: {df_game_odds['game_id'].nunique()} games, {len(df_game_odds)} rows")
 session.commit()
 
 if args.p:

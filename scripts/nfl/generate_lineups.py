@@ -184,6 +184,14 @@ def main():
     quotas = [base + (1 if i < remainder else 0) for i in range(args.num_jobs)]
 
     # Pass total_workers
+    # Validate the dependence structure once, in the parent, before the workers
+    # draw their own samples: prints the per-game correlation check.
+    from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian, summarize_sampling
+    session = get_session(init_db('nfl'))
+    samples, diag = generate_correlated_samples_gaussian(session, n_samples=4000, return_diagnostics=True)
+    print(summarize_sampling(samples, diag))
+    session.close()
+
     _run_with_progress(quotas, args.config, total_workers=args.num_jobs)
 
     print(f"\n✅ Generated {args.num_lineups:,} lineups across {args.num_jobs} workers")

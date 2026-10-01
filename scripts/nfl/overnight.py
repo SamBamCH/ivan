@@ -5,13 +5,21 @@ from ivan.database.session import init_db, get_session
 from ivan.core.utils import PROJECT_ROOT
 from sqlalchemy import text
 
-from ivan.sports.nfl.refactor.historical.data_fetch import fetch_boxscores
+from ivan.sports.nfl.refactor.historical.data_fetch import fetch_boxscores, fetch_schedules, seasons_to_fetch
+from ivan.sports.nfl.dst_scoring import build_dst_game_table
 
 #init db
 engine = init_db('nfl')
 session = get_session(engine)
-#fetch_stats
-fetch_boxscores(session)
+#fetch stats, schedule (scores + closing lines) for every season through the current one
+n = fetch_schedules(session)
+print(f"[overnight] nfl_schedule: {n} games")
+n = fetch_boxscores(session)
+print(f"[overnight] nfl_stats: {n} player-weeks")
+# DST points per team-game feed the team correlation model at ingest, so
+# they must track the stats table.
+n = build_dst_game_table(None, years=seasons_to_fetch(), session=session)
+print(f"[overnight] nfl_dst_game: {n} team-games")
 
 #clear old data
 #clear NFLPlayer -> ProjectionSnapshot.p[p]

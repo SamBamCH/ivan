@@ -62,6 +62,11 @@ DEFAULT_COEFFS: dict[tuple[str, str], tuple[float, float, float]] = {
     ("WR", "receiving_tds"):         (-0.04, 0.01, 1.21),
     ("WR", "receiving_yards"):       (-13.41, 9.72, 52.62),
     ("WR", "receptions"):            (-0.93, 0.80, 2.89),
+    # Kickers: last resort when no book posts kicking points or field goals
+    # for a kicker. Set so that a mid-salary kicker lands near the league
+    # average (8.5 DK points, 1.7 FGs) after UNPRICED_SHADE.
+    ("K", "kicker_pts"):             (4.90, 1.10, 0.00),
+    ("K", "fg_made"):                (1.00, 0.27, 0.00),
 }
 
 

@@ -74,6 +74,42 @@ def _mu_sigma(p: NFLPlayer, default_sigma: float) -> Tuple[float, float]:
     return mu, sd
 
 
+def summarize_sampling(samples: Dict[int, np.ndarray], diag: dict, max_pairs_reported: int = 3) -> str:
+    """
+    Brief check that the draws carry the dependence that was asked for: per
+    game, the realised Spearman correlation between every pair of sampled
+    players against the requested matrix, plus where each matrix came from.
+    Returns a few lines for printing.
+    """
+    from scipy.stats import spearmanr
+    games = diag.get("games", [])
+    if not games:
+        return "sampling: no games built (every player independent)"
+    lines = [f"sampling: {diag.get('n_samples')} draws, {len(games)} game(s), "
+             f"{len(diag.get('independent', []))} player(s) independent, method {diag.get('method')}"]
+    worst = []
+    for g in games:
+        ids = g["player_ids"]
+        X = np.column_stack([samples[i] for i in ids])
+        realised = spearmanr(X).correlation if len(ids) > 2 else np.array([[1.0, spearmanr(X[:, 0], X[:, 1]).correlation], [0, 1.0]])
+        requested = np.asarray(g["requested_corr"], float)
+        iu = np.triu_indices(len(ids), 1)
+        # requested is Pearson of the latent normals; compare on the same scale
+        req_s = (6.0 / np.pi) * np.arcsin(np.clip(requested, -1, 1) / 2.0)
+        dev = np.abs(realised[iu] - req_s[iu])
+        src = g.get("sources", {})
+        lines.append(f"  {g['teams'][0]}-{g['teams'][1]}: {len(ids)} players, mean |requested rho| {np.abs(req_s[iu]).mean():.2f}, "
+                     f"max |realised - requested| {dev.max():.2f}, "
+                     f"sources {src.get(g['teams'][0])}/{src.get(g['teams'][1])}, cross {src.get('cross')}")
+        k = int(np.argmax(dev))
+        worst.append((dev.max(), g["teams"], g["slots"][iu[0][k]], g["slots"][iu[1][k]], req_s[iu][k], realised[iu][k]))
+    worst.sort(reverse=True)
+    for d, teams, sa, sb, r, q in worst[:max_pairs_reported]:
+        if d > 0.08:
+            lines.append(f"  largest gap {teams[0]}-{teams[1]} {sa} vs {sb}: requested {r:+.2f}, realised {q:+.2f}")
+    return "\n".join(lines)
+
+
 def generate_correlated_samples_gaussian(
     session: Session,
     model_dir: str | Path = MODELS_DIR,
