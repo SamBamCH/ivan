@@ -29,7 +29,7 @@ def worker(worker_id: int, num_lineups: int, config_path: str, total_workers: in
     with open(config_path, "r") as f:
         config = json.load(f)
 
-    q.put(("start", worker_id, num_lineups, "seed=42"))
+    q.put(("start", worker_id, num_lineups, ""))
 
     def on_progress(delta: int, note: str | None = None):
         q.put(("advance", worker_id, delta, note or ""))
@@ -72,7 +72,7 @@ def _run_with_progress(quotas, config_path, total_workers):
                 continue
 
             if kind == "start":
-                print(f"[{SCRIPT_NAME}][{proc_no}] starting ({note})")
+                print(f"[{SCRIPT_NAME}][{proc_no}] starting" + (f" ({note})" if note else ""))
             elif kind == "advance":
                 done[proc_no] += int(val)
                 print(
@@ -116,7 +116,7 @@ def _run_with_progress(quotas, config_path, total_workers):
 
             if kind == "start":
                 # Show worker config in initial description
-                desc = f"Worker {proc_no} ({note})"
+                desc = f"Worker {proc_no}" + (f" ({note})" if note else "")
                 task_id[proc_no] = progress.add_task(desc, total=int(val))
             elif kind == "advance":
                 tid = task_id.get(proc_no)
