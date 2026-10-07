@@ -102,6 +102,21 @@ class NBAOdds(NBABase):
     price           = Column(Integer, nullable=True)
     last_update     = Column(String,  nullable=True)
 
+class NBAMarketRate(NBABase):
+    """Per-minute rate implied by the props at fetch time (see projection/market.py)."""
+    __tablename__ = "nba_market_rate"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    player_name     = Column(String,  nullable=False, index=True)   # normalized
+    stat            = Column(String,  nullable=False)               # points, rebounds, ...
+    market_mean     = Column(Float,   nullable=False)               # consensus mean for the game
+    rate            = Column(Float,   nullable=False)               # market_mean / basis_minutes
+    basis_minutes   = Column(Float,   nullable=False)               # projected minutes when priced
+    books           = Column(Integer, nullable=True)
+    line            = Column(Float,   nullable=True)
+    fetched_at      = Column(DateTime, nullable=True)
+
+
 class Lineup(NBABase):
     __tablename__ = "lineup"
 

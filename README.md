@@ -147,8 +147,9 @@ The NBA side is being brought up to the NFL approach for 2026-27. What exists to
 
 | Step | Command | What it does |
 |---|---|---|
-| Ingest | `python scripts/nba/ingest.py -p` | Upcoming contests, the DK player pool (`-p`), projections from `data/nba/input/stok.csv` if you still use them, confirmed starters from Rotowire into `starting_lineups`. |
-| Project | `python scripts/nba/project.py [--dry-run] [--team MIL] [--out "Giannis Antetokounmpo"]` | Minutes-anchored projections from box score history (below). Writes `fpts_mean`, `fpts_std`, `minutes_proj` on `nba_player`; players with DK status OUT get no projection. |
+| Ingest | `python scripts/nba/ingest.py -p --update-odds --no-projections-csv` | Upcoming contests, the DK player pool (`-p`), player props from the-odds-api turned into per-minute market rates (`--update-odds`, needs `ODDS_API_KEY` in `.env`), confirmed starters from Rotowire into `starting_lineups`. Without `--no-projections-csv` it still reads `data/nba/input/stok.csv` if present. |
+| Project | `python scripts/nba/project.py [--dry-run] [--team MIL] [--no-market]` | Minutes-anchored projections (below): market rates where a player is priced, history elsewhere. Writes `fpts_mean`, `fpts_std`, `minutes_proj` on `nba_player`; players with DK status OUT get no projection. |
+| Late news | `python scripts/nba/news.py "Giannis Antetokounmpo" [--accept] [--conditional]` | Marks him out, shows his team with and without him, asks for minutes player by player (Enter keeps the model's), saves the pins to `minutes_overrides.csv`, writes the projections. Then `sim.py --fresh`. |
 | Generate, simulate, choose | `python scripts/nba/sim.py [--num-lineups 25000] [--num-sims 1000]` | One interactive flow: GLPK lineup pool, field sampled from the historical-contest model, contest sims from the entries CSV, lineup selection. |
 | Late swap | `python scripts/nba/swap.py` | Re-optimises locked entries against the remaining games. |
 | Overnight | `python scripts/nba/overnight.py` | Box scores (nba_api), contest results and payouts, refits the field model. **Runs on import** — do not call it with `--help`. |
@@ -170,34 +171,60 @@ the roster instead of being guessed per player.
   the other way). The available roster is then reconciled to 241: a shortfall
   (someone out) goes to players with room to grow, a surplus (DK lists the whole
   roster) comes off the bottom of the rotation.
-* **Rates** (`rates.py`): trailing rates shrunk to league rates with 60 minutes
-  of prior weight. One usage multiplier per team closes half the gap between
-  the team's trailing production and what the present roster projects to, so
-  teammates pick up efficiency as well as minutes when a star sits.
+* **Rates** (`rates.py`, `market.py`): for a player the books price, each
+  (book, line) pair is de-vigged and solved for the negative-binomial mean
+  that matches it; the median is his market mean for the game, and dividing
+  by the minutes he projected to when the props were fetched gives a
+  forward-looking per-minute rate that travels with him when his minutes
+  move (`nba_market_rate` table). Everyone else uses trailing history rates
+  shrunk to league with 60 minutes of prior weight. One usage multiplier per
+  team closes half the gap between the team's trailing production and what
+  the present roster projects to, so teammates pick up efficiency as well as
+  minutes when a star sits.
 * **Fantasy points** (`fpts.py`): Monte Carlo over minutes and negative-binomial
   stat draws; double-double and triple-double bonuses come out of the joint
   draw. Dispersion and minutes spread live in
   `data/nba/models/projection_calibration.json`, refit by the backtest.
 
-**Late news.** Put the players whose minutes you know in
+**Late news.** `news.py "Name"` is the one command: it marks the player out,
+shows the team with and without him (model minutes, history, and how each
+teammate's minutes and production per minute went in last season's games
+without him), asks for minutes player by player, saves the pins to
 `data/nba/input/minutes_overrides.csv` (columns `player,minutes`; 0 means a
-scratch) and re-run `project.py`. Pinned players keep those minutes exactly
-and the rest of their team is re-allocated around them, so re-projecting a
-slate after a late scratch is one command and a few seconds. `--out NAME` does
-the same for a single scratch without a file.
+scratch) and writes the projections. The minutes you type are the
+forward-looking input; the model only moves what you do not pin. Rates stay
+forward looking too: a priced player keeps his market rate, the rest keep
+history times the usage bump. `--conditional` scales teammates toward their
+"without him" per-minute history instead; it is opt-in because those samples
+are small and confounded (LeBron's six games without Luka in 2025-26 show
+*lower* production, which is his own early-season form, not usage). For a
+player stepping into a role nobody has seen, pin his minutes; his efficiency
+comes from the usage bump until the books reprice him, after which
+`ingest.py --update-odds` and `project.py` pick up the market's view.
 
 **Backtest.** `python scripts/nba/backtest_projection.py [--dnp-available]
 [--grid|--kgrid|--rgrid|--sgrid] [--calibrate] [--compare]` replays 2025-26
 from 15 November to 15 January using only earlier games. `--dnp-available`
 is the live condition (dressed players may not play); without it the box
 score reveals who played. `--compare` scores the same player-games against
-the Stokastic projections kept in `projection_snapshot`. As of 2026-10-06,
-under live conditions, the model's error is level with Stokastic (MAE 7.44 vs
-7.41 DK points on 3,410 player-games) and a 50/50 blend beats both; minutes
-error is 4.7 per player-game. Reports land in `data/nba/diagnostics/`.
+the Stokastic projections kept in `projection_snapshot`; `--market-day
+2025-11-30` evaluates market rates from the props stored in `odds` for that
+slate. As of 2026-10-06, under live conditions, the model's error is level
+with Stokastic (MAE 7.44 vs 7.41 DK points on 3,410 player-games) and a 50/50
+blend beats both; minutes error is 4.7 per player-game. Overfitting check:
+parameters tuned on 15 Nov to 15 Dec are the ones the held-out 16 Dec to 15 Jan
+half prefers (model 7.36 vs naive 7.51 vs season average 7.62 there), the
+grid surfaces are flat, and the playoffs (never used for tuning) show the
+same margin (7.50 vs 7.74 vs 8.81). The one stored props slate (71 priced
+players) is too small to rank market against history rates, but the market
+consensus and Stokastic correlate at 0.994: Stokastic is the market, so the
+real test of the odds layer starts when ingests snapshot projections through
+the season. Reports land in `data/nba/diagnostics/`.
 
-Not yet ported from NFL: odds-driven rates for priced players, the
-correlation layer, the web pipeline and the overnight job's safety rails.
+Not yet ported from NFL: the correlation layer, the web pipeline and the
+overnight job's safety rails. The projection snapshot keeps one `fpts_mean`
+per player-day, so keep dropping `stok.csv` on a separate column if you want
+Stokastic as a season-long yardstick.
 
 ## Configuration
 

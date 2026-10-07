@@ -114,6 +114,8 @@ def main():
     ap.add_argument("--rgrid", action="store_true", help="rate halflife / prior grid")
     ap.add_argument("--calibrate", action="store_true")
     ap.add_argument("--compare", action="store_true")
+    ap.add_argument("--market-day", default=None,
+                    help="evaluate market rates from the odds table for this date (e.g. 2025-11-30)")
     args = ap.parse_args()
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
 
@@ -233,6 +235,50 @@ def main():
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         (MODELS_DIR / "projection_calibration.json").write_text(json.dumps(cal, indent=2))
         out = json.dumps(cal, indent=2); report.append("CALIBRATION\n" + out); print(out)
+
+    if args.market_day:
+        from ivan.sports.nba.projection.market import market_means, market_rates
+        day = date.fromisoformat(args.market_day)
+        odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.get_bind())
+        odds = odds[pd.to_datetime(odds.last_update).dt.date == day]
+        means = market_means(odds)
+        # players play on the day or the next (the fetch takes each team's next event)
+        mcases = [c for c in build_cases(box, day, day + timedelta(days=1), dnp_available=args.dnp_available)]
+        seen = set(); mc = []
+        for c in mcases:
+            if c["team"] in seen:
+                continue
+            seen.add(c["team"]); mc.append(c)
+        base = run(mc, hist, ProjectionParams(market_weight=0.0))
+        basis = base.set_index("player_name")["minutes"].to_dict()
+        mr = market_rates(means, basis)
+        for c in mc:
+            for p in c["roster"]:
+                p.market_rates = mr.for_player(p.name)
+        lines = [f"odds rows {len(odds)} on {day}: {means.player.nunique()} priced players, "
+                 f"{len(mr.rates)} with a minutes basis; {len(mc)} team-games"]
+        ms = []
+        for w in [0.0, 0.5, 0.75, 1.0]:
+            res = run(mc, hist, ProjectionParams(market_weight=w))
+            priced = res[res.priced]
+            ms.append(metrics(priced, f"market_weight={w:g} (priced players)"))
+        ms.append(metrics(base[~base.priced] if "priced" in base else base, "history (unpriced players)"))
+        lines.append(fmt(ms))
+        snap = pd.read_sql("select player_name, gametime, fpts_mean as stok from projection_snapshot "
+                           "where fpts_mean is not null and fpts_mean > 0", session.get_bind())
+        snap["date"] = pd.to_datetime(snap.gametime).dt.date
+        res1 = run(mc, hist, ProjectionParams(market_weight=1.0)); res0 = base
+        j = res1[res1.priced].merge(snap.drop_duplicates(["player_name", "date"])[["player_name", "date", "stok"]],
+                                    on=["player_name", "date"], how="inner")
+        j0 = res0.set_index(["player_name", "game_id"]).loc[list(zip(j.player_name, j.game_id))]
+        if len(j):
+            lines.append(f"priced players with a Stokastic projection: {len(j)}")
+            lines.append(f"  history   MAE {(j0.fpts_mean.values - j.dk_fpts.values).__abs__().mean():.3f}")
+            lines.append(f"  market    MAE {(j.fpts_mean - j.dk_fpts).abs().mean():.3f}")
+            lines.append(f"  stokastic MAE {(j.stok - j.dk_fpts).abs().mean():.3f}")
+            lines.append(f"  market+stok blend MAE {((j.fpts_mean + j.stok) / 2 - j.dk_fpts).abs().mean():.3f}")
+            lines.append(f"  corr(market, stok) {np.corrcoef(j.fpts_mean, j.stok)[0,1]:.3f}")
+        out = "\n".join(lines); report.append("MARKET DAY\n" + out); print(out)
 
     tag = "_live" if args.dnp_available else ""
     (DIAG_DIR / f"backtest_projection{tag}_{date.today()}.txt").write_text("\n\n".join(report))

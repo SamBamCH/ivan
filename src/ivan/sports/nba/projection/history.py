@@ -145,3 +145,29 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
     sd = float(rot["min_ewm_sd"].median()) if len(rot) else 5.0
     return HistoryState(rows=rows, team_rows=team_rows, league_rates=league, league_min_sd=sd,
                         league_team_fpts=float(tg["dk_fpts"].mean()))
+
+
+def without_player(box: pd.DataFrame, team: str, absent: str, before: date | None = None,
+                   min_minutes: float = 8.0) -> pd.DataFrame:
+    """
+    How the team's players did in games `absent` did not play (and games he
+    did), for a late-news comparison. One row per teammate: games with and
+    without him, average minutes and fantasy points per minute in each.
+    """
+    g = box[(box["team"] == team) & box["played"]]
+    if before is not None:
+        g = g[g["game_date"] < before]
+    with_ids = set(g[g["player_name"] == absent]["game_id"])
+    g = g[g["player_name"] != absent].copy()
+    g["with"] = g["game_id"].isin(with_ids)
+    rows = []
+    for name, d in g.groupby("player_name"):
+        w, wo = d[d["with"]], d[~d["with"]]
+        if len(wo) == 0 or wo["minutes"].mean() < min_minutes:
+            continue
+        rows.append(dict(player_name=name,
+                         g_with=len(w), min_with=w["minutes"].mean() if len(w) else np.nan,
+                         fpm_with=(w["dk_fpts"].sum() / w["minutes"].sum()) if len(w) else np.nan,
+                         g_without=len(wo), min_without=wo["minutes"].mean(),
+                         fpm_without=wo["dk_fpts"].sum() / wo["minutes"].sum()))
+    return pd.DataFrame(rows).set_index("player_name") if rows else pd.DataFrame()

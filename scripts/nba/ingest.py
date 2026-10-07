@@ -4,6 +4,9 @@ from ivan.sports.common.draftkings import ingest_players, get_upcoming_contest_i
 from ivan.sports.nba.historical.data_fetch import fetch_starting_lineups
 from ivan.sports.nba.historical.data_clean import parse_sd
 from ivan.sports.nba.cli import view_lineups
+from ivan.sports.nba.models import NBAOdds, NBABase
+from ivan.sports.common.odds import get_odds, parse_odds
+from ivan.core.config import require_env
 from ivan.core.utils import normalize_name
 import argparse
 from pathlib import Path
@@ -13,6 +16,10 @@ from ivan.sports.nba.paths import PROJECTIONS_CSV
 def parse_args():
     p = argparse.ArgumentParser(description="ingest and update player odds")
     p.add_argument("-p", action='store_true', help='preflock flag. Determines if we fetch payload from DK or not.')
+    p.add_argument("--update-odds", action='store_true',
+                   help='fetch player props from the-odds-api for the teams on the slate, store them, and '
+                        'derive per-minute market rates (projection/market.py) for project.py')
+    p.add_argument("--no-projections-csv", action='store_true', help='skip stok.csv (use project.py instead)')
     return p.parse_args()
 
 args = parse_args()
@@ -66,7 +73,33 @@ if args.p:
     
     session.commit()
 
+#player props -> market rates
+if args.update_odds:
+    from ivan.database.session import add_missing_columns
+    from ivan.sports.nba.projection.market import NBA_MARKETS, market_means
+    from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, store_market_rates, read_overrides
+    add_missing_columns(engine, NBABase.metadata)
+    teams = {p.team for p in session.query(NBAPlayer).all()}
+    raw = get_odds("basketball_nba", require_env("ODDS_API_KEY"), list(teams), markets=NBA_MARKETS)
+    odds_df = parse_odds(raw)
+    if odds_df is None or odds_df.empty:
+        raise SystemExit("no NBA player props came back; the market rates were left as they were")
+    session.query(NBAOdds).delete(synchronize_session=False)
+    session.bulk_insert_mappings(NBAOdds, odds_df.to_dict("records"))
+    session.commit()
+    means = market_means(odds_df)
+    slate = LiveSlate(session, use_market=False)
+    basis = basis_minutes_for_market(slate, read_overrides(), set())
+    n = store_market_rates(session, means, basis)
+    print(f"✓ {len(odds_df)} prop rows from {odds_df.sportsbook.nunique()} books; "
+          f"market rates for {means.player.nunique()} players ({n} player-stats)")
+
 #ingest projections
+if args.no_projections_csv or not PROJECTIONS_CSV.exists():
+    print("no stok.csv projections ingested; run scripts/nba/project.py")
+    fetch_starting_lineups(session)
+    view_lineups(session)
+    raise SystemExit(0)
 csv_path = PROJECTIONS_CSV
 df = pd.read_csv(csv_path)
 # Update database players from CSV

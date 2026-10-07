@@ -16,6 +16,7 @@ from .fpts import simulate_fpts, summarize, minutes_sd
 from .history import HistoryState, STATS
 from .minutes import MinutesInputs, allocate_team_minutes, baseline_minutes
 from .rates import shrunk_rates, fpts_per_minute, apply_usage_bump, USAGE_RECOVERY
+from .market import blend_rates
 
 
 @dataclass
@@ -25,6 +26,8 @@ class RosterPlayer:
     starter: bool | None = None       # confirmed starter; None = unknown
     salary: int | None = None
     minutes_override: float | None = None
+    market_rates: dict[str, float] | None = None   # stat -> per-minute rate from the props
+    rate_mult: float = 1.0                         # e.g. conditional "without X" usage
 
 
 @dataclass
@@ -37,6 +40,7 @@ class ProjectionParams:
     prior_minutes: float = 60.0
     n_sims: int = 4000
     dispersion: dict | None = None
+    market_weight: float = 1.0
 
 
 def project_team(
@@ -65,6 +69,9 @@ def project_team(
     for p in roster:
         s = srow(p.name)
         rates = shrunk_rates(s, history.league_rates, params.prior_minutes)
+        rates = blend_rates(rates, p.market_rates, params.market_weight)
+        if p.rate_mult != 1.0:
+            rates = {k: v * p.rate_mult for k, v in rates.items()}
         mi = MinutesInputs(
             name=p.name,
             min_ewm=None if s is None else float(s["min_ewm"]),
@@ -74,6 +81,7 @@ def project_team(
             salary=p.salary, minutes_override=p.minutes_override,
         )
         recs[p.name] = dict(inputs=mi, rates=rates, fpm=fpts_per_minute(rates),
+                            priced=bool(p.market_rates),
                             baseline=baseline_minutes(mi, params.start_shift),
                             hist_sd=None if s is None else float(s["min_ewm_sd"]),
                             games=0 if s is None else int(s["games"]),
@@ -95,7 +103,7 @@ def project_team(
         rates = {s: r["rates"][s] * float(bump[name]) for s in STATS}
         rec = {"player_name": name, "minutes": mins, "baseline": r["baseline"],
                "pinned": bool(alloc.loc[name, "pinned"]), "usage_mult": float(bump[name]),
-               "games": r["games"], "fpm": r["fpm"] * float(bump[name])}
+               "games": r["games"], "fpm": r["fpm"] * float(bump[name]), "priced": r["priced"]}
         for s in STATS:
             rec[f"proj_{s}"] = mins * rates[s]
         if simulate and mins > 0:
