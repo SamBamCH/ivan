@@ -7,7 +7,7 @@ actual contests you entered, and pick the lineups to submit.
 | Sport | Status | Entry points |
 |---|---|---|
 | **NFL** | Active — CLI pipeline plus a web UI | `scripts/nfl/`, `src/ivan/sports/nfl/`, `src/ivan/web/` |
-| NBA | Mid-refactor | `scripts/nba/`, `src/ivan/sports/nba/` |
+| NBA | Rebuilding for 2026-27 — minutes-anchored projections in, odds layer next | `scripts/nba/`, `src/ivan/sports/nba/` |
 | MLB | Dormant (previous seasons) | `scripts/mlb/`, `src/ivan/sports/mlb/` |
 | LoL | Dormant | `scripts/lol/`, `src/ivan/sports/lol/` |
 
@@ -140,6 +140,64 @@ DraftKings Chrome profile.
 | `scripts/nfl/build_models.py` | Player marginals and copulas, team vine, DST/positional tables → `data/nfl/models/`. |
 | `scripts/nfl/build_dupe_model.py` | Two-stage showdown duplication model → `data/nfl/models/{contest_dupe_quantiles,lineup_dupe_model}.pkl`. |
 | `scripts/nfl/lineup_exposures.py` | Ad-hoc exposure and stacking diagnostics over the current field. |
+
+## NBA
+
+The NBA side is being brought up to the NFL approach for 2026-27. What exists today:
+
+| Step | Command | What it does |
+|---|---|---|
+| Ingest | `python scripts/nba/ingest.py -p` | Upcoming contests, the DK player pool (`-p`), projections from `data/nba/input/stok.csv` if you still use them, confirmed starters from Rotowire into `starting_lineups`. |
+| Project | `python scripts/nba/project.py [--dry-run] [--team MIL] [--out "Giannis Antetokounmpo"]` | Minutes-anchored projections from box score history (below). Writes `fpts_mean`, `fpts_std`, `minutes_proj` on `nba_player`; players with DK status OUT get no projection. |
+| Generate, simulate, choose | `python scripts/nba/sim.py [--num-lineups 25000] [--num-sims 1000]` | One interactive flow: GLPK lineup pool, field sampled from the historical-contest model, contest sims from the entries CSV, lineup selection. |
+| Late swap | `python scripts/nba/swap.py` | Re-optimises locked entries against the remaining games. |
+| Overnight | `python scripts/nba/overnight.py` | Box scores (nba_api), contest results and payouts, refits the field model. **Runs on import** — do not call it with `--help`. |
+
+### Minutes-anchored projections
+
+`src/ivan/sports/nba/projection/` models a player as minutes times per-minute
+rates, the NBA analogue of the salary/TD-odds anchor NFL uses for unpriced
+stats. Minutes are the volume signal: a team has 241 minutes (240 plus the
+average overtime) to hand out, so availability changes move minutes around
+the roster instead of being guessed per player.
+
+* **History** (`history.py`): per player, exponentially weighted minutes
+  (half-life 5 games), minute-weighted per-minute rates for points, rebounds,
+  assists, steals, blocks, turnovers and threes (half-life 20), starter share,
+  and how often he plays when dressed. Per team, trailing fantasy points per game.
+* **Minutes** (`minutes.py`): baseline = play-rate × trailing minutes, plus
+  6 minutes for a confirmed starter who has been coming off the bench (minus 6
+  the other way). The available roster is then reconciled to 241: a shortfall
+  (someone out) goes to players with room to grow, a surplus (DK lists the whole
+  roster) comes off the bottom of the rotation.
+* **Rates** (`rates.py`): trailing rates shrunk to league rates with 60 minutes
+  of prior weight. One usage multiplier per team closes half the gap between
+  the team's trailing production and what the present roster projects to, so
+  teammates pick up efficiency as well as minutes when a star sits.
+* **Fantasy points** (`fpts.py`): Monte Carlo over minutes and negative-binomial
+  stat draws; double-double and triple-double bonuses come out of the joint
+  draw. Dispersion and minutes spread live in
+  `data/nba/models/projection_calibration.json`, refit by the backtest.
+
+**Late news.** Put the players whose minutes you know in
+`data/nba/input/minutes_overrides.csv` (columns `player,minutes`; 0 means a
+scratch) and re-run `project.py`. Pinned players keep those minutes exactly
+and the rest of their team is re-allocated around them, so re-projecting a
+slate after a late scratch is one command and a few seconds. `--out NAME` does
+the same for a single scratch without a file.
+
+**Backtest.** `python scripts/nba/backtest_projection.py [--dnp-available]
+[--grid|--kgrid|--rgrid|--sgrid] [--calibrate] [--compare]` replays 2025-26
+from 15 November to 15 January using only earlier games. `--dnp-available`
+is the live condition (dressed players may not play); without it the box
+score reveals who played. `--compare` scores the same player-games against
+the Stokastic projections kept in `projection_snapshot`. As of 2026-10-06,
+under live conditions, the model's error is level with Stokastic (MAE 7.44 vs
+7.41 DK points on 3,410 player-games) and a 50/50 blend beats both; minutes
+error is 4.7 per player-game. Reports land in `data/nba/diagnostics/`.
+
+Not yet ported from NFL: odds-driven rates for priced players, the
+correlation layer, the web pipeline and the overnight job's safety rails.
 
 ## Configuration
 

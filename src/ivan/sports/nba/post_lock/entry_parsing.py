@@ -6,7 +6,7 @@ import re
 import pandas as pd
 from sqlalchemy.orm import Session
 from ivan.sports.nba.models import NBAPlayer
-from ivan.sports.nba.refactor.pre_lock.lineup import SLOT_NAMES  # ['PG','SG','SF','PF','C','G','F','UTIL']
+from ivan.sports.nba.pre_lock.lineup import SLOT_NAMES  # ['PG','SG','SF','PF','C','G','F','UTIL']
 
 SLOT_COLS = [s.lower() for s in SLOT_NAMES]
 

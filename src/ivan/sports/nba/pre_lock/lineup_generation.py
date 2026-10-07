@@ -18,6 +18,7 @@ import re
 
 import pulp as plp
 from pulp import PulpSolverError
+from ivan.sports.nba.paths import LOGS_DIR
 
 
 # === EXPLICIT ROSTER STRUCTURE DEFINITION ===
@@ -145,7 +146,7 @@ def generate_single_classic_lineup(
     config = config or {}
     
     if not debug_lp_path:
-        debug_lp_path = "data/nba/logs/"
+        debug_lp_path = str(LOGS_DIR) + "/"
     
     try:
         _p = Path(debug_lp_path)

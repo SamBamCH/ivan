@@ -38,6 +38,7 @@ from ivan.sports.nba.cli import (
 )
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nba.utils import _coerce_positions
+from ivan.sports.nba.paths import DEFAULT_ENTRIES_CSV, CHOSEN_LINEUPS_CSV
 
 
 # ------------------------------- DK SLOT DEFINITIONS -------------------------------
@@ -247,7 +248,7 @@ def _parse_entries_csv_prelock(csv_path: str) -> Tuple[Dict[int, List[PreLockEnt
 
 
 def simulate_one_slate(
-    entries_csv: str = "data/nba/input/entries.csv",
+    entries_csv: str = str(DEFAULT_ENTRIES_CSV),
     console: Optional[Console] = None,
     field_cap: int = 10000,
     num_sims: int = 1000,
@@ -366,11 +367,11 @@ def simulate_one_slate(
 
 
 def choose_lineups_for_slate(
-    entries_csv: str = "data/nba/input/entries.csv",
+    entries_csv: str = str(DEFAULT_ENTRIES_CSV),
     entries_by_contest: Optional[Dict[int, List[PreLockEntry]]] = None,
     console: Optional[Console] = None,
     weights: Optional[dict] = None,
-    output_csv: str = "data/nba/output/chosen_lineups.csv",
+    output_csv: str = str(CHOSEN_LINEUPS_CSV),
     prompt_per_contest: bool = True,    
 ) -> Dict[str, List[int]]:
     """

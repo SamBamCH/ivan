@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 from ivan.sports.nba.models import ContestPayout
 from ivan.sports.nba.models import NBAStat
+from ivan.sports.nba.paths import DIAG_DIR
 
 def _calculate_dk_fpts(row):
     """
@@ -53,10 +54,14 @@ def _transfer_boxscore_to_model(boxscore_df, game_date, season='2025-26'):
 
     for _, row in boxscore_df.iterrows():
         player_name = normalize_name(f"{row.get('firstName', '')} {row.get('familyName', '')}")
-        min_str = row.get('minutes', '0:00') or '0.00'
+        # DNP rows carry an empty minutes string. Without the else branch the
+        # previous player's minutes leaked into every DNP row (fixed 2026-10-06).
+        min_str = row.get('minutes') or ''
         if ':' in str(min_str):
             parts = str(min_str).split(':')
             minutes = float(parts[0]) + float(parts[1]) / 60
+        else:
+            minutes = 0.0
 
         # Get position - try START_POSITION first (starters), then POSITION (bench)
         position = row.get('position', '').strip()        
@@ -148,7 +153,7 @@ def normalize_player_names(session):
     session.commit()
 
 def clean_old_diagnostics(
-    diagnostics_root: str | Path = "data/nfl/diagnostics",
+    diagnostics_root: str | Path = DIAG_DIR,
     days_to_keep: int = 7
 ):
     """Remove diagnostic folders older than days_to_keep."""

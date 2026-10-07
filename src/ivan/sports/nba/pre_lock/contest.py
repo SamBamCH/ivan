@@ -31,6 +31,7 @@ from ivan.sports.nba.models import (
 )
 from ivan.sports.nba.pre_lock.player import generate_player_samples
 from ivan.sports.mlb.payouts import scale_payouts_correctly
+from ivan.sports.nba.paths import FIELD_MODEL_PKL
 
 
 def _coerce_player_ids(val) -> List[int]:
@@ -150,7 +151,7 @@ def sample_field_with_projection_model(
     session: Session,
     field_size: int,
     cfg: dict,
-    model_path: str = "data/nba/models/field_distribution_model.pkl",
+    model_path: str = str(FIELD_MODEL_PKL),
     contest_params: dict = None
 ) -> Dict[int, int]:
     """

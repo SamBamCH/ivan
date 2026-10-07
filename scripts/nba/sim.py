@@ -6,18 +6,19 @@ from sqlalchemy import text
 import argparse
 
 from rich.console import Console
+from ivan.sports.nba.paths import DEFAULT_ENTRIES_CSV, CHOSEN_LINEUPS_CSV
 
 
 def main():
     p = argparse.ArgumentParser(description="NBA pre-lock simulation flow")
-    p.add_argument("--entries-csv", default="data/nba/input/entries.csv", help="Path to DK entries CSV")
+    p.add_argument("--entries-csv", default=str(DEFAULT_ENTRIES_CSV), help="Path to DK entries CSV")
     p.add_argument("--num-lineups", default=25000, type=int, help="Number of lineups to generate before simming")
     p.add_argument("--num-jobs", default=8, type=int, help="Number of parallel jobs for lineup generation")
     p.add_argument("--fresh", action="store_true", help="Clear all lineups in DB prior to run")
     p.add_argument("--min-fpts", default=None, type=float, help="Optional minimum fantasy points constraint for lineups")
     p.add_argument("--field-cap", default=10000, type=int, help="Number of lineups to cap field at when simulating")
     p.add_argument("--num-sims", default=1000, type=int, help="Number of Monte Carlo simulations to run")
-    p.add_argument("--output-csv", default="data/nba/output/chosen_lineups.csv", help="Output CSV for chosen lineups")
+    p.add_argument("--output-csv", default=str(CHOSEN_LINEUPS_CSV), help="Output CSV for chosen lineups")
 
     args = p.parse_args()
     console = Console() 

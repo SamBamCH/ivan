@@ -8,6 +8,7 @@ from ivan.core.utils import normalize_name
 import argparse
 from pathlib import Path
 import pandas as pd
+from ivan.sports.nba.paths import PROJECTIONS_CSV
 
 def parse_args():
     p = argparse.ArgumentParser(description="ingest and update player odds")
@@ -66,7 +67,7 @@ if args.p:
     session.commit()
 
 #ingest projections
-csv_path = Path("data/nba/input/stok.csv")
+csv_path = PROJECTIONS_CSV
 df = pd.read_csv(csv_path)
 # Update database players from CSV
 for _, row in df.iterrows():

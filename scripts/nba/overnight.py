@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 import pickle
 from datetime import datetime, timedelta
+from ivan.sports.nba.paths import CHROME_PROFILE_DIR, FIELD_MODEL_PKL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -122,7 +123,7 @@ to_process = (
     .all()
 )
 chrome_session = build_requests_session_from_chrome(
-    user_data_dir="/home/sam-pratt/ivan/chrome-selenium/dk-profile",
+    user_data_dir=str(CHROME_PROFILE_DIR),
     profile_directory='Default',
     headless=False,
 )
@@ -139,7 +140,7 @@ for hc in to_process:
 #BUILD_MODELS-------------------
 #field distribution model
 field_distribution_model = build_field_distribution_model(session)
-out_path = Path("data/nba/models/field_distribution_model.pkl")
+out_path = FIELD_MODEL_PKL
 out_path.parent.mkdir(parents=True, exist_ok=True)
 with open(out_path, "wb") as f:
     pickle.dump(field_distribution_model, f)

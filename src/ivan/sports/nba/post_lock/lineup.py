@@ -5,9 +5,9 @@ import pytz
 import random
 import logging
 
-from ivan.sports.nba.refactor.pre_lock.lineup_generation import SLOT_NAMES, generate_single_classic_lineup, FieldPlayer
+from ivan.sports.nba.pre_lock.lineup_generation import SLOT_NAMES, generate_single_classic_lineup, FieldPlayer
 from ivan.core.utils import normalize_name
-from ivan.sports.nba.refactor.post_lock.entry_parsing import OriginalEntry
+from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
 
 # Track failed name lookups to avoid spamming logs
 _failed_names: Set[str] = set()

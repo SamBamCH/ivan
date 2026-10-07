@@ -4,16 +4,16 @@ import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from rich.console import Console
-from ivan.sports.nba.refactor.post_lock.entry_parsing import OriginalEntry
+from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
 import numpy as np
 from ivan.sports.nba.models import NBAPlayer, HistoricalContest, ContestPayout
-from ivan.sports.nba.simulate_contest import _load_and_scale_payouts_from_db as _scale_payouts
-from ivan.sports.nba.refactor.pre_lock.lineup_generation import FieldPlayer
+from ivan.sports.nba.pre_lock.contest import _load_and_scale_payouts_from_db as _scale_payouts
+from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer
 from ivan.sports.nba.utils import _coerce_positions
 from ivan.sports.common.draftkings import download_contest_dataframe
-from ivan.sports.nba.refactor.post_lock.lineup import finish_lineup, generate_candidate
-from ivan.sports.nba.refactor.pre_lock.player import generate_player_samples
-from ivan.sports.nba.refactor.cli import print_exposures
+from ivan.sports.nba.post_lock.lineup import finish_lineup, generate_candidate
+from ivan.sports.nba.pre_lock.player import generate_player_samples
+from ivan.sports.nba.cli import print_exposures
 
 WORKERS = 8
 console = Console()

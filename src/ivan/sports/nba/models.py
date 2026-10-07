@@ -86,6 +86,8 @@ class NBAPlayer(NBABase):
     fpts_updated_at = Column(DateTime,  nullable=True)
     # Projected ownership percentage (0-100)
     ownership       = Column(Float,     nullable=True, default=0.0)
+    # Minutes behind fpts_mean (minutes-anchored projection); None for CSV projections
+    minutes_proj    = Column(Float,     nullable=True)
 
 
 class NBAOdds(NBABase):

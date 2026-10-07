@@ -3,11 +3,12 @@ import csv
 import json
 from pathlib import Path
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.refactor.post_lock.entry_parsing import parse_entries_csv
-from ivan.sports.nba.refactor.post_lock.slate import lateswap_slate
-from ivan.sports.nba.refactor.pre_lock.lineup import SLOT_NAMES
-from ivan.sports.nba.refactor.pre_lock.slate import assign_player_order_classic
+from ivan.sports.nba.post_lock.entry_parsing import parse_entries_csv
+from ivan.sports.nba.post_lock.slate import lateswap_slate
+from ivan.sports.nba.pre_lock.lineup import SLOT_NAMES
+from ivan.sports.nba.pre_lock.slate import assign_player_order_classic
 from ivan.sports.nba.models import HistoricalContest, NBAPlayer
+from ivan.sports.nba.paths import DEFAULT_ENTRIES_CSV, LATESWAP_BEST_CSV
 
 def _apply_locked_slots(entry, lineup_pids):
     locked_ids = set(entry.locked_player_ids or [])
@@ -110,12 +111,12 @@ def _write_best(session, path: Path, rows):
 
 def main():
     parser = argparse.ArgumentParser(description="NBA Late Swap Optimization")
-    parser.add_argument("--entries-csv", default='data/nba/input/entries.csv', help="Path to DK entries export CSV")
+    parser.add_argument("--entries-csv", default=str(DEFAULT_ENTRIES_CSV), help="Path to DK entries export CSV")
     parser.add_argument("--num-sims", type=int, default=1000, help="Number of Monte Carlo simulations")
     parser.add_argument("--num-candidates", type=int, default=20, help="Number of candidates per entry")
     parser.add_argument("--field-samples", type=int, default=5000, help="Max field lineups sampled from DK")
     parser.add_argument("--player-min-fpts", type=float, default=0.0, help="Minimum fpts_mean threshold for player pool")
-    parser.add_argument("--out-best", default="data/nba/output/lateswap_best.csv", help="Output CSV for best lineups")
+    parser.add_argument("--out-best", default=str(LATESWAP_BEST_CSV), help="Output CSV for best lineups")
     args = parser.parse_args()
 
     engine = init_db('nba')

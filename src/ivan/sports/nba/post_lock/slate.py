@@ -1,9 +1,10 @@
 from typing import Dict, List, Tuple
 from sqlalchemy.orm import Session
-from ivan.sports.nba.refactor.post_lock.entry_parsing import OriginalEntry
-from ivan.sports.nba.refactor.post_lock.contest import lateswap_one_contest
+from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
+from ivan.sports.nba.post_lock.contest import lateswap_one_contest
 from ivan.sports.common.draftkings import build_requests_session_from_chrome
-from ivan.sports.nba.refactor.post_lock.utils import _build_name_map
+from ivan.sports.nba.post_lock.utils import _build_name_map
+from ivan.sports.nba.paths import CHROME_PROFILE_DIR
 
 
 def lateswap_slate(
@@ -15,7 +16,7 @@ def lateswap_slate(
 ) -> Tuple[List[Tuple['OriginalEntry', List[int], float, Dict]], List[Tuple[int, int, int, List[int], float, Dict]]]:
     
     http_sess = build_requests_session_from_chrome(
-        user_data_dir="/home/sam-pratt/ivan/chrome-selenium/dk-profile",
+        user_data_dir=str(CHROME_PROFILE_DIR),
         profile_directory="Default",
         headless=False
     )

@@ -11,6 +11,7 @@ import pickle
 import plotext as plt
 import numpy as np
 from collections import Counter
+from ivan.sports.nba.paths import FIELD_MODEL_PKL
 
 
 def view_lineups(session: Session, prompt_missing: bool = False) -> list[str]:
@@ -424,7 +425,7 @@ def analyze_lineups(
     plt.show()
 
 
-def plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params, model_path="data/nba/models/field_distribution_model.pkl"):
+def plot_field_sampling_diagnostics(session, counts_by_lineup, contest_params, model_path=str(FIELD_MODEL_PKL)):
     """
     Plot the model's predicted projection distribution vs. the empirical distribution from the sampled field.
     Prints in terminal using plotext if available, otherwise prints text summary.
