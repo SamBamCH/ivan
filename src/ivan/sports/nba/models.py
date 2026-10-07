@@ -88,6 +88,9 @@ class NBAPlayer(NBABase):
     ownership       = Column(Float,     nullable=True, default=0.0)
     # Minutes behind fpts_mean (minutes-anchored projection); None for CSV projections
     minutes_proj    = Column(Float,     nullable=True)
+    # Marginal distribution as 101 quantiles (JSON list); the correlated sampler
+    # maps uniforms through it. None -> Normal(fpts_mean, fpts_std).
+    fpts_quantiles  = Column(JSON,      nullable=True)
 
 
 class NBAOdds(NBABase):

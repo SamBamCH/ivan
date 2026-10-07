@@ -114,6 +114,8 @@ def main():
     ap.add_argument("--rgrid", action="store_true", help="rate halflife / prior grid")
     ap.add_argument("--calibrate", action="store_true")
     ap.add_argument("--compare", action="store_true")
+    ap.add_argument("--fit-correlation", action="store_true",
+                    help="fit the role-pair correlation table and write the residuals the pair layer uses")
     ap.add_argument("--market-day", default=None,
                     help="evaluate market rates from the odds table for this date (e.g. 2025-11-30)")
     args = ap.parse_args()
@@ -235,6 +237,29 @@ def main():
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         (MODELS_DIR / "projection_calibration.json").write_text(json.dumps(cal, indent=2))
         out = json.dumps(cal, indent=2); report.append("CALIBRATION\n" + out); print(out)
+
+    if args.fit_correlation:
+        from ivan.sports.nba.projection.correlation import (fit_league, role, category, CORRELATION_JSON,
+                                                            RESIDUALS_CSV)
+        r = res[res.fpts_mean >= 10].copy()
+        r["sd"] = 3.0 + 0.3 * r.fpts_mean           # predictive sd line; scale-free for correlation
+        r["z"] = (r.dk_fpts - r.fpts_mean) / r.sd
+        r["role"] = r.minutes.map(role)
+        prs = []
+        for gid, g in r.groupby("game_id"):
+            g = g.reset_index(drop=True)
+            for i in range(len(g)):
+                for j_ in range(i + 1, len(g)):
+                    a, b = g.iloc[i], g.iloc[j_]
+                    prs.append((category(a.team == b.team, a.role, b.role), a.z, b.z, a.date))
+        pairs = pd.DataFrame(prs, columns=["cat", "za", "zb", "date"])
+        fit = fit_league(pairs)
+        fit["fit_window"] = [args.start, args.end]; fit["player_games"] = int(len(r))
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        CORRELATION_JSON.write_text(json.dumps(fit, indent=2))
+        r[["player_name", "game_id", "z"]].to_csv(RESIDUALS_CSV, index=False)
+        out = json.dumps(fit, indent=2); report.append("CORRELATION\n" + out); print(out)
+        print(f"wrote {CORRELATION_JSON} and {RESIDUALS_CSV} ({len(r)} player-games)")
 
     if args.market_day:
         from ivan.sports.nba.projection.market import market_means, market_rates

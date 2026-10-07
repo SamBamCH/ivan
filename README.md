@@ -184,7 +184,25 @@ the roster instead of being guessed per player.
 * **Fantasy points** (`fpts.py`): Monte Carlo over minutes and negative-binomial
   stat draws; double-double and triple-double bonuses come out of the joint
   draw. Dispersion and minutes spread live in
-  `data/nba/models/projection_calibration.json`, refit by the backtest.
+  `data/nba/models/projection_calibration.json`, refit by the backtest. The
+  resulting marginal is kept as 101 quantiles on `nba_player.fpts_quantiles`.
+* **Same-game correlation** (`correlation.py`, used by
+  `pre_lock/player.py`): one Gaussian copula per game maps correlated
+  uniforms through each player's own quantiles, so skew and the
+  double-double bump survive. The correlation is a league table by role pair
+  (teammates both starting, starter with bench, bench with bench, and the
+  opponent versions) fit on walk-forward residuals, with each specific
+  pair's shared-game history shrunk toward it by 200 pseudo-games. Measured
+  on 2025-26 the structure is small and stable across half-seasons:
+  starter-bench teammates -0.06, bench-bench -0.03, everything else within
+  0.01 of zero; and pair-specific history is noise (a pair's first-half
+  correlation predicts its second half at r=0.08), which is why it is shrunk
+  that hard. Who is out changes the *means* through the minutes allocation,
+  not the correlations (teammate correlation is -0.03 with and without the
+  team's star). Refit with `backtest_projection.py --fit-correlation`.
+* **Odds are gospel.** A priced player keeps his market rate and is exempt
+  from the team usage bump, so with nothing changed since the fetch he
+  projects to exactly the market mean; only unpriced teammates absorb a gap.
 
 **Late news.** `news.py "Name"` is the one command: it marks the player out,
 shows the team with and without him (model minutes, history, and how each
@@ -221,8 +239,8 @@ consensus and Stokastic correlate at 0.994: Stokastic is the market, so the
 real test of the odds layer starts when ingests snapshot projections through
 the season. Reports land in `data/nba/diagnostics/`.
 
-Not yet ported from NFL: the correlation layer, the web pipeline and the
-overnight job's safety rails. The projection snapshot keeps one `fpts_mean`
+Not yet ported from NFL: the web pipeline and the overnight job's safety
+rails. DK status Q (questionable) is treated as playing. The projection snapshot keeps one `fpts_mean`
 per player-day, so keep dropping `stok.csv` on a separate column if you want
 Stokastic as a season-long yardstick.
 

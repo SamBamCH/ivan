@@ -37,19 +37,25 @@ def fpts_per_minute(rates: dict[str, float]) -> float:
 
 
 def apply_usage_bump(
-    present: pd.DataFrame,          # index name; columns minutes, fpm (per-minute fpts)
+    present: pd.DataFrame,          # index name; columns minutes, fpm, priced
     team_fpts: float,               # trailing team fantasy points per game
     recovery: float = USAGE_RECOVERY,
 ) -> pd.Series:
     """
-    One multiplier for every present player so that a fraction `recovery` of
-    the gap between the team's trailing production and the present roster's
-    projected production is closed. Symmetric: a roster that projects above
-    the team's usual total (a star back from injury while his teammates'
-    trailing rates are still inflated) is scaled down the same way.
+    One multiplier for the *unpriced* present players so that a fraction
+    `recovery` of the gap between the team's trailing production and the
+    present roster's projected production is closed. Priced players are
+    gospel: the books have already priced their role, so they keep their
+    market rate and only the rest of the roster absorbs the gap. Symmetric: a
+    roster that projects above the team's usual total is scaled down.
     """
-    new_prod = float((present["minutes"] * present["fpm"]).sum())
-    if new_prod <= 0 or not np.isfinite(team_fpts):
-        return pd.Series(1.0, index=present.index)
-    mult = 1.0 + recovery * (team_fpts - new_prod) / new_prod
-    return pd.Series(float(np.clip(mult, 0.7, 1.4)), index=present.index)
+    prod = present["minutes"] * present["fpm"]
+    priced = present["priced"].astype(bool) if "priced" in present else pd.Series(False, index=present.index)
+    free = prod[~priced].sum()
+    total = float(prod.sum())
+    mult = pd.Series(1.0, index=present.index)
+    if free <= 0 or not np.isfinite(team_fpts):
+        return mult
+    m = 1.0 + recovery * (team_fpts - total) / free
+    mult[~priced] = float(np.clip(m, 0.7, 1.4))
+    return mult

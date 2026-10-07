@@ -1,18 +1,25 @@
 """
-Fantasy points sample generation for NBA players.
+Player fantasy-point samples for lineup generation and contest simulation.
 
-This module provides Monte Carlo sampling of player fantasy point outcomes
-based on their fitted Normal(mean, std) distributions.
+generate_player_samples() draws one correlated universe per game (see
+projection/correlation.py): every player on the slate with a stored marginal
+is sampled through his own quantiles on a Gaussian copula with the role-pair
+correlation; players without quantiles are Normal(fpts_mean, fpts_std) on the
+same copula; locked players from ProjectionSnapshot are independent Normals.
 """
+from __future__ import annotations
 
-from typing import Optional, Dict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta, date
+from typing import Dict, Optional
 
 import numpy as np
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from ivan.core.utils import normalize_name
 from ivan.sports.nba.models import NBAPlayer, ProjectionSnapshot
+from ivan.sports.nba.projection.correlation import (load_league, PairHistory, build_game_correlation,
+                                                    draw_from_marginals)
 
 
 def generate_player_samples(
@@ -23,76 +30,50 @@ def generate_player_samples(
     snapshot_date: Optional[date] = None,
     include_active_players: bool = True,
     name_to_id: Optional[Dict[str, int]] = None,
+    correlated: bool = True,
 ) -> Dict[int, np.ndarray]:
     """
-    Generate independent FPTS samples for all players in the NBAPlayer table.
+    Returns player_id -> np.ndarray(n_samples,) of DK fantasy points.
 
-    Each player's samples are drawn from their fitted Normal(mean, std) distribution
-    stored in the NBAPlayer table (fpts_mean, fpts_std columns).
-
-    Args:
-        session: Database session
-        n_samples: Number of samples to generate per player (default: 1000)
-        randomness: Controls distribution spread (0.0 = deterministic at mean,
-                   1.0 = full distribution). Values clamped to [0.0, 1.0].
-        seed: Random seed for reproducibility (optional)
-        snapshot_date: Optional date to include ProjectionSnapshot rows for locked players
-        include_active_players: Whether to include current active players from NBAPlayer
-        name_to_id: Optional name->id mapping (unused, for API compatibility)
-
-    Returns:
-        Dictionary mapping player_id -> np.ndarray of shape (n_samples,) containing
-        FPTS samples for each player
+    randomness scales the spread around the mean (0 = deterministic, 1 = full).
+    correlated=False draws every player independently (the old behaviour).
     """
     rng = np.random.default_rng(seed)
-
-    # Clamp randomness to [0.0, 1.0]
     randomness = float(np.clip(randomness, 0.0, 1.0))
+    samples: Dict[int, np.ndarray] = {}
 
-    samples_by_player: Dict[int, np.ndarray] = {}
-
-    # Include current active (unlocked) players from NBAPlayer
     if include_active_players:
-        stmt = select(NBAPlayer).where(
-            (NBAPlayer.fpts_mean.isnot(None)) &
-            (NBAPlayer.fpts_std.isnot(None))
-        )
-        players = session.execute(stmt).scalars().all()
-        for player in players:
-            mean = float(player.fpts_mean)
-            std = float(player.fpts_std)
-            effective_std = std * randomness
-            player_samples = rng.normal(loc=mean, scale=effective_std, size=n_samples)
-            samples_by_player[int(player.id)] = np.clip(player_samples, 0, None)
+        players = session.execute(select(NBAPlayer).where(
+            NBAPlayer.fpts_mean.isnot(None), NBAPlayer.fpts_std.isnot(None))).scalars().all()
+        league = load_league() if correlated else {}
+        pairs = PairHistory.load() if correlated else None
+        # one universe per game: group by the unordered (team, opponent) pair
+        games: Dict[tuple, list] = {}
+        for p in players:
+            key = tuple(sorted([p.team or "", p.opponent or ""])) if correlated else (p.id,)
+            games.setdefault(key, []).append(p)
+        for key, ps in games.items():
+            names = [normalize_name(p.name) for p in ps]
+            teams = [p.team for p in ps]
+            mins = [float(p.minutes_proj) if p.minutes_proj else (float(p.fpts_mean) / 0.95) for p in ps]
+            means = [float(p.fpts_mean) for p in ps]
+            sds = [float(p.fpts_std) for p in ps]
+            quants = [p.fpts_quantiles if isinstance(p.fpts_quantiles, list) else None for p in ps]
+            R = build_game_correlation(names, teams, mins, league, pairs) if correlated and len(ps) > 1 else np.eye(len(ps))
+            X = draw_from_marginals(R, quants, means, sds, n_samples, rng, randomness)
+            for j, p in enumerate(ps):
+                samples[int(p.id)] = X[:, j]
 
-    # Add ProjectionSnapshot rows for the specified date to cover locked players
     if snapshot_date is not None:
         day_start = datetime(snapshot_date.year, snapshot_date.month, snapshot_date.day)
-        day_end = day_start + timedelta(days=1)
-
-        snaps = (
-            session.query(ProjectionSnapshot)
-            .filter(
-                ProjectionSnapshot.snapshot_date >= day_start,
-                ProjectionSnapshot.snapshot_date < day_end,
-                ProjectionSnapshot.fpts_mean.isnot(None),
-                ProjectionSnapshot.fpts_std.isnot(None),
-            )
-            .all()
-        )
+        snaps = (session.query(ProjectionSnapshot)
+                 .filter(ProjectionSnapshot.snapshot_date >= day_start,
+                         ProjectionSnapshot.snapshot_date < day_start + timedelta(days=1),
+                         ProjectionSnapshot.fpts_mean.isnot(None), ProjectionSnapshot.fpts_std.isnot(None)).all())
         for snap in snaps:
-            pid = getattr(snap, 'id', None)
-            if pid is None:
+            pid = getattr(snap, "id", None)
+            if pid is None or int(pid) in samples:
                 continue
-            pid = int(pid)
-            if pid in samples_by_player:
-                continue
-
-            mean = float(snap.fpts_mean)
-            std = float(snap.fpts_std)
-            effective_std = std * randomness
-            player_samples = rng.normal(loc=mean, scale=effective_std, size=n_samples)
-            samples_by_player[pid] = np.clip(player_samples, 0, None)
-
-    return samples_by_player
-
+            x = rng.normal(float(snap.fpts_mean), float(snap.fpts_std) * randomness, n_samples)
+            samples[int(pid)] = np.clip(x, 0, None)
+    return samples

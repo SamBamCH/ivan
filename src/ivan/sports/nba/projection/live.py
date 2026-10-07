@@ -97,8 +97,9 @@ class LiveSlate:
                 r = proj.loc[name]
                 p.fpts_mean = float(r["fpts_mean"]); p.fpts_std = float(r["fpts_std"])
                 p.minutes_proj = float(r["minutes"]); p.fpts_updated_at = datetime.now(); n += 1
+                p.fpts_quantiles = r["quantiles"] if "quantiles" in r and isinstance(r["quantiles"], list) else None
             else:
-                p.fpts_mean = None; p.fpts_std = None; p.minutes_proj = 0.0
+                p.fpts_mean = None; p.fpts_std = None; p.minutes_proj = 0.0; p.fpts_quantiles = None
         return n
 
 

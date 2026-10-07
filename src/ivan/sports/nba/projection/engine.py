@@ -41,6 +41,7 @@ class ProjectionParams:
     n_sims: int = 4000
     dispersion: dict | None = None
     market_weight: float = 1.0
+    quantiles: int = 101          # points of the marginal kept for the correlated sampler
 
 
 def project_team(
@@ -93,6 +94,7 @@ def project_team(
                                   start_shift=params.start_shift, alloc=params.alloc,
                                   cut_tau=params.cut_tau)
     alloc["fpm"] = [recs[n]["fpm"] for n in alloc.index]
+    alloc["priced"] = [recs[n]["priced"] for n in alloc.index]
     team_total = history.league_team_fpts if team_fpts is None else float(team_fpts)
     bump = apply_usage_bump(alloc, team_total, params.recovery)
 
@@ -111,8 +113,10 @@ def project_team(
                                     min_sd=minutes_sd(mins, r["hist_sd"]),
                                     dispersion=params.dispersion, rng=rng)
             rec["fpts_mean"], rec["fpts_std"] = summarize(samples)
+            rec["quantiles"] = np.quantile(samples, np.linspace(0, 1, params.quantiles)).round(2).tolist()
         else:
             rec["fpts_mean"] = mins * rec["fpm"]
             rec["fpts_std"] = float("nan")
+            rec["quantiles"] = None
         rows.append(rec)
     return pd.DataFrame(rows).set_index("player_name")
