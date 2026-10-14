@@ -1,9 +1,6 @@
 #!/usr/bin/env python
-import os
-import json
 from sqlalchemy import text
-from ivan.database.session import init_db, get_session, Base
-from ivan.core.utils import PROJECT_ROOT
+from ivan.database.session import init_db, get_session
 
 def main():
 

@@ -282,7 +282,7 @@ start a new one with a name and a window. A new run walks through:
 
 Going forward, every slate played is settled on its own: the ingest archives
 the capture at lock, the overnight job fetches the box scores, and
-`scripts/nfl/settle_recent.py` scrapes the contests the chooser entered in
+`scripts/nfl/settle.py --days 3` scrapes the contests the chooser entered in
 the last days (the overnight job runs it when `IVAN_DK_USERNAME` is set and
 a display exists for Chrome).
 

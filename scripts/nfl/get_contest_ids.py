@@ -1,11 +1,7 @@
 #!/usr/bin/env python
-import os
 import re
-import json
-from datetime import datetime, date, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 
-import requests
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import HistoricalContest

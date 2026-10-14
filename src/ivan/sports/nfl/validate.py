@@ -33,7 +33,6 @@ from ivan.core import artifacts, validation as V
 from ivan.sports.nfl import actuals
 from ivan.sports.nfl import backtest_tax as bt
 from ivan.sports.nfl.models import HistoricalContest, ProjectionSnapshot, ShowdownLineup, ShowdownPlayer
-from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.sports.nfl.placement import load_payout_tiers, payout_vector, places_paid, rank_payout_from_table, remove_our_copies
 from ivan.sports.nfl.refactor import environment as E
 from ivan.sports.nfl.run_artifacts import load_usage, load_environment, load_projections, load_sim_artifact

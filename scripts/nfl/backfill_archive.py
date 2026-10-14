@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import re
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd

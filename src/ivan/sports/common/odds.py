@@ -1,9 +1,7 @@
 import requests
 
 from ivan.core import raw
-from datetime import datetime
 from dateutil import parser
-import pprint
 import pandas as pd
 
 from ivan.core.utils import map_team_name_to_abbreviation, normalize_name

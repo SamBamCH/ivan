@@ -1,13 +1,10 @@
 from datetime import datetime, timedelta
 import pytz
-import math
 from collections import defaultdict
 from sqlalchemy.orm import Session
 from pathlib import Path
 import re
 import unicodedata
-import pandas as pd
-import matplotlib as plt
 
 
 def parse_game_time(game_info, timezone="US/Eastern", lock_offset_hours=0):
@@ -213,8 +210,6 @@ def normalize_name(name: str) -> str:
     return _NAME_OVERRIDES.get(name, name)
 
 import importlib
-from collections import defaultdict
-from sqlalchemy.orm import Session
 
 def show_player_exposures(
     session: Session,

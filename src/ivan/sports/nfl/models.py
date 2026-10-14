@@ -1,6 +1,6 @@
 # src/ivan/sports/mlb/models.py
 from datetime import datetime
-from typing import Optional, List, Any, Tuple
+from typing import Optional, List
 from sqlalchemy.orm import Session, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import (
@@ -11,14 +11,10 @@ from sqlalchemy import (
     DateTime,
     func,
     Float,
-    Boolean,
     ForeignKey,
     UniqueConstraint,
-    MetaData,
-    Table,
-    PrimaryKeyConstraint
+    MetaData
 )
-from sqlalchemy.ext.automap import automap_base
 
 from dataclasses import dataclass
 from ivan.core.player import BasePlayer

@@ -1,7 +1,6 @@
 # src/ivan/core/player.py
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import declarative_mixin
-from datetime import datetime
 
 @declarative_mixin
 class BasePlayer:

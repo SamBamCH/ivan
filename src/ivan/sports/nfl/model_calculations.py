@@ -7,7 +7,6 @@ contest parameters (entries, fee, games, ownership_gini).
 """
 
 import numpy as np
-import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor

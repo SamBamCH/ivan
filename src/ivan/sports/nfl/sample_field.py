@@ -22,7 +22,6 @@ Retrain with: python scripts/nfl/train_showdown_model_simplified.py
 """
 
 from __future__ import annotations
-import json
 import pickle
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -34,8 +33,7 @@ from sqlalchemy.orm import Session
 
 from ivan.core.utils import calculate_gini, coerce_player_ids as _coerce_player_ids
 from ivan.core.seed import seed_for
-from ivan.sports.nfl.paths import MODELS_DIR, models_dir
-from ivan.database.session import init_db, get_session
+from ivan.sports.nfl.paths import models_dir
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 

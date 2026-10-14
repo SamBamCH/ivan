@@ -3,10 +3,9 @@ import time
 import io
 import zipfile
 import logging
-import json
 import sys
 from datetime import date, datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 import requests
 
@@ -142,10 +141,6 @@ def build_requests_session(profile_dir: str, headless: bool = False) -> requests
 def _cookies_to_requests_session(driver: webdriver.Chrome) -> requests.Session:
     """Copy all visible cookies + user agent from Selenium into a requests.Session."""
     # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from webdriver_manager.chrome import ChromeDriverManager
     sess = requests.Session()
 
     # exact browser UA matters for some bot defenses

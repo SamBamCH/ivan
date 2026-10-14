@@ -8,7 +8,7 @@ rank comes from the contest's payout table (payouts in the database).
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 import numpy as np
 from sqlalchemy.orm import Session

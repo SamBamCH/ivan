@@ -16,18 +16,13 @@ import logging
 import numpy as np
 from collections import Counter
 from sqlalchemy.orm import Session
-from scipy import sparse as sp
-from scipy.spatial.distance import pdist, squareform
 
 from ivan.core.utils import coerce_player_ids as _coerce_player_ids, normalize_name
 from ivan.core.seed import seed_for
 from ivan.sports.nfl.models import NFLPlayer, Lineup, ProjectionSnapshot
 from ivan.sports.nfl.sample_field import (
     sample_showdown_field_learned,
-    sample_classic_field_learned,
     build_lineup_matrix,
-    generate_correlated_samples_gaussian,
-    build_player_samples,
     compute_lineup_diversity_matrix,
 )
 

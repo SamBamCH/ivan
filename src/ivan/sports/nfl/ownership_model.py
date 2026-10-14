@@ -25,12 +25,11 @@ version per cutoff like the other models.
 """
 from __future__ import annotations
 
-import json
 import pickle
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import numpy as np
 import pandas as pd

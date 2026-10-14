@@ -32,7 +32,7 @@ from ivan.sports.common.payouts import scale_payouts_by_rank_average
 from ivan.sports.nfl import sim_report
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 from ivan.sports.nfl.models import ContestPayout, HistoricalContest, Lineup, LineupSimulationResult
-from ivan.sports.nfl.paths import DIAG_DIR, MODELS_DIR
+from ivan.sports.nfl.paths import DIAG_DIR
 from ivan.sports.nfl.sample_field import sample_field
 
 MAX_WORKERS = 8

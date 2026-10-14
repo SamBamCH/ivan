@@ -8,7 +8,6 @@ from pathlib import Path
 import os, shutil, re, time
 from uuid import uuid4
 
-import numpy as np
 from pulp import PulpSolverError
 import pulp as plp
 from sqlalchemy.orm import Session

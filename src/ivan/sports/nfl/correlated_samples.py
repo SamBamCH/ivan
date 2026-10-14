@@ -9,7 +9,7 @@ import scipy.stats as st
 from sqlalchemy.orm import Session
 from ivan.sports.nfl.actuals import history_cutoff
 
-from ivan.sports.nfl.paths import MODELS_DIR, models_dir
+from ivan.sports.nfl.paths import models_dir
 from ivan.sports.nfl.models import NFLPlayer
 from ivan.sports.nfl.refactor.team_correlation import TEAM10_SLOTS, PTS_SLOT, SLOT_IDX as _SLOT_IDX
 from ivan.sports.nfl.refactor.dst import (load_dst_odds_model, game_implied_totals,

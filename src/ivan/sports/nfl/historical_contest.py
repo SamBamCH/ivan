@@ -1,17 +1,14 @@
 import re
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import List, Tuple, Dict, Set, Optional
+from typing import List, Tuple, Dict, Optional
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ivan.core.utils import calculate_gini
-from ivan.database.session import init_db, get_session
-from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe
 from ivan.core.utils import normalize_name
 from ivan.sports.nfl.models import (
     HistoricalContest,
@@ -185,7 +182,6 @@ def get_snapshot_data_for_contest(
     """
     from ivan.sports.nfl.models import ProjectionSnapshot
     from ivan.core.utils import normalize_name
-    from zoneinfo import ZoneInfo
 
     # For classic contests, only get standard (non-CPT) slots
     if roster_slot_filter is None:

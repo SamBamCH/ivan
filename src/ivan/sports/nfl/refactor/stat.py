@@ -10,7 +10,7 @@ Workflow:
 """
 
 from __future__ import annotations
-from typing import Callable, Dict, List, Tuple, TYPE_CHECKING
+from typing import Dict, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 import numpy as np

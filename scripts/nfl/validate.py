@@ -16,7 +16,6 @@ summary.json under --out (default data/nfl/output/validation/<stamp>/ or
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
