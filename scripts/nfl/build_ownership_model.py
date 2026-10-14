@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
+scripts/nfl/build_ownership_model.py
+
 Backtest and build the learned showdown ownership model
 (ivan.sports.nfl.ownership_model) from the scraped fields.
 
-    scripts/nfl/build_ownership_model.py backtest [--split 2026-01-01 | --test-share 0.3]
-    scripts/nfl/build_ownership_model.py build [--cutoff YYYY-MM-DD] [--model-dir DIR]
+    build_ownership_model.py backtest [--split 2026-01-01 | --test-share 0.3]
+    build_ownership_model.py build [--cutoff YYYY-MM-DD] [--model-dir DIR]
 
 The backtest scores, on held-out contests, the sampler alone, the sampler
 with the per-position calibration, and the learned model, on the same
 ownership checks the validation uses (MAE, Spearman, chalk bias). Build
 writes ownership_model.pkl to the model directory (an as-of directory with
---cutoff, trained only on contests before it).
+--cutoff, trained only on contests before it); it is the step build_models.py
+runs as "ownership_model".
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ from pathlib import Path
 
 from ivan.database.session import get_session, init_db
 from ivan.sports.nfl import ownership_model as OM
+from ivan.sports.nfl.model_build import build_ownership_model
 from ivan.sports.nfl.paths import MODELS_DIR
 
 
@@ -45,13 +49,10 @@ def main() -> int:
         if r.get("importances"):
             print("  importances: " + ", ".join(f"{f} {v:.2f}" for f, v in list(r["importances"].items())[:8]))
         return 0
-    df = OM.training_frame(session, a.cutoff)
-    if df.contest_id.nunique() < 20:
-        print(f"only {df.contest_id.nunique()} contests before the cutoff; not building"); return 1
-    m = OM.fit(df, cutoff=a.cutoff)
-    path = m.save(Path(a.model_dir or MODELS_DIR))
-    print(f"ownership model on {m.n_contests} contests ({m.n_rows} rows) -> {path}")
-    return 0
+    out = Path(a.model_dir or MODELS_DIR)
+    out.mkdir(parents=True, exist_ok=True)
+    info = build_ownership_model(session, out, a.cutoff)
+    return 0 if info.get("built") else 1
 
 
 if __name__ == "__main__":

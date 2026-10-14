@@ -9,12 +9,14 @@ fields the settle job keeps per contest (ivan.sports.nfl.dupe_model).
         leave-one-slate-out fit per format, printed
     build_dupe_model.py build [--cutoff YYYY-MM-DD] [--model-dir DIR] [--db-url URL]
         fit (on contests before the cutoff when given) and write dupe_model_v2.json
+        (the same step build_models.py runs as "dupe")
 """
 import argparse
 from pathlib import Path
 
 from ivan.database.session import get_session, init_db
 from ivan.sports.nfl import dupe_model as DM
+from ivan.sports.nfl.model_build import build_dupe_model
 from ivan.sports.nfl.paths import MODELS_DIR
 
 
@@ -35,13 +37,9 @@ def main(argv=None) -> int:
                 print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']}  copies/entry pred {f['copies_per_entry_pred']:6.1f} actual {f['copies_per_entry_actual']:6.1f}  "
                       f"log MAE {f['log_mae']:.2f} bias {f['log_bias']:+.2f}  top ratio {f['top_lineup_ratio_median']:.2f}")
         return 0
-    df = DM.training_frame(session, cutoff=a.cutoff)
-    m = DM.fit(df, cutoff=a.cutoff)
-    m.cv = {k: {"contests": v["contests"], "folds": v["folds"]} for k, v in DM.backtest(df).items()} if len(df) else {}
     out = Path(a.model_dir or MODELS_DIR)
     out.mkdir(parents=True, exist_ok=True)
-    path = m.save(out)
-    print(f"dupe model -> {path}: {m.describe()}")
+    build_dupe_model(session, out, cutoff=a.cutoff)
     return 0
 
 

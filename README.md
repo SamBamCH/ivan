@@ -476,7 +476,7 @@ DraftKings Chrome profile.
 |---|---|
 | `scripts/nfl/overnight.py` | Fetch boxscores, clear last slate's lineups and sim results, `VACUUM` when the file is mostly free pages, sync to the server. |
 | `scripts/nfl/get_contest_data.py` | Scrape finished contests (lineups, ownership, payouts) into the historical tables. Selenium + `chrome-selenium/dk-profile`. |
-| `scripts/nfl/build_models.py` | DST game table and DST odds fit, classic field models; `--cutoff` builds the full as-of set (dupe, sd calibration, ownership) → `data/nfl/models/`. |
+| `scripts/nfl/build_models.py` | Every model the pipeline reads (DST table + odds fit, classic field, dupe, sd calibration, ownership calibration + model) → `data/nfl/models/`; `--cutoff` writes the as-of set, `--only` a subset. One function per model in `ivan.sports.nfl.model_build`. |
 | `scripts/nfl/build_dupe_model.py` | Product-rule duplication model fitted on scraped fields → `data/nfl/models/dupe_model_v2.json`; `backtest` prints the leave-one-slate-out fit. |
 
 ## NBA
