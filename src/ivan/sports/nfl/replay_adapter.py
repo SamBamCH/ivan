@@ -77,22 +77,10 @@ class NFLReplayAdapter:
 
     # ---------------------------------------------------------------- project
     def project(self, session, log: Callable[[str], None]) -> None:
-        from ivan.sports.nfl.refactor.player import fit_fpts_distributions
-        from ivan.sports.nfl.ownership import project_and_snapshot
-        from ivan.core import artifacts
-        from ivan.sports.nfl.paths import OUTPUT_DIR
-        from ivan.sports.nfl.run_artifacts import write_projections
-        cfg = load_config("nfl", self.config_path)
-        info = fit_fpts_distributions(session, cfg) or {}
-        project_and_snapshot(session, cfg, snapshot=False)
-        n = session.query(NFLPlayer).filter(NFLPlayer.fpts_mean.isnot(None)).count()
-        from ivan.sports.nfl.run_artifacts import write_environment
-        path = artifacts.projections_path(OUTPUT_DIR)
-        write_projections(session, path)
-        n_env = write_environment(session, path)
-        from ivan.sports.nfl.run_artifacts import write_usage
-        n_use = write_usage(info.get("usage"), path, info.get("unpriced_volume", ""))
-        log(f"projected {n} players -> {path}; game environment {n_env} team rows; usage {n_use} team-stat rows ({info.get('unpriced_volume')})")
+        """The live ingest's projection step (ivan.sports.nfl.ingest.project_slate) on the restored capture; no snapshot."""
+        from ivan.sports.nfl.ingest import project_slate
+        info = project_slate(session, load_config("nfl", self.config_path), snapshot=False, artifacts_required=True, log=log)
+        log(f"projected {info.players} players")
 
     # ---------------------------------------------------------------- field
     def generate(self, env: dict, n_lineups: int, jobs: int, log_path: Path, log) -> None:

@@ -1,6 +1,6 @@
 # src/ivan/sports/nfl/archive_capture.py
 """
-What scripts/nfl/ingest.py archives after each run: the raw pool, props and
+What the ingest (ivan.sports.nfl.ingest.store_slate) archives after each run: the raw pool, props and
 lines of the capture, keyed by the slate's draft group (see ivan.core.archive).
 """
 from __future__ import annotations
