@@ -76,7 +76,7 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def _cookies_to_requests_session(driver: webdriver.Chrome) -> requests.Session:
+def _cookies_to_requests_session(driver) -> requests.Session:
     """Copy all visible cookies + user agent from Selenium into a requests.Session."""
     # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
     sess = requests.Session()

@@ -23,7 +23,7 @@ sampled field's concentration follows it) and for the predicted copies of
 every candidate (what the validation checks against real copies). Re-fit
 as slates accumulate:
 
-    scripts/nfl/build_dupe_model.py v2 backtest | build [--cutoff]
+    scripts/nfl/build_dupe_model.py backtest | build [--cutoff]
 """
 from __future__ import annotations
 

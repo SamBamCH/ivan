@@ -222,10 +222,10 @@ reach); classic k 4e-5, beta 0.07, i.e. classic fields barely duplicate by
 ownership. Both samplers use the same function for their lineup weights
 and for every candidate's predicted copies, so the sampled field's
 concentration and the dupe prediction of our own lineups agree.
-`config/nfl.json` → `field.dupe_model`: `product` (default) or `two_stage`
-(the old quantile + GBM model, which under-predicted the chalk about 3x).
-`scripts/nfl/build_dupe_model.py v2 backtest|build` re-fits as fields
-accumulate; the as-of build writes a version per cutoff.
+`scripts/nfl/build_dupe_model.py backtest|build` re-fits as fields
+accumulate; the as-of build writes a version per cutoff. (The earlier
+two-stage quantile + GBM model, which under-predicted the chalk about 3x,
+was removed in 2026-10.)
 
 ### Raw artifacts: every payload, as received
 
@@ -477,8 +477,7 @@ DraftKings Chrome profile.
 | `scripts/nfl/overnight.py` | Fetch boxscores, clear last slate's lineups and sim results, `VACUUM` when the file is mostly free pages, sync to the server. |
 | `scripts/nfl/get_contest_data.py` | Scrape finished contests (lineups, ownership, payouts) into the historical tables. Selenium + `chrome-selenium/dk-profile`. |
 | `scripts/nfl/build_models.py` | DST game table and DST odds fit, classic field models; `--cutoff` builds the full as-of set (dupe, sd calibration, ownership) → `data/nfl/models/`. |
-| `scripts/nfl/build_dupe_model.py` | Two-stage showdown duplication model → `data/nfl/models/{contest_dupe_quantiles,lineup_dupe_model}.pkl`. |
-| `scripts/nfl/lineup_exposures.py` | Ad-hoc exposure and stacking diagnostics over the current field. |
+| `scripts/nfl/build_dupe_model.py` | Product-rule duplication model fitted on scraped fields → `data/nfl/models/dupe_model_v2.json`; `backtest` prints the leave-one-slate-out fit. |
 
 ## NBA
 

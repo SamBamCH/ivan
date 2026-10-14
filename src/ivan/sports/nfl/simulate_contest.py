@@ -217,7 +217,7 @@ def simulate_one_contest(
                     "entry_fee": entry_fee, "total_entries": field_sz, "field_cap": field_cap, "simulated_size": capped,
                     "num_sims": num_sims, "use_classic_dupes": use_classic_dupes, "candidates": n_candidates,
                     "start": contest.date, "started_at": datetime.now(),
-                    "config": {k: cfg.get(k) for k in ("field", "sampling", "simulation", "randomness") if k in cfg}},
+                    "config": {k: cfg.get(k) for k in ("field", "randomness") if k in cfg}},
     }
 
     # 1) the opposing field, with the contest's real size and fee driving the duplication model

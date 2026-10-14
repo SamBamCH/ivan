@@ -76,10 +76,6 @@ def build_asof(cutoff: date, db_url: str | None = None) -> int:
     build_slate_models(out_dir=out, cutoff=datetime.combine(cutoff, datetime.min.time()))
     built["classic_models"] = {"cutoff": cutoff.isoformat()}
     script = Path(__file__).resolve().parent
-    cmd = [sys.executable, str(script / "build_dupe_model.py"), "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
-    print("→ " + " ".join(cmd))
-    rc = subprocess.run(cmd).returncode
-    built["dupe_model"] = {"cutoff": cutoff.isoformat(), "ok": rc == 0}
     cmd = [sys.executable, str(script / "backtest_projections.py"), "--until", (cutoff - timedelta(days=1)).isoformat(),
            "--write-calibration", "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
     print("→ " + " ".join(cmd))
@@ -93,10 +89,10 @@ def build_asof(cutoff: date, db_url: str | None = None) -> int:
     print("→ " + " ".join(cmd))
     rc4 = subprocess.run(cmd).returncode
     built["ownership_model"] = {"cutoff": cutoff.isoformat(), "ok": rc4 == 0}
-    cmd = [sys.executable, str(script / "build_dupe_model.py"), "v2", "build", "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
+    cmd = [sys.executable, str(script / "build_dupe_model.py"), "build", "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
     print("→ " + " ".join(cmd))
-    rc5 = subprocess.run(cmd).returncode
-    built["dupe_model_v2"] = {"cutoff": cutoff.isoformat(), "ok": rc5 == 0}
+    rc = subprocess.run(cmd).returncode
+    built["dupe_model"] = {"cutoff": cutoff.isoformat(), "ok": rc == 0}
     m = model_store.write_manifest(out, cutoff, built)
     print(f"✅ as-of models written to {out} ({', '.join(sorted(m['built']))})")
     return 0 if rc == 0 and rc2 == 0 else 1

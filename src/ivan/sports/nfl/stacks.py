@@ -2,7 +2,7 @@
 """
 Describe a lineup's construction in DFS terms: team split, captain side,
 QB stacks with their bring-backs, RB/DST pairs. Labels follow
-scripts/nfl/lineup_exposures.py ("4-2", "QB+2 with opp 1").
+the DFS convention ("4-2", "QB+2 with opp 1"); the web UI's Exposures page uses them.
 """
 from __future__ import annotations
 
