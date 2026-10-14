@@ -9,7 +9,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 _np.seterr(all="ignore")
 import argparse
+from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from ivan.core import model_store
 
 import joblib
 import numpy as np
@@ -41,10 +44,15 @@ from ivan.database.session import init_db, get_session
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--db-url',    default=None)
-    parser.add_argument('--model-dir', default=MODELS_DIR)
+    parser.add_argument('--model-dir', default=None)
+    parser.add_argument('--cutoff', default=None,
+                        help="build an as-of version from data before this date (YYYY-MM-DD) into MODELS_DIR/asof/<cutoff>: "
+                             "DST params, classic field models, the dupe model and the sd calibration (the legacy marginals/vine are skipped)")
     args = parser.parse_args()
 
-    model_dir = Path(args.model_dir)
+    if args.cutoff:
+        return build_asof(date.fromisoformat(args.cutoff), args.db_url)
+    model_dir = Path(args.model_dir or MODELS_DIR)
     model_dir.mkdir(parents=True, exist_ok=True)
 
     print("→ Building player‐level models")
@@ -73,7 +81,54 @@ def main():
     build_team10_vine(model_dir, args.db_url)     # writes team10_vine.pkl
 
     build_slate_models()
+    model_store.write_manifest(model_dir, None, {"dst_odds_params": {"n": params.get("n")}, "team10_vine": {}, "classic_models": {}, "player_models": {}})
+
+
+def build_asof(cutoff: date, db_url: str | None = None) -> int:
+    """
+    The models the replay of a slate at `cutoff` may use: trained on contests that finished and games played
+    strictly before it, written to MODELS_DIR/asof/<cutoff>/ with a manifest (ivan.core.model_store).
+    """
+    import subprocess, sys
+    from ivan.sports.nfl.actuals import week_for_date
+    out = model_store.asof_dir(MODELS_DIR, cutoff)
+    out.mkdir(parents=True, exist_ok=True)
+    engine = init_db("nfl", db_url)
+    session = get_session(engine)
+    before = week_for_date(session, cutoff)
+    built = {}
+    print(f"→ as-of {cutoff}: history before season/week {before} -> {out}")
+    params = fit_dst_odds_model(session, out, before=before)
+    built["dst_odds_params"] = {"n": params.get("n"), "before": list(before) if before else None}
+    print("\n".join("   " + line for line in describe_dst_odds_model(params).splitlines()))
+    build_slate_models(out_dir=out, cutoff=datetime.combine(cutoff, datetime.min.time()))
+    built["classic_models"] = {"cutoff": cutoff.isoformat()}
+    script = Path(__file__).resolve().parent
+    cmd = [sys.executable, str(script / "build_dupe_model.py"), "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
+    print("→ " + " ".join(cmd))
+    rc = subprocess.run(cmd).returncode
+    built["dupe_model"] = {"cutoff": cutoff.isoformat(), "ok": rc == 0}
+    cmd = [sys.executable, str(script / "backtest_projections.py"), "--until", (cutoff - timedelta(days=1)).isoformat(),
+           "--write-calibration", "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
+    print("→ " + " ".join(cmd))
+    rc2 = subprocess.run(cmd).returncode
+    built["sd_calibration"] = {"until": (cutoff - timedelta(days=1)).isoformat(), "ok": rc2 == 0}
+    cmd = [sys.executable, str(script / "build_ownership_calibration.py"), "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
+    print("→ " + " ".join(cmd))
+    rc3 = subprocess.run(cmd).returncode
+    built["ownership_calibration"] = {"cutoff": cutoff.isoformat(), "ok": rc3 == 0}
+    cmd = [sys.executable, str(script / "build_ownership_model.py"), "build", "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
+    print("→ " + " ".join(cmd))
+    rc4 = subprocess.run(cmd).returncode
+    built["ownership_model"] = {"cutoff": cutoff.isoformat(), "ok": rc4 == 0}
+    cmd = [sys.executable, str(script / "build_dupe_model.py"), "v2", "build", "--cutoff", cutoff.isoformat(), "--model-dir", str(out)] + (["--db-url", db_url] if db_url else [])
+    print("→ " + " ".join(cmd))
+    rc5 = subprocess.run(cmd).returncode
+    built["dupe_model_v2"] = {"cutoff": cutoff.isoformat(), "ok": rc5 == 0}
+    m = model_store.write_manifest(out, cutoff, built, notes=["legacy player marginals / team vine not built for as-of versions (the pipeline does not read them)"])
+    print(f"✅ as-of models written to {out} ({', '.join(sorted(m['built']))})")
+    return 0 if rc == 0 and rc2 == 0 else 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main() or 0)

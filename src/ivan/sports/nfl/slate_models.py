@@ -21,6 +21,7 @@ def build_slate_models(
     db_key: str = "nfl",
     config_path: Path | None = None,
     out_dir: Path | None = None,
+    cutoff=None,
 ):
     """
     1) Reads nfl.json config
@@ -40,7 +41,7 @@ def build_slate_models(
 
     # — build models —
     print("▶ Building classic field distribution regressors…")
-    bin_models = build_slate_bin_regressors(session)
+    bin_models = build_slate_bin_regressors(session, cutoff)
 
     # — determine output directory —
     if out_dir is None:

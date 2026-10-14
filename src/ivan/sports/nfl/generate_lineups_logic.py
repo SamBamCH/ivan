@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
+from ivan.core.seed import seed_for
 
 # ------- Logging directory (used only if you enable solver logging) -------
 LOG_DIR = Path(__file__).resolve().parents[3] / "data" / "nfl" / "logs"
@@ -512,10 +513,12 @@ def generate_and_store_field_lineups(
     # Get randomness from config (default 1.0 = full distribution)
     randomness = float(_cfg(config, "randomness", 1.0))
 
+    # with IVAN_SEED set the worker's `random` is seeded (scripts/nfl/generate_lineups.py), so its universes follow
     samples = generate_correlated_samples_gaussian(
         session,
         n_samples=max(5000, num_lineups*2),
-        randomness=randomness
+        randomness=randomness,
+        seed=random.getrandbits(32) if seed_for("generate") is not None else None,
     )
     slate_type = _infer_slate_type(roster_slot_by_id)
 

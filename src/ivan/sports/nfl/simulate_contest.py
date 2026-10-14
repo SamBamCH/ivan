@@ -27,6 +27,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.core.utils import coerce_player_ids as _coerce_player_ids
+from ivan.core.seed import seed_for
 from ivan.sports.common.payouts import scale_payouts_by_rank_average
 from ivan.sports.nfl import sim_report
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
@@ -100,13 +101,13 @@ def _scale_payouts(tiers: List[dict], num_field_lineups: int, original_field_siz
 
 # ------------------------------------------------------------------------- samples
 def _player_samples_matrix(session: Session, pid_to_idx: Dict[int, int], n_samples: int,
-                           model_dir: str | Path = MODELS_DIR):
+                           model_dir: str | Path | None = None, seed: int | None = None):
     """
     Scores P[num_sims, num_players] aligned to pid_to_idx from one correlated
     draw per simulation. Also returns the raw per-player samples, the sampler's
     diagnostics and the field players that had no samples (zero columns).
     """
-    raw, diag = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples,
+    raw, diag = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples, seed=seed,
                                                      return_diagnostics=True)
     P = np.zeros((n_samples, len(pid_to_idx)), dtype=np.float32)
     missing = []
@@ -192,10 +193,14 @@ def simulate_one_contest(
     field_cap: int,
     num_sims: int = 1000,
     use_classic_dupes: bool = False,
+    artifact_dir: str | Path | None = None,
 ) -> dict:
     """
     Simulate a contest end to end and persist the per-lineup results and the
-    run's report. Returns the report (see sim_report for its layout).
+    run's report. Returns the report (see sim_report for its layout). With
+    `artifact_dir` the run's assumptions are also written there for the
+    validation layer (ivan.sports.nfl.run_artifacts); a failure to write
+    them never sinks the simulation.
     """
     t0 = time.time()
     cfg = json.load(open(config_path, encoding="utf-8"))
@@ -224,6 +229,7 @@ def simulate_one_contest(
         raise RuntimeError(f"field sampler returned no entries for contest {contest_id} ({meta.get('error', 'no lineups?')})")
     if M != capped:
         raise RuntimeError(f"field sampler returned {M} entries, expected {capped}")
+    sampler_arrays = meta.pop("_arrays", None)
     u_lids, pid_lists_by_lid, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(session, counts_by_lineup)
     players = sim_report.player_meta(session, unique_pids)
 
@@ -235,7 +241,8 @@ def simulate_one_contest(
     paid_places = max((r for r, a in scaled.items() if 1 <= r <= M and a > 0), default=0)
 
     # 3) one correlated draw per simulation
-    P, raw, diag, missing = _player_samples_matrix(session, pid_to_idx, num_sims)
+    sim_seed = seed_for(f"sim/{contest_id}")
+    P, raw, diag, missing = _player_samples_matrix(session, pid_to_idx, num_sims, seed=sim_seed)
     players.update(sim_report.player_meta(session, [p for g in diag["games"] for p in g["player_ids"]]
                                           + [d["id"] for d in diag["independent"]]))
     report["field"] = sim_report.field_section(counts_by_lineup, pid_lists_by_lid, players, meta, n_candidates)
@@ -249,7 +256,7 @@ def simulate_one_contest(
     full_rois = np.zeros_like(full_scores)
     full_ranks = np.zeros((num_sims, M), dtype=np.int32)
     chunk_stats = {"max_abs_error": 0.0, "sims_off": 0, "tie_anomalies": 0, "over_top": 0,
-                   "workers": min(MAX_WORKERS, os.cpu_count() or 1)}
+                   "workers": max(1, min(MAX_WORKERS, int(os.environ.get("IVAN_SIM_WORKERS") or (os.cpu_count() or 1))))}   # IVAN_SIM_WORKERS: a replay worker's share of the cores
     with ProcessPoolExecutor(max_workers=chunk_stats["workers"]) as exe:
         futures = [exe.submit(_simulate_chunk, s, min(s + chunk, num_sims), lineup_ix, P[s:min(s + chunk, num_sims)],
                               entry_fee, scaled) for s in range(0, num_sims, chunk)]
@@ -286,4 +293,23 @@ def simulate_one_contest(
     report["check_counts"] = sim_report.summarise_checks(report["checks"])
     sim_report.save_report(session, report)
     session.commit()
+
+    if artifact_dir is not None:
+        try:
+            from ivan.core.artifacts import contest_artifact_paths
+            from ivan.sports.nfl.run_artifacts import build_sim_artifact, write_sim_artifact
+            pay_by_rank = np.array([float(scaled.get(r, 0.0)) for r in range(1, M + 1)])
+            arrays, art_meta = build_sim_artifact(
+                contest={"id": contest_id, "name": contest_name, "mode": mode, "contest_type": contest.contest_type,
+                         "entry_fee": entry_fee, "total_entries": field_sz, "field_cap": field_cap, "start": contest.date,
+                         "candidates": n_candidates},
+                u_lids=u_lids, starts=starts, ends=ends, pid_lists_by_lid=pid_lists_by_lid, full_scores=full_scores,
+                full_payouts=full_payouts, full_rois=full_rois, full_ranks=full_ranks, raw_samples=raw, players=players,
+                pay_by_rank=pay_by_rank, tiers=tiers, paid_places=paid_places, pool_in_field=pool_in_field,
+                sampler_arrays=sampler_arrays, sampler_meta=meta, seed=sim_seed)
+            npz_path, json_path = contest_artifact_paths(Path(artifact_dir), contest_id)
+            write_sim_artifact(npz_path, json_path, arrays, art_meta)
+            report["artifact"] = str(npz_path)
+        except Exception as e:                      # never sink a simulation over its paper trail
+            print(f"  WARNING: could not write the run artifact for contest {contest_id}: {type(e).__name__}: {e}")
     return sim_report.jsonable(report)

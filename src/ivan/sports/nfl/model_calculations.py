@@ -18,7 +18,7 @@ from ivan.sports.nfl.models import ClassicContestMetadata
 BINS = 20  # Fixed-width histogram bins
 
 
-def build_slate_bin_regressors(session: Session) -> dict:
+def build_slate_bin_regressors(session: Session, cutoff=None) -> dict:
     """
     Fit regressors mapping slate features to fixed-width bin masses for
     projection and ownership distributions.
@@ -30,10 +30,13 @@ def build_slate_bin_regressors(session: Session) -> dict:
         - bin_edges: np.array of bin edges [0, 0.05, 0.10, ..., 1.0]
     """
     # Query historical classic contest metadata
-    recs = session.query(ClassicContestMetadata).filter(
+    q = session.query(ClassicContestMetadata).filter(
         ClassicContestMetadata.hist_proj_counts.isnot(None),
         ClassicContestMetadata.hist_own_counts.isnot(None),
-    ).all()
+    )
+    if cutoff is not None:                      # as-of build: only contests that finished before the cutoff
+        q = q.filter(ClassicContestMetadata.date < cutoff)
+    recs = q.all()
 
     bin_edges = np.linspace(0.0, 1.0, BINS + 1)
 

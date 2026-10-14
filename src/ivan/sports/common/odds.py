@@ -1,4 +1,6 @@
 import requests
+
+from ivan.core import raw
 from datetime import datetime
 from dateutil import parser
 import pprint
@@ -20,6 +22,7 @@ def get_game_odds(
     includeLinks: str | None = None,
     includeSids: str | None = None,
     includeBetLimits: str | None = None,
+    raw_sport=None,
 ):
     """
     Calls /v4/sports/{sport}/odds with the provided params and returns JSON.
@@ -44,7 +47,10 @@ def get_game_odds(
     resp = requests.get(url, params=params)
     if resp.status_code == 200:
         # You can access quota: resp.headers.get('x-requests-remaining'), etc.
-        return resp.json(), resp.headers
+        payload = resp.json()
+        if raw_sport and payload:
+            raw.store(raw_sport, "odds/lines", sport, payload, meta={"markets": markets})
+        return payload, resp.headers
     else:
         print(f"Error fetching game odds: {resp.status_code} - {resp.text}")
         return None, resp.headers if hasattr(resp, "headers") else {}
@@ -112,6 +118,18 @@ def parse_game_odds(odds_json: list[dict]) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+# The NFL player markets the ingest prices (the odds API bills per market, so the replay backfill asks for exactly these)
+DEFAULT_PLAYER_MARKETS = (
+    "player_pass_tds,player_pass_yds,player_pass_completions,"
+    "player_pass_attempts,player_pass_interceptions,"
+    "player_rush_yds,player_rush_attempts,"
+    "player_receptions,player_reception_yds,player_anytime_td,"
+    "player_defensive_interceptions,player_field_goals,player_kicking_points,player_kicking_points_alternate,"
+    "player_field_goals_alternate,player_receptions_alternate,player_sacks,player_sacks_alternate,player_reception_yds_alternate,"
+    "player_rush_tds_alternate,player_rush_yds_alternate,player_pass_tds_alternate,player_pass_yds_alternate"
+)
+
+
 def _get_upcoming_events(sport, api_key):
     """
     Fetches all upcoming events for the specified sport.
@@ -146,15 +164,7 @@ def _get_event_odds(sport, api_key, event_id, markets=None):
         dict: A JSON response containing odds data or None if the request fails.
     """
     if markets is None:
-        markets = (
-            "player_pass_tds,player_pass_yds,player_pass_completions,"
-            "player_pass_attempts,player_pass_interceptions,"
-            "player_rush_yds,player_rush_attempts,"
-            "player_receptions,player_reception_yds,player_anytime_td,"
-            "player_defensive_interceptions,player_field_goals,player_kicking_points,player_kicking_points_alternate,"
-            "player_field_goals_alternate,player_receptions_alternate,player_sacks,player_sacks_alternate,player_receptions_alternate,player_reception_yds_alternate,"
-            "player_rush_tds_alternate,player_rush_yds_alternate,player_pass_tds_alternate,player_pass_yds_alternate"
-        )
+        markets = DEFAULT_PLAYER_MARKETS
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
     params = {
         'apiKey': api_key,
@@ -169,15 +179,19 @@ def _get_event_odds(sport, api_key, event_id, markets=None):
         print(f"Error fetching event odds: {response.status_code} - {response.text}")
         return None
 
-def get_odds(sport, api_key, relevant_teams, markets=None):
+def get_odds(sport, api_key, relevant_teams, markets=None, raw_sport=None):
     """
-    Fetches odds only for each team’s next upcoming event.
+    Fetches odds only for each team’s next upcoming event. With raw_sport the
+    events list and every event's odds response are kept as received (raw odds/events, odds/props).
 
     Returns:
         dict: mapping team_abbreviation -> odds JSON
     """
     # 1) grab all upcoming events
     events = _get_upcoming_events(sport, api_key)
+    stamp = raw._stamp()
+    if raw_sport and events:
+        raw.store(raw_sport, "odds/events", sport, events, stamp=stamp)
     if not events:
         return {}
 
@@ -204,6 +218,8 @@ def get_odds(sport, api_key, relevant_teams, markets=None):
     for team, ev in next_event_by_team.items():
         ev_id = ev['id']
         odds = _get_event_odds(sport, api_key, ev_id, markets=markets)
+        if raw_sport and odds:
+            raw.store(raw_sport, "odds/props", ev_id, odds, stamp=stamp, meta={"team": team, "markets": markets, "commence_time": ev.get("commence_time")})
         odds_by_team[team] = odds
 
     return odds_by_team
@@ -244,3 +260,61 @@ def parse_odds(odds_by_team: dict) -> pd.DataFrame:
     return df
     
 
+
+
+# --------------------------------------------------------------------------- historical (replay backfill)
+HISTORICAL_BASE = "https://api.the-odds-api.com/v4/historical/sports"
+
+
+def _historical_get(url: str, params: dict):
+    """GET a historical endpoint; returns (data, snapshot timestamp, headers). Raises on a dead key."""
+    resp = requests.get(url, params=params)
+    if resp.status_code in (401, 403):
+        raise RuntimeError(f"the-odds-api rejected the API key ({resp.status_code}): {resp.text[:200]}")
+    if resp.status_code != 200:
+        print(f"Error fetching {url}: {resp.status_code} - {resp.text[:200]}")
+        return None, None, resp.headers
+    body = resp.json()
+    return body.get("data"), body.get("timestamp"), resp.headers
+
+
+def get_historical_events(sport: str, api_key: str, at: str):
+    """
+    Events as they stood at `at` (ISO 8601 UTC, e.g. 2025-11-24T00:50:00Z):
+    the snapshot the API has at or before that time. Costs 1 credit.
+    Returns (events, snapshot_timestamp, headers).
+    """
+    return _historical_get(f"{HISTORICAL_BASE}/{sport}/events", {"apiKey": api_key, "date": at, "dateFormat": "iso"})
+
+
+def get_historical_event_odds(sport: str, api_key: str, event_id: str, at: str, markets: str | None = None,
+                              regions: str = "us", bookmakers: str | None = None):
+    """
+    One event's odds (player props included) as they stood at `at`. The API
+    bills historical odds per market per region, so `markets` should be the
+    list the live ingest asks for and nothing more. Returns
+    (event_odds, snapshot_timestamp, headers); event_odds has the same shape
+    as the live /events/{id}/odds response, so parse_odds() applies.
+    """
+    if markets is None:
+        markets = DEFAULT_PLAYER_MARKETS
+    params = {"apiKey": api_key, "regions": regions, "markets": markets, "oddsFormat": "american",
+              "dateFormat": "iso", "date": at}
+    if bookmakers:
+        params["bookmakers"] = bookmakers
+    return _historical_get(f"{HISTORICAL_BASE}/{sport}/events/{event_id}/odds", params)
+
+
+def get_historical_game_odds(sport: str, api_key: str, at: str, markets: str = "h2h,spreads,totals", regions: str = "us"):
+    """Every event's game lines as they stood at `at`; parse with parse_game_odds(). Returns (events, timestamp, headers)."""
+    params = {"apiKey": api_key, "regions": regions, "markets": markets, "oddsFormat": "american",
+              "dateFormat": "iso", "date": at}
+    return _historical_get(f"{HISTORICAL_BASE}/{sport}/odds", params)
+
+
+def credits_remaining(headers) -> tuple[int | None, int | None]:
+    """(remaining, used) from the API's quota headers, or Nones."""
+    try:
+        return int(headers.get("x-requests-remaining")), int(headers.get("x-requests-used"))
+    except (TypeError, ValueError, AttributeError):
+        return None, None

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Backtest plan{% endblock %}
+{% block content %}
+<style>
+  .fields { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end }
+  .fields label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:#555 }
+  textarea.menu { width:100%; min-height:120px; font-family:ui-monospace, monospace; font-size:12px }
+  .status { padding:1px 6px; border-radius:3px; font-size:12px }
+  .status.ready { background:#e3f3e6; color:#1b5e20 } .status.unsettled { background:#fff4d6; color:#7a5200 } .status.no { background:#fbe3e1; color:#8a1c12 }
+  .missing { font-size:12px; color:#7a5200; margin:2px 0 0 0; padding-left:16px }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px }
+  .actions form { display:inline }
+  code.cmd { display:block; white-space:pre-wrap; font-size:12px; background:#f6f6f3; padding:6px; margin:4px 0 }
+  table.contests td { font-size:12px }
+</style>
+<h1>Backtest plan <span class="muted small">a window of slates, a contest pool, and what each slate still needs</span></h1>
+
+<div class="card">
+  <form method="get" action="/backtest/plan">
+    <div class="fields">
+      <label>Sport <select name="sport"><option value="nfl">NFL</option></select></label>
+      <label>Since <input type="text" name="since" value="{{ plan.since if plan else default_since }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
+      <label>Until <input type="text" name="until" value="{{ plan.until if plan else default_until }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
+      <label style="justify-content:flex-end"><button class="small">Check readiness</button></label>
+    </div>
+    <label style="display:block; margin-top:8px; font-size:13px; color:#555">Contest pool (the replay menu: per item the largest contest whose name matches, entries capped at the contest's max)
+      <textarea class="menu" name="menu">{{ menu_text }}</textarea></label>
+    <p class="muted small" style="margin:6px 0 0">The plan lists every archived slate in the window plus every draft group with a scraped contest. A slate is <b>replayable</b> with a pre-lock capture and contests that match the pool, <b>settled</b> when those contests are scraped, and <b>ready</b> with the week's box scores as well. Models resolve to the newest as-of version before each lock.</p>
+  </form>
+</div>
+
+{% if plan %}
+{% set S = plan.summary %}
+<div class="card">
+  <h2>{{ plan.since }} .. {{ plan.until }} <span class="muted small">{{ S.slates }} slates · {{ S.replayable }} replayable · {{ S.settled }} settled · {{ S.ready }} ready · {{ S.picks }} contests in the pool, {{ S.picks_scraped }} scraped, {{ S.our_entries }} of our entries recorded{% if S.other_draft_groups %} · {{ S.other_draft_groups }} other draft groups ignored (nothing captured or scraped){% endif %}</span></h2>
+  <div class="actions">
+    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="replay"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+      <button class="small" {% if not S.replayable %}disabled{% endif %}>Replay {{ S.replayable }} slates + validate</button></form>
+    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="fetch_actuals"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+      <button class="small">Fetch box scores</button></form>
+    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="scrape"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+      <input type="text" name="username" placeholder="DK username" style="width:130px"><button class="small" {% if not plan.unscraped_ids %}disabled{% endif %}>Scrape {{ plan.unscraped_ids|length }} contests</button></form>
+    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="build_models"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+      <button class="small">Build models as of {{ plan.since }}</button></form>
+    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="backfill"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+      <button class="small">Backfill captures (no props)</button></form>
+  </div>
+  <p class="muted small" style="margin:8px 0 0">The scrape opens Chrome on this machine with the saved DraftKings profile; if it reports 403, log in there once and run it again. Jobs run one at a time (see Jobs). Equivalent commands:</p>
+  {% for k, c in plan.commands.items() %}{% if c %}<code class="cmd">{{ c }}</code>{% endif %}{% endfor %}
+  {% if plan.model_versions %}<p class="small muted">As-of model versions: {% for m in plan.model_versions %}{{ m.cutoff }} ({{ m.built|join(', ') }}){% if not loop.last %} · {% endif %}{% endfor %}</p>
+  {% else %}<p class="small muted">No as-of model version exists yet: every replay would use the live models (trained on everything, including the slates replayed).</p>{% endif %}
+</div>
+
+<div class="card">
+  <table class="compact">
+    <tr><th>Lock</th><th>Slate</th><th>Mode</th><th>Capture</th><th class="num">Contests</th><th class="num">Pool</th><th class="num">Scraped</th><th class="num">Ours</th><th>Box scores</th><th>Models</th><th>Replayed</th><th>Status</th></tr>
+    {% for r in plan.rows %}
+    <tr>
+      <td>{{ r.lock }}</td><td>{{ r.slate_key }}</td><td>{{ r.mode }}</td><td class="small">{{ r.capture }}</td>
+      <td class="num">{{ r.contests_at_lock }}</td><td class="num">{{ r.picks }}</td><td class="num">{{ r.scraped }}</td><td class="num">{{ r.our_entries }}</td>
+      <td class="{{ '' if r.box_ok else 'neg' }}">{{ r.box_scores }} <span class="muted small">{{ r.week }}</span></td>
+      <td class="{{ 'neg' if r.models_fallback else '' }} small">{{ r.models }}</td><td class="small">{{ r.replayed }}</td>
+      <td><span class="status {{ 'ready' if r.status.startswith('ready') else ('unsettled' if 'unsettled' in r.status else 'no') }}">{{ r.status }}</span></td>
+    </tr>
+    {% if r.missing or r.contests %}
+    <tr><td></td><td colspan="11">
+      {% if r.missing %}<ul class="missing">{% for m in r.missing %}<li>{{ m }}</li>{% endfor %}</ul>{% endif %}
+      {% if r.contests %}<details><summary class="small">Contest pool ({{ r.contests|length }})</summary>
+        <table class="compact contests">
+          <tr><th>Contest</th><th class="num">Fee</th><th class="num">Size</th><th class="num">Entries</th><th>Payouts</th><th>Field</th><th class="num">Points</th><th class="num">Own</th><th class="num">Ours</th></tr>
+          {% for c in r.contests %}<tr><td>{{ c.contest_id }} {{ c.name }}</td><td class="num">{{ c.fee }}</td><td class="num">{{ c.size }}</td><td class="num">{{ c.entries }}</td>
+            <td>{{ 'yes' if c.payouts else 'no' }}</td><td class="{{ '' if c.scraped else 'neg' }}">{{ 'yes' if c.scraped else 'no' }}</td><td class="num">{{ c.points }}</td><td class="num">{{ c.own }}</td><td class="num">{{ c.ours }}</td></tr>{% endfor %}
+        </table></details>{% endif %}
+    </td></tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

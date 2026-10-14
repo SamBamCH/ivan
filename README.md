@@ -10,6 +10,7 @@ actual contests you entered, and pick the lineups to submit.
 | NBA | Rebuilding for 2026-27 — minutes-anchored projections in, odds layer next | `scripts/nba/`, `src/ivan/sports/nba/` |
 | MLB | Dormant (previous seasons) | `scripts/mlb/`, `src/ivan/sports/mlb/` |
 | LoL | Dormant | `scripts/lol/`, `src/ivan/sports/lol/` |
+| MMA | Active — CSV-driven odds model ported from the standalone mma_dfs project (2026-10) | `scripts/mma/`, `src/ivan/sports/mma/` |
 
 Everything below is about NFL unless it says otherwise.
 
@@ -89,6 +90,338 @@ a tercile table per position. The overnight job keeps `nfl_stats`,
 `nfl_schedule` (scores and closing lines) and `nfl_dst_game` current through
 the season in progress.
 
+### Replaying past slates with today's code
+
+```bash
+python scripts/replay.py --sport nfl --since 2025-11-01 --until 2025-11-30 [--lineups 3000 --jobs 4 --sims 500] [--bankroll 2000]
+```
+
+Every pre-lock ingest now archives its raw inputs (the DraftKings pool, the
+player props, the game lines) as a capture in `archived_slate` /
+`archived_blob`, never modelled. The replay takes each archived slate in the
+window, restores those inputs into a *copy* of the database
+(`data/nfl/replay/nfl_replay.sqlite`; the live one is never written), pins
+the clock to the slate's lock (`IVAN_AS_OF`, honoured wherever the pipeline
+reads the time or player history, so a 2025 slate cannot see later box
+scores), and runs today's projection, lineup generation, contest simulation
+and chooser on it. The contests it enters come from a menu
+(`config/replay/nfl.json`: name patterns, entry counts, choose weights)
+matched against the slate's real contests. Each slate's outputs land in
+`data/nfl/output/replay/nfl/<lock>_<mode>_<slate>/` in the live pipeline's
+own files; afterwards the settlement + tax report runs over the window
+(`report_<since>_<until>/`). Known gap: the correlation, duplication and
+spread-calibration models in `data/nfl/models` were trained on data that
+includes the replayed weeks.
+
+One replay is one draw of the pipeline's own randomness (the generator's
+jitter, the sim's universes). `--repeats N --seed 0` runs generate ->
+simulate -> choose N times per slate (projection once), repeat k seeded with
+`IVAN_SEED = seed + k` (every draw in the pipeline derives from it, see
+`ivan.core.seed`; unset, the live pipeline behaves as before), into
+`rep_000/`, `rep_001/`, ... of the slate directory. The report then settles
+every repeat against the same actual results and adds the window's profit as
+a distribution (`repeats.csv`, `repeats_by_slate.csv`, `repeats_summary.json`,
+`repeats.png`): mean / percentiles / share of repeats in profit, pre- and
+after-tax, the same with the slates bootstrapped, the window without its best
+slate, and each slate's spread. Profit that only shows in some repeats was
+luck of the draw, not edge. A slate-repeat takes about 35 s; `--workers W`
+splits the slates over W processes (each on its own copy of the replay
+database; keep workers x jobs near the core count), re-running with a larger
+`--repeats` only adds the missing ones, and `--report-only` re-reads what is
+there. Put a long run in its own root (`--out data/nfl/output/replay_repeats`)
+to keep the single replay intact:
+
+```bash
+python -u scripts/replay.py --sport nfl --since 2025-11-01 --until 2025-11-30 --repeats 100 --seed 0 --workers 3 --jobs 3 \
+    --out data/nfl/output/replay_repeats --bankroll 1000 --tax-year 2025
+```
+
+Past slates that predate the archive are rebuilt with
+`scripts/nfl/backfill_archive.py --since 2025-11-01 --until 2025-11-30 --odds`:
+the pool from the projection snapshot, the lines from `game_odds`, and the
+props from the-odds-api historical endpoint as of 30 minutes before lock
+(about 210 credits per showdown game). Only showdown slates with a scraped
+field are backfilled, since those are the ones that settle with real payouts.
+
+### After-tax backtest
+
+`python scripts/nfl/backtest_tax.py [--dk-history export.csv] [--bankroll 2000] [--cap 0.9 --rate 0.22 | --brackets --other-income 90000] [--mode gross_165d|net_dfs]`
+
+What the chosen lineups would have returned after US federal gambling tax
+(2026 rules: only 90% of losses deductible, configurable for the pending
+repeal). For each contest the last choose run before lock is what we would
+have submitted; each of those entries is settled from the best evidence
+available, in this order: a DraftKings contest-history export
+(`--dk-history`, the real finish of entries actually played), our own
+entries in a scraped contest (`get_contest_data.py --username <dk user>`),
+or the lineup's actual points placed in the scraped field and paid from the
+real payout table. Entries that cannot be settled are listed with the reason
+(no box scores yet: run `overnight.py`; no field: scrape the contest with
+`get_contest_data.py --contest-ids ...`).
+
+The report prints the year to date (W, L, deductible, itemize decision,
+taxable, phantom income, tax, after-tax profit and ROI), a scenario table
+(cap 90% vs 100%, itemize vs standard, gross vs net reporting), the tax each
+contest format adds, the sim's expectation against the actual result per
+contest, the running per-slate ledger with the point where tax owed exceeds
+the bankroll, and a volume sweep (bootstrapped years at 0.25x-8x the
+observed slates, from the actual slates and from the sim's traces) with a
+plot. Everything is also written under `data/nfl/output/backtest/<stamp>/`.
+Rules and 2026 figures live in `config/tax.json` (verify them with a CPA);
+the engine itself is `ivan.sports.nfl.tax.compute_tax(W, L, config)`, tested
+in `tests/nfl/test_tax.py`.
+
+`choose.py` now also writes `chosen_entries.simroi.<stamp>.npz` (each pick's
+per-simulation ROI) because the sim tables are cleared weekly, and the
+scraper stores every entry's actual points (`contest_field_scores`) for
+showdown and classic contests alike. Run `python -m pytest tests` for the
+test suite.
+
+### Ownership: the sampler, corrected by what fields do
+
+The field sampler projects ownership by generating value-driven lineups
+and counting exposures. It has the wrong habits for roster-filler
+positions (it never plays a 4-point defense; the public plays one 13% of
+the time in showdowns, kickers 20%) and overplays the chalk. Two
+corrections, both fitted on the scraped showdown fields and both part of
+the as-of model build:
+
+- **Calibration lines** (`scripts/nfl/build_ownership_calibration.py` →
+  `ownership_calibration.json`): per slot and position, actual ~ a + b ×
+  projected; DST and K on projected points instead (a DST's flex ownership
+  tracks its projected points at corr 0.89).
+- **Learned model** (`scripts/nfl/build_ownership_model.py` →
+  `ownership_model.pkl`): a gradient-boosted regressor on the sampler's
+  projection plus points, salary, value, ranks, position, slot, team share
+  and contest size. On a time split (train November 2025, test October
+  2026) it scores MAE 2.51 against 2.74 for the calibrated sampler and 3.00
+  for the sampler alone, Spearman 0.961 vs 0.926 vs 0.939; on the last
+  third of contests MAE 2.73 vs 3.26 vs 3.80 and chalk bias +1.8 vs +2.6 vs
+  +6.8. `backtest` prints the comparison.
+
+`config/nfl.json` → `ownership.model`: `learned` (default; falls back to
+the calibration when no model file exists), `sampler_calibrated`, or
+`sampler`. Each slot is renormalised to one lineup's worth (captain 100,
+flex 500). Classic slates are untouched until their fields are scraped at
+the player level. The validation's ownership check (MAE, Spearman, chalk
+bias by quintile) is the acceptance test for any change here.
+
+### Duplication: how many copies of a lineup the field holds
+
+`ivan.sports.nfl.dupe_model` fits the product rule on real fields (the
+lineups the settle job keeps per contest):
+
+    copies(L) = N × k × ∏ (own_i / 100) ^ beta
+
+by copy-weighted least squares on the log scale, per format, so it targets
+the copies of the lineup an entry actually holds rather than the million
+singletons. On the first 50 October fields: showdown k 0.044, beta 0.56
+(leave-one-slate-out bias within ±0.2 in log terms; the single most
+duplicated lineup is still under-predicted, a tail the rule does not
+reach); classic k 4e-5, beta 0.07, i.e. classic fields barely duplicate by
+ownership. Both samplers use the same function for their lineup weights
+and for every candidate's predicted copies, so the sampled field's
+concentration and the dupe prediction of our own lineups agree.
+`config/nfl.json` → `field.dupe_model`: `product` (default) or `two_stage`
+(the old quantile + GBM model, which under-predicted the chalk about 3x).
+`scripts/nfl/build_dupe_model.py v2 backtest|build` re-fits as fields
+accumulate; the as-of build writes a version per cutoff.
+
+### Raw artifacts: every payload, as received
+
+`ivan.core.raw` keeps every payload a fetcher receives, gzip, under
+`data/<sport>/raw/<kind>/<key>/<stamp>.<ext>.gz`, with an append-only
+`index.jsonl` and the same index in the database (`raw_artifact`). The
+fetchers write it before anything parses it: DraftKings draftables, lobby,
+payouts and standings exports; the odds API's events, player props (every
+book, every market asked for) and game lines. A parser change later is a
+re-run over the files. `docs/data_framework.md` has the design and the
+build order.
+
+**Settling a slate** (`scripts/nfl/settle.py`, run nightly by the overnight
+job with `--days 3`): for every archived slate past lock, the standings of
+the contests we entered and the draft group's largest public contests, the
+week's box scores, the derived `lineups.parquet` and `scores.npy` per contest
+under `data/nfl/derived/contests/`, and a status row per slate
+(`slate_status`: open, waiting, login_needed, settled), plus, for classic
+contests, per-player rows (actual ownership and points from the export's
+player table, matched to the capture and the projection snapshot) so classic
+slates settle at the player level like showdowns. Idempotent. The
+scrape needs the saved DraftKings Chrome profile and a display; without
+them the job runs with `--no-scrape` and the slate stays `waiting`. When
+the profile's session has expired the scraper opens the login page in the
+Chrome window and waits up to ten minutes for you to log in there, then
+continues; the profile keeps the session for the following runs.
+
+### Backtest: re-run slates with what was known at lock
+
+One page, `/backtest`, organised around a **run** (a window of slates, the
+contests chosen on them, the parameters, the results; stored under
+`data/nfl/output/backtests/<name>/`). Open an existing run from the menu or
+start a new one with a name and a window. A new run walks through:
+
+1. **Data.** What the window lacks, grouped by the fetch that fills it, each
+   with its cost: box scores for the missing weeks (free, nflverse), pre-lock
+   captures for slates that only have scraped contests (the props come from
+   the-odds-api history at about 230 credits per game), the default pool's
+   unscraped contests (DraftKings through the saved Chrome profile, with your
+   username so your finishes settle), and a model version as of the window
+   start. Nothing is fetched until you tick it and confirm; what is fetched is
+   written to the database and kept. You can also continue without it.
+2. **Contests.** Every contest of every replayable slate; tick what to enter
+   and how many entries (defaults follow `config/replay/nfl.json`).
+3. **Parameters.** Repeats per contest, workers, lineups, simulations, field
+   cap, seed. Each repeat re-generates, re-simulates and re-chooses with seed
+   plus k; the projection is fitted once per slate.
+4. **Results.** The sim's claim against the actual outcome and after tax, the
+   distribution across repeats, the assumption checks (projections,
+   environment, usage, ownership, field, dupes, simulator, chooser; full
+   component detail one link away), then every slate and contest with the
+   sim's expected profit, the actual profit and, over repeats, the mean, p10,
+   p90 and the share of repeats that profited.
+
+Going forward, every slate played is settled on its own: the ingest archives
+the capture at lock, the overnight job fetches the box scores, and
+`scripts/nfl/settle_recent.py` scrapes the contests the chooser entered in
+the last days (the overnight job runs it when `IVAN_DK_USERNAME` is set and
+a display exists for Chrome).
+
+Underneath: `ivan.sports.nfl.readiness` (what the window holds),
+`ivan.web.backtest_hub` (the steps and the job commands), `scripts/replay.py`
+with an explicit selection (`"picks"` in the menu file, written per run as
+`replay_<name>/selection.json`), `scripts/nfl/validate.py --replay` for the
+checks, and the replay's own report for the settlement (`repeats.csv`,
+`repeats_by_slate.csv`, `repeats_by_contest.csv`, `sim_vs_actual.csv`).
+
+What makes the re-run honest:
+
+- **Captures.** Every ingest archives the slate's players, props and game
+  lines; older slates are backfilled from projection snapshots. The replay
+  restores a capture with the clock frozen at lock minus one minute, so every
+  history table cuts off at that week, and enters the slate's own draft
+  group's contests.
+- **As-of models.** `build_models.py --cutoff 2025-11-01` writes
+  `data/nfl/models/asof/2025-11-01/` (DST parameters, classic field models,
+  the dupe model, the sd calibration, each trained only on contests and games
+  before the cutoff) with a manifest. `ivan.core.model_store` resolves the
+  directory for the clock: live runs use the live models, a replay the newest
+  version whose cutoff precedes the slate, falling back to the live models
+  while saying so in the manifest and the report.
+
+    scripts/nfl/build_models.py --cutoff 2025-11-01
+    scripts/replay.py --since 2025-11-01 --until 2025-11-30 --menu data/nfl/output/replay_nov/selection.json --repeats 20 --workers 3 --out data/nfl/output/replay_nov
+    scripts/nfl/validate.py --replay data/nfl/output/replay_nov
+
+### Validation: projected vs actual, per component
+
+Every stage writes its predictions down when it makes them (`ivan.core.artifacts`):
+the ingest writes `data/nfl/output/projections/projections.<stamp>.csv`, the simulator
+writes `data/nfl/output/sim/<stamp>/contest_<id>.npz|json` (the sampled field, every
+candidate lineup's simulated cash % / ROI / predicted dupes, the players' sampled score
+quantiles and field exposure, the cash line and winning score per simulation), and the
+chooser its `chosen_entries.*` files. A replay writes the same files into each slate /
+repeat directory (`IVAN_RUN_DIR`). After the games:
+
+```bash
+python scripts/nfl/validate.py --since 2026-09-01 --until 2026-10-12            # live runs
+python scripts/nfl/validate.py --replay data/nfl/output/replay_artifacts        # a replayed window
+```
+
+pairs each contest's last pre-lock choose run with the sim and projections it read, scores
+every lineup the way the settlement does (`backtest_tax.score_lineup`, scraped per-slot
+points first, `nfl_stats` otherwise) and reports, with a pass / warn / fail row each
+(`ivan.core.validation`, NFL adapter `ivan.sports.nfl.validate`):
+
+* **projections** bias, MAE against a salary-only baseline, PIT histogram and 10-90
+  coverage, by position / salary tier / ownership quintile; slates without artifacts are
+  covered from `projection_snapshot` with a normal-approximation PIT
+* **ownership** projected ownership and the sim's sampled-field exposure against actual
+  ownership (scraped contests), with the chalk bias
+* **field** the sim's cash line, winning score, score percentiles and duplication profile
+  against the real field, per contest
+* **simulator / chooser** every lineup the sim scored, settled in the real field: does sim
+  ROI rank lineups (Spearman, sim-ROI deciles vs actual ROI), and do our picks beat K random
+  lineups from the same pool
+* **our entries** sim cash % / ROI / predicted dupes against the real finish and copies
+
+Output under `data/nfl/output/validation/<stamp>/` (or `<replay root>/nfl/validation/rep_<k>/`):
+`players.csv`, `field.csv`, `lineups.csv`, `pool.csv`, `pool_deciles.csv`, `summary.json`;
+the Validation page of the web UI reads them and can submit a run as a job. Live slates
+need the week's box scores (overnight job) and the contests scraped with
+`get_contest_data.py --contest-ids ... --username <dk user>` to settle.
+
+### The projected game environment (layer 1 of the game model)
+
+`ivan.sports.nfl.refactor.environment` draws, per team in a game, points, offensive plays
+and pass rate jointly from the lines (total, spread) and the teams' tendencies in history,
+with the within-game residual dependence (a scoring team runs more and passes less, the
+trailing team passes more, both teams' play counts move together) estimated from past games.
+Training rows are `nfl_schedule` (closing lines, final scores) and `nfl_stats` (attempts,
+sacks, carries per team-week), strictly before the history cutoff. Team tendencies are
+shrunk toward the league and only used where the rolling backtest says they help
+(`DEFAULT_TEAM_EFFECTS`: pass rate yes, plays a little, points never - the market already
+prices team strength).
+
+```bash
+python scripts/nfl/environment.py backtest --from 2024-1    # rolling refit, projected vs actual, writes a validation report
+python scripts/nfl/environment.py grid                      # shrinkage grid behind the defaults
+python scripts/nfl/environment.py slate                     # the loaded slate's environment
+python scripts/nfl/environment.py draw CIN BAL -n 2000      # joint draws for one game
+```
+
+Every projection step writes the slate's environment next to the projections
+(`environment.<stamp>.csv`), and the validation joins it to the actual team-games, so the
+Validation page shows a Game environment table ahead of the player tables. Layers 2 (usage
+shares pinned to the props, residual to unpriced players by depth slot) and 3 (market
+marginals through rank mapping) are planned on top of these draws.
+
+### Usage allocation (layer 2 of the game model)
+
+`ivan.sports.nfl.refactor.usage` hands out the volume of the players nobody
+prices. For each team and stat (receiving yards, receptions, rushing yards)
+it takes the team total (the QB's passing-yards line when one exists, else the
+game environment's dropbacks / rushes times the league's yards per dropback,
+completions per dropback or yards per carry), subtracts every mean already
+settled (the priced players' market means and the QB's salary-model rushing),
+floors the residual at 5% of the total, and splits it among the unpriced
+RB / WR / TE by depth-rank priors measured on the previous four seasons (share
+of the team's stat for the k-th WR / TE / RB by salary order; WR4 .09, WR5 .06,
+TE2 .08, RB3 .02 of receiving yards, and so on), normalised over the unpriced
+players actually on the slate.
+
+`config/nfl.json` → `projection.unpriced_volume` chooses `salary` (the
+salary + TD-odds model in `refactor.volume`, the default) or `environment`
+(this allocation); `IVAN_UNPRICED_VOLUME` overrides it for an A/B. The model is
+built in both modes because its team rows are a diagnostic on their own: the
+projection step writes `usage.<stamp>.csv` beside the projections (team, stat,
+total and its source, settled lines, residual, how many unpriced players share
+it), and the Validation page shows them as **coverage** = settled lines / team
+total. This needs no actuals: it is an identity on the marginals. At 100% the
+priced players already account for the whole team; past it their means are
+collectively too high and the unpriced players only get the floor. Every
+player also records `volume_source` (market / environment / salary / lines)
+and `unpriced_stats`, so the Projections table splits the error by it.
+
+    scripts/nfl/backtest_usage.py --since 2025-11-01 --until 2025-11-30 [--modes salary,environment]
+
+is a projection-only replay: it restores each archived slate with the clock
+frozen at lock, fits the projections under each mode and scores both against
+the actual DraftKings points (usage_ab.csv, a paired comparison on the players
+the modes disagree on, and a validation report under
+data/nfl/output/validation/usage_<stamp>/ that the page lists). Twelve showdown
+slates take about a minute.
+
+What the November 2025 slates said (first run): the two models tie on the 79
+unpriced players (MAE 2.22 vs 2.25, both under by about 0.65 points, 48% of
+those players scored zero), because the settled receiving lines already claim
+a median 105% of each team's passing yards (83% of team-slates past 100%), so
+the allocation only ever hands out the floor. Receptions (100%) and rushing
+yards (98%) add up; receiving yards run 5-6% over, the mean-above-median
+effect of right-skewed yardage props. Reconciling the priced WR / TE
+receiving means to the QB line (a crude proportional scaling) halved their
+over-projection on those slates (WR bias -0.89 → -0.40, TE -1.83 → -1.37);
+that reconciliation is the next thing to build and test properly.
+
 ## Web UI
 
 ```bash
@@ -97,7 +430,13 @@ python scripts/nfl/serve.py            # http://<host>:8000
 
 A single page with the five steps as forms (step 5 takes choose weights per contest and
 remembers them), an entries-file upload, a live log of the running job, and pages for the
-per-contest simulation reports, exposures, downloads (the DK upload files) and job history.
+per-contest simulation reports, exposures, downloads (the DK upload files), job history,
+and a Backtest page that reads the replay / after-tax reports (`data/nfl/output/replay*/nfl/report_*`,
+`data/nfl/output/backtest/*`): headline profit and tax, the repeats distribution, scenarios,
+the per-slate ledger, sim vs actual, formats, the volume sweep, plus the progress of a replay
+still running and a button that rebuilds its report from the repeats finished so far.
+To run it on the laptop only: `python scripts/nfl/serve.py --host 127.0.0.1` and open
+http://localhost:8000.
 It shells out to the scripts above and runs **one job at a time**, `nice`d, which is also
 what keeps SQLite happy. There is no authentication: bind it to a LAN or Tailscale address.
 
@@ -244,6 +583,26 @@ rails. DK status Q (questionable) is treated as playing. The projection snapshot
 per player-day, so keep dropping `stok.csv` on a separate column if you want
 Stokastic as a season-long yardstick.
 
+## MMA
+
+The UFC model from the standalone `mma_dfs` project, on Ivan's layout: a
+SQLite file (`data/mma/mma_history.sqlite`), per-sport tables (`mma_player`,
+`mma_fight`, the lineup pool, one simulation-result row per lineup per
+contest, the DK contest and payout tables), `config/mma.json`, and one
+script per step. Run top to bottom:
+
+| # | Step | Command | What it does |
+|---|---|---|---|
+| 1 | Ingest the slate | `python scripts/mma/ingest.py` | No arguments: picks the Classic MMA slate on DraftKings (the one with the most contests; `--draft-group <id>` for another), pulls its fighter pool, fills each fighter's Win odds from the-odds-api (`ODDS_API_KEY`; DraftKings moneylines, matched to the fights by name similarity), fetches the slate's contests and payout tables, and writes the slate with a win probability and projection per fighter. The finish markets and volume lines are not on the-odds-api, so they are hand-entered: on a new card ingest writes `data/mma/input/fight_odds.csv` (fight, u60 sec, 1st round, itd) and `player_odds.csv` (1st round win, ITD, Win, sig strikes, takedowns) with the names and Win odds in; fill them from the sportsbook and run ingest again. Whenever those files describe the current card they are read as overrides (a non-empty cell wins over the API) and left alone. The summary says what is still blank. The latest `--main-events` fights are 5 rounds. `--players-csv <DK export>` uses DraftKings' CSV instead of the API. |
+| 2 | Generate the field's lineups | `python scripts/mma/generate_lineups.py 6000 4` | `<solves> <workers>`. Each solve maximises jittered win probability (main-event fighters boosted) under DK's rules: six fighters, cap, salary floor, one fighter per fight. Unique results form the candidate pool. Clears the previous pool unless `--append`. |
+| 3 | Simulate | `python scripts/mma/sim.py` | With no arguments, every contest in `data/mma/input/entries.csv` (the DraftKings entries export, as for NFL; `--entries <file>` for another), each against its own sampled field; contests ingest did not list are fetched by id. One contest instead: `--contest "mini-MAX"` (the upcoming DK contest whose name contains the text), `--contest-id <dk id>`, or hand-described with `--payouts payouts.csv --total-entries 47500 --fee 0.5 --name "UFC Sat"` (rank, prize rows as copied from the contest page). Each run samples a field of `field.size` entries from the pool, duplicating cap-spending and favourite-heavy lineups more, scales the payout table to that field, simulates every fight `n_sims` times (finish type from the fight markets, winner from the fighter markets for that finish, production by time fought) and ranks every entry, ties pooling their prizes. Writes each sampled field to `data/mma/output/field.*.csv`. |
+| 4 | Choose | `python scripts/mma/choose.py [--roi-weight 0.8] [--diversity-weight 0.4]` | With no arguments, fills every row of `entries.csv`: per contest, as many lineups as you hold entries, written to `data/mma/output/chosen_entries.<stamp>.csv` in DraftKings' upload format (your entry rows with the six F columns filled), plus `chosen_entries.{lineups,exposures}.<stamp>.csv`. One contest instead: `--name <contest> --lineups 150` writes `chosen_lineups.{lineups,upload,exposures}.<stamp>.csv`. Greedy either way: quality = ROI weight × average ROI + (1 − ROI weight) × cash rate, minus the diversity weight times the largest fighter overlap with anything already picked. |
+
+Scoring constants, the duplication model, the generator and the chooser are
+all in `config/mma.json`, with the values the original used. `IVAN_SEED`
+makes a run reproducible, as for NFL. Tests: `python -m pytest tests/mma`
+(end to end on the sample slate under `tests/mma/data`).
+
 ## Configuration
 
 `config/nfl.json` is machine-independent and tracked. Paths in it are relative to the repo
@@ -284,6 +643,7 @@ src/ivan/
 ├── sports/common/          DraftKings and odds API clients, payout scaling
 ├── sports/nfl/             models, ingestion, distributions, field sampling, simulation, choosing
 │   └── refactor/           the newer ingestion path (player/stat fitting, team correlation, boxscores)
+├── sports/mma/             fight model, slate ingest, generator, field sampler, simulator, chooser
 ├── sports/{nba,mlb,lol}/   other sports
 └── web/                    FastAPI app, job runner, NFL pipeline definition, templates
 config/                     per-sport JSON config

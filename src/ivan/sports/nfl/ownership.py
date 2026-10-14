@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 #!/usr/bin/env python3
 """
 Ownership projection using field sampling simulations.
@@ -18,6 +20,7 @@ from scipy import sparse as sp
 from scipy.spatial.distance import pdist, squareform
 
 from ivan.core.utils import coerce_player_ids as _coerce_player_ids, normalize_name
+from ivan.core.seed import seed_for
 from ivan.sports.nfl.models import NFLPlayer, Lineup, ProjectionSnapshot
 from ivan.sports.nfl.sample_field import (
     sample_showdown_field_learned,
@@ -329,7 +332,10 @@ def _estimate_ownership_from_lineups(
     logger.info(f"[ownership] Generating {num_lineups} lineups to estimate ownership (full sampling)...")
 
     import numpy as np
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed_for("ownership/samples"))
+    if seed_for("ownership") is not None:            # the ILP helpers below draw their cap drop from `random`
+        import random
+        random.seed(seed_for("ownership/ilp"))
 
     for i in range(num_lineups * 2):  # Try up to 2x to get num_lineups successful
         if successful_lineups >= num_lineups:
@@ -688,6 +694,105 @@ def project_and_snapshot(
     ownership = project_ownership(session, config={**config, "ownership": own_cfg}, num_simulations=sims)
     if not ownership:
         raise RuntimeError("ownership projection produced no players; see log above")
+    mode = str(own_cfg.get("model", "learned")).lower()
+    applied = False
+    if mode == "learned":
+        applied = apply_learned_ownership(session)
+        ownership = {int(p.id): float(p.ownership_proj or 0.0) for p in session.query(NFLPlayer).all()} if applied else ownership
+    if not applied and mode in ("learned", "sampler_calibrated") and (own_cfg.get("calibration") or {}).get("enabled", True):
+        ownership = calibrate_ownership(session, ownership)
     if snapshot:
         snapshot_projections(session)
     return ownership
+
+
+SLOT_TOTAL = {511: 100.0, 512: 500.0}        # showdown: one captain and five flex per lineup
+
+
+def apply_learned_ownership(session: Session, model=None) -> bool:
+    """
+    Replace the sampled ownership with the learned model's prediction
+    (ivan.sports.nfl.ownership_model: the sampler's projection plus points,
+    salary, ranks, position and slot, fitted on scraped fields). Showdown
+    slates only; returns False when no model file exists so the caller can
+    fall back to the per-position calibration.
+    """
+    from ivan.sports.nfl import ownership_model as OM
+    model = OM.load() if model is None else model
+    if model is None:
+        return False
+    players = session.query(NFLPlayer).all()
+    if not players or not {int(p.roster_slot_id) for p in players} <= set(SLOT_TOTAL):
+        return False
+    d = OM.slate_frame(session, players)
+    pred = model.predict_frame(d)
+    before = {int(p.id): float(p.ownership_proj or 0.0) for p in players}
+    by_id = dict(zip(d.player_id.astype(int), pred))
+    changed = []
+    for p in players:
+        new = round(float(by_id.get(int(p.id), before[int(p.id)])), 2)
+        if abs(new - before[int(p.id)]) >= 2.0:
+            changed.append((p.name, p.position, int(p.roster_slot_id), before[int(p.id)], new))
+        p.ownership_proj = new
+    session.commit()
+    print(f"learned ownership model ({model.n_contests} contests, fitted {model.fitted_on}{', cutoff ' + model.cutoff if model.cutoff else ''}): "
+          f"{len(changed)} moves of 2+ pts: " + "; ".join(f"{n} {pos} {'CPT' if slot == 511 else 'FLEX'} {b:.1f}->{a:.1f}"
+                                                         for n, pos, slot, b, a in sorted(changed, key=lambda t: -abs(t[4] - t[3]))[:12]))
+    return True
+
+
+def load_ownership_calibration(model_dir=None) -> dict:
+    from ivan.sports.nfl.paths import models_dir
+    path = Path(models_dir() if model_dir is None else model_dir) / "ownership_calibration.json"
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def calibrate_ownership(session: Session, ownership: Dict[int, float], cal: Optional[dict] = None) -> Dict[int, float]:
+    """
+    Map the field-sampling projection onto what the public actually does, per
+    roster slot and position, with the lines fitted on scraped showdown
+    contests (scripts/nfl/build_ownership_calibration.py): most positions
+    on the projected ownership itself, DST and K on projected points (the
+    public rosters them by projection, not by value). Each slot is then
+    renormalised to its lineup total (captain 100, flex 500). Classic slates
+    and slates without a calibration file are left alone.
+    """
+    cal = load_ownership_calibration() if cal is None else cal
+    maps = (cal or {}).get("maps") or {}
+    if not maps:
+        return ownership
+    players = session.query(NFLPlayer).all()
+    slots = {int(p.roster_slot_id) for p in players}
+    if not slots <= set(SLOT_TOTAL):
+        return ownership
+    before = {int(p.id): float(p.ownership_proj or 0.0) for p in players}
+    raw_new: Dict[int, float] = {}
+    for p in players:
+        m = maps.get(f"{int(p.roster_slot_id)}:{p.position}")
+        own = before[int(p.id)]
+        if m is None:
+            raw_new[int(p.id)] = own
+            continue
+        x = float(p.fpts_mean or 0.0) if m["on"] == "fpts_proj" else own
+        raw_new[int(p.id)] = max(0.0, float(m["a"]) + float(m["b"]) * x)
+    # renormalise per slot so the totals still add to one lineup's worth
+    for slot, total in SLOT_TOTAL.items():
+        ids = [int(p.id) for p in players if int(p.roster_slot_id) == slot]
+        ssum = sum(raw_new[i] for i in ids)
+        if ssum > 0:
+            for i in ids:
+                raw_new[i] = raw_new[i] * total / ssum
+    changed = []
+    for p in players:
+        new = round(raw_new[int(p.id)], 2)
+        if abs(new - before[int(p.id)]) >= 2.0:
+            changed.append((p.name, p.position, int(p.roster_slot_id), before[int(p.id)], new))
+        p.ownership_proj = new
+    session.commit()
+    if changed:
+        print(f"ownership calibration ({cal.get('contests')} contests, fitted {cal.get('fitted_on')}): {len(changed)} moves of 2+ pts: "
+              + "; ".join(f"{n} {pos} {'CPT' if slot == 511 else 'FLEX'} {b:.1f}->{a:.1f}" for n, pos, slot, b, a in sorted(changed, key=lambda t: -abs(t[4] - t[3]))[:12]))
+    return {int(p.id): float(p.ownership_proj) for p in players}

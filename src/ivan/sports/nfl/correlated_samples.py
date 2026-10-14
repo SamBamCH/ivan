@@ -7,8 +7,9 @@ import json
 import numpy as np
 import scipy.stats as st
 from sqlalchemy.orm import Session
+from ivan.sports.nfl.actuals import history_cutoff
 
-from ivan.sports.nfl.paths import MODELS_DIR
+from ivan.sports.nfl.paths import MODELS_DIR, models_dir
 from ivan.sports.nfl.models import NFLPlayer
 from ivan.sports.nfl.refactor.team_correlation import TEAM10_SLOTS, PTS_SLOT, SLOT_IDX as _SLOT_IDX
 from ivan.sports.nfl.refactor.dst import (load_dst_odds_model, game_implied_totals,
@@ -148,7 +149,7 @@ def summarize_sampling(samples: Dict[int, np.ndarray], diag: dict, max_pairs_rep
 
 def generate_correlated_samples_gaussian(
     session: Session,
-    model_dir: str | Path = MODELS_DIR,
+    model_dir: str | Path | None = None,
     n_samples: int = 1000,
     seed: int | None = None,
     use_hgv20: bool = False,
@@ -159,7 +160,9 @@ def generate_correlated_samples_gaussian(
     """
     One correlated draw per *game*. Every offensive player and kicker is
     Normal(mu, sigma) on a latent Gaussian with a slot-structured correlation:
-    a within-team matrix for each side plus a cross-team block. When the game
+    a within-team matrix for each side plus a cross-team block, each team's
+    own history shrunk toward the league matrices (refactor/team_correlation.py).
+    When the game
     has lines and the DST model is fitted, the draw also carries one latent
     per team for its points scored (implied total plus a historical residual),
     correlated with that team's slots and the opponent's from history. Each
@@ -188,7 +191,7 @@ def generate_correlated_samples_gaussian(
     SPD projection (also the player block).
     """
     rng = np.random.default_rng(seed)
-    model_dir = Path(model_dir)
+    model_dir = Path(models_dir() if model_dir is None else model_dir)
     randomness = float(np.clip(randomness, 0.0, 1.0))
 
     players = session.query(NFLPlayer).all()
@@ -213,11 +216,12 @@ def generate_correlated_samples_gaussian(
         matchups.append((a, b))
 
     # --- correlation source -----------------------------------------------------------
-    team_corr_cache: Dict[str, Tuple[np.ndarray, bool]] = {}
+    team_corr_cache: Dict[str, Tuple[np.ndarray, str]] = {}
     cross_corr_cache: Dict[Tuple[str, str], Tuple[np.ndarray, bool]] = {}
     Rw = Rx = None
     if use_team_specific_corr:
-        from ivan.sports.nfl.refactor.team_correlation import build_team_correlation, build_cross_team_correlation
+        from ivan.sports.nfl.refactor.team_correlation import (build_team_correlation, build_cross_team_correlation,
+                                                               team_history_summary, describe_team_history)
         method = "team_specific"
     elif use_hgv20:
         from .correlated_sampling_validation import print_hgv20_spearman
@@ -232,7 +236,7 @@ def generate_correlated_samples_gaussian(
         np.fill_diagonal(Rw, 1.0)
         method = "hgv20"
     else:
-        d = json.loads((model_dir / "team10_spearman.json").read_text())
+        d = json.loads((Path(models_dir() if model_dir is None else model_dir) / "team10_spearman.json").read_text())
         Rw, Rx = _spearman_to_pearson(np.array(d["within"], float)), _spearman_to_pearson(np.array(d["cross"], float))
         np.fill_diagonal(Rw, 1.0)
         method = "team10_spearman.json"
@@ -241,12 +245,12 @@ def generate_correlated_samples_gaussian(
         if not use_team_specific_corr:
             return Rw, method
         if team not in team_corr_cache:
-            R_S, ok = build_team_correlation(session, team)
+            R_S, ok = build_team_correlation(session, team, before=history_cutoff(session))
             R = _spearman_to_pearson(R_S)
             np.fill_diagonal(R, 1.0)
-            team_corr_cache[team] = (R, ok)
-        R, ok = team_corr_cache[team]
-        return R, ("history" if ok else "identity")
+            src = f"history[{describe_team_history(team_history_summary(session, team))}]" if ok else "league"
+            team_corr_cache[team] = (R, src)
+        return team_corr_cache[team]
 
     def cross(a: str, b: str) -> Tuple[np.ndarray, str]:
         if not use_team_specific_corr:
@@ -256,7 +260,7 @@ def generate_correlated_samples_gaussian(
             R_S, ok = build_cross_team_correlation(session, a, b)
             cross_corr_cache[key] = (_spearman_to_pearson(R_S), ok)
         R, ok = cross_corr_cache[key]
-        return R, ("history" if ok else "default")
+        return R, ("history" if ok else "league")
 
     def sort_team(pl: list) -> list:
         seq = []

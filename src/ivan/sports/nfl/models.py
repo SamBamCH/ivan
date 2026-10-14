@@ -214,6 +214,8 @@ class NFLPlayer(NFLBase, BasePlayer):
     fpts_p95        = Column(Float, nullable=True)
     fpts_p99        = Column(Float, nullable=True)    
     ownership_proj  = Column(Float, nullable=True, default=0.0)
+    volume_source   = Column(String, nullable=True)   # market | environment | salary | lines (where the unpriced volume came from)
+    unpriced_stats  = Column(String, nullable=True)   # '|'-joined stats no book priced for this player
 
 @dataclass
 class FieldPlayer:
@@ -521,6 +523,39 @@ class ShowdownContestMetadata(NFLBase):
     p25_dupe_count = Column(Integer, nullable=True)
     p75_dupe_count = Column(Integer, nullable=True)
     p90_dupe_count = Column(Integer, nullable=True)
+
+class ContestFieldScores(NFLBase):
+    """
+    Every entry's actual points in a finished contest, from the standings
+    export, so a lineup we chose (or could have chosen) can be placed in the
+    real field after the fact. Written for showdown and classic alike by
+    historical_contest.store_field_results; read by the tax backtest.
+    """
+    __tablename__ = "contest_field_scores"
+
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"), primary_key=True)
+    n_entries  = Column(Integer, nullable=False)
+    scores     = Column(JSON, nullable=False)          # list of floats, descending
+    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ContestEntryResult(NFLBase):
+    """
+    Our own entries' actual finish in a scraped contest (matched by DraftKings
+    username): the ground truth the tax backtest prefers over any reconstruction.
+    """
+    __tablename__ = "contest_entry_result"
+
+    entry_id   = Column(Integer, primary_key=True)
+    contest_id = Column(Integer, ForeignKey("historical_contest_information.contest_id"), nullable=False, index=True)
+    username   = Column(String, nullable=True)
+    rank       = Column(Integer, nullable=False)
+    tie_size   = Column(Integer, nullable=False, default=1)
+    points     = Column(Float, nullable=True)
+    payout     = Column(Float, nullable=False)
+    lineup     = Column(String, nullable=True)         # DK's lineup string
+    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
 
 class ProjectionSnapshot(NFLBase):
     """

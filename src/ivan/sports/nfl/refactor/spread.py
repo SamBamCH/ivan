@@ -21,15 +21,15 @@ from pathlib import Path
 
 import numpy as np
 
-from ivan.sports.nfl.paths import MODELS_DIR
+from ivan.sports.nfl.paths import MODELS_DIR, models_dir
 
 CALIBRATION_FILE = "sd_calibration.json"
 MIN_ROWS = 100            # scored projections before a position's factor is trusted
 FACTOR_RANGE = (0.7, 2.0)
 
 
-def load_sd_calibration(model_dir: Path = MODELS_DIR) -> dict:
-    path = Path(model_dir) / CALIBRATION_FILE
+def load_sd_calibration(model_dir: Path | None = None) -> dict:
+    path = Path(models_dir() if model_dir is None else model_dir) / CALIBRATION_FILE
     if not path.exists():
         return {"factors": {}, "fitted_on": None, "window": None, "n": {}}
     cal = json.loads(path.read_text())

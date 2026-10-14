@@ -27,7 +27,7 @@ def main():
     db = get_session(engine)
 
     # 3) Fetch & filter contests
-    filtered = get_upcoming_contest_ids(sport="NFL", days_ahead=1)
+    filtered = get_upcoming_contest_ids(sport="NFL", days_ahead=1, raw_sport="nfl")
 
     # 4) Upsert each into historical_contests
     for c in filtered:

@@ -25,6 +25,7 @@ spread covers the outcomes the way the DST residual pool already does.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from datetime import date
 
 import numpy as np
@@ -32,32 +33,10 @@ import pandas as pd
 from sqlalchemy import text
 
 from ivan.database.session import init_db, get_session, read_sql, add_missing_columns
+from ivan.sports.nfl.actuals import dk_kicker_points, dk_offense_points, week_lookup
 from ivan.sports.nfl.refactor.spread import load_sd_calibration, write_sd_calibration, MIN_ROWS
 
 OFFENSE = {"QB", "RB", "WR", "TE"}
-
-
-def dk_offense_points(st: pd.DataFrame) -> pd.Series:
-    n = lambda c: pd.to_numeric(st[c], errors="coerce").fillna(0.0)
-    pass_yds, rush_yds, rec_yds = n("passing_yards"), n("rushing_yards"), n("receiving_yards")
-    return (0.04 * pass_yds + 4 * n("passing_tds") - 1 * n("passing_interceptions")
-            + 0.1 * rush_yds + 6 * n("rushing_tds") + n("receptions") + 0.1 * rec_yds + 6 * n("receiving_tds")
-            - (n("rushing_fumbles_lost") + n("receiving_fumbles_lost") + n("sack_fumbles_lost"))
-            + 2 * (n("passing_2pt_conversions") + n("rushing_2pt_conversions") + n("receiving_2pt_conversions"))
-            + 6 * (n("special_teams_tds") + n("fumble_recovery_tds"))
-            + 3 * (pass_yds >= 300) + 3 * (rush_yds >= 100) + 3 * (rec_yds >= 100))
-
-
-def dk_kicker_points(st: pd.DataFrame) -> pd.Series:
-    n = lambda c: pd.to_numeric(st[c], errors="coerce").fillna(0.0)
-    return (3 * (n("fg_made_0_19") + n("fg_made_20_29") + n("fg_made_30_39")) + 4 * n("fg_made_40_49")
-            + 5 * (n("fg_made_50_59") + n("fg_made_60_")) + n("pat_made"))
-
-
-def week_lookup(session) -> pd.DataFrame:
-    """(season, week, first_gameday, last_gameday) per schedule week."""
-    s = read_sql(session, text("SELECT season, week, min(gameday) first, max(gameday) last FROM nfl_schedule GROUP BY 1,2"))
-    return s.sort_values(["season", "week"]).reset_index(drop=True)
 
 
 def assign_week(snapshot_dates: pd.Series, weeks: pd.DataFrame) -> pd.DataFrame:
@@ -106,6 +85,7 @@ def main():
     ap.add_argument("--until", default=str(date.today()))
     ap.add_argument("--positions", default="QB,RB,WR,TE,K,DST")
     ap.add_argument("--db-url", default=None)
+    ap.add_argument("--model-dir", default=None, help="where to read/write sd_calibration.json (default the live model directory)")
     ap.add_argument("--write-calibration", action="store_true",
                     help="write each listed position's z sd (on the model sd) to sd_calibration.json")
     args = ap.parse_args()
@@ -154,11 +134,11 @@ def main():
             z_model, _ = z_scores(m)
             factors[pos] = float(z_model.std())
             counts[pos] = int(len(m))
-        cal = write_sd_calibration(factors, counts, (args.since, args.until))
+        cal = write_sd_calibration(factors, counts, (args.since, args.until), **({"model_dir": Path(args.model_dir)} if args.model_dir else {}))
         print("\ncalibration written: " + " ".join(f"{p} x{f:.2f} (n={counts[p]})" for p, f in sorted(factors.items()))
               + f"\n  file: data/nfl/models/sd_calibration.json; all factors now {cal['factors']}")
     else:
-        cal = load_sd_calibration()
+        cal = load_sd_calibration(Path(args.model_dir) if args.model_dir else None)
         if cal.get("factors"):
             print(f"\npredictive sd factors in effect for the next ingest: {cal['factors']} (written {cal.get('fitted_on')})")
 

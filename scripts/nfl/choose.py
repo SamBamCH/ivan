@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import json
+import numpy as np
 import pandas as pd
 from collections import Counter
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import List, Dict, Tuple
 from ivan.core.config import load_config
 from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.database.session import init_db, get_session
-from ivan.sports.nfl.choose import choose_lineup_ids
+from ivan.sports.nfl.choose import choose_lineup_ids, sim_roi_traces
 
 from ivan.sports.nfl.models import Lineup, NFLPlayer
 
@@ -50,6 +51,14 @@ SLOT_CODE = {
 CODE_TO_SLOT = {v: k for k, v in SLOT_CODE.items()}
 
 BASE_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"]
+
+
+def parse_money(x) -> float:
+    """'$0.50' -> 0.5"""
+    try:
+        return float(str(x).replace("$", "").replace(",", "").strip() or 0)
+    except ValueError:
+        return 0.0
 
 
 # ------------------------------- HELPERS -------------------------------
@@ -306,6 +315,8 @@ def main():
     lineup_rows: List[Dict[str, object]] = []
     # What the chooser saw per contest (candidates, picks, greedy trace): for the web UI's Choose page
     choose_viz: Dict[str, dict] = {}
+    # Per-entry simulated ROI traces of the picks, kept for the tax backtest (the sim tables are cleared weekly)
+    sim_rows: List[tuple] = []
 
     def _detail_rows(base_data, fmt: str, lid: int, slots: List[str], assigned: List[NFLPlayer]):
         sim = stats.get("by_lineup", {}).get(lid, {})
@@ -356,6 +367,8 @@ def main():
         print(f"  chosen {stats['chosen']}: mean ROI {stats['chosen_roi']:+.1%}, cash {stats['chosen_cash']:.1%}"
               f"  (top-{stats['chosen']} by quality alone: ROI {stats['top_quality_roi']:+.1%}, cash {stats['top_quality_cash']:.1%})")
 
+        traces = sim_roi_traces(session, cname, chosen_ids)
+
         # Load lineups and players
         lineups = session.query(Lineup).filter(Lineup.id.in_(chosen_ids)).all()
         id_to_lineup = {L.id: L for L in lineups}
@@ -374,6 +387,7 @@ def main():
             pids: List[int] = lineup.player_ids_list
             objs: List[NFLPlayer] = [players_map[pid] for pid in pids]
             base_data = orig_rows.iloc[i % num_entries][BASE_COLS].to_list()
+            sim_rows.append((int(base_data[0]), int(cid), int(lid), parse_money(base_data[3]), traces.get(lid)))
 
             if len(pids) == 6:
                 assigned = assign_player_order_showdown(objs, POSITION_ORDER_SD)
@@ -501,6 +515,18 @@ def main():
         out_viz = f"{root}.choose.{ts}.json"
         Path(out_viz).write_text(json.dumps(choose_viz))
         print(f"✅ Wrote chooser diagnostics → {out_viz}")
+    if sim_rows:
+        n_sims = max((len(t) for *_, t in sim_rows if t is not None), default=0)
+        roi = np.full((len(sim_rows), n_sims), np.nan, dtype=np.float32)
+        for k, (*_, t) in enumerate(sim_rows):
+            if t is not None:
+                roi[k, :len(t)] = t[:n_sims]
+        out_sim = f"{root}.simroi.{ts}.npz"
+        np.savez_compressed(out_sim, entry_id=np.array([r[0] for r in sim_rows], dtype=np.int64),
+                            contest_id=np.array([r[1] for r in sim_rows], dtype=np.int64),
+                            lineup_id=np.array([r[2] for r in sim_rows], dtype=np.int64),
+                            entry_fee=np.array([r[3] for r in sim_rows], dtype=np.float64), roi=roi)
+        print(f"✅ Wrote simulated ROI traces ({len(sim_rows)} entries x {n_sims} sims) → {out_sim}")
 
 
 if __name__ == "__main__":

@@ -33,7 +33,8 @@ from scipy import sparse as sp
 from sqlalchemy.orm import Session
 
 from ivan.core.utils import calculate_gini, coerce_player_ids as _coerce_player_ids
-from ivan.sports.nfl.paths import MODELS_DIR
+from ivan.core.seed import seed_for
+from ivan.sports.nfl.paths import MODELS_DIR, models_dir
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
@@ -129,7 +130,7 @@ FLEX_SLOT = 512
 # MODEL LOADING
 # ==============================================================================
 
-def load_showdown_models(model_dir: str | Path = MODELS_DIR):
+def load_showdown_models(model_dir: str | Path | None = None):
     """Load trained showdown duplication models from disk.
     
     Loads the 2-stage model built by build_dupe_model.py:
@@ -143,7 +144,7 @@ def load_showdown_models(model_dir: str | Path = MODELS_DIR):
             'mode': 'two_stage',
         }
     """
-    model_dir = Path(model_dir)
+    model_dir = Path(models_dir() if model_dir is None else model_dir)
     
     # Load stage 1: contest quantile models
     contest_model_path = model_dir / 'contest_dupe_quantiles.pkl'
@@ -472,6 +473,9 @@ def build_lineup_matrix(session: Session):
     rows = session.query(Lineup.id, Lineup.player_ids_list).all()
     if not rows:
         raise RuntimeError("No lineups found in database.")
+    # generate's workers commit in parallel, so ids interleave differently run to run; the seeded sampler below
+    # indexes this list, so order it by content to keep a seed reproducible
+    rows = sorted(rows, key=lambda r: (tuple(sorted(_coerce_player_ids(r[1]))), int(r[0])))
     
     lineup_ids, parsed, all_pids = [], [], set()
     for lid, player_ids_json in rows:
@@ -541,7 +545,7 @@ def build_player_samples(session: Session, pid_to_col: Dict[int, int]) -> np.nda
     Build correlated player samples matrix [n_sims x n_players].
     Uses the correlated_samples module for realistic covariance.
     """
-    raw = generate_correlated_samples_gaussian(session)
+    raw = generate_correlated_samples_gaussian(session, seed=seed_for("field/samples"))
     sizes = [len(x) for x in raw.values() if isinstance(x, np.ndarray)]
     if not sizes:
         raise RuntimeError("No player samples generated.")
@@ -569,7 +573,7 @@ def build_player_samples_independent(
     
     Used for popularity-based features where we want player means without correlation effects.
     """
-    raw = generate_correlated_samples_gaussian(session)
+    raw = generate_correlated_samples_gaussian(session, seed=seed_for("field/independent"))
     sizes = [len(v) for v in raw.values() if isinstance(v, np.ndarray) and v.size]
     if not sizes:
         raise RuntimeError("No player samples available.")
@@ -1026,6 +1030,67 @@ def apply_diversity_penalty_to_weights(
 # UNIFIED DIVERSITY-GATED DUPLICATION SAMPLER
 # ==============================================================================
 
+OWNERSHIP_CALIBRATION_DEFAULTS = {"enabled": True, "iterations": 30, "damping": 0.7, "max_ratio": 4.0, "min_target_pct": 0.05}
+
+
+def rake_weights_to_ownership(weights: np.ndarray, L, targets_pct: np.ndarray, *, iterations: int = 30, damping: float = 0.7,
+                              max_ratio: float = 4.0, min_target_pct: float = 0.05) -> Tuple[np.ndarray, dict]:
+    """
+    Adjust lineup sampling weights so the field's player exposures match the
+    projected ownership (iterative proportional fitting on the lineup x player
+    matrix). The duplication model still decides how concentrated the field is
+    on its top lineups; this decides who the field is concentrated on.
+
+    weights      [n_lineups] sampling weights (any scale)
+    L            [n_lineups, n_players] 0/1 lineup matrix (one column per roster slot id)
+    targets_pct  [n_players] projected ownership in % of entries; <= min_target_pct is
+                 treated as "as little as possible" (ratio floored at 1/max_ratio)
+    Each pass multiplies a lineup's weight by the geometric product of its players'
+    (target / current) ratios, damped and capped, so no single pass can swing a
+    lineup more than max_ratio ** 6. Returns (weights, info) with the exposure MAE
+    before and after.
+    """
+    w = np.asarray(weights, dtype=np.float64).copy()
+    w = np.clip(w, 1e-12, None); w /= w.sum()
+    t = np.asarray(targets_pct, dtype=np.float64)
+    present = np.asarray((L != 0).sum(axis=0)).ravel() > 0        # a target no candidate carries cannot be reached
+    reachable = present & np.isfinite(t)
+    def exposure(w):
+        return 100.0 * np.asarray(L.T @ w).ravel()
+    before = exposure(w)
+    def mae(e):
+        return float(np.abs(e[reachable] - t[reachable]).mean()) if reachable.any() else float("nan")
+    mae0 = mae(before)
+    # keep the best iterate: with a sparse candidate pool (classic slates, few lineups) the simultaneous
+    # update can overshoot, and the result must never be worse than the weights it started from
+    best_w, best_mae, best_iter = w.copy(), mae0, 0
+    tt = np.where(t > min_target_pct, t, 0.0)
+    for k in range(1, max(0, int(iterations)) + 1):
+        cur = exposure(w)
+        ratio = np.ones_like(cur)
+        ok = reachable & (cur > 1e-9)
+        ratio[ok] = np.clip(np.where(tt[ok] > 0, tt[ok] / cur[ok], 1.0 / max_ratio), 1.0 / max_ratio, max_ratio)
+        logw = np.log(w) + damping * np.asarray(L @ np.log(ratio)).ravel()
+        w = np.exp(logw - logw.max()); w = np.clip(w, 1e-300, None); w /= w.sum()
+        m = mae(exposure(w))
+        if m < best_mae - 1e-9:
+            best_w, best_mae, best_iter = w.copy(), m, k
+    w = best_w
+    after = exposure(w)
+    mae1 = mae(after)
+    top = np.argsort(-t)[:5]
+    per_lineup = float(np.asarray((L != 0).sum(axis=1)).ravel().mean()) if L.shape[0] else 0.0
+    info = {"iterations": int(iterations), "best_iteration": int(best_iter), "damping": damping, "max_ratio": max_ratio, "players": int(reachable.sum()),
+            # targets are consistent when they sum to 100 x players per lineup; a gap here means they cannot all be met
+            "target_sum_pct": float(np.nansum(t[reachable])), "players_per_lineup": per_lineup,
+            "unreachable_targets_pct": float(t[~present & np.isfinite(t)].sum()) if (~present).any() else 0.0,
+            "exposure_mae_before": mae0, "exposure_mae_after": mae1,
+            "chalk_bias_before": float((before[top] - t[top]).mean()), "chalk_bias_after": float((after[top] - t[top]).mean()),
+            "max_weight_before": float(np.asarray(weights, dtype=float).max() / np.asarray(weights, dtype=float).sum()),
+            "max_weight_after": float(w.max())}
+    return w, info
+
+
 def sample_showdown_field_unified(
     session: Session,
     field_size: int,
@@ -1037,6 +1102,8 @@ def sample_showdown_field_unified(
     predicted_dupes: np.ndarray,  # NEW: pass predicted dupes directly
     player_ownership: np.ndarray,
     total_entries: int,
+    ownership_calibration: Optional[dict] = None,
+    dupe_clip_floor: float = 1.0,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Unified sampler combining diversity and duplication in one gate.
@@ -1070,7 +1137,7 @@ def sample_showdown_field_unified(
         lineup_ids=lineup_ids,
         pid_to_col=pid_to_col,
         n_sims=32,  # Fast: only 32 sims for diversity
-        seed=42,
+        seed=seed_for("field/diversity", 42),
     )
 
     if dist_mat.size == 0 or 'error' in diversity_meta:
@@ -1081,7 +1148,7 @@ def sample_showdown_field_unified(
     # ========================================================================
     # Step 2: Use predicted duplication from caller
     # ========================================================================
-    predicted_dupes_clipped = np.clip(predicted_dupes, 1.0, None)
+    predicted_dupes_clipped = np.clip(predicted_dupes, dupe_clip_floor, None)
 
     # ========================================================================
     # Step 3: Compute diversity bonuses
@@ -1111,9 +1178,27 @@ def sample_showdown_field_unified(
     combined_weights = combined_weights / combined_weights.sum()
 
     # ========================================================================
+    # Step 4b: Rake the weights so the field's exposures match projected ownership
+    # ========================================================================
+    # Without this the field over-rosters the chalk: optimizer-built candidates
+    # lean on the top projections and the dupe model rewards the same lineups,
+    # so the sampled field's top-5 exposure ran ~24 points above actual
+    # ownership on the Nov 2025 slates (validation 2026-10-11). Projected
+    # ownership itself was within ~3 points; the field should be built on it.
+    cal = {**OWNERSHIP_CALIBRATION_DEFAULTS, **(ownership_calibration or {})}
+    rake_info: dict = {"enabled": bool(cal.get("enabled", True))}
+    if rake_info["enabled"] and player_ownership is not None and np.nanmax(player_ownership) > 0:
+        combined_weights, rake_info = rake_weights_to_ownership(
+            combined_weights, L, player_ownership, iterations=int(cal["iterations"]), damping=float(cal["damping"]),
+            max_ratio=float(cal["max_ratio"]), min_target_pct=float(cal["min_target_pct"]))
+        rake_info["enabled"] = True
+        print(f"  ownership raking: exposure MAE {rake_info['exposure_mae_before']:.1f} -> {rake_info['exposure_mae_after']:.1f} pts, "
+              f"chalk bias {rake_info['chalk_bias_before']:+.1f} -> {rake_info['chalk_bias_after']:+.1f}")
+
+    # ========================================================================
     # Step 5: Sample field
     # ========================================================================
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed_for("field/sample", 42))
     sampled_indices = rng.choice(n_lineups, size=field_size, replace=True, p=combined_weights)
 
     # Count duplicates
@@ -1154,6 +1239,10 @@ def sample_showdown_field_unified(
             'mean': float(combined_weights.mean()),
         },
         'diversity_meta': diversity_meta,
+        'ownership_raking': rake_info,
+        # arrays for the run artifact (ivan.sports.nfl.run_artifacts); the simulator pops them before the report is stored
+        '_arrays': {'lineup_id': np.asarray(lineup_ids, dtype=np.int64), 'predicted_dupes': predicted_dupes_clipped,
+                    'combined_weights': combined_weights},
     }
 
     return counts_by_lineup, meta
@@ -1168,7 +1257,7 @@ def sample_showdown_field_learned(
     field_size: int,
     config: dict,
     contest_id: Optional[int] = None,
-    model_dir: str | Path = MODELS_DIR,
+    model_dir: str | Path | None = None,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Sample showdown field using trained duplication models with diversity control.
@@ -1186,6 +1275,7 @@ def sample_showdown_field_learned(
     """
     # Try to load trained models
     try:
+        model_dir = Path(models_dir() if model_dir is None else model_dir)
         models = load_showdown_models(model_dir)
         model_mode = models.get('mode', 'unknown')
         use_models = True
@@ -1245,12 +1335,26 @@ def sample_showdown_field_learned(
         'mean': float(player_ownership.mean()),
     }
     dupe_info: dict = {}
+    dupe_mode = str(((config or {}).get("field") or {}).get("dupe_model", "product")).lower()
+    dupe_clip_floor = 1.0
 
     # ================================================================
     # PREDICT DUPLICATION BASED ON MODEL MODE
     # ================================================================
 
-    if use_models and model_mode == 'two_stage':
+    if dupe_mode == "product":
+        # copies = N x k x prod(own)^beta, fitted on real fields (ivan.sports.nfl.dupe_model); the same function gives the
+        # sampling weights, so the sampled field's concentration and every candidate's predicted copies agree
+        from ivan.sports.nfl import dupe_model as DMv2
+        dm = DMv2.load()
+        slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
+        predicted_dupes = dm.copies(total_entries, True, slo)
+        dupe_clip_floor = 1e-6
+        dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
+                     "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries)}
+        print(f"  dupes: {dm.describe().split(';')[0]}; candidates' expected copies at {int(total_entries)} entries: "
+              f"median {np.median(predicted_dupes):.2f}, p90 {np.percentile(predicted_dupes, 90):.1f}, max {predicted_dupes.max():.1f}")
+    elif use_models and model_mode == 'two_stage':
         # Use new prediction function with updated models
         predicted_dupes, dupe_info = predict_lineups_with_twostage_new(
             session=session,
@@ -1297,8 +1401,10 @@ def sample_showdown_field_learned(
         pid_to_col=pid_to_col,
         cpt_col_by_row=cpt_col_by_row,
         predicted_dupes=predicted_dupes,  # NEW: pass predicted dupes directly
+        dupe_clip_floor=dupe_clip_floor,
         player_ownership=player_ownership,
         total_entries=total_entries,
+        ownership_calibration=(config or {}).get("field", {}).get("ownership_calibration"),
     )
     
     # Add metadata
@@ -1326,7 +1432,7 @@ def sample_classic_field_learned(
     entry_fee: Optional[float] = None,
     num_games: Optional[int] = None,
     ownership_gini: Optional[float] = None,
-    model_dir: str | Path = MODELS_DIR,
+    model_dir: str | Path | None = None,
     allow_duplicates: bool = True,
 ) -> Tuple[Dict[int, int], Dict]:
     """
@@ -1362,7 +1468,7 @@ def sample_classic_field_learned(
         return float((2 * np.sum(index * sorted_values)) / (n * np.sum(sorted_values)) - (n + 1) / n)
 
     # Load trained models
-    model_dir = Path(model_dir)
+    model_dir = Path(models_dir() if model_dir is None else model_dir)
     try:
         with open(model_dir / "classic_proj_model.pkl", "rb") as f:
             proj_model = pickle.load(f)
@@ -1467,13 +1573,37 @@ def sample_classic_field_learned(
     weights = np.zeros(n_lineups, dtype=np.float64)
     for i in range(n_lineups):
         weights[i] = proj_probs[proj_bins[i]] * own_probs[own_bins[i]]
+    classic_dupe_mode = str(((config or {}).get("field") or {}).get("dupe_model", "product")).lower()
+    predicted_copies_classic = None
+    if classic_dupe_mode == "product" and player_ownership is not None and np.nanmax(player_ownership) > 0:
+        # the fitted product rule decides how much the field concentrates on the chalk; the bin weights keep the shape of
+        # the projection / ownership distributions and are multiplied in
+        from ivan.sports.nfl import dupe_model as DMv2
+        dm = DMv2.load()
+        slo = np.asarray(L @ np.log(np.maximum(np.nan_to_num(player_ownership, nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0), dtype=np.float64)
+        n_real = float(total_entries or field_size)
+        predicted_copies_classic = dm.copies(n_real, False, slo)
+        weights = weights * dm.weights(False, slo)
+        print(f"  dupes (classic): {dm.params['classic']}; candidates' expected copies at {int(n_real)} entries: "
+              f"median {np.median(predicted_copies_classic):.2f}, max {predicted_copies_classic.max():.1f}")
 
     # Ensure nonzero weights
     weights = np.clip(weights, 1e-12, None)
     weights = weights / weights.sum()
 
+    # Rake the weights so the field's player exposures match projected ownership (same step as the showdown sampler)
+    cal = {**OWNERSHIP_CALIBRATION_DEFAULTS, **((config or {}).get("field", {}).get("ownership_calibration") or {})}
+    rake_info: dict = {"enabled": bool(cal.get("enabled", True))}
+    if rake_info["enabled"] and player_ownership is not None and np.nanmax(player_ownership) > 0:
+        weights, rake_info = rake_weights_to_ownership(
+            weights, L, player_ownership, iterations=int(cal["iterations"]), damping=float(cal["damping"]),
+            max_ratio=float(cal["max_ratio"]), min_target_pct=float(cal["min_target_pct"]))
+        rake_info["enabled"] = True
+        print(f"  ownership raking: exposure MAE {rake_info['exposure_mae_before']:.1f} -> {rake_info['exposure_mae_after']:.1f} pts, "
+              f"chalk bias {rake_info['chalk_bias_before']:+.1f} -> {rake_info['chalk_bias_after']:+.1f}")
+
     # Sampling (with or without replacement)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed_for("field/sample", 42))
     if not allow_duplicates:
         if field_size > n_lineups:
             print(f"  ⚠️  Requested field_size {field_size} exceeds unique candidate lineups {n_lineups}; falling back to sampling with replacement.")
@@ -1518,6 +1648,10 @@ def sample_classic_field_learned(
         'predicted_distributions': {'projection_bins': [float(x) for x in proj_probs],
                                     'ownership_bins': [float(x) for x in own_probs]},
         'weights': {'min': float(weights.min()), 'mean': float(weights.mean()), 'max': float(weights.max())},
+        'ownership_raking': rake_info,
+        # arrays for the run artifact (ivan.sports.nfl.run_artifacts); the simulator pops them before the report is stored
+        '_arrays': {'lineup_id': np.asarray(lineup_ids, dtype=np.int64), 'combined_weights': weights,
+                    **({'predicted_dupes': predicted_copies_classic} if predicted_copies_classic is not None else {})},
     }
 
     return counts_by_lineup, meta

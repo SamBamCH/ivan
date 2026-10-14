@@ -7,6 +7,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
+from ivan.sports.nfl.actuals import history_cutoff
 
 from ivan.sports.nfl.models import NFLStat
 from .team import TEAM10_SLOTS, build_team_correlation
@@ -266,11 +267,11 @@ def generate_correlated_samples(
 
         # Pull or build within-team Spearman, then convert to Pearson
         if a not in team_corr_cache:
-            Rw_a_S, _ = build_team_correlation(session, a)
+            Rw_a_S, _ = build_team_correlation(session, a, before=history_cutoff(session))
             Rw_a = s2p(Rw_a_S); np.fill_diagonal(Rw_a, 1.0)
             team_corr_cache[a] = Rw_a
         if b not in team_corr_cache:
-            Rw_b_S, _ = build_team_correlation(session, b)
+            Rw_b_S, _ = build_team_correlation(session, b, before=history_cutoff(session))
             Rw_b = s2p(Rw_b_S); np.fill_diagonal(Rw_b, 1.0)
             team_corr_cache[b] = Rw_b
 

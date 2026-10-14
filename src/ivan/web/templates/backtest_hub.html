@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+{% block title %}Backtest · Ivan{% endblock %}
+{% block content %}
+{% macro n(x, p=2) %}{{ x|num(p) if (x is defined and x is not none) else '' }}{% endmacro %}
+{% macro p1(x) %}{{ x|pct1 if (x is defined and x is not none) else '' }}{% endmacro %}
+<style>
+  .steps { display:flex; gap:0; margin:0 0 14px 0; border-bottom:1px solid #e3e3df }
+  .steps span, .steps a { padding:8px 14px; text-decoration:none; color:#888; border-bottom:2px solid transparent } .steps .on { color:var(--ink); border-bottom-color:var(--accent); font-weight:600 }
+  .steps a { color:#1b5e20 }
+  .fields { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end } .fields label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:#555 }
+  .status { padding:1px 6px; border-radius:3px; font-size:12px } .status.ready { background:#e3f3e6; color:#1b5e20 } .status.unsettled { background:#fff4d6; color:#7a5200 } .status.no { background:#fbe3e1; color:#8a1c12 }
+  table.contests td, table.contests th { font-size:12px } .slatehead td { background:#f6f6f3; font-weight:600 }
+  .kv { display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:13px } .kv b { font-weight:500; color:#444 }
+  .item { padding:8px 10px; border:1px solid #e3e3df; border-radius:4px; margin:6px 0; display:flex; gap:10px; align-items:flex-start } .item .d { font-size:12px; color:#666 }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center } .actions form { display:inline-flex; gap:6px; align-items:center }
+  .runs select { font-size:14px; padding:4px }
+</style>
+<h1>Backtest <span class="muted small">re-run slates with what was known at lock, then compare every assumption to what happened</span></h1>
+
+{# ================================================================ run menu / new run #}
+{% if not run %}
+<div class="card">
+  <div class="fields">
+    {% if runs %}
+    <form method="get" action="/backtest/open" class="runs">
+      <label>Open a run
+        <select name="name">{% for r in runs %}<option value="{{ r.name }}">{{ r.name }} · {{ r.since }} .. {{ r.until }} · {{ r.status }}{% if r.confidence and r.confidence.score is not none %} · confidence {{ r.confidence.score|num(0) }} {{ r.confidence.grade }}{% endif %}{% if r.progress and r.progress.running %} (running){% endif %}</option>{% endfor %}</select></label>
+      <label style="justify-content:flex-end"><button class="small">Open</button></label>
+    </form>
+    <span class="muted" style="padding:0 10px 8px">or</span>
+    {% endif %}
+    <form method="post" action="/backtest/new">
+      <div class="fields">
+        <label>New run <input type="text" name="name" placeholder="name (optional)" style="width:160px"></label>
+        <label>Sport <select name="sport"><option value="nfl">NFL</option></select></label>
+        <label>Since <input type="text" name="since" value="{{ default_since }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
+        <label>Until <input type="text" name="until" value="{{ default_until }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
+        <label style="justify-content:flex-end"><button class="small">Start</button></label>
+      </div>
+    </form>
+  </div>
+  <p class="muted small" style="margin:8px 0 0">A run is one backtest: a window of slates, the contests you choose on them, the parameters, and the results. Starting one checks what data the window still needs before anything is fetched.</p>
+</div>
+{% endif %}
+
+{# ================================================================ a run #}
+{% if run %}
+<div class="steps">
+  <a href="/backtest">runs</a>
+  <span class="{{ 'on' if step == 'data' }}">{{ run.name }} · 1 data</span>
+  {% if run.status in ('contests','params','running','done') %}<a href="/backtest/{{ run.name }}?step=contests" class="{{ 'on' if step == 'contests' }}">2 contests</a>{% else %}<span class="{{ 'on' if step == 'contests' }}">2 contests</span>{% endif %}
+  {% if run.status in ('params','running','done') %}<a href="/backtest/{{ run.name }}?step=params" class="{{ 'on' if step == 'params' }}">3 parameters</a>{% else %}<span class="{{ 'on' if step == 'params' }}">3 parameters</span>{% endif %}
+  {% if run.status in ('running','done') %}<a href="/backtest/{{ run.name }}?step=results" class="{{ 'on' if step == 'results' }}">4 results</a>{% else %}<span class="{{ 'on' if step == 'results' }}">4 results</span>{% endif %}
+</div>
+
+{# ---------------------------------------------------------------- 1 data #}
+{% if step == 'data' %}
+<div class="card">
+  <h2>{{ run.since }} .. {{ run.until }} <span class="muted small">{{ data.have.slates }} slates in the window, {{ data.have.captured }} with a pre-lock capture · {{ data.have.scraped }} of {{ data.have.pool }} pool contests scraped · box scores for {{ data.have.weeks_ok|join(', ') or 'no week yet' }}</span></h2>
+  {% if data.ready %}
+  <p class="pos">Everything the re-run needs is in the database.</p>
+  {% else %}
+  <p>The window is missing data. Tick what to fetch; it is written to the database and kept, so these slates stay backtestable.</p>
+  <form method="post" action="/backtest/{{ run.name }}/fetch">
+    {% for it in data.needs %}
+    <div class="item"><input type="checkbox" name="key" value="{{ it.key }}" checked id="k_{{ it.key }}">
+      <div><label for="k_{{ it.key }}"><b>{{ it.label }}</b></label><div class="d">{{ it.detail }}</div>
+        {% if it.slates %}<div class="d">{{ it.slates|join(' · ') }}</div>{% endif %}
+        {% if it.key == 'scrape' %}<div class="d" style="margin-top:4px">DK username <input type="text" name="username" placeholder="IVAN_DK_USERNAME" style="width:140px"></div>{% endif %}
+        {% if it.key == 'backfill' %}<div class="d" style="margin-top:4px"><label><input type="checkbox" name="buy_props" value="1" checked> buy the props (about 230 credits per game)</label></div>{% endif %}
+      </div></div>
+    {% endfor %}
+    <div class="actions" style="margin-top:8px"><button class="small">Fetch the ticked items</button>
+      <span class="muted small">Jobs run one at a time; this page re-checks when you reload it.</span></div>
+  </form>
+  {% endif %}
+  {% if data.have.no_ours %}<p class="muted small">{{ data.have.no_ours }} captured slate(s) have no record of your own entries' finishes (the scrape with your username adds them; without it the actual ROI is reconstructed by placing the re-run's lineups in the real field).</p>{% endif %}
+  {% if jobs %}
+  <table class="compact" style="margin-top:8px"><tr><th>Job</th><th>Status</th><th>Started</th></tr>
+    {% for j in jobs %}<tr><td>{{ j.name }}</td><td>{{ j.status }}</td><td class="muted small">{{ j.started }}</td></tr>{% endfor %}</table>
+  {% endif %}
+  <form method="post" action="/backtest/{{ run.name }}/settle" style="margin-top:10px" class="actions">
+    <button class="small">Settle the window now</button> <input type="text" name="username" placeholder="DK username" style="width:130px">
+    <label class="small muted"><input type="checkbox" name="scrape" value="1" checked> scrape standings (needs the Chrome profile and a display)</label>
+    <span class="muted small">= what the overnight job does: standings for the played and largest public contests, box scores, derived files, a status row per slate.</span></form>
+  <form method="post" action="/backtest/{{ run.name }}/continue" style="margin-top:12px"><input type="hidden" name="to" value="contests">
+    <button class="small">{{ 'Next: choose contests →' if data.ready else 'Continue without the missing data →' }}</button></form>
+  <details style="margin-top:10px"><summary class="small muted">Slates in the window ({{ data.slates|length }})</summary>
+    <table class="compact">
+      <tr><th>Lock</th><th>Slate</th><th>Mode</th><th>Capture</th><th class="num">Pool</th><th class="num">Scraped</th><th class="num">Ours</th><th>Box scores</th><th>Status</th></tr>
+      {% for s in data.slates %}<tr><td>{{ s.lock.strftime('%Y-%m-%d %H:%M') }}</td><td>{{ s.slate_key }}</td><td>{{ s.mode }}</td>
+        <td class="small">{% if s.captures %}{{ s.capture_source }}, {{ s.capture_minutes_before_lock|round|int }} min before lock{% else %}<span class="neg">none</span>{% endif %}</td>
+        <td class="num">{{ s.picks|length }}</td><td class="num">{{ s.scraped_picks }}</td><td class="num">{{ s.our_entries }}</td>
+        <td class="{{ '' if s.box_scores else 'neg' }}">{{ 'yes' if s.box_scores else 'no' }}</td>
+        <td><span class="status {{ 'ready' if s.status.startswith('ready') else ('unsettled' if 'unsettled' in s.status else 'no') }}">{{ s.status }}</span></td></tr>{% endfor %}
+    </table></details>
+</div>
+{% endif %}
+
+{# ---------------------------------------------------------------- 2 contests #}
+{% if step == 'contests' %}
+<form method="post" action="/backtest/{{ run.name }}/contests">
+  <div class="card">
+    <h2>Contests <span class="muted small">tick what to enter; entries default to the contest's limit (the pool's defaults are pre-ticked)</span></h2>
+    <table class="compact contests">
+      <tr><th></th><th>Contest</th><th class="num">Fee</th><th class="num">Size</th><th class="num">Entries (max)</th><th>Payouts</th><th>Scraped</th><th class="num">Ours</th></tr>
+      {% for s in slates %}
+      <tr class="slatehead"><td colspan="8">{{ s.lock }} · {{ s.mode }} · slate {{ s.slate_key }} <span class="muted small">largest {{ s.contests|length }} of {{ s.n_total }} contests · {{ s.status }}</span></td></tr>
+      {% for c in s.contests %}
+      <tr><td><input type="checkbox" name="pick" value="{{ c.contest_id }}" {% if c.picked %}checked{% endif %}></td>
+        <td>{{ c.name }} <span class="muted small">{{ c.contest_id }}</span></td><td class="num">{{ c.fee }}</td><td class="num">{{ c.size }}</td>
+        <td class="num"><input type="number" name="entries_{{ c.contest_id }}" value="{{ c.entries }}" min="1" max="{{ c.max_entries }}" style="width:64px" title="max {{ c.max_entries }}"></td>
+        <td>{% if c.payouts %}yes{% else %}<span class="neg">no</span>{% endif %}</td><td>{% if c.scraped %}yes{% else %}<span class="neg">no</span>{% endif %}</td><td class="num">{{ c.ours }}</td></tr>
+      {% endfor %}
+      {% endfor %}
+    </table>
+    {% if not slates %}<p class="neg">No replayable slate in the window (none has a pre-lock capture with contests).</p>{% endif %}
+    <p class="muted small" style="margin:6px 0 0">Unscraped contests run but do not settle (no real field to place the entries in); contests without payouts cannot be simulated.</p>
+    <div class="actions" style="margin-top:10px"><button class="small" {% if not slates %}disabled{% endif %}>Next: parameters →</button></div>
+  </div>
+</form>
+{% endif %}
+
+{# ---------------------------------------------------------------- 3 parameters #}
+{% if step == 'params' %}
+{% set P = run.params or {} %}
+<form method="post" action="/backtest/{{ run.name }}/run">
+  <div class="card">
+    <h2>Parameters <span class="muted small">{{ run.picks|length }} contests, {{ run.picks.values()|sum }} entries</span></h2>
+    <div class="fields">
+      <label>Repeats per contest <input type="number" name="repeats" value="{{ P.repeats or 1 }}" min="1" max="500" style="width:80px"></label>
+      <label>Workers <input type="number" name="workers" value="{{ P.workers or 3 }}" min="1" max="8" style="width:60px"></label>
+      <label>Lineups per slate <input type="number" name="lineups" value="{{ P.lineups or 3000 }}" min="100" step="100" style="width:90px"></label>
+      <label>Simulations <input type="number" name="sims" value="{{ P.sims or 500 }}" min="50" step="50" style="width:80px"></label>
+      <label>Field cap <input type="number" name="field_cap" value="{{ P.field_cap or 5000 }}" min="500" step="500" style="width:80px"></label>
+      <label>Seed <input type="number" name="seed" value="{{ P.seed or 0 }}" style="width:70px"></label>
+    </div>
+    <div class="kv" style="margin-top:10px">
+      <b>Models</b><span>{{ ('as of ' ~ models.cutoff) if models.cutoff else 'live' }}{% if models.fallback %} <span class="neg">no as-of version precedes {{ run.since }}; the live models have seen these slates (build one in step 1)</span>{% endif %}</span>
+      <b>Repeats</b><span>each repeat re-generates the pool, re-simulates and re-chooses with seed + k; the projection is fitted once per slate. 100 repeats of a showdown slate take about an hour per worker.</span>
+    </div>
+    <div class="actions" style="margin-top:12px"><button class="small">Run the backtest</button></div>
+  </div>
+</form>
+{% endif %}
+
+{# ---------------------------------------------------------------- 4 results #}
+{% if step == 'results' %}
+{% set R = view.report %}{% set V = view.validation %}
+{% if progress %}
+{% if progress.active %}<meta http-equiv="refresh" content="15">{% endif %}
+<div class="card">
+  <h2>Progress <span class="muted small">{{ progress.phase }}{% if progress.active %} · this page refreshes every 15 s{% endif %}</span></h2>
+  <div style="background:#eee; border-radius:4px; height:14px; width:100%; max-width:640px; overflow:hidden"><div style="background:var(--accent); height:100%; width:{{ progress.percent }}%"></div></div>
+  <p class="small muted" style="margin:4px 0 8px">{{ progress.done }} of {{ progress.wanted }} slate-repeats done · {{ progress.n_ok }} slates ok{% if progress.n_err %} · <span class="neg">{{ progress.n_err }} failed</span>{% endif %}{% if progress.stale %} · <span class="neg">no output for 15 minutes: the replay may be stuck (see Jobs)</span>{% endif %}</p>
+  {% if progress.no_slates %}<p class="neg">The replay finished without finding a slate in the window. Its working database may predate the captures; <b>Run again</b> rebuilds it from the live database.</p>{% endif %}
+  {% if progress.slates %}
+  <table class="compact">
+    <tr><th>Lock</th><th>Slate</th><th>Status</th><th>Stages</th><th class="num">Repeats</th><th class="num">s</th><th>Last line</th></tr>
+    {% for s in progress.slates %}<tr>
+      <td>{{ s.lock }}</td><td>{{ s.key }} <span class="muted small">{{ s.mode }} · {{ s.contests }} contests</span></td>
+      <td><span class="status {{ 'ready' if s.status == 'ok' else ('no' if s.status == 'error' else 'unsettled') }}">{{ s.status }}</span></td>
+      <td class="small">{{ s.stages|join(' → ') }}{% if s.next %} → <i>{{ s.next }}…</i>{% endif %}</td>
+      <td class="num">{{ s.repeats_ok }}/{{ s.repeats_wanted }}</td><td class="num">{{ s.seconds or '' }}</td>
+      <td class="small muted">{{ s.error or s.last_line }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  {% if jobs %}
+  <table class="compact" style="margin-top:8px"><tr><th>Job</th><th>Status</th><th>Started</th><th class="num">s</th></tr>
+    {% for j in jobs %}<tr><td><a href="/jobs/{{ j.id }}">{{ j.name }}</a></td><td>{{ j.status }}{% if j.returncode not in (None, 0) %} <span class="neg">rc {{ j.returncode }}</span>{% endif %}</td><td class="muted small">{{ j.started }}</td><td class="num">{{ j.duration or '' }}</td></tr>{% endfor %}
+  </table>
+  {% set last = jobs[0] %}
+  {% if last.tail %}<pre class="small" style="background:#f6f6f3; padding:8px; max-height:220px; overflow:auto; margin-top:6px">{{ last.tail|join('\n') }}</pre>{% endif %}
+  {% endif %}
+  {% if not progress.active %}
+  <div class="actions" style="margin-top:8px">
+    <form method="post" action="/backtest/{{ run.name }}/resettle"><button class="small">Re-settle results</button> <span class="muted small">place the same lineups in the real fields again (after a scrape or a data fix); no re-run</span></form>
+    <form method="post" action="/backtest/{{ run.name }}/rerun"><button class="small">Run again</button> <span class="muted small">re-run the pipeline on every slate</span></form>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+<div class="card">
+  <h2>{{ run.name }} <span class="muted small">{{ run.since }} .. {{ run.until }} · {{ view.slates_ok }}/{{ view.slates_total }} slates · {{ view.repeats }} repeats · models {{ view.models|join(', ') or '-' }}{% if view.progress and view.progress.running %} · running{% endif %}</span></h2>
+  {% if view.failed %}<p class="neg small">{% for f in view.failed %}{{ f.lock }} {{ f.slate }}: {{ f.error }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+  {% set C = V.summary.confidence if V and V.summary.confidence else None %}
+  <div style="display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; margin:6px 0 10px">
+    <div><div class="muted small">Actual ROI</div><div style="font-size:30px; font-weight:600" class="{{ (R.sva_totals.actual if R else 0)|scss }}">{% if R and R.fees %}{{ (R.sva_totals.actual / R.fees)|pct1 }}{% else %}–{% endif %}</div><div class="muted small">{% if R %}{{ R.sva_totals.actual|money }} on {{ R.fees|money }}{% endif %}</div></div>
+    <div><div class="muted small">Sim claimed</div><div style="font-size:30px; font-weight:600">{% if R and R.fees %}{{ (R.sva_totals.sim / R.fees)|pct1 }}{% else %}–{% endif %}</div><div class="muted small">{% if R %}cash {{ (R.sva_totals.sim_cash or 0)|pct1 }} claimed vs {{ (R.sva_totals.actual_cash or 0)|pct1 }} actual{% endif %}</div></div>
+    <div><div class="muted small">Confidence</div><div style="font-size:30px; font-weight:600">{% if C and C.score is not none %}{{ C.score|num(0) }} <span style="font-size:18px">{{ C.grade }}</span>{% else %}–{% endif %}</div>
+      <div class="muted small">{% if C and C.weakest %}weakest stage: {{ C.weakest }} ({{ (C.weakest_score * 100)|num(0) }}){% if C.notes %} · {{ C.notes|join(' · ') }}{% endif %}{% elif C %}no validated stage yet{% else %}runs after the checks{% endif %}</div></div>
+  </div>
+  {% if C and C.stages %}
+  <details><summary class="small">How the confidence is built</summary>
+    <table class="compact"><tr><th>Stage</th><th class="num">Score</th><th class="num">n</th><th>Metrics (value → score)</th></tr>
+      {% for name, st in C.stages.items() %}<tr><td>{{ name }}</td><td class="num">{{ (st.score * 100)|num(0) }}</td><td class="num">{{ st.n }}</td>
+        <td class="small">{% for k, m in st.metrics.items() %}{{ k }} {% if m.value is iterable and m.value is not string %}{{ m.value|map('num', 2)|join(' vs ') }}{% else %}{{ m.value|num(2) }}{% endif %} → {{ (m.score * 100)|num(0) }}{% if not loop.last %} · {% endif %}{% endfor %}</td></tr>{% endfor %}
+    </table>
+    <p class="muted small">Each metric scores 1 at its target and 0 at the tolerance (coverage 80% ± 20, sd ratio within 2x, skill = salary-line MAE / ours from 0.85 to 1.15, bias ± 3 fpts; ownership MAE 1.5 → 6, Spearman 0.6 → 0.95, chalk bias ± 10; field exposure MAE 1.5 → 6, in-band shares 80% ± 30, chalk ± 10; dupe ratios within 3x; cash calibration ± 15 pts, ROI rank Spearman 0 → 0.3). A stage is the mean of its metrics; the confidence is the geometric mean of the stages, so one broken stage drags it down. Thin samples cap it.</p>
+  </details>
+  {% endif %}
+  {% if R %}
+  <div class="kv">
+    <b>Fees</b><span>{{ R.fees|money }}</span>
+    <b>Sim's expected profit</b><span>{{ R.sva_totals.sim|money }} on {{ R.sva_totals.n }} settled contests (cash {{ (R.sva_totals.sim_cash or 0)|pct1 }})</span>
+    <b>Actual profit</b><span class="{{ R.sva_totals.actual|scss }}">{{ R.sva_totals.actual|money }} (cash {{ (R.sva_totals.actual_cash or 0)|pct1 }})</span>
+    {% if R.year_end %}<b>After tax</b><span>{{ R.year_end.after_tax_profit|money }} <span class="muted small">{{ R.summary.config }} · <a href="/backtest/tax?r={{ R.id|urlencode }}">tax detail</a></span></span>{% endif %}
+  </div>
+  {% if view.dist %}
+  <h3>Across {{ view.repeats }} repeats</h3>
+  <table class="compact"><tr><th></th><th class="num">mean</th><th class="num">sd</th><th class="num">p5</th><th class="num">median</th><th class="num">p95</th><th class="num">&gt; 0</th></tr>
+    {% for d in view.dist %}<tr><td>{{ d.label }}</td>{% for k in ('mean','sd','p5','p50','p95') %}<td class="num">{% if d.fmt == 'money' %}{{ d[k]|money }}{% elif d.fmt == 'pct' %}{{ d[k]|pct1 }}{% else %}{{ d[k]|num(2) }}{% endif %}</td>{% endfor %}<td class="num">{{ d.p_positive|pct1 }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  {% else %}<p class="muted">No settled report yet{% if view.progress and view.progress.running %}: the replay is running ({{ view.progress.done }}/{{ view.progress.wanted }} slate-repeats done){% endif %}.</p>{% endif %}
+  {% if V %}
+  <h3>Assumptions vs actuals <span class="muted small">{{ V.summary.contests }} contests · <a href="/validate?r={{ V.id|urlencode }}">full component detail</a></span></h3>
+  <table class="compact"><tr><th></th><th>Component</th><th>Check</th><th>Finding</th></tr>
+    {% for c in V.checks %}<tr><td><span class="status {{ c.status }}">{{ c.status }}</span></td><td>{{ c.component }}</td><td>{{ c.name }}</td><td>{{ c.detail }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">No assumption checks yet (they run after the replay).</p>{% endif %}
+</div>
+{% for s in view.slates %}
+<div class="card">
+  <h2>{{ s.slate }} <span class="muted small">{{ s.contests|length }} contests · fees {{ s.fees|money }} · sim {{ s.sim|money }} · actual <span class="{{ s.actual|scss }}">{{ s.actual|money }}</span></span></h2>
+  <table class="compact contests">
+    <tr><th>Contest</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Sim profit</th><th class="num">Sim cash</th><th class="num">Actual profit</th><th class="num">Actual cash</th>
+      {% if view.repeats > 1 %}<th class="num">Mean over {{ view.repeats }}</th><th class="num">p10</th><th class="num">p90</th><th class="num">&gt; 0</th>{% endif %}
+      <th class="num">Cash line sim / real</th><th class="num">Winner sim / real</th><th class="num">Top dupe share sim / real</th><th>Settled</th></tr>
+    {% for c in s.contests %}<tr>
+      <td>{{ c.contest_name }} <span class="muted small">{{ c.contest_id }}</span></td><td class="num">{{ c.entries }}</td><td class="num">{{ c.fees|money }}</td>
+      <td class="num">{{ c.sim_expected_profit|money }}</td><td class="num">{{ c.sim_cash_pct|pct1 }}</td>
+      <td class="num {{ c.actual_profit|scss }}">{{ c.actual_profit|money }}</td><td class="num">{{ c.actual_cash_rate|pct1 }}</td>
+      {% if view.repeats > 1 %}<td class="num {{ c.actual_mean|scss }}">{{ c.actual_mean|money }}</td><td class="num">{{ c.actual_p10|money }}</td><td class="num">{{ c.actual_p90|money }}</td><td class="num">{{ c.p_profit|pct1 }}</td>{% endif %}
+      {% set f = c.field %}<td class="num small">{{ n(f.sim_cash_p50, 1) }} / {{ n(f.actual_cash_line, 1) }}</td><td class="num small">{{ n(f.sim_win_p50, 1) }} / {{ n(f.actual_win, 1) }}</td><td class="num small">{{ p1(f.sim_top_share) }} / {{ p1(f.actual_top_share) }}</td>
+      <td class="small">{{ c.settled }}/{{ c.entries }} {{ c.source }}</td></tr>
+    {% if c.entries_ranked or c.exposures %}<tr><td colspan="20" style="padding:2px 8px 8px">
+      {% if c.entries_ranked %}<details><summary class="small">Our entries in the real field ({{ c.entries_ranked|length }}, field {{ c.entries_ranked[0].field_size }})</summary>
+        <table class="compact contests"><tr><th class="num">Rank</th><th class="num">Points</th><th class="num">Payout</th><th class="num">Sim cash</th><th class="num">Sim ROI</th><th>Lineup</th></tr>
+        {% for e in c.entries_ranked %}<tr><td class="num">{{ e.rank }}</td><td class="num">{{ n(e.points, 2) }}</td><td class="num {{ (e.payout or 0)|scss }}">{{ e.payout|money }}</td><td class="num">{{ p1(e.sim_cash_pct) }}</td><td class="num">{{ p1(e.sim_avg_roi) }}</td><td class="small">{{ e.lineup }}</td></tr>{% endfor %}
+        </table></details>{% endif %}
+      {% if c.exposures %}<details><summary class="small">Our sampled field vs the real field: the {{ c.exposures|length }} most-owned players</summary>
+        <table class="compact contests"><tr><th>Player</th><th>Slot</th><th class="num">Salary</th><th class="num">Proj</th><th class="num">Actual pts</th><th class="num">Own proj</th><th class="num">Sampled field</th><th class="num">Real field</th></tr>
+        {% for r in c.exposures %}<tr><td>{{ r.name }}</td><td>{{ r.slot }}</td><td class="num">{{ r.salary }}</td><td class="num">{{ n(r.proj_mean, 1) }}</td><td class="num">{{ n(r.actual_fpts, 1) }}</td><td class="num">{{ n(r.own_proj, 1) }}</td><td class="num">{{ n(r.own_field, 1) }}</td><td class="num">{{ n(r.actual_own, 1) }}</td></tr>{% endfor %}
+        </table></details>{% endif %}
+    </td></tr>{% endif %}
+    {% endfor %}
+  </table>
+</div>
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endblock %}

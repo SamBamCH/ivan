@@ -37,8 +37,9 @@ import scipy.stats as st
 from sqlalchemy import or_, and_, text
 
 from ivan.database.session import read_sql as _read_sql
+from ivan.core import clock
 from ivan.sports.nfl.models import NFLGameOdds
-from ivan.sports.nfl.paths import MODELS_DIR
+from ivan.sports.nfl.paths import MODELS_DIR, models_dir
 
 PARAMS_FILE = "dst_odds_params.json"
 MIN_TRAINING_GAMES = 200
@@ -115,7 +116,7 @@ def _expected_pa_bonus(opp_implied, pa_resid_pool: np.ndarray, chunk: int = 256,
 VALIDATION_BUCKETS = (0, 16, 18, 20, 22, 24, 26, 60)
 
 
-def fit_dst_odds_model(session, model_dir: Path = MODELS_DIR) -> dict:
+def fit_dst_odds_model(session, model_dir: Path = MODELS_DIR, before=None) -> dict:
     """
     Fit the two-part DST model on every historical team-game with closing
     lines and write the params file:
@@ -125,6 +126,9 @@ def fit_dst_odds_model(session, model_dir: Path = MODELS_DIR) -> dict:
       team score      = team_implied + residual pool (the offense's latent in the sampler)
     """
     df = training_frame(session)
+    if before is not None:                      # as-of build: team-games strictly before (season, week)
+        s, w = before
+        df = df[(df.season < s) | ((df.season == s) & (df.week < w))].reset_index(drop=True)
     if len(df) < MIN_TRAINING_GAMES:
         raise RuntimeError(f"only {len(df)} DST games with lines and scores; need {MIN_TRAINING_GAMES} "
                            "(run fetch_schedules and build_dst_game_table first)")
@@ -180,8 +184,8 @@ def _prepare(params: dict) -> dict:
     return params
 
 
-def load_dst_odds_model(model_dir: Path = MODELS_DIR) -> dict | None:
-    model_dir = Path(model_dir)
+def load_dst_odds_model(model_dir: Path | None = None) -> dict | None:
+    model_dir = Path(models_dir() if model_dir is None else model_dir)
     if model_dir not in _MODEL_CACHE:
         path = model_dir / PARAMS_FILE
         params = json.loads(path.read_text()) if path.exists() else None
@@ -216,7 +220,7 @@ def matchup_lines(session, team: str, opponent: str, now: datetime | None = None
     `horizon` (and not more than `max_age` ago) counts, so a stale line from
     a previous meeting is never used.
     """
-    now = now or datetime.now()
+    now = now or clock.now()
     rows = session.query(NFLGameOdds).filter(
         NFLGameOdds.market.in_(["totals", "spreads"]),
         or_(and_(NFLGameOdds.home_abbr == team, NFLGameOdds.away_abbr == opponent),
@@ -299,7 +303,7 @@ def expected_dst(params: dict, team_implied: float, opp_implied: float) -> tuple
 
 
 def project_dst_samples(session, team: str, opponent: str, rng: np.random.Generator,
-                        n_samples: int = 10000, model_dir: Path = MODELS_DIR):
+                        n_samples: int = 10000, model_dir: Path | None = None):
     """
     Samples of DraftKings DST points for `team` against `opponent` from the
     current lines, or None when the lines or the fitted model are missing.

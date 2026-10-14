@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Backtest · Ivan{% endblock %}
+{% macro v(x, fmt, k='') -%}
+  {%- if k == 'sd' and fmt != 'rate' %}{{ x|money if fmt == 'money' else x|pct1 }}{% elif fmt == 'money' %}{{ x|smoney }}{% elif fmt == 'pct' %}{{ x|spct }}{% elif fmt == 'rate' %}{{ x|pct1 }}{% else %}{{ x }}{% endif -%}
+{%- endmacro %}
+{% block content %}
+<style>
+  .pos { color:var(--ok) } .neg { color:var(--bad) }
+  table.dist td.num, table.dist th.num { white-space:nowrap }
+  .prog { height:10px; background:#e8e8e6; border-radius:5px; overflow:hidden; margin:6px 0 } .prog > div { height:100%; background:var(--accent) }
+  img.plot { max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px; margin-top:8px }
+  .hist .bar { height:12px }
+</style>
+<h1>Backtest</h1>
+
+{% if runs %}
+{% for r in runs %}
+<div class="card">
+  <h2>Replay run: {{ r.name }} <span class="muted small">{{ r.since }} .. {{ r.until }}</span></h2>
+  <p>{{ '{:,}'.format(r.done) }} of {{ '{:,}'.format(r.wanted) }} slate-repeats done across the {{ r.slates|length }} slate(s) started so far
+    {% if r.failed %}<span class="bad">· {{ r.failed }} failed</span>{% endif %}
+    {% if r.stale %}<span class="badge failed">no progress for {{ (r.last_write|time) }}+</span>{% elif r.running %}<span class="badge running">running</span>{% else %}<span class="badge done">finished</span>{% endif %}
+    <span class="muted small">· last write {{ r.last_write|time }}</span></p>
+  <div class="prog"><div style="width:{{ (r.share * 100)|round(1) }}%"></div></div>
+  <details><summary class="small">Slates ({{ r.slates|length }})</summary>
+    <table class="compact">
+      <tr><th>Lock</th><th>Slate</th><th class="num">Contests</th><th class="num">Repeats ok</th><th class="num">Wanted</th><th class="num">Last repeat</th><th>Status</th></tr>
+      {% for s in r.slates %}<tr><td>{{ s.lock|dt }}</td><td>{{ s.key }}</td><td class="num">{{ s.contests }}</td><td class="num">{{ s.ok }}</td><td class="num">{{ s.wanted }}</td>
+        <td class="num">{{ s.seconds|num(0) }}s</td><td>{{ s.status }}{% if s.error %} <span class="bad small">{{ s.error[:80] }}</span>{% endif %}</td></tr>{% endfor %}
+    </table>
+    {% if r.log_tail %}<pre class="log" style="margin-top:8px">{{ r.log_tail }}</pre>{% endif %}
+  </details>
+  <form method="post" action="/backtest/report" style="margin-top:10px">
+    <input type="hidden" name="root" value="{{ r.name }}">
+    <div class="fields">
+      <label>Since <input type="text" name="since" value="{{ r.since }}" style="width:120px;padding:5px 8px;font:inherit;border:1px solid #cfcfcf;border-radius:5px"></label>
+      <label>Until <input type="text" name="until" value="{{ r.until }}" style="width:120px;padding:5px 8px;font:inherit;border:1px solid #cfcfcf;border-radius:5px"></label>
+      <label>Bankroll <input type="number" name="bankroll" value="1000" step="100"></label>
+      <label>Tax year <input type="number" name="tax_year" value="{{ r.since[:4] if r.since else '' }}" step="1"></label>
+      <label style="justify-content:flex-end"><button class="small">{{ 'Rebuild report from what is done so far' if r.running else 'Build report' }}</button></label>
+    </div>
+  </form>
+  <p class="help">Settles every finished repeat against the actual results and rewrites the report below. Safe to run while the replay is going. For a new replay use the command line: <code>scripts/replay.py --sport nfl --since … --until … --repeats N --workers W</code>.</p>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if not reports %}
+<div class="card"><p class="muted">No backtest report yet. Replay a window (<code>scripts/replay.py --sport nfl --since 2025-11-01 --until 2025-11-30</code>) or run <code>scripts/nfl/backtest_tax.py</code> on the live picks.</p></div>
+{% else %}
+{% set s = view.summary %}{% set y = view.year_end %}
+<div class="card">
+  <form method="get" class="inline">
+    <label>Report: <select name="r" onchange="this.form.submit()">
+      {% for x in reports %}<option value="{{ x.id }}" {% if x.id == view.id %}selected{% endif %}>{{ x.label }}</option>{% endfor %}
+    </select></label>
+  </form>
+  <span class="small muted"> · written {{ view.mtime|time }} · {% for f in view.files %}<a href="/backtest/file/{{ view.id }}/{{ f }}">{{ f }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>
+  <p class="muted small" style="margin:8px 0 0">{{ view.title }} · tax year {{ s.tax_year }} · {{ s.config }}{% if s.start_bankroll %} · bankroll {{ s.start_bankroll|money(0) }}{% endif %}</p>
+  {% if y %}
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ view.fees|money(0) }}</div><div class="l">entry fees</div><div class="s">{{ s.entries }} entries · {{ view.coverage.contests_settled }} of {{ view.coverage.contests_chosen }} contests settled</div></div>
+    <div class="tile"><div class="v {{ y.P|scss }}">{{ y.P|smoney }}</div><div class="l">pre-tax profit</div><div class="s">ROI {{ view.roi|spct }} · W {{ y.W|money(0) }} · L {{ y.L|money(0) }}</div></div>
+    <div class="tile"><div class="v">{{ y.est_tax|money }}</div><div class="l">estimated tax</div><div class="s">{{ 'itemizing' if y.itemize else 'standard deduction' }} · deductible {{ y.deductible|money(0) }} · phantom {{ y.phantom|money(0) }}</div></div>
+    <div class="tile"><div class="v {{ y.after_tax_profit|scss }}">{{ y.after_tax_profit|smoney }}</div><div class="l">after-tax profit</div><div class="s">ROI {{ y.after_tax_roi|spct }}</div></div>
+    {% if view.sva_totals.n %}
+    <div class="tile"><div class="v">{{ view.sva_totals.sim|smoney(0) }} <span class="muted">vs</span> {{ view.sva_totals.actual|smoney(0) }}</div><div class="l">sim expected vs actual profit</div>
+      <div class="s">cash rate: sim {{ view.sva_totals.sim_cash|pct1 }} · actual {{ view.sva_totals.actual_cash|pct1 }}</div></div>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="warn" style="margin-top:10px">Nothing settled in this report, so there is no ledger. {{ view.coverage.contests_chosen }} contests had a pick; see the unsettled list below.</p>
+  {% endif %}
+</div>
+
+{% if view.repeats %}{% set rp = view.repeats %}
+<div class="card">
+  <h2>Over {{ rp.repeats }} repeats of the pipeline</h2>
+  <p class="muted small">The same archived slates and the same actual results, with lineup generation, the simulation and the chooser re-run under a different seed each time. The spread is the pipeline's own randomness: profit that only shows in some repeats was luck of the draw, not edge. The headline tiles above are repeat 0 alone.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v {{ rp.P.mean|scss }}">{{ rp.P.mean|smoney(0) }}</div><div class="l">mean pre-tax profit</div><div class="s">in profit in {{ rp.P.p_positive|pct1(0) }} of repeats</div></div>
+    <div class="tile"><div class="v {{ rp.after_tax_profit.mean|scss }}">{{ rp.after_tax_profit.mean|smoney(0) }}</div><div class="l">mean after-tax profit</div><div class="s">in profit in {{ rp.after_tax_profit.p_positive|pct1(0) }} of repeats</div></div>
+    <div class="tile"><div class="v">{{ rp.P.p5|smoney(0) }} .. {{ rp.P.p95|smoney(0) }}</div><div class="l">pre-tax, 5th to 95th percentile</div><div class="s">sd {{ rp.P.sd|money(0) }}</div></div>
+    {% if rp.slate_bootstrap %}<div class="tile"><div class="v">{{ rp.slate_bootstrap.p_positive|pct1(0) }}</div><div class="l">in profit, slates resampled</div><div class="s">mean {{ rp.slate_bootstrap.mean|smoney(0) }} · p5 {{ rp.slate_bootstrap.p5|smoney(0) }}</div></div>{% endif %}
+    {% if rp.without_best_slate %}<div class="tile"><div class="v {{ rp.without_best_slate.mean|scss }}">{{ rp.without_best_slate.mean|smoney(0) }}</div><div class="l">mean without the best slate</div><div class="s">{{ rp.without_best_slate.slate }} · in profit {{ rp.without_best_slate.p_positive|pct1(0) }}</div></div>{% endif %}
+    {% if rp.corr_sim_expected_vs_actual is not none %}<div class="tile"><div class="v">{{ rp.corr_sim_expected_vs_actual|num(2) }}</div><div class="l">corr: sim expected vs actual, across repeats</div><div class="s">near 0 = the sim's preference carries no signal</div></div>{% endif %}
+  </div>
+  <div class="grid">
+    <div>
+      <h3>Window profit, pre-tax</h3>
+      <table class="compact hist">
+        {% for h in rp.hist %}<tr><td style="white-space:nowrap" class="{{ 'warn' if h.has_zero }}">{{ h.label }}</td><td class="b"><span class="bar" style="width:{{ (h.share * 100)|round|int }}%"></span>{{ h.n }}</td></tr>{% endfor %}
+      </table>
+    </div>
+    <div>
+      <h3>Window profit, after tax</h3>
+      <table class="compact hist">
+        {% for h in rp.hist_after %}<tr><td style="white-space:nowrap" class="{{ 'warn' if h.has_zero }}">{{ h.label }}</td><td class="b"><span class="bar" style="width:{{ (h.share * 100)|round|int }}%"></span>{{ h.n }}</td></tr>{% endfor %}
+      </table>
+    </div>
+  </div>
+  <h3 style="margin-top:14px">Distribution</h3>
+  <div class="wide"><table class="compact dist">
+    <tr><th></th><th class="num">mean</th><th class="num">sd</th><th class="num">min</th><th class="num">p5</th><th class="num">p25</th><th class="num">median</th><th class="num">p75</th><th class="num">p95</th><th class="num">max</th><th class="num">&gt; 0</th></tr>
+    {% for r in dist %}<tr><td>{{ r.label }}</td>
+      {% for k in ('mean','sd','min','p5','p25','p50','p75','p95','max') %}<td class="num">{{ v(r[k], r.fmt, k) }}</td>{% endfor %}
+      <td class="num">{{ r.p_positive|pct1(0) }}</td></tr>{% endfor %}
+    {% if rp.slate_bootstrap %}{% set b = rp.slate_bootstrap %}<tr><td>pre-tax profit, slates resampled × repeats</td>
+      {% for k in ('mean','sd','min','p5','p25','p50','p75','p95','max') %}<td class="num">{{ b[k]|money if k == 'sd' else b[k]|smoney }}</td>{% endfor %}<td class="num">{{ b.p_positive|pct1(0) }}</td></tr>{% endif %}
+    {% if rp.without_best_slate %}{% set w = rp.without_best_slate %}<tr><td>pre-tax profit without {{ w.slate }}</td>
+      {% for k in ('mean','sd','min','p5','p25','p50','p75','p95','max') %}<td class="num">{{ w[k]|money if k == 'sd' else w[k]|smoney }}</td>{% endfor %}<td class="num">{{ w.p_positive|pct1(0) }}</td></tr>{% endif %}
+  </table></div>
+  {% if rp.per_slate %}
+  <h3 style="margin-top:14px">Per slate, across repeats</h3>
+  <div class="wide"><table class="compact">
+    <tr><th>Slate</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Mean P</th><th class="num">sd</th><th class="num">Min</th><th class="num">Max</th><th class="num">In profit</th><th class="num">Sim expected</th><th class="num">Window without it</th></tr>
+    {% for p in rp.per_slate %}{% set loo = (rp.leave_one_out or [])|selectattr('slate', 'equalto', p.slate)|first %}
+    <tr><td>{{ p.slate }}</td><td class="num">{{ p.entries|num(0) }}</td><td class="num">{{ p.fees|money(0) }}</td><td class="num {{ p.mean_P|scss }}">{{ p.mean_P|smoney }}</td><td class="num">{{ p.sd_P|money }}</td>
+      <td class="num">{{ p.min_P|smoney }}</td><td class="num">{{ p.max_P|smoney }}</td><td class="num">{{ p.p_profit|pct1(0) }}</td><td class="num">{{ p.sim_expected_profit|smoney }}</td>
+      <td class="num">{% if loo %}{{ loo.mean_P|smoney }} ({{ loo.p_profit|pct1(0) }}){% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% endif %}
+  {% if 'repeats.png' in view.images %}<img class="plot" src="/backtest/file/{{ view.id }}/repeats.png" alt="repeats">{% endif %}
+</div>
+{% endif %}
+
+{% if view.scenarios %}
+<div class="card">
+  <h2>Same results, different tax rules</h2>
+  <div class="wide"><table class="compact">
+    <tr><th>Scenario</th><th class="num">Deductible</th><th class="num">Taxable</th><th class="num">Phantom</th><th class="num">Est. tax</th><th class="num">After tax</th><th class="num">ROI</th></tr>
+    {% for r in view.scenarios %}<tr><td>{{ r.scenario }}</td><td class="num">{{ r.deductible|money }}</td><td class="num">{{ r.taxable_gambling|money }}</td><td class="num">{{ r.phantom|money }}</td>
+      <td class="num">{{ r.est_tax|money }}</td><td class="num {{ r.after_tax_profit|scss }}">{{ r.after_tax_profit|smoney }}</td><td class="num">{{ r.after_tax_roi|spct }}</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+{% if view.ledger %}
+<div class="card">
+  <h2>Running ledger, per slate</h2>
+  <div class="wide"><table class="compact">
+    <tr><th>Slate</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Slate P</th><th class="num">Cum. W</th><th class="num">Cum. L</th><th class="num">Cum. P</th><th class="num">Taxable</th><th class="num">Est. tax</th><th class="num">After tax</th><th class="num">Bankroll</th></tr>
+    {% for r in view.ledger %}<tr><td>{{ r.slate }}</td><td class="num">{{ r.entries }}</td><td class="num">{{ r.slate_fees|money(0) }}</td><td class="num {{ r.slate_P|scss }}">{{ r.slate_P|smoney }}</td>
+      <td class="num">{{ r.W|money(0) }}</td><td class="num">{{ r.L|money(0) }}</td><td class="num {{ r.P|scss }}">{{ r.P|smoney }}</td><td class="num">{{ r.taxable_gambling|money(0) }}</td>
+      <td class="num">{{ r.est_tax|money }}</td><td class="num {{ r.after_tax_profit|scss }}">{{ r.after_tax_profit|smoney }}</td>
+      <td class="num {{ 'bad' if r.tax_exceeds_bankroll }}">{{ r.bankroll|money(0) }}{% if r.tax_exceeds_bankroll %} <span class="small">tax &gt; bankroll</span>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+{% if view.sim_vs_actual %}
+<div class="card">
+  <h2>Sim versus actual, per contest</h2>
+  <div class="wide"><table class="compact">
+    <tr><th>Slate</th><th>Contest</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Sim expected</th><th class="num">Actual</th><th class="num">Sim cash %</th><th class="num">Actual cash</th><th>Settled by</th></tr>
+    {% for r in view.sim_vs_actual %}<tr><td style="white-space:nowrap">{{ r.slate }}</td><td class="small">{{ r.contest_name[:60] }}</td><td class="num">{{ r.entries }}</td><td class="num">{{ r.fees|money(0) }}</td>
+      <td class="num">{{ r.sim_expected_profit|smoney }}</td><td class="num {{ r.actual_profit|scss }}">{{ r.actual_profit|smoney }}</td><td class="num">{{ r.sim_cash_pct|pct1(0) }}</td><td class="num">{{ r.actual_cash_rate|pct1(0) }}</td><td class="small muted">{{ r.source }}</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+{% if view.formats %}
+<div class="card">
+  <h2>By format</h2>
+  <div class="wide"><table class="compact">
+    <tr><th>Format</th><th>Type</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">P</th><th class="num">ROI</th><th class="num">Cash rate</th><th class="num">Losses per $ fee</th><th class="num">Tax it added</th></tr>
+    {% for r in view.formats %}<tr><td>{{ r.format_class }}</td><td>{{ r.contest_type }}</td><td class="num">{{ r.entries }}</td><td class="num">{{ r.fees|money(0) }}</td><td class="num {{ r.P|scss }}">{{ r.P|smoney }}</td>
+      <td class="num">{{ r.roi|spct }}</td><td class="num">{{ r.cash_rate|pct1(0) }}</td><td class="num">{{ r.losses_per_fee|num(2) }}</td><td class="num">{{ r.tax_added|money }}</td></tr>{% endfor %}
+  </table></div>
+  <p class="help">Tax it added = what the year's tax bill would drop by without this format.</p>
+</div>
+{% endif %}
+
+{% if view.sweep %}
+<div class="card">
+  <h2>Volume sweep</h2>
+  <p class="muted small">The same edge at more or less volume: a year is the multiplier times this window's slate count, each slate resampled with replacement. "actual" draws from the realised slate results, "sim" from the simulator's traces of the picks.</p>
+  <div class="wide"><table class="compact">
+    <tr><th>Basis</th><th class="num">× slates</th><th class="num">Fees</th><th class="num">Pre-tax P</th><th class="num">Est. tax</th><th class="num">Phantom</th><th class="num">After tax</th><th class="num">p10</th><th class="num">p90</th><th class="num">P(loss after tax)</th><th class="num">P(tax &gt; bankroll)</th></tr>
+    {% for r in view.sweep %}<tr><td>{{ r.basis }}</td><td class="num">{{ r.multiplier }}</td><td class="num">{{ r.fees|money(0) }}</td><td class="num {{ r.pre_tax_profit|scss }}">{{ r.pre_tax_profit|smoney(0) }}</td>
+      <td class="num">{{ r.est_tax|money(0) }}</td><td class="num">{{ r.phantom|money(0) }}</td><td class="num {{ r.after_tax_profit|scss }}">{{ r.after_tax_profit|smoney(0) }}</td>
+      <td class="num">{{ r.after_tax_p10|smoney(0) }}</td><td class="num">{{ r.after_tax_p90|smoney(0) }}</td><td class="num">{{ r.p_aftertax_loss|pct1(0) }}</td><td class="num">{{ r.p_tax_exceeds_bankroll|pct1(0) }}</td></tr>{% endfor %}
+  </table></div>
+  {% if 'volume_sweep.png' in view.images %}<img class="plot" src="/backtest/file/{{ view.id }}/volume_sweep.png" alt="volume sweep">{% endif %}
+</div>
+{% endif %}
+
+{% if view.unsettled %}
+<div class="card">
+  <details><summary>Unsettled contests ({{ view.unsettled|length }})</summary>
+  <table class="compact">
+    <tr><th>Lock</th><th>Contest</th><th class="num">Entries</th><th>Why</th></tr>
+    {% for u in view.unsettled %}<tr><td>{{ u.lock|dt }}</td><td class="small">{{ u.name[:70] }}</td><td class="num">{{ u.entries }}</td><td class="small muted">{{ u.why }}</td></tr>{% endfor %}
+  </table></details>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 
 from ivan.database.session import init_db, get_session
@@ -48,6 +49,16 @@ if page_count and freelist / page_count > 0.25:
     session.close()
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         conn.execute(text("VACUUM"))
+
+# Settle the slates we played in the last days: scrape their contests (with our
+# username) so every slate stays backtestable. Needs the saved DraftKings Chrome
+# profile, which wants a display (headless fails once its login cookies age).
+if os.environ.get("IVAN_DK_USERNAME") and os.environ.get("DISPLAY"):
+    print("[overnight] settling recent slates (standings, box scores, derived files, status rows)")
+    subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "nfl" / "settle.py"), "--days", "3"], check=False)
+else:
+    print("[overnight] settling recent slates without the scrape (set IVAN_DK_USERNAME and run with a display to scrape the contests we played)")
+    subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "nfl" / "settle.py"), "--days", "3", "--no-scrape"], check=False)
 
 # Push reference tables + model pickles to the server. No-op unless
 # IVAN_SYNC_HOST is set (in .env or the environment); the server's per-slate

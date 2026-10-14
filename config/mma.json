@@ -1,0 +1,65 @@
+{
+  "paths": {
+    "entries_csv": "data/mma/input/entries.csv",
+    "fight_odds_csv": "data/mma/input/fight_odds.csv",
+    "player_odds_csv": "data/mma/input/player_odds.csv",
+    "payouts_csv": "data/mma/input/payouts.csv"
+  },
+  "_paths_note": "fight_odds_csv and player_odds_csv are hand-entered; ingest.py writes them fresh for a new card",
+  "name_aliases": {
+    "Valesca Machado": "Tina Black"
+  },
+  "_name_aliases_note": "odds-file name -> DraftKings name, for fighters the matcher cannot resolve on its own",
+  "slate": {
+    "game_type": "Classic",
+    "num_5_round_fights": 1
+  },
+  "odds_api": {
+    "bookmakers": "draftkings"
+  },
+  "scoring": {
+    "sig_strike": 0.4,
+    "takedown": 5.0,
+    "loser_production_share": 0.5,
+    "bonus": {
+      "u60": 115,
+      "r1": 90,
+      "r2": 70,
+      "r3": 45,
+      "r4": 40,
+      "r5": 40,
+      "decision": 30
+    },
+    "production_noise_cv": 0.2
+  },
+  "lineup_generation": {
+    "n_candidates": 6000,
+    "jitter_sd": 0.15,
+    "min_salary": 48500,
+    "salary_cap": 50000,
+    "roster_size": 6,
+    "main_event_boost": 1.15
+  },
+  "field": {
+    "size": 5000,
+    "dupes_at_zero_remaining": 200,
+    "salary_threshold": 1500,
+    "win_boost_slope": 0.2,
+    "win_boost_center": 3.0,
+    "win_boost_min": 0.8,
+    "win_boost_max": 1.5
+  },
+  "contest": {
+    "name": "manual",
+    "total_entries": 47500,
+    "entry_fee": 0.5
+  },
+  "simulation": {
+    "n_sims": 2000
+  },
+  "choose": {
+    "num_lineups": 150,
+    "roi_weight": 0.8,
+    "diversity_weight": 0.4
+  }
+}

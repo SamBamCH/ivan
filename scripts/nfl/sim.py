@@ -14,10 +14,12 @@ import traceback
 
 import pandas as pd
 
+from ivan.core import artifacts
 from ivan.core.config import config_path, load_config
 from ivan.database.session import get_session, init_db
 from ivan.sports.nfl import sim_report
 from ivan.sports.nfl.models import NFLBase
+from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.sports.nfl.simulate_contest import clean_old_diagnostics, simulate_one_contest
 
 
@@ -52,14 +54,15 @@ def main() -> int:
     df["Contest ID"] = df["Contest ID"].astype(int)
     contests = df.sort_values("Contest ID").drop_duplicates(subset=["Contest Name"], keep="last")
 
-    print(f"Simulating {len(contests)} contest(s): {args.n} sims each, field cap {args.c:,}\n")
+    art_dir = artifacts.sim_dir(OUTPUT_DIR)
+    print(f"Simulating {len(contests)} contest(s): {args.n} sims each, field cap {args.c:,}; run artifacts -> {art_dir}\n")
     failed = 0
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         print(f"--- {i}/{len(contests)} ---")
         try:
             report = simulate_one_contest(session=session, contest_id=int(cid), contest_name=name,
                                           config_path=args.config, field_cap=args.c, num_sims=args.n,
-                                          use_classic_dupes=args.d)
+                                          use_classic_dupes=args.d, artifact_dir=art_dir)
             print(sim_report.format_summary(report), flush=True)
         except Exception as e:
             failed += 1

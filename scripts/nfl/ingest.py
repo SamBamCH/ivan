@@ -53,7 +53,7 @@ if args.update_odds:
         relevant_teams = {p.team for p in players if p.team}
     else:
         relevant_teams = set(session.scalars(select(NFLPlayer.team).distinct()))
-    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams))
+    odds = get_odds("americanfootball_nfl", api_key, list(relevant_teams), raw_sport="nfl")
     df_odds = parse_odds(odds)
     if df_odds is None or len(df_odds) == 0:
         raise SystemExit('the-odds-api returned no odds (see the error above). '
@@ -61,7 +61,7 @@ if args.update_odds:
     records = df_odds.to_dict(orient='records')
     # Game lines (spread, total, moneyline) for every upcoming game: the DST
     # projection and the per-game diagnostics read them from game_odds.
-    game_odds_json, _ = get_game_odds("americanfootball_nfl", api_key, markets="h2h,spreads,totals")
+    game_odds_json, _ = get_game_odds("americanfootball_nfl", api_key, markets="h2h,spreads,totals", raw_sport="nfl")
     df_game_odds = parse_game_odds(game_odds_json) if game_odds_json else None
     if df_game_odds is None or df_game_odds.empty:
         print('the-odds-api returned no game lines; DST projections will fall back to salary.')
@@ -94,19 +94,46 @@ if args.update_odds and df_game_odds is not None:
     print(f"game lines: {df_game_odds['game_id'].nunique()} games, {len(df_game_odds)} rows")
 session.commit()
 
+# Archive the raw inputs of this capture (pool, props, lines) so the slate can
+# be replayed later with whatever projection code is current. Never modelled.
+from ivan.core.archive import ensure_tables
+from ivan.sports.nfl.archive_capture import archive_ingest_capture
+ensure_tables(engine)
+from ivan.core import raw as _raw
+print(f"raw artifacts indexed: {_raw.sync_index(session, 'nfl')} new")
+cap = archive_ingest_capture(session, players, records, df_game_odds if args.update_odds else None)
+if cap is not None:
+    print(f"archived capture #{cap.id}: slate {cap.slate_key} ({cap.mode}, lock {cap.lock:%Y-%m-%d %H:%M}) "
+          f"{cap.n_players} players, {cap.n_odds} odds rows, {cap.n_lines} line rows")
+
 if args.p:
     #remove out players
     session.query(NFLPlayer).filter(func.upper(NFLPlayer.status).in_(['OUT', 'IR'])).delete(synchronize_session=False)
     session.commit()
 
 #fit fpts for each player
-fit_fpts_distributions(session)
+from ivan.core.config import load_config
+_fit_info = fit_fpts_distributions(session, load_config("nfl")) or {}
 
 #project ownership from field sampling (needs only the fitted distributions), then snapshot
 if not args.no_ownership:
     from ivan.core.config import load_config
     from ivan.sports.nfl.ownership import project_and_snapshot
     project_and_snapshot(session, load_config("nfl"), snapshot=not args.no_snapshot)
+
+# write the projections down for the validation layer (ivan.sports.nfl.run_artifacts)
+try:
+    from ivan.core import artifacts
+    from ivan.sports.nfl.paths import OUTPUT_DIR
+    from ivan.sports.nfl.run_artifacts import write_projections
+    _proj_path = artifacts.projections_path(OUTPUT_DIR)
+    print(f"projections artifact: {write_projections(session, _proj_path)} rows -> {_proj_path}")
+    from ivan.sports.nfl.run_artifacts import write_environment
+    print(f"game environment artifact: {write_environment(session, _proj_path)} team rows")
+    from ivan.sports.nfl.run_artifacts import write_usage
+    print(f"usage artifact: {write_usage(_fit_info.get('usage'), _proj_path, _fit_info.get('unpriced_volume', ''))} team-stat rows")
+except Exception as _e:
+    print(f"WARNING: could not write the projections artifact: {type(_e).__name__}: {_e}")
 
 #run team simulations to capture team dependence? overright the original FPTS values if we want to. Worried that this will bias the simulations too much, since this aspect will already be captured in the simulation. 
 

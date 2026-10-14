@@ -1,4 +1,4 @@
-import json, os, argparse, sys
+import json, os, argparse, random, sys
 
 from queue import Empty
 
@@ -10,6 +10,7 @@ from rich.console import Console
 
 from ivan.core.utils import coerce_player_ids as _coerce_player_ids
 from ivan.core.config import config_path
+from ivan.core.seed import seed_for
 from ivan.database.session import init_db, get_session
 from ivan.sports.nfl.models import Lineup
 from ivan.sports.nfl.generate_lineups_logic import generate_and_store_field_lineups
@@ -25,6 +26,9 @@ def worker(worker_id: int, num_lineups: int, config_path: str, total_workers: in
     """Updated worker with diversity strategy for parallel showdown generation."""
     engine = init_db('nfl')
     session = get_session(engine)
+    _seed = seed_for(f"generate/{worker_id}")      # the jitter and shuffles in generate_lineups_logic use `random`
+    if _seed is not None:
+        random.seed(_seed)
 
     with open(config_path, "r") as f:
         config = json.load(f)

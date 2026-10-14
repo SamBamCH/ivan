@@ -301,13 +301,15 @@ NEIGHBOR_MIN_GAMES = 4       # games before a player-season's mean counts as a r
 
 
 def position_logs(session: 'Session', position: str) -> pd.DataFrame:
-    """All NFLStat rows for a position as a frame (cached per process)."""
+    """All NFLStat rows for a position as a frame (cached per process); in a replay only games before the slate."""
     if position not in _POSITION_LOGS:
-        from ivan.sports.nfl.models import NFLStat
         from sqlalchemy import select
+        from ivan.sports.nfl.models import NFLStat
+        from ivan.sports.nfl.actuals import before_cutoff, history_cutoff
         stmt = select(NFLStat).where(NFLStat.position == position)
-        with session.bind.connect() as conn:
-            _POSITION_LOGS[position] = pd.read_sql(stmt, conn)
+        with session.get_bind().connect() as conn:
+            logs = pd.read_sql(stmt, conn)
+        _POSITION_LOGS[position] = before_cutoff(logs, history_cutoff(session)).reset_index(drop=True)
     return _POSITION_LOGS[position]
 
 

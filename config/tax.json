@@ -1,0 +1,29 @@
+{
+  "_note": "2026 federal figures as understood in Oct 2026; VERIFY with a CPA before relying on them. brackets are [lower_bound, rate] rows per filing status. defaults.use_brackets switches the engine from the flat marginal_rate to the bracket table layered on other_taxable_income.",
+  "defaults": {
+    "tax_year": 2026,
+    "loss_cap_pct": 0.90,
+    "filing_status": "single",
+    "other_itemized": 0,
+    "other_taxable_income": 0,
+    "marginal_rate": 0.22,
+    "use_brackets": false,
+    "state_rate": 0.0,
+    "state_allows_loss_deduction": true,
+    "reporting_mode": "gross_165d",
+    "itemize": "auto",
+    "tax_reserve_pct": null
+  },
+  "standard_deduction": {
+    "single": 16100,
+    "married_joint": 32200,
+    "married_separate": 16100,
+    "head_of_household": 24150
+  },
+  "brackets": {
+    "single": [[0, 0.10], [12400, 0.12], [50400, 0.22], [105700, 0.24], [201775, 0.32], [256225, 0.35], [640600, 0.37]],
+    "married_joint": [[0, 0.10], [24800, 0.12], [100800, 0.22], [211400, 0.24], [403550, 0.32], [512450, 0.35], [768700, 0.37]],
+    "married_separate": [[0, 0.10], [12400, 0.12], [50400, 0.22], [105700, 0.24], [201775, 0.32], [256225, 0.35], [384350, 0.37]],
+    "head_of_household": [[0, 0.10], [17700, 0.12], [67450, 0.22], [105700, 0.24], [201775, 0.32], [256225, 0.35], [640600, 0.37]]
+  }
+}

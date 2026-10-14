@@ -1,7 +1,7 @@
 import re
 import logging
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict, Set, Optional
 
 import numpy as np
@@ -19,12 +19,104 @@ from ivan.sports.nfl.models import (
     ShowdownLineup,
     ShowdownContestMetadata,
     ClassicContestMetadata,
+    ContestEntryResult,
+    ContestFieldScores,
     ProjectionSnapshot
 )
+from ivan.sports.nfl.placement import load_payout_tiers, payout_vector, place, remove_our_copies
 
 log = logging.getLogger(__name__)
 
 _SHOWDOWN_LINEUP_REGEX = re.compile(r"(CPT|FLEX)\s+([A-Za-z\s\.''-]+?)(?=\s+(?:CPT|FLEX)|$)")
+
+
+# ==============================================================================
+# SNAPSHOT DATE + ACTUAL RESULTS (shared by both contest types)
+# ==============================================================================
+
+def resolve_snapshot_date(session: Session, contest_date: Optional[datetime]) -> Optional[datetime]:
+    """
+    The projection_snapshot date that belongs to a contest. Contest dates are
+    UTC; snapshots were stamped in UTC through 2025 and with the local kickoff
+    time since 2026, so an exact match is tried first and then the nearest
+    snapshot within six hours of either reading of the contest date.
+    """
+    if contest_date is None:
+        return None
+    lo, hi = contest_date - timedelta(days=1), contest_date + timedelta(days=1)
+    dates = [d for (d,) in session.query(ProjectionSnapshot.snapshot_date)
+             .filter(ProjectionSnapshot.snapshot_date.between(lo, hi)).distinct().all()]
+    if not dates or contest_date in dates:
+        return contest_date
+    local = contest_date.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    gap = lambda d: min(abs(d - contest_date), abs(d - local))
+    best = min(dates, key=gap)
+    return best if gap(best) <= timedelta(hours=6) else contest_date
+
+
+def _standings_columns(df: pd.DataFrame) -> Dict[str, str]:
+    """Column names of the standings part of a DK export, keyed by a lowercase alias."""
+    base = df.iloc[:, :-4] if df.shape[1] > 6 else df
+    found = {}
+    for c in base.columns:
+        key = str(c).strip().lower().replace(" ", "").replace("_", "")
+        found.setdefault(key, c)
+    return {"rank": found.get("rank"), "entry_id": found.get("entryid"), "entry_name": found.get("entryname"),
+            "points": found.get("points"), "lineup": found.get("lineup")}
+
+
+def store_field_results(session: Session, hc: HistoricalContest, df: pd.DataFrame,
+                        username: Optional[str] = None) -> Dict[str, int]:
+    """
+    Keep every entry's actual points (contest_field_scores) and, when a
+    DraftKings username is given, our own entries' rank, points and payout
+    (contest_entry_result). Works for showdown and classic exports alike and
+    needs no snapshot, so it is stored before either processor runs.
+    """
+    cid = hc.contest_id
+    cols = _standings_columns(df)
+    if not cols["points"]:
+        log.warning(f"Contest {cid}: standings export has no Points column; field scores not stored")
+        return {"field": 0, "own": 0}
+    pts = pd.to_numeric(df[cols["points"]], errors="coerce")
+    valid = pts.notna()
+    scores = np.sort(pts[valid].to_numpy(dtype=float))[::-1]
+
+    session.query(ContestFieldScores).filter_by(contest_id=cid).delete()
+    session.add(ContestFieldScores(contest_id=cid, n_entries=int(scores.size),
+                                   scores=[round(float(x), 2) for x in scores]))
+
+    n_own = 0
+    if username and cols["entry_name"]:
+        owner = (df[cols["entry_name"]].astype(str).str.replace(r"\s*\(\d+/\d+\)\s*$", "", regex=True)
+                 .str.strip().str.lower())
+        mine = df.index[valid & (owner == username.strip().lower())]
+        if len(mine):
+            tiers = load_payout_tiers(session, cid)
+            pay = payout_vector(tiers, int(scores.size)) if tiers else np.zeros(int(scores.size))
+            our = pts[mine].to_numpy(dtype=float)
+            field_wo, _ = remove_our_copies(scores, our)
+            ranks, pays = place(our, field_wo, pay)
+            session.query(ContestEntryResult).filter_by(contest_id=cid).delete()
+            for i, ix in enumerate(mine):
+                row = df.loc[ix]
+                try:
+                    entry_id = int(row[cols["entry_id"]]) if cols["entry_id"] else None
+                except (TypeError, ValueError):
+                    entry_id = None
+                if entry_id is None:
+                    continue
+                tie = int(np.sum(np.abs(np.concatenate([field_wo, our]) - our[i]) <= 1e-6))
+                session.add(ContestEntryResult(
+                    entry_id=entry_id, contest_id=cid, username=username, rank=int(ranks[i]), tie_size=tie,
+                    points=float(our[i]), payout=float(pays[i]),
+                    lineup=str(row[cols["lineup"]]) if cols["lineup"] else None))
+                n_own += 1
+            if not tiers:
+                log.warning(f"Contest {cid}: no payout table; own entries stored with payout 0 (run get_payouts.py --all)")
+    session.commit()
+    log.info(f"Contest {cid}: stored {scores.size} field scores" + (f", {n_own} own entries" if n_own else ""))
+    return {"field": int(scores.size), "own": n_own}
 
 # ==============================================================================
 # HELPER FUNCTIONS FOR CLASSIC CONTEST PROCESSING
@@ -199,6 +291,9 @@ def process_showdown_contest(
     own_df = df.iloc[:, -4:].copy()
     
     # Build player lookup from ownership table
+    # The export lists a player once per slot: a FLEX row with the base points
+    # and a CPT row with 1.5x. Keep the base points (the FLEX row; a CPT-only
+    # row is divided back), never the last row seen.
     player_lookup = {}
     for _, row in own_df.iterrows():
         player_name = row.get("Player")
@@ -208,17 +303,20 @@ def process_showdown_contest(
             continue
         
         norm_name = normalize_name(player_name)
-        player_lookup[norm_name] = {
-            'name': player_name,
-            'fpts_actual': float(fpts) if pd.notna(fpts) else None,
-        }
+        slot = str(row.get("Roster Position") or "").strip().upper()
+        base = float(fpts) if pd.notna(fpts) else None
+        if slot == "CPT" and base is not None:
+            base = round(base / 1.5, 2)
+        prev = player_lookup.get(norm_name)
+        if prev is None or (slot != "CPT" and prev.get("slot") == "CPT"):
+            player_lookup[norm_name] = {'name': player_name, 'fpts_actual': base, 'slot': slot}
     
     # Get ProjectionSnapshot data for player IDs and metadata
     norm_names = list(player_lookup.keys())
     results = (
         session.query(ProjectionSnapshot)
         .filter(
-            ProjectionSnapshot.snapshot_date == hc.date,
+            ProjectionSnapshot.snapshot_date == resolve_snapshot_date(session, hc.date),
             ProjectionSnapshot.normalized_name.in_(norm_names),
             ProjectionSnapshot.roster_slot_id.in_([511, 512])
         )
@@ -394,10 +492,17 @@ def process_showdown_contest(
         traceback.print_exc()
         return False
 
-def process_contest(session: Session, hc: HistoricalContest, df: pd.DataFrame) -> bool:
+def process_contest(session: Session, hc: HistoricalContest, df: pd.DataFrame,
+                    username: Optional[str] = None) -> bool:
     """
-    Route to appropriate processor based on contest type.
+    Store the field's actual scores (and our own entries, if `username` is
+    given), then route to the processor for the contest type.
     """
+    try:
+        store_field_results(session, hc, df, username=username)
+    except Exception:
+        session.rollback()
+        log.exception(f"Contest {hc.contest_id}: storing field results failed")
     contest_type = hc.contest_type or ""
     
     if "Showdown" in contest_type or "Captain Mode" in contest_type:
@@ -464,7 +569,7 @@ def process_classic_contest(
     all_player_names = [info['name'] for info in player_base_info.values()]
     snapshot_data = get_snapshot_data_for_contest(
         session,
-        hc.date,
+        resolve_snapshot_date(session, hc.date),
         all_player_names,
         player_slots={},
         roster_slot_filter=[66, 67, 68, 69, 71]

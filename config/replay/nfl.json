@@ -1,0 +1,13 @@
+{
+  "_note": "The contests a replay enters on every slate: for each item the largest contest whose name matches (regex, case-insensitive), with entries capped at the contest's max entries. mode restricts an item to showdown or classic slates. weights are passed to choose.py for every contest.",
+  "weights": {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1},
+  "max_fee": 5,
+  "contests": [
+    {"match": "mini-MAX", "entries": 50},
+    {"match": "First Down", "entries": 20},
+    {"match": "Play-Action", "entries": 10},
+    {"match": "Quarter Jukebox", "entries": 20},
+    {"match": "Dime Package", "entries": 20},
+    {"match": "Huddle", "entries": 1}
+  ]
+}

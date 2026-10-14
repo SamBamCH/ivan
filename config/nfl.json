@@ -2,14 +2,34 @@
   "paths": {
     "entries_csv": "data/nfl/input/entries.csv"
   },
+  "projection": {
+    "unpriced_volume": "salary",
+    "_note": "how stats no book prices get their mean: 'salary' (refactor.volume: salary + TD odds) or 'environment' (refactor.usage: team volume from the QB line / game environment, minus the priced players, split by depth-rank priors); IVAN_UNPRICED_VOLUME overrides"
+  },
   "solver": {},
   "ownership": {
     "num_lineups": 1000,
-    "num_simulations": 1
+    "num_simulations": 1,
+    "calibration": {
+      "enabled": true,
+      "_note": "map the field-sampling projection onto actual showdown ownership per slot and position (models/ownership_calibration.json from scripts/nfl/build_ownership_calibration.py); DST and K on projected points"
+    },
+    "model": "learned",
+    "_model_note": "learned: ownership_model.pkl (sampler projection + points/salary/ranks/position, fitted on scraped fields; scripts/nfl/build_ownership_model.py); sampler_calibrated: the sampler with the per-position calibration lines; sampler: raw exposures"
   },
   "field": {
     "target_unique_ratio": 0.2,
-    "max_unique": null
+    "max_unique": null,
+    "ownership_calibration": {
+      "enabled": true,
+      "iterations": 30,
+      "damping": 0.7,
+      "max_ratio": 4.0,
+      "min_target_pct": 0.05,
+      "_note": "rake the field sampler's lineup weights so player exposures match projected ownership (sample_field.rake_weights_to_ownership)"
+    },
+    "dupe_model": "product",
+    "_dupe_note": "product: copies = N x k x prod(own)^beta fitted on real fields (models/dupe_model_v2.json, scripts/nfl/build_dupe_model.py v2); two_stage: the old quantile + GBM model"
   },
   "randomness": 0.5,
   "pool": {

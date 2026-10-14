@@ -5,10 +5,12 @@ import zipfile
 import logging
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 import requests
+
+from ivan.core import raw
 import pandas as pd
 from pandas.errors import EmptyDataError
 from http.client import RemoteDisconnected
@@ -33,7 +35,8 @@ LOCAL_TZ = pytz.timezone('America/Chicago')
 def get_upcoming_contest_ids(
     sport: str = "NBA",
     days_ahead: int = 1,
-    entry_filter: int = 100
+    entry_filter: int = 100,
+    raw_sport: str | None = None,
 ) -> list[str]:
     # 1) fetch raw JSON
     sess = requests.Session()
@@ -176,12 +179,39 @@ def _cookies_to_requests_session(driver: webdriver.Chrome) -> requests.Session:
 
     return sess
 
+LOGIN_URL = "https://www.draftkings.com/account/sitelogin/false?returnPath=%2Flobby"
+AUTH_CHECK_URL = "https://www.draftkings.com/mycontests"
+AUTH_COOKIES = {"SINFN", "SSIDN", "SIDN", "dk_session", "knownUser"}      # names vary by account / geo
+
+
+def _looks_logged_in(driver) -> bool:
+    """Open a page that needs an account and see whether DraftKings answers with it or with the login page."""
+    try:
+        driver.get(AUTH_CHECK_URL)
+        time.sleep(2)
+        title = (driver.title or "").lower()
+        url = (driver.current_url or "").lower()
+        if "authentication login" in title or "sitelogin" in url or "/login" in url:
+            return False
+        names = {c["name"] for c in driver.get_cookies()}
+        return bool(AUTH_COOKIES & names) or "mycontests" in url
+    except Exception:
+        return False
+
+
 def build_requests_session_from_chrome(user_data_dir: str,
                                        profile_directory: str = "Default",
-                                       headless: bool = False) -> requests.Session:
+                                       headless: bool = False,
+                                       login_wait: int = 600) -> requests.Session:
     """
-    Launch Chrome using your real profile. Navigate to the lobby first to trigger SSO/bot cookies,
-    then copy cookies+UA into a requests.Session and return it.
+    Launch Chrome on the saved profile, make sure it is logged in to
+    DraftKings, then copy cookies + user agent into a requests.Session.
+
+    When the profile's session has expired and Chrome is visible, the login
+    page is opened and this waits up to `login_wait` seconds for you to log
+    in there (the profile keeps the session afterwards). Headless and logged
+    out raises RuntimeError("DraftKings login needed ...") instead of
+    scraping login pages.
     """
     # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
     from selenium import webdriver
@@ -199,32 +229,64 @@ def build_requests_session_from_chrome(user_data_dir: str,
     # helps avoid "automation" flags that some sites key on
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option('useAutomationExtension', False)
+    opts.add_argument("--disable-blink-features=AutomationControlled")      # navigator.webdriver stays false
+    opts.add_argument("--password-store=basic")      # same cookie encryption as a manual login started with this flag
+    opts.add_argument("--window-size=1280,900")
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=opts)
+    try:                                                                       # hide the automation flag from page scripts too
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument",
+                               {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"})
+    except Exception:
+        pass
 
     try:
-        # 1) Hit the main site first (sets core cookies)
+        # 1) Hit the main site first (sets core cookies), then the lobby (akamai / bot cookies)
         driver.get("https://www.draftkings.com/")
         time.sleep(2)
-
-        # 2) Hit the lobby webapp (ensures DK sets akamai/bot cookies for this session)
-        driver.get("https://www.draftkings.com/lobby")   # sport tab doesn’t really matter
+        driver.get("https://www.draftkings.com/lobby")
         time.sleep(4)
 
-        # quick auth heuristic: look for a cookie that only appears post-login
-        have_auth_cookie = False
-        auth_markers = {"SINFN", "SSIDN", "SIDN", "dk_session", "knownUser"}  # varies by account/geo
+        if not _looks_logged_in(driver):
+            if headless:
+                raise RuntimeError("DraftKings login needed: the saved Chrome profile is logged out; run without --headless and log in "
+                                   "in the window it opens (the profile keeps the session afterwards)")
+            driver.get(LOGIN_URL)
+            print(f"[draftkings] LOGIN NEEDED: log in to DraftKings in the Chrome window that just opened "
+                  f"(waiting up to {login_wait // 60} minutes; the profile keeps the session afterwards)", flush=True)
+            logging.warning("DraftKings login needed: waiting up to %ss for a login in the Chrome window", login_wait)
+            deadline = time.time() + login_wait
+            logged_in = False
+            login_paths = ("sitelogin", "/login", "verif", "mfa", "2fa", "challenge", "account/")
+            while time.time() < deadline:
+                time.sleep(3)
+                # watch only: never navigate while the login (and its 2FA step) is in progress
+                try:
+                    url = (driver.current_url or "").lower()
+                    names = {c["name"] for c in driver.get_cookies()}
+                    title = (driver.title or "").lower()
+                except Exception as e:                      # the window was closed or is mid-navigation
+                    if "no such window" in str(e).lower() or "invalid session" in str(e).lower():
+                        raise RuntimeError("DraftKings login needed: the Chrome window was closed before the login finished")
+                    continue
+                on_login_flow = any(k in url for k in login_paths) or "authentication login" in title
+                if on_login_flow:
+                    continue
+                if (AUTH_COOKIES & names) or "/lobby" in url or "mycontests" in url:
+                    if _looks_logged_in(driver):            # one real check, only once the flow has left the login pages
+                        logged_in = True
+                        break
+                    driver.get(LOGIN_URL)                   # it bounced back to login: show the form again and keep waiting
+                    time.sleep(2)
+            if not logged_in:
+                raise RuntimeError(f"DraftKings login needed: no login seen within {login_wait}s")
+            print("[draftkings] logged in; continuing", flush=True)
+            driver.get("https://www.draftkings.com/lobby")
+            time.sleep(3)
+
         names = {c["name"] for c in driver.get_cookies()}
-        if auth_markers & names:
-            have_auth_cookie = True
-
-        # Also make sure Akamai cookies are present (anti-bot)
-        akamai_ok = {"ak_bmsc", "bm_sv", "bm_sz"} & names
-
-        if not have_auth_cookie:
-            logging.warning("Did not find a clear 'logged-in' cookie in this profile (found: %s)", list(names)[:10])
-        if not akamai_ok:
+        if not ({"ak_bmsc", "bm_sv", "bm_sz"} & names):
             logging.warning("Akamai cookies not seen yet; make sure you visited a real DK page (not just the API).")
 
         # Build session from whatever the browser has right now
@@ -233,10 +295,18 @@ def build_requests_session_from_chrome(user_data_dir: str,
     finally:
         driver.quit()
 
+    # verify with the session itself: an account page must not come back as the login page
+    try:
+        r = sess.get(AUTH_CHECK_URL, timeout=20, allow_redirects=True)
+        if "authentication login" in (r.text or "")[:4000].lower():
+            raise RuntimeError("DraftKings login needed: the copied cookies are not accepted (log in again in the Chrome profile)")
+    except requests.RequestException as e:
+        logging.warning("could not verify the DraftKings session: %s", e)
     return sess
 
 def download_contest_dataframe(sess: requests.Session, contest_id: int,
-                               max_retries: int = 3, timeout: int = 20) -> pd.DataFrame | None:
+                               max_retries: int = 3, timeout: int = 20, raw_sport: str | None = None) -> pd.DataFrame | None:
+    """The contest's full standings export as a DataFrame. With raw_sport the export is kept as received (raw dk/standings)."""
     gc_url = f"https://www.draftkings.com/contest/gamecenter/{contest_id}"
     export_url = f"https://www.draftkings.com/contest/exportfullstandingscsv/{contest_id}"
 
@@ -274,6 +344,8 @@ def download_contest_dataframe(sess: requests.Session, contest_id: int,
                 if not text.strip():
                     print(f"[warn] Contest {contest_id} returned an empty CSV body.")
                     raise EmptyDataError("empty CSV body")
+                if raw_sport:
+                    raw.store(raw_sport, "dk/standings", contest_id, text, ext="csv", meta={"content_type": ctype})
                 try:
                     return pd.read_csv(io.StringIO(text))
                 except EmptyDataError as e:
@@ -282,6 +354,8 @@ def download_contest_dataframe(sess: requests.Session, contest_id: int,
 
             z = zipfile.ZipFile(io.BytesIO(r2.content))
             csv_name = next(f for f in z.namelist() if f.endswith(".csv"))
+            if raw_sport:
+                raw.store(raw_sport, "dk/standings", contest_id, z.read(csv_name), ext="csv", meta={"content_type": ctype, "zip_member": csv_name})
             try:
                 return pd.read_csv(z.open(csv_name))
             except EmptyDataError as e:
@@ -295,9 +369,9 @@ def download_contest_dataframe(sess: requests.Session, contest_id: int,
     print(f"[error] Contest {contest_id} skipped after {max_retries} attempts.")
     return None
 
-def fetch_all_contests(sport: str = "MLB") -> List[Dict[str, Any]]:
+def fetch_all_contests(sport: str = "MLB", raw_sport: str | None = None) -> List[Dict[str, Any]]:
     """
-    Hit the Lobby endpoint and return the raw list of contests.
+    Hit the Lobby endpoint and return the raw list of contests. With raw_sport the lobby payload is kept (raw dk/lobby).
     """
     logging.info(f"[draftkings] Fetching contests for sport={sport} from {LOBBY_URL}")
     try:
@@ -317,6 +391,8 @@ def fetch_all_contests(sport: str = "MLB") -> List[Dict[str, Any]]:
 
     try:
         data = r.json()
+        if raw_sport:
+            raw.store(raw_sport, "dk/lobby", datetime.now().strftime('%Y-%m-%d'), data, meta={"sport": sport})
     except Exception as e:
         logging.error(f"[draftkings] Failed to parse JSON: {e}; first 300 chars: {r.text[:300]!r}")
         raise
@@ -365,7 +441,7 @@ def get_upcoming_slate_ids(sport: str = "MLB") -> List[int]:
     """
     Returns all unique draftGroupIds for upcoming slates.
     """
-    contests = fetch_all_contests(sport)
+    contests = fetch_all_contests(sport, raw_sport=raw_sport)
     seen: List[int] = []
     for c in contests:
         dg = c.get("dg")
@@ -378,7 +454,7 @@ def get_upcoming_slate_ids(sport: str = "MLB") -> List[int]:
     return seen
 
 
-def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
+def get_players_for_slate(draft_group_id: int, raw_sport: str | None = None) -> List[Dict[str, Any]]:
     """
     Fetch the draftables for one slate, tagging each with `draftGroupId`
     and pretty‑printing the first payload for inspection.
@@ -389,6 +465,8 @@ def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
     r.raise_for_status()
 
     payload = r.json()
+    if raw_sport:
+        raw.store(raw_sport, "dk/draftables", draft_group_id, payload)
     draftables = payload.get("draftables", [])
     # tag for easy upsert
     for p in draftables:
@@ -396,12 +474,14 @@ def get_players_for_slate(draft_group_id: int) -> List[Dict[str, Any]]:
 
     return draftables
 
-def get_upcoming_payouts(cid):
+def get_upcoming_payouts(cid, raw_sport: str | None = None):
     url = DK_CONTESTDETAIL_URL.format(cid=cid)
     try:
         resp = requests.get(url, params={"format": "json"})
         resp.raise_for_status()
         payload = resp.json()
+        if raw_sport:
+            raw.store(raw_sport, "dk/payouts", cid, payload)
         return payload
     except requests.RequestException as e:
         logger.error(f"HTTP error for contest {cid}: {e}")
@@ -547,7 +627,7 @@ def ingest_players(sport, dedupe_by_name=True, draft_group_id=None):
     else:
         dg = int(draft_group_id)
 
-    players = get_players_for_slate(dg)
+    players = get_players_for_slate(dg, raw_sport=str(sport).lower())
 
     relevant_teams = set()
     seen_names = set()
@@ -591,6 +671,7 @@ def ingest_players(sport, dedupe_by_name=True, draft_group_id=None):
             salary=salary,
             status=p.get("status"),
         )
+        player.draft_group_id = dg
         processed_players.add(player)
 
     return processed_players

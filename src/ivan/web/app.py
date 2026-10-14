@@ -5,8 +5,9 @@ step, no auth (run it on a LAN or behind Tailscale). One job at a time.
 """
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from datetime import datetime
+import json
+from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,10 @@ from ivan.core.utils import PROJECT_ROOT
 from ivan.database.session import add_missing_columns, get_session, init_db
 from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
+from ivan.web import backtest_view as bv
+from ivan.web import validate_view as vv
+from ivan.web import plan_view as pv
+from ivan.web import backtest_hub as hub
 from ivan.web.jobs import JobRunner
 from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR, WEIGHT_KEYS,
                                    WEIGHT_LABELS, RESETS, choose_rows, choose_view, chosen_runs, chosen_view, contest_report,
@@ -105,7 +110,8 @@ def _fmt_pct1(x, places=1) -> str:
 
 
 templates.env.filters.update(time=_fmt_time, dur=_fmt_dur, dt=_fmt_dt, pct=_fmt_pct, kb=_fmt_kb,
-                             money=_fmt_money, num=_fmt_num, pct1=_fmt_pct1, corr_css=corr_css)
+                             money=_fmt_money, num=_fmt_num, pct1=_fmt_pct1, corr_css=corr_css,
+                             smoney=bv.money_signed, spct=bv.pct_signed, scss=bv.sign_css)
 
 
 def _with_db(fn):
@@ -114,6 +120,15 @@ def _with_db(fn):
         return fn(session)
     finally:
         session.close()
+
+
+@contextmanager
+def _session():
+    s = get_session(engine)
+    try:
+        yield s
+    finally:
+        s.close()
 
 
 def _ctx(request: Request, **extra) -> dict:
@@ -197,7 +212,7 @@ async def run_step(key: str, request: Request):
         raise HTTPException(404, "unknown step")
     if step.needs_entries and not CURRENT_ENTRIES.exists():
         return _redirect("/", f"'{step.title}' needs an entries file. Upload one first.")
-    form = {k: str(v) for k, v in (await request.form()).items()}
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
     try:
         cmds = step.build(form)
     except ValueError as e:
@@ -295,6 +310,327 @@ def choose_page(request: Request, run: Optional[str] = None, contest: Optional[s
     lineups = WEB_OUTPUT_DIR / picked["files"]["lineups"] if "lineups" in picked["files"] else None
     view = choose_view(WEB_OUTPUT_DIR / picked["files"]["choose"], lineups, (contest or "").strip() or None)
     return templates.TemplateResponse(request, "choose.html", _ctx(request, runs=runs, picked=picked, view=view))
+
+
+@app.get("/backtest", response_class=HTMLResponse)
+def backtest_page(request: Request):
+    today = datetime.now().date()
+    return templates.TemplateResponse(request, "backtest_hub.html", _ctx(
+        request, run=None, runs=hub.runs(), default_since=(today - timedelta(days=7)).isoformat(), default_until=today.isoformat(),
+        msg=request.query_params.get("msg")))
+
+
+@app.get("/backtest/open")
+def backtest_open(name: str):
+    return _redirect(f"/backtest/{name}")
+
+
+@app.post("/backtest/new")
+async def backtest_new(request: Request):
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    try:
+        run = hub.new_run(form.get("name", ""), form.get("since", "").strip(), form.get("until", "").strip())
+    except ValueError as e:
+        return _redirect("/backtest", f"Could not start the run: {e}")
+    return _redirect(f"/backtest/{run['name']}")
+
+
+def _run_jobs(name: str, tail: int = 14) -> list[dict]:
+    out = []
+    for j in runner.all():
+        if (j.meta or {}).get("run") != name:
+            continue
+        lines = []
+        try:
+            p = runner.log_path(j)
+            if p.is_file():
+                lines = [l for l in p.read_text(errors="replace").splitlines() if l.strip()][-tail:]
+        except OSError:
+            lines = []
+        out.append({"id": j.id, "name": j.name, "status": j.status, "stage": (j.meta or {}).get("step", ""),
+                    "started": datetime.fromtimestamp(j.started).strftime("%H:%M:%S") if j.started else "",
+                    "duration": int(j.duration) if j.duration else None, "returncode": j.returncode, "tail": lines})
+    return out[:12]
+
+
+@app.get("/backtest/{name}", response_class=HTMLResponse)
+def backtest_run_page(request: Request, name: str, step: Optional[str] = None):
+    run = hub.load_run(name)
+    if run is None:
+        return _redirect("/backtest", f"No run named {name!r}.")
+    step = hub.step_for(run, step)
+    ctx = {"run": run, "step": step, "runs": [], "data": None, "slates": [], "models": {}, "view": None, "jobs": _run_jobs(name),
+           "msg": request.query_params.get("msg")}
+    try:
+        with _session() as session:
+            if step == "data":
+                ctx["data"] = hub.data_check(session, run)
+            elif step == "contests":
+                ctx["slates"] = hub.contests_view(session, run)
+            elif step == "params":
+                ctx["models"] = hub.model_version_for(run["since"]) if hasattr(hub, "model_version_for") else hub.model_store.resolve(hub.MODELS_DIR, datetime.fromisoformat(run["since"])).describe()
+            elif step == "results":
+                ctx["view"] = hub.run_view(run)
+                ctx["progress"] = hub.progress_view(run, ctx["jobs"])
+                if run.get("status") == "running" and not ctx["progress"]["active"]:
+                    run["status"] = "done"
+                    hub.save_run(run)
+                    ctx["run"] = run
+    except ValueError as e:
+        return _redirect("/backtest", f"Could not read the run: {e}")
+    return templates.TemplateResponse(request, "backtest_hub.html", _ctx(request, **ctx))
+
+
+@app.post("/backtest/{name}/fetch")
+async def backtest_fetch(request: Request, name: str):
+    run = hub.load_run(name)
+    if run is None:
+        return _redirect("/backtest", f"No run named {name!r}.")
+    form = await request.form(max_fields=100000, max_files=10)
+    keys = [str(k) for k in form.getlist("key")]
+    with _session() as session:
+        data = hub.data_check(session, run)
+    ids = next((it.get("ids") or [] for it in data["needs"] if it["key"] == "scrape"), [])
+    jobs = hub.fetch_commands(run, keys, ids, str(form.get("username") or "") or None, bool(form.get("buy_props")))
+    for label, cmd in jobs:
+        j = runner.submit(f"{name}: {label}", cmd, meta={"step": "fetch", "run": name})
+        run.setdefault("jobs", []).append({"id": j.id, "name": label, "at": datetime.now().isoformat(timespec="seconds")})
+    run["status"] = "data"
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}", f"Started {len(jobs)} fetch job(s) (see Jobs). Reload this page to re-check the window." if jobs else "Nothing ticked.")
+
+
+@app.post("/backtest/{name}/settle")
+async def backtest_settle(request: Request, name: str):
+    run = hub.load_run(name)
+    if run is None:
+        return _redirect("/backtest", f"No run named {name!r}.")
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    j = runner.submit(f"{name}: settle {run['since']}..{run['until']}", hub.settle_command(run, form.get("username") or None, scrape=bool(form.get("scrape"))),
+                      meta={"step": "settle", "run": name})
+    run.setdefault("jobs", []).append({"id": j.id, "name": "settle", "at": datetime.now().isoformat(timespec="seconds")})
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}", "Settling the window (see Jobs); reload to re-check.")
+
+
+@app.post("/backtest/{name}/continue")
+async def backtest_continue(request: Request, name: str):
+    run = hub.load_run(name)
+    if run is None:
+        return _redirect("/backtest", f"No run named {name!r}.")
+    run["status"] = "contests"
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}?step=contests")
+
+
+@app.post("/backtest/{name}/contests")
+async def backtest_contests(request: Request, name: str):
+    run = hub.load_run(name)
+    if run is None:
+        return _redirect("/backtest", f"No run named {name!r}.")
+    form = await request.form(max_fields=100000, max_files=10)
+    picks = {}
+    for cid in form.getlist("pick"):
+        try:
+            picks[str(int(cid))] = max(1, int(float(form.get(f"entries_{cid}") or 1)))
+        except ValueError:
+            picks[str(int(cid))] = 1
+    if not picks:
+        return _redirect(f"/backtest/{name}?step=contests", "Tick at least one contest.")
+    with _session() as session:
+        limits = {str(c["contest_id"]): int(c["max_entries"]) for sl in hub.contests_view(session, run, top=10 ** 6) for c in sl["contests"]}
+    picks = {cid: min(n, limits.get(cid, n)) for cid, n in picks.items()}
+    run["picks"] = picks
+    run["status"] = "params"
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}?step=params")
+
+
+@app.post("/backtest/{name}/rerun")
+async def backtest_rerun(request: Request, name: str):
+    """Run the saved parameters again (after a fix, or when the replay found nothing)."""
+    run = hub.load_run(name)
+    if run is None or not run.get("picks") or not run.get("params"):
+        return _redirect(f"/backtest/{name}", "Nothing to rerun: choose contests and parameters first.")
+    hub.write_selection(run)
+    j1 = runner.submit(f"{name}: replay {len(run['picks'])} contests x {run['params']['repeats']}", hub.replay_command(run), meta={"step": "replay", "run": name})
+    j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
+    run.setdefault("jobs", []).extend([{"id": j1.id, "name": "replay", "at": datetime.now().isoformat(timespec="seconds")},
+                                       {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
+    run["status"] = "running"
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}?step=results", f"Running {name} again (see the progress below).")
+
+
+@app.post("/backtest/{name}/resettle")
+async def backtest_resettle(request: Request, name: str):
+    """Re-settle the replayed slates against the live database and re-run the checks; no re-run of the pipeline."""
+    run = hub.load_run(name)
+    if run is None or not (hub.run_root(name) / "nfl").is_dir():
+        return _redirect(f"/backtest/{name}", "Nothing to settle yet.")
+    j1 = runner.submit(f"{name}: settle results", hub.resettle_command(run), meta={"step": "resettle", "run": name})
+    j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
+    run.setdefault("jobs", []).extend([{"id": j1.id, "name": "resettle", "at": datetime.now().isoformat(timespec="seconds")},
+                                       {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
+    run["status"] = "running"
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}?step=results", "Settling the results again against the current database (see the progress below).")
+
+
+@app.post("/backtest/{name}/run")
+async def backtest_run(request: Request, name: str):
+    run = hub.load_run(name)
+    if run is None or not run.get("picks"):
+        return _redirect(f"/backtest/{name}?step=contests", "Choose contests first.")
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    try:
+        params = {"repeats": max(1, int(form.get("repeats") or 1)), "workers": max(1, int(form.get("workers") or 1)),
+                  "lineups": int(form.get("lineups") or 3000), "sims": int(form.get("sims") or 500), "field_cap": int(form.get("field_cap") or 5000),
+                  "seed": int(form.get("seed") or 0)}
+    except ValueError:
+        return _redirect(f"/backtest/{name}?step=params", "The parameters must be numbers.")
+    run["params"] = params
+    hub.write_selection(run)
+    j1 = runner.submit(f"{name}: replay {len(run['picks'])} contests x {params['repeats']}", hub.replay_command(run), meta={"step": "replay", "run": name})
+    j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
+    run.setdefault("jobs", []).extend([{"id": j1.id, "name": "replay", "at": datetime.now().isoformat(timespec="seconds")},
+                                       {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
+    run["status"] = "running"
+    hub.save_run(run)
+    return _redirect(f"/backtest/{name}?step=results", f"Running {name}: {len(run['picks'])} contests, {params['repeats']} repeat(s) (see Jobs).")
+
+
+@app.get("/backtest/tax", response_class=HTMLResponse)
+def backtest(request: Request, r: Optional[str] = None):
+    rows = bv.reports()
+    picked = next((x for x in rows if x["id"] == r), rows[0] if rows else None)
+    view = bv.report_view(picked["path"]) if picked else None
+    return templates.TemplateResponse(request, "backtest.html", _ctx(
+        request, reports=rows, view=view, runs=bv.runs_in_progress(),
+        dist=bv.dist_rows(view["repeats"]) if view and view.get("repeats") else []))
+
+
+@app.get("/backtest/file/{report_id:path}/{name}")
+def backtest_file(report_id: str, name: str):
+    d = bv.report_path(report_id)
+    if d is None or name not in bv.FILES or not (d / name).is_file():
+        raise HTTPException(404)
+    media = {"csv": "text/csv", "json": "application/json", "png": "image/png"}[name.rsplit(".", 1)[1]]
+    return FileResponse(d / name, media_type=media, filename=None if name.endswith(".png") else name)
+
+
+@app.post("/backtest/report")
+async def backtest_report(request: Request):
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    root = bv.OUTPUT_DIR / Path(form.get("root", "")).name
+    if not root.name.startswith("replay") or not root.is_dir():
+        raise HTTPException(404, "unknown replay root")
+    since, until = form.get("since", "").strip(), form.get("until", "").strip()
+    try:
+        datetime.fromisoformat(since); datetime.fromisoformat(until)
+        bankroll = float(form.get("bankroll") or 0)
+        tax_year = int(form["tax_year"]) if form.get("tax_year") else None
+    except (ValueError, KeyError):
+        return _redirect("/backtest/tax", "Since / until must be dates (YYYY-MM-DD); bankroll and tax year numbers.")
+    cmd = bv.report_command(root, since, until, bankroll, tax_year)
+    runner.submit(f"Backtest report: {root.name} {since}..{until}", cmd, meta={"step": "backtest_report", "form": form})
+    return _redirect("/backtest/tax", f"Building the report for {root.name} {since}..{until}; it appears here when the job finishes (see Jobs).")
+
+
+@app.get("/validate", response_class=HTMLResponse)
+def validate_page(request: Request, r: Optional[str] = None):
+    rows = vv.reports()
+    picked = next((x for x in rows if x["id"] == r), rows[0] if rows else None)
+    view = vv.report_view(picked["path"]) if picked else None
+    today = datetime.now().date()
+    return templates.TemplateResponse(request, "validate.html", _ctx(
+        request, reports=rows, view=view, replay_roots=vv.replay_roots(),
+        default_since=(today.replace(day=1)).isoformat(), default_until=today.isoformat()))
+
+
+@app.get("/validate/file/{report_id:path}/{name}")
+def validate_file(report_id: str, name: str):
+    d = vv.report_path(report_id)
+    if d is None or name not in vv.FILES or not (d / name).is_file():
+        raise HTTPException(404)
+    media = {"csv": "text/csv", "json": "application/json"}[name.rsplit(".", 1)[1]]
+    return FileResponse(d / name, media_type=media, filename=name)
+
+
+@app.post("/validate/run")
+async def validate_run(request: Request):
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    mode = form.get("mode", "live")
+    since, until = form.get("since", "").strip(), form.get("until", "").strip()
+    try:
+        for v in (since, until):
+            if v:
+                datetime.fromisoformat(v)
+        repeat = int(form.get("repeat") or 0)
+    except ValueError:
+        return _redirect("/validate", "Since / until must be dates (YYYY-MM-DD); repeat a number.")
+    root = None
+    if mode.startswith("replay:"):
+        root = vv.OUTPUT_DIR / Path(mode.split(":", 1)[1]).name
+        if not root.name.startswith("replay") or not (root / "nfl").is_dir():
+            raise HTTPException(404, "unknown replay root")
+    cmd = vv.validate_command("replay" if root else "live", since, until, root, repeat)
+    label = f"replay {root.name} repeat {repeat}" if root else f"live {since}..{until}"
+    runner.submit(f"Validation: {label}", cmd, meta={"step": "validate", "form": form})
+    return _redirect("/validate", f"Running the validation ({label}); it appears here when the job finishes (see Jobs).")
+
+
+@app.get("/backtest/plan", response_class=HTMLResponse)
+def backtest_plan_page(request: Request, since: Optional[str] = None, until: Optional[str] = None, menu: Optional[str] = None,
+                       sport: str = "nfl"):
+    today = datetime.now().date()
+    default_since, default_until = (today - timedelta(days=7)).isoformat(), today.isoformat()
+    plan = None
+    err = None
+    if since and until:
+        try:
+            with _session() as session:
+                plan = pv.plan_view(session, since.strip(), until.strip(), menu or "")
+        except (ValueError, json.JSONDecodeError) as e:
+            err = f"Could not build the plan: {e}"
+    return templates.TemplateResponse(request, "backtest_plan.html", _ctx(
+        request, plan=plan, menu_text=(menu if menu else pv.default_menu_text()), default_since=default_since, default_until=default_until,
+        msg=err or request.query_params.get("msg")))
+
+
+@app.post("/backtest/plan/run")
+async def backtest_plan_run(request: Request):
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    action = form.get("action", "")
+    since, until = form.get("since", "").strip(), form.get("until", "").strip()
+    try:
+        datetime.fromisoformat(since); datetime.fromisoformat(until)
+    except ValueError:
+        return _redirect("/backtest/plan", "Since / until must be dates (YYYY-MM-DD).")
+    back = f"/backtest/plan?since={since}&until={until}"
+    if action == "replay":
+        root = pv.replay_root(since, until)
+        runner.submit(f"Replay {since}..{until}", pv.replay_command(since, until, root), meta={"step": "replay", "form": form})
+        runner.submit(f"Validation: replay {root.name}", pv.validate_replay_command(root, f"replay {since}..{until}"), meta={"step": "validate", "form": form})
+        return _redirect(back, f"Replaying the window into {root.name}, then validating it (see Jobs; the report appears under Validation).")
+    if action == "fetch_actuals":
+        runner.submit("Fetch actuals (schedule, box scores, DST)", pv.fetch_actuals_command(), meta={"step": "fetch_actuals"})
+        return _redirect(back, "Fetching box scores (see Jobs). nflverse publishes a day or two after the games.")
+    if action == "scrape":
+        with _session() as session:
+            plan = pv.plan_view(session, since, until, form.get("menu", ""))
+        ids = plan["unscraped_ids"]
+        if not ids:
+            return _redirect(back, "Nothing to scrape: every contest in the pool is already scraped.")
+        runner.submit(f"Scrape {len(ids)} contests", pv.scrape_command(ids, form.get("username") or None), meta={"step": "scrape"})
+        return _redirect(back, f"Scraping {len(ids)} contests through the saved Chrome profile (see Jobs). A 403 in the log means DraftKings wants a fresh login there.")
+    if action == "build_models":
+        runner.submit(f"Build models as of {since}", pv.build_models_command(since), meta={"step": "build_models"})
+        return _redirect(back, f"Building the as-of {since} model version (see Jobs).")
+    if action == "backfill":
+        runner.submit(f"Backfill captures {since}..{until}", pv.backfill_command(since, until), meta={"step": "backfill"})
+        return _redirect(back, "Backfilling captures from projection snapshots and stored game lines (no props; add --odds on the command line to buy them).")
+    return _redirect(back, f"Unknown action {action!r}.")
 
 
 @app.get("/downloads", response_class=HTMLResponse)

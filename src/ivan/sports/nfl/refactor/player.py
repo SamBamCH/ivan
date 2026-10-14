@@ -1,11 +1,15 @@
 from dataclasses import dataclass, field
 
 from ivan.sports.nfl.models import NFLPlayer, NFLStat, NFLOdds
+from ivan.sports.nfl.actuals import history_cutoff
+from ivan.core.seed import seed_for
 from ivan.sports.nfl.refactor.stat import (
     MARKET_TO_STAT, StatDistribution, _get_anytime_td_prob_from_odds,
     clear_neighbor_cache, fit_stat_distribution, position_logs, sample_stat,
 )
 from ivan.sports.nfl.refactor.volume import VolumeModel
+from ivan.sports.nfl.refactor.usage import UsageModel, VOLUME_STATS as USAGE_STATS
+import os
 from ivan.sports.nfl.refactor.dst import project_dst_samples
 from ivan.sports.nfl.refactor.spread import load_sd_calibration, calibrate_spread, describe_sd_calibration, spread_factor
 import pandas as pd
@@ -269,7 +273,20 @@ def _has_market(odds_df: pd.DataFrame, stat: str) -> bool:
     return bool(set(odds_df['market']) & set(MARKET_TO_STAT.get(stat, ())))
 
 
-def fit_fpts_distributions(session):
+UNPRICED_VOLUME_MODES = ("salary", "environment")
+VOLUME_STAT_NAMES = ("passing_yards", "rushing_yards", "receiving_yards", "receptions")   # the stats that define a player's volume
+
+
+def unpriced_volume_mode(config: dict | None) -> str:
+    """config['projection']['unpriced_volume'] ('salary' | 'environment'), overridden by $IVAN_UNPRICED_VOLUME."""
+    mode = os.environ.get("IVAN_UNPRICED_VOLUME") or ((config or {}).get("projection") or {}).get("unpriced_volume") or "salary"
+    mode = str(mode).strip().lower()
+    if mode not in UNPRICED_VOLUME_MODES:
+        raise ValueError(f"unpriced_volume must be one of {UNPRICED_VOLUME_MODES}, got {mode!r}")
+    return mode
+
+
+def fit_fpts_distributions(session, config: dict | None = None):
     """
     Fit every slate player's fantasy-point distribution.
 
@@ -280,6 +297,12 @@ def fit_fpts_distributions(session):
     the mean, and a neighbor pool of same-position player-seasons with that
     role supplies the shape. Current odds always win; salary only speaks where
     the market is silent.
+
+    With config['projection']['unpriced_volume'] == 'environment' the unpriced
+    receiving / rushing volume of RB / WR / TE comes from refactor.usage
+    instead: the team's volume (QB line or game environment) minus the priced
+    players, split by depth-rank priors. Every player records where his volume
+    came from (volume_source) and which stats went unpriced.
     """
     players = session.query(NFLPlayer).all()
 
@@ -288,16 +311,31 @@ def fit_fpts_distributions(session):
         print("Detected Classic slate - removing duplicate players")
         players = _dedupe_classic_players(session, players)
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed_for("project/dst", 42))
     fitted = 0
     clear_neighbor_cache()
+    cutoff = history_cutoff(session)
+    if cutoff is not None:
+        print(f"replay: player history limited to games before season {cutoff[0]} week {cutoff[1]}")
     cal = load_sd_calibration()
     print(describe_sd_calibration(cal))
     volume = VolumeModel()
+    mode = unpriced_volume_mode(config)
+    use_usage = mode == "environment"
+    # the usage model is always built: its team rows (priced lines vs team totals) are written down as a diagnostic;
+    # only in environment mode do its allocations replace the salary model
+    from ivan.sports.nfl.refactor.environment import slate_environment
+    try:
+        env = slate_environment(session)
+    except Exception as e:                      # a database without the schedule: the model falls back to league volume
+        print(f"game environment unavailable ({type(e).__name__}: {e}); usage model falls back to league volume")
+        env = pd.DataFrame()
+    usage = UsageModel(session, environment=env, before=cutoff)
+    print(f"unpriced volume: {'environment (usage allocation)' if use_usage else 'salary model'}; game environment for {len(env)} team rows")
     pending: list[_Pending] = []
     # per-run validation tallies: stats priced by a market vs filled from the
     # salary model, and where each K/DST projection came from
-    tally = {"priced": 0, "unpriced": 0, "by_pos": {}, "dst_lines": 0, "dst_salary": 0, "k_market": 0, "k_salary": 0}
+    tally = {"priced": 0, "unpriced": 0, "unpriced_env": 0, "by_pos": {}, "dst_lines": 0, "dst_salary": 0, "k_market": 0, "k_salary": 0}
 
     # ---- pass 1: market-priced stats -------------------------------------
     for player in players:
@@ -313,12 +351,14 @@ def fit_fpts_distributions(session):
             if projected is not None:
                 dst_samples, info = projected
                 tally["dst_lines"] += 1
+                player.volume_source = "lines"
                 print(f"DST {player.team} vs {player.opponent}: lines total={info['total']} "
                       f"team={info['team_implied']} opp={info['opp_implied']} -> mean {info['mu']} "
                       f"(bracket {info['bracket']} + takeaways {info['takeaways']})")
             else:
                 dst_samples = _fit_dst_by_salary(player, rng)
                 tally["dst_salary"] += 1
+                player.volume_source = "salary"
                 print(f"DST {player.team} vs {player.opponent}: no lines or no DST model, salary fallback")
             _store_fit(player, dst_samples, cal)
             session.commit()
@@ -351,6 +391,8 @@ def fit_fpts_distributions(session):
         history = session.query(NFLStat).filter(
             NFLStat.player_display_name == player.name
         ).all()
+        if cutoff is not None:                      # replay: only games played before the slate
+            history = [h for h in history if (h.season, h.week) < cutoff]
 
         item = _Pending(player, odds_df, history, _get_anytime_td_prob_from_odds(odds_df))
         for stat in stats_to_model:
@@ -364,8 +406,10 @@ def fit_fpts_distributions(session):
             tally["priced"] += 1
             mean = float(np.mean(sample_stat(sd, 4000, rng)))
             volume.add(player.position, stat, player.salary, item.p_td, mean)
+            usage.add_fixed(player, stat, mean)
         if player.position == 'K':
             tally["k_market" if 'kicker_pts' in item.dists else "k_salary"] += 1
+        usage.add_candidate(player, item.p_td)
         pending.append(item)
 
     volume.fit()
@@ -373,15 +417,28 @@ def fit_fpts_distributions(session):
     print(volume.describe())
 
     # ---- pass 2: unpriced stats, then the joint sample --------------------
+    # QBs first: their salary-model rushing is settled before the usage model allocates the team's residual
+    pending.sort(key=lambda it: it.player.position != "QB")
     for item in pending:
         player = item.player
         stats_to_model = STATS[player.position]
+        sources: set[str] = set()
+        unpriced: list[str] = []
 
         for stat in stats_to_model:
             if stat in item.dists:
                 continue
             hv = [getattr(h, stat) for h in item.history if getattr(h, stat) is not None]
-            target = volume.predict(player.position, stat, player.salary, item.p_td)
+            target = usage.predict(player, stat) if use_usage else None
+            source = "environment"
+            if target is None:
+                target = volume.predict(player.position, stat, player.salary, item.p_td)
+                source = "salary"
+                if target is not None and stat in USAGE_STATS and not usage.fitted:
+                    usage.add_fixed(player, stat, target)        # a QB's rushing, settled for the allocation
+            if stat in VOLUME_STAT_NAMES:
+                unpriced.append(stat)
+                sources.add(source)
             sd = fit_stat_distribution(
                 item.odds_df, hv, stat,
                 session=session, position=player.position, target_mean=target,
@@ -389,6 +446,11 @@ def fit_fpts_distributions(session):
             if sd is not None:
                 item.dists[stat] = sd
                 tally["unpriced"] += 1
+                if source == "environment":
+                    tally["unpriced_env"] += 1
+
+        player.volume_source = "market" if not unpriced else ("environment" if "environment" in sources else "salary")
+        player.unpriced_stats = "|".join(unpriced) if unpriced else None
 
         stats_valid = [s for s in stats_to_model if s in item.dists]
         if not stats_valid:
@@ -414,7 +476,7 @@ def fit_fpts_distributions(session):
 
         # Sample independent marginals
         n_samples = 10000
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(seed_for("project/marginals", 42))
         X = np.zeros((n_samples, len(stats_valid)), dtype=float)
         for j, sd in enumerate(dists_valid):
             X[:, j] = sample_stat(sd, n_samples, rng)
@@ -439,6 +501,8 @@ def fit_fpts_distributions(session):
         session.commit()
         fitted += 1
         tally["by_pos"][player.position] = tally["by_pos"].get(player.position, 0) + 1
+
+    print(usage.describe())                   # after pass 2: the QBs' settled rushing is in the totals
 
     # A captain scores exactly 1.5x the same player's FLEX line (the sampler
     # applies the multiplier), so the CPT row carries the FLEX row's fit. The
@@ -465,16 +529,17 @@ def fit_fpts_distributions(session):
     print(f"\nFitted {fitted} players ({by_pos}; DST {tally['dst_lines'] + tally['dst_salary']}); "
           f"{synced} captain rows copied from FLEX; {labelled} rows given depth-chart slots for correlation.")
     print(f"validation: {tally['priced']}/{n_stats} stat distributions priced by a market, "
-          f"{tally['unpriced']} from the salary model | "
+          f"{tally['unpriced'] - tally['unpriced_env']} from the salary model, {tally['unpriced_env']} from the usage allocation | "
           f"K: {tally['k_market']} on the kicking-points market, {tally['k_salary']} salary | "
           f"DST: {tally['dst_lines']} from game lines, {tally['dst_salary']} salary fallback | "
           f"predictive sd factors " + " ".join(f"{p} x{spread_factor(cal, p):.2f}" for p in ("QB", "RB", "WR", "TE", "K", "DST")))
+    return {"unpriced_volume": mode, "usage": usage.team_rows(), "fitted": fitted, "tally": tally}
 
 
 def _sync_captain_rows(session) -> int:
     players = session.query(NFLPlayer).all()
     flex = {p.name: p for p in players if p.roster_slot_id == 512}
-    fpts_cols = [c.name for c in NFLPlayer.__table__.columns if c.name.startswith("fpts_")]
+    fpts_cols = [c.name for c in NFLPlayer.__table__.columns if c.name.startswith("fpts_")] + ["volume_source", "unpriced_stats"]
     synced = 0
     for p in players:
         src = flex.get(p.name) if p.roster_slot_id == 511 else None

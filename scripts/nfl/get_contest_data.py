@@ -1,4 +1,6 @@
+import argparse
 import logging
+import os
 from datetime import datetime, timedelta
 
 from ivan.sports.nfl.paths import CHROME_PROFILE_DIR
@@ -9,7 +11,7 @@ from ivan.sports.nfl.models import (
     HistoricalContest, 
     ClassicContestMetadata,
 )
-from ivan.sports.nfl.historical_contest import process_showdown_contest, process_classic_contest
+from ivan.sports.nfl.historical_contest import process_contest
 
 log = logging.getLogger(__name__)
 
@@ -124,9 +126,17 @@ def run_pipeline(
     profile_directory: str = None,
     headless: bool = False,
     days_back: int = 7,
+    min_entries: int = 5000,
+    contest_ids: list[int] | None = None,
+    username: str | None = None,
 ):
     """
-    Main pipeline to process showdown contests.
+    Scrape finished contests into the historical tables. By default every
+    unprocessed contest of the last `days_back` days with at least
+    `min_entries` entries (classic slates are picked interactively);
+    `contest_ids` instead processes exactly those contests, processed or not,
+    without prompting. `username` additionally records our own entries'
+    finish (contest_entry_result) for the tax backtest.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -151,18 +161,26 @@ def run_pipeline(
     processed_showdown = session.query(ShowdownContestMetadata.contest_id).subquery()
     processed_classic = session.query(ClassicContestMetadata.contest_id).subquery()
 
-    to_process = (
-        session.query(HistoricalContest)
-        .filter(
-            HistoricalContest.date >= cutoff,
-            HistoricalContest.date <= now,
-            ~HistoricalContest.contest_id.in_(processed_showdown),
-            ~HistoricalContest.contest_id.in_(processed_classic),
-            HistoricalContest.total_entries >= 5000,  # Filter by minimum entries
+    if contest_ids:
+        to_process = (session.query(HistoricalContest)
+                      .filter(HistoricalContest.contest_id.in_([int(c) for c in contest_ids]))
+                      .order_by(HistoricalContest.date.desc()).all())
+        missing = set(int(c) for c in contest_ids) - {hc.contest_id for hc in to_process}
+        if missing:
+            log.warning(f"{len(missing)} contest id(s) not in historical_contest_information: {sorted(missing)}")
+    else:
+        to_process = (
+            session.query(HistoricalContest)
+            .filter(
+                HistoricalContest.date >= cutoff,
+                HistoricalContest.date <= now,
+                ~HistoricalContest.contest_id.in_(processed_showdown),
+                ~HistoricalContest.contest_id.in_(processed_classic),
+                HistoricalContest.total_entries >= min_entries,
+            )
+            .order_by(HistoricalContest.date.desc())
+            .all()
         )
-        .order_by(HistoricalContest.date.desc())
-        .all()
-    )
     
     log.info(f"Found {len(to_process)} contests to process")
 
@@ -180,8 +198,11 @@ def run_pipeline(
     log.info(f"Found {len(showdown_contests)} showdown contests (will process all)")
     log.info(f"Found {len(classic_contests)} classic contests (user selection required)")
     
-    # Interactive draft group selection for classic contests only
-    if classic_contests:
+    # Interactive draft group selection for classic contests only (not when the contests were named)
+    if classic_contests and contest_ids:
+        selected_draft_groups = sorted({hc.draft_group_id for hc in classic_contests})
+        filtered_classic_contests = classic_contests
+    elif classic_contests:
         selected_draft_groups = select_draft_groups_interactively(session, classic_contests)
         
         # Filter classic contests to only include selected draft_groups
@@ -207,17 +228,14 @@ def run_pipeline(
         log.info(f"Processing contest {hc.contest_id} from {hc.date}")
         
         try:
-            df = download_contest_dataframe(sess, hc.contest_id)
+            df = download_contest_dataframe(sess, hc.contest_id, raw_sport="nfl")
             
             if df is None or df.empty:
                 log.warning(f"Skipping contest {hc.contest_id}: no data")
                 continue
             
-            # Route to appropriate processor
-            if is_showdown_contest(hc):
-                success = process_showdown_contest(session, hc, df)
-            else:
-                success = process_classic_contest(session, hc, df)
+            # field scores + own entries, then the processor for the contest type
+            success = process_contest(session, hc, df, username=username)
             
             if success:
                 success_count += 1
@@ -229,13 +247,30 @@ def run_pipeline(
     
         
     log.info(f"Pipeline complete: {success_count}/{len(to_process)} contests processed")
+    from ivan.core import raw as _raw
+    logging.info(f"raw artifacts indexed: {_raw.sync_index(session, 'nfl')} new")
     session.close()
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Scrape finished DraftKings contests into the historical tables")
+    ap.add_argument("--days-back", type=int, default=7, help="look back this many days (default 7)")
+    ap.add_argument("--min-entries", type=int, default=5000, help="skip contests smaller than this (default 5000)")
+    ap.add_argument("--contest-ids", default=None,
+                    help="comma-separated contest ids to process exactly (any size, already processed or not)")
+    ap.add_argument("--username", default=os.environ.get("IVAN_DK_USERNAME"),
+                    help="your DraftKings username: records your own entries' finish for the tax backtest "
+                         "(default $IVAN_DK_USERNAME)")
+    ap.add_argument("--headless", action="store_true")
+    a = ap.parse_args()
+    ids = [int(x) for x in a.contest_ids.split(",") if x.strip()] if a.contest_ids else None
     run_pipeline(
         user_data_dir=str(CHROME_PROFILE_DIR),
         profile_directory="Default",  # or "Profile 1", etc.
-        headless=False,
+        headless=a.headless,
+        days_back=a.days_back,
+        min_entries=a.min_entries,
+        contest_ids=ids,
+        username=a.username,
     )
 
 if __name__ == "__main__":

@@ -104,6 +104,19 @@ def choose_lineup_ids(
     return [sims[i].lineup_id for i in selected]
 
 
+def sim_roi_traces(session: Session, contest_name: str, lineup_ids) -> dict[int, np.ndarray]:
+    """Per-simulation ROI of each lineup in this contest's results: lineup_id -> array of length num_sims."""
+    ids = [int(i) for i in lineup_ids]
+    out: dict[int, np.ndarray] = {}
+    for i in range(0, len(ids), 900):
+        rows = (session.query(LineupSimulationResult.lineup_id, LineupSimulationResult.roi)
+                .filter(LineupSimulationResult.contest_name == contest_name,
+                        LineupSimulationResult.lineup_id.in_(ids[i:i + 900])).all())
+        for lid, roi in rows:
+            out[int(lid)] = np.asarray(roi, dtype=np.float32)
+    return out
+
+
 def _viz(sims, raw, q, dist_mat, fpts_matrix, selected, top_q, trace, lam, weights, norm, max_points=1500, seed=0) -> dict:
     """
     What the chooser saw, for plotting: every candidate's cash %, ROI and
