@@ -313,3 +313,40 @@ def simulate_one_contest(
         except Exception as e:                      # never sink a simulation over its paper trail
             print(f"  WARNING: could not write the run artifact for contest {contest_id}: {type(e).__name__}: {e}")
     return sim_report.jsonable(report)
+
+
+# ----------------------------------------------------------------------------- every contest in an entries file
+def contests_in_entries(entries_csv) -> pd.DataFrame:
+    """The distinct contests of a DraftKings entries file (one row per contest name, highest id kept)."""
+    from ivan.sports.nfl.lineup_export import read_entries
+    df = read_entries(entries_csv)[["Contest ID", "Contest Name"]].copy()
+    df["Contest Name"] = df["Contest Name"].str.strip()
+    return df.sort_values("Contest ID").drop_duplicates(subset=["Contest Name"], keep="last").reset_index(drop=True)
+
+
+def simulate_entries(session, entries_csv, config_path, n_sims: int, field_cap: int, use_classic_dupes: bool = False,
+                     artifact_dir: str | Path | None = None, log=print) -> dict:
+    """
+    Simulate every contest in the entries file (simulate_one_contest each; a failure is
+    logged and the others still run). Returns {"contests", "simulated", "failed", "reports"}.
+    """
+    contests = contests_in_entries(entries_csv)
+    art = Path(artifact_dir) if artifact_dir is not None else None
+    log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}"
+        + (f"; run artifacts -> {art}" if art is not None else ""))
+    out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}}
+    for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
+        log(f"--- {i}/{len(contests)} ---")
+        try:
+            report = simulate_one_contest(session=session, contest_id=int(cid), contest_name=name, config_path=str(config_path),
+                                          field_cap=field_cap, num_sims=n_sims, use_classic_dupes=use_classic_dupes, artifact_dir=art)
+            out["reports"][int(cid)] = report
+            out["simulated"] += 1
+            log(sim_report.format_summary(report))
+        except Exception as e:   # noqa: BLE001 - one contest failing must not lose the others
+            import traceback
+            session.rollback()
+            out["failed"].append({"contest_id": int(cid), "name": name, "error": f"{type(e).__name__}: {e}"})
+            log(f"FAILED contest {cid} ('{name}'): {e}\n{traceback.format_exc()}")
+    log(f"Done: {out['simulated']} contest(s) simulated" + (f", {len(out['failed'])} failed" if out["failed"] else ""))
+    return out

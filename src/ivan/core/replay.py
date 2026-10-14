@@ -18,8 +18,10 @@ repeats is the pipeline's own noise: how much of a window's profit came
 from which lineups the generator jittered to and which universes the sim
 happened to draw.
 
-A sport plugs in through a SportAdapter (see ivan.sports.nfl.replay_adapter).
-The live database is never written.
+A sport plugs in through a SportAdapter (see ivan.sports.nfl.replay_adapter);
+every stage runs in this process on the replay session, with the seed and run
+directory set in the environment around it (the stages read IVAN_SEED and
+IVAN_RUN_DIR wherever they draw or write). The live database is never written.
 """
 from __future__ import annotations
 
@@ -28,8 +30,6 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
-import sys
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -40,7 +40,6 @@ from typing import Callable, Dict, List, Optional, Protocol, Sequence
 from sqlalchemy import text
 
 from ivan.core import archive, artifacts, clock, seed as seedmod
-from ivan.core.utils import PROJECT_ROOT
 from ivan.database.session import get_session, init_db, add_missing_columns
 
 MANIFEST = "replay.json"
@@ -54,11 +53,11 @@ class SportAdapter(Protocol):
 
     def restore(self, session, blobs: Dict[str, List[dict]], log: Callable[[str], None]) -> dict: ...
     def project(self, session, log: Callable[[str], None]) -> None: ...
-    def generate(self, env: dict, n_lineups: int, jobs: int, log_path: Path, log: Callable[[str], None]) -> None: ...
+    def generate(self, session, n_lineups: int, jobs: int, log: Callable[[str], None]) -> dict: ...
     def contests_for(self, session, lock_local: datetime, mode: str, slate_key: Optional[str] = None) -> List[dict]: ...
     def entries_csv(self, picks: List[dict], path: Path) -> int: ...
-    def simulate(self, env: dict, entries_csv: Path, n_sims: int, field_cap: int, log_path: Path, log: Callable[[str], None]) -> None: ...
-    def choose(self, env: dict, entries_csv: Path, out_dir: Path, weights: dict, log_path: Path, log: Callable[[str], None]) -> None: ...
+    def simulate(self, session, entries_csv: Path, n_sims: int, field_cap: int, log: Callable[[str], None]) -> dict: ...
+    def choose(self, session, entries_csv: Path, out_dir: Path, weights: dict, log: Callable[[str], None]) -> dict: ...
 
 
 # --------------------------------------------------------------------------- the contest menu
@@ -166,23 +165,6 @@ def clear_working_tables(session, working_tables: Sequence[str]) -> None:
     session.commit()
 
 
-# --------------------------------------------------------------------------- running scripts
-def run_script(cmd: List[str], env: dict, log_path: Path, log=print, cwd: Path = PROJECT_ROOT) -> None:
-    """Run a pipeline script as a subprocess, tee its output to log_path, raise on failure."""
-    log(f"$ {' '.join(str(c) for c in cmd)}")
-    full_env = {**os.environ, **env}
-    for k in [k for k, v in env.items() if v is None]:      # None unsets a variable for the child
-        full_env.pop(k, None)
-    with open(log_path, "a") as fh:
-        fh.write(f"\n$ {' '.join(str(c) for c in cmd)}\n")
-        fh.flush()
-        proc = subprocess.run([sys.executable] + [str(c) for c in cmd], cwd=str(cwd), env=full_env,
-                              stdout=fh, stderr=subprocess.STDOUT)
-    if proc.returncode != 0:
-        tail = "".join(open(log_path).readlines()[-15:])
-        raise RuntimeError(f"{Path(cmd[0]).name} exited {proc.returncode}; log tail:\n{tail}")
-
-
 # --------------------------------------------------------------------------- the driver
 @dataclass
 class ReplayOptions:
@@ -208,11 +190,6 @@ def repeat_dir_name(k: int) -> str:
 
 def repeat_seed(opts: ReplayOptions, k: int) -> Optional[int]:
     return None if opts.seed is None else int(opts.seed) + int(k)
-
-
-def _seed_env(value: Optional[int]) -> dict:
-    """The seed variable for a child process (None = make sure it is unset)."""
-    return {seedmod.ENV: None if value is None else str(value)}
 
 
 class _env_var:
@@ -244,24 +221,34 @@ def manifest_repeats(m: dict) -> List[dict]:
     return list(reps)
 
 
-def _run_repeat(adapter: SportAdapter, session, env: dict, k: int, seed: Optional[int], out_dir: Path, rep_dir: Path,
+def _tee(log_path: Path, log):
+    """A log function that also appends to the slate's replay.log."""
+    def _log(msg: str) -> None:
+        with open(log_path, "a") as fh:
+            fh.write(str(msg) + "\n")
+        log(msg)
+    return _log
+
+
+def _run_repeat(adapter: SportAdapter, session, k: int, seed: Optional[int], out_dir: Path, rep_dir: Path,
                 entries_csv: Path, menu: Menu, opts: ReplayOptions, log_path: Path, log) -> dict:
     rep_dir.mkdir(parents=True, exist_ok=True)
     r = {"k": k, "dir": "." if rep_dir == out_dir else rep_dir.name, "seed": seed, "status": "running", "stages": {},
          "started_at": datetime.now().isoformat(timespec="seconds")}
     t_rep = time.time()
+    stage_log = _tee(log_path, log)
     try:
         clear_working_tables(session, getattr(adapter, "repeat_tables", ()))
-        env_k = {**env, **_seed_env(seed), artifacts.ENV: str(rep_dir)}
-        t0 = time.time()
-        adapter.generate(env_k, opts.n_lineups, opts.jobs, log_path, log)
-        r["stages"]["generate"] = {"seconds": round(time.time() - t0, 1), "n_lineups": opts.n_lineups}
-        t0 = time.time()
-        adapter.simulate(env_k, entries_csv, opts.n_sims, opts.field_cap, log_path, log)
-        r["stages"]["simulate"] = {"seconds": round(time.time() - t0, 1), "n_sims": opts.n_sims, "field_cap": opts.field_cap}
-        t0 = time.time()
-        adapter.choose(env_k, entries_csv, rep_dir, menu.weights, log_path, log)
-        r["stages"]["choose"] = {"seconds": round(time.time() - t0, 1), "weights": menu.weights}
+        with _env_var(seedmod.ENV, None if seed is None else str(seed)), _env_var(artifacts.ENV, str(rep_dir)):
+            t0 = time.time()
+            info = adapter.generate(session, opts.n_lineups, opts.jobs, stage_log) or {}
+            r["stages"]["generate"] = {"seconds": round(time.time() - t0, 1), "n_lineups": opts.n_lineups, **info}
+            t0 = time.time()
+            info = adapter.simulate(session, entries_csv, opts.n_sims, opts.field_cap, stage_log) or {}
+            r["stages"]["simulate"] = {"seconds": round(time.time() - t0, 1), "n_sims": opts.n_sims, "field_cap": opts.field_cap, **info}
+            t0 = time.time()
+            info = adapter.choose(session, entries_csv, rep_dir, menu.weights, stage_log) or {}
+            r["stages"]["choose"] = {"seconds": round(time.time() - t0, 1), "weights": menu.weights, **info}
         r["status"] = "ok"
     except Exception as e:
         r["status"] = "error"
@@ -323,12 +310,11 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
              "status": "running", "stages": {}, "repeats": done}
         mpath.write_text(json.dumps(m, indent=2))
         as_of = cap.lock - timedelta(minutes=1)
-        env = {db_env: f"sqlite:///{replay_db}", clock.ENV: as_of.isoformat(timespec="seconds")}
         project_seed = repeat_seed(opts, 0)
         t_slate = time.time()
         try:
-            with clock.frozen(as_of), _env_var(db_env, env[db_env]), _env_var(seedmod.ENV, None if project_seed is None else str(project_seed)), \
-                    _env_var(artifacts.ENV, str(out_dir)):
+            with clock.frozen(as_of), _env_var(db_env, f"sqlite:///{replay_db}"), \
+                    _env_var(seedmod.ENV, None if project_seed is None else str(project_seed)), _env_var(artifacts.ENV, str(out_dir)):
                 clear_working_tables(session, adapter.working_tables)
                 info_fn = getattr(adapter, "models_info", None)
                 m["models"] = info_fn() if info_fn else {}
@@ -358,7 +344,7 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
 
                 for k in todo:
                     rep_dir = out_dir if n_rep == 1 else out_dir / repeat_dir_name(k)
-                    r = _run_repeat(adapter, session, env, k, repeat_seed(opts, k), out_dir, rep_dir, entries_csv, menu, opts, log_path, log)
+                    r = _run_repeat(adapter, session, k, repeat_seed(opts, k), out_dir, rep_dir, entries_csv, menu, opts, log_path, log)
                     m["repeats"] = sorted([x for x in m["repeats"] if int(x["k"]) != k] + [r], key=lambda x: int(x["k"]))
                     mpath.write_text(json.dumps(m, indent=2, default=str))
                     if n_rep > 1:

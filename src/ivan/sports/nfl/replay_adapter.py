@@ -1,12 +1,12 @@
 # src/ivan/sports/nfl/replay_adapter.py
 """
 The NFL pipeline as the replay driver sees it (see ivan.core.replay): how to
-put an archived slate back into the working tables and which scripts to run.
-The stages are the live ones; nothing is reimplemented here.
+put an archived slate back into the working tables and how to run each stage
+on it. The stages are the live ones (ivan.sports.nfl.ingest, field_generation,
+simulate_contest, lineup_export); nothing is reimplemented here.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Callable, Dict, List
@@ -15,11 +15,8 @@ import pandas as pd
 from sqlalchemy import func
 
 from ivan.core.config import config_path, load_config
-from ivan.core.replay import run_script
-from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nfl.models import NFLBase, ContestPayout, HistoricalContest, NFLGameOdds, NFLOdds, NFLPlayer
 
-SCRIPTS = PROJECT_ROOT / "scripts" / "nfl"
 SHOWDOWN_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee", "CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"]
 CLASSIC_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee", "QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"]
 CONTEST_TYPES = {"showdown": ("Showdown Captain Mode",), "classic": ("Classic",)}
@@ -83,8 +80,9 @@ class NFLReplayAdapter:
         log(f"projected {info.players} players")
 
     # ---------------------------------------------------------------- field
-    def generate(self, env: dict, n_lineups: int, jobs: int, log_path: Path, log) -> None:
-        run_script([SCRIPTS / "generate_lineups.py", str(n_lineups), str(jobs), "-c", str(self.config_path)], env, log_path, log)
+    def generate(self, session, n_lineups: int, jobs: int, log) -> dict:
+        from ivan.sports.nfl.field_generation import generate_field
+        return generate_field(n_lineups, jobs, self.config_path, log=log, progress=False, session=session)
 
     # ---------------------------------------------------------------- contests
     def contests_for(self, session, lock_local: datetime, mode: str, slate_key: Optional[str] = None) -> List[dict]:
@@ -122,11 +120,19 @@ class NFLReplayAdapter:
         return len(df)
 
     # ---------------------------------------------------------------- simulate / choose
-    def simulate(self, env: dict, entries_csv: Path, n_sims: int, field_cap: int, log_path: Path, log) -> None:
-        run_script([SCRIPTS / "sim.py", "--entries", str(entries_csv), "-n", str(n_sims), "-c", str(field_cap),
-                    "--config", str(self.config_path)], env, log_path, log)
+    def simulate(self, session, entries_csv: Path, n_sims: int, field_cap: int, log) -> dict:
+        from ivan.core import artifacts
+        from ivan.sports.nfl.paths import OUTPUT_DIR
+        from ivan.sports.nfl.simulate_contest import simulate_entries
+        r = simulate_entries(session, entries_csv, self.config_path, n_sims=n_sims, field_cap=field_cap,
+                             artifact_dir=artifacts.sim_dir(OUTPUT_DIR), log=log)
+        if r["failed"]:
+            raise RuntimeError(f"{len(r['failed'])} of {r['contests']} contest(s) failed to simulate: "
+                               + "; ".join(f"{f['contest_id']} {f['error']}" for f in r["failed"]))
+        return {"contests": r["contests"], "simulated": r["simulated"]}
 
-    def choose(self, env: dict, entries_csv: Path, out_dir: Path, weights: dict, log_path: Path, log) -> None:
-        run_script([SCRIPTS / "choose.py", "--entries", str(entries_csv), "--no-prompt",
-                    "--weights-json", json.dumps({"default": weights}), "-o", str(Path(out_dir) / "chosen_entries.csv")],
-                   env, log_path, log)
+    def choose(self, session, entries_csv: Path, out_dir: Path, weights: dict, log) -> dict:
+        from ivan.sports.nfl import lineup_export as LE
+        run, paths = LE.run_choose(session, entries_csv, Path(out_dir) / "chosen_entries.csv",
+                                   LE.weights_resolver(overrides={"default": dict(weights)}), log=log)
+        return {"entries": int(run.total_sd + run.total_classic), "files": sorted(paths)}

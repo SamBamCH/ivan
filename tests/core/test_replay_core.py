@@ -110,8 +110,10 @@ class FakeAdapter:
         import os
         self.calls.append(("project", os.environ.get("IVAN_SEED")))
 
-    def generate(self, env, n_lineups, jobs, log_path, log):
-        self.calls.append(("generate", env.get("IVAN_SEED")))
+    def generate(self, session, n_lineups, jobs, log):
+        import os
+        self.calls.append(("generate", os.environ.get("IVAN_SEED")))
+        return {"unique": n_lineups}
 
     def contests_for(self, session, lock_local, mode, slate_key=None):
         return [{"contest_id": 1, "name": "Fake Showdown mini-MAX", "entry_fee": 1.0, "total_entries": 100, "multi_entry": 20, "has_payouts": True}]
@@ -120,11 +122,14 @@ class FakeAdapter:
         path.write_text("Entry ID,Contest Name,Contest ID,Entry Fee\n")
         return sum(p["entries"] for p in picks)
 
-    def simulate(self, env, entries_csv, n_sims, field_cap, log_path, log):
-        self.calls.append(("simulate", env.get("IVAN_SEED")))
+    def simulate(self, session, entries_csv, n_sims, field_cap, log):
+        import os
+        self.calls.append(("simulate", os.environ.get("IVAN_SEED")))
 
-    def choose(self, env, entries_csv, out_dir, weights, log_path, log):
-        self.calls.append(("choose", env.get("IVAN_SEED")))
+    def choose(self, session, entries_csv, out_dir, weights, log):
+        import os
+        self.calls.append(("choose", os.environ.get("IVAN_SEED")))
+        assert os.environ.get("IVAN_RUN_DIR") == str(out_dir)
         stamp = f"20251123-1919{len(self.calls):02d}"
         (out_dir / f"chosen_entries.lineups.{stamp}.csv").write_text("entry_id,contest_id\n")
 
@@ -167,3 +172,4 @@ def test_run_replay_repeats_and_resume(tmp_path):
     d2 = out2 / "fake" / "20251123-1920_showdown_5"
     assert ms[0]["status"] == "ok" and "choose" in ms[0]["stages"] and list(d2.glob("chosen_entries.lineups.*.csv"))
     assert ("generate", None) in ad.calls and rp.repeat_dirs([d2]) == {0: [d2]}
+    assert ms[0]["stages"]["generate"]["unique"] == rp.ReplayOptions().n_lineups     # a stage's dict lands in the manifest
