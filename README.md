@@ -476,7 +476,7 @@ DraftKings Chrome profile.
 |---|---|
 | `scripts/nfl/overnight.py` | Fetch boxscores, clear last slate's lineups and sim results, `VACUUM` when the file is mostly free pages, sync to the server. |
 | `scripts/nfl/get_contest_data.py` | Scrape finished contests (lineups, ownership, payouts) into the historical tables. Selenium + `chrome-selenium/dk-profile`. |
-| `scripts/nfl/build_models.py` | Player marginals and copulas, team vine, DST/positional tables → `data/nfl/models/`. |
+| `scripts/nfl/build_models.py` | DST game table and DST odds fit, classic field models; `--cutoff` builds the full as-of set (dupe, sd calibration, ownership) → `data/nfl/models/`. |
 | `scripts/nfl/build_dupe_model.py` | Two-stage showdown duplication model → `data/nfl/models/{contest_dupe_quantiles,lineup_dupe_model}.pkl`. |
 | `scripts/nfl/lineup_exposures.py` | Ad-hoc exposure and stacking diagnostics over the current field. |
 

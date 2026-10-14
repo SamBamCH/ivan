@@ -37,28 +37,6 @@ from ivan.sports.nfl.paths import models_dir
 from ivan.sports.nfl.models import NFLPlayer, Lineup
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 
-def _smooth_lam(dupe_lambda: np.ndarray, *,
-                strength: float = 0.6,
-                sigma: float = 0.18,
-                eps_frac: float = 0.06) -> np.ndarray:
-    """
-    Smooth duplication lambda to fatten the middle percentiles.
-    
-    Applies a Gaussian bump centered at median to reduce extreme concentration
-    on the very top chalk lineups.
-    """
-    def _percentiles_01(x: np.ndarray) -> np.ndarray:
-        r = np.argsort(np.argsort(x))
-        return (r + 0.5) / float(x.size)
-    
-    lam = np.clip(dupe_lambda.astype(np.float64), 1e-12, None)
-    p = _percentiles_01(lam)
-    s = max(1e-3, float(sigma))
-    temp = 1.0 + float(strength) * np.exp(-0.5 * ((p - 0.5) / s) ** 2)
-    lam = np.power(lam, 1.0 / temp)
-    lam += float(eps_frac) * lam.mean()
-    return np.clip(lam, 1e-12, None)
-
 # ==============================================================================
 # UNIFIED ENTRY POINT
 # ==============================================================================
@@ -172,33 +150,6 @@ def load_showdown_models(model_dir: str | Path | None = None):
         'mode': 'two_stage',
     }
     
-    # except FileNotFoundError:
-    #     # Fall back to legacy single-stage model
-    #     try:
-    #         print("⚠️  Two-stage models not found, trying legacy single-stage model...")
-    #         with open(model_dir / 'showdown_duplication_model.pkl', 'rb') as f:
-    #             dupe_model = pickle.load(f)
-            
-    #         with open(model_dir / 'showdown_scaler.pkl', 'rb') as f:
-    #             scaler = pickle.load(f)
-            
-    #         with open(model_dir / 'showdown_feature_cols.pkl', 'rb') as f:
-    #             feature_cols = pickle.load(f)
-            
-    #         print("✓ Loaded legacy single-stage model")
-            
-    #         return {
-    #             'dupe_model': dupe_model,
-    #             'scaler': scaler,
-    #             'feature_cols': feature_cols,
-    #             'mode': 'legacy',
-    #         }
-    #     except FileNotFoundError as e:
-    #         raise FileNotFoundError(
-    #             f"Showdown models not found in {model_dir}. "
-    #             f"Run 'python scripts/nfl/train_showdown_model.py' first."
-    #         ) from e
-
 # ==============================================================================
 # TWO-STAGE PREDICTION FUNCTION
 # ==============================================================================
@@ -408,54 +359,6 @@ def _stats(x: np.ndarray) -> dict:
     return {"min": float(x.min()), "mean": float(x.mean()), "max": float(x.max()),
             "p10": float(q[0]), "p25": float(q[1]), "p50": float(q[2]), "p75": float(q[3]), "p90": float(q[4])}
 
-def estimate_field_density(total_entries: int) -> float:
-    """
-    Estimate typical field density based on historical contest sizes.
-    
-    Field density = (unique lineups / total entries) decreases as contest size grows.
-    
-    Historical averages:
-    - Small (<5K): ~65% unique
-    - Medium (5K-20K): ~45% unique  
-    - Large (20K-100K): ~30% unique
-    - Massive (>100K): ~20% unique
-    """
-    if total_entries < 5000:
-        return 0.65
-    elif total_entries < 20000:
-        return 0.45
-    elif total_entries < 100000:
-        return 0.30
-    else:
-        return 0.20
-
-
-def compute_contest_features_from_lineups(
-    total_entries: int,
-    entry_fee: float,
-    player_ownership: np.ndarray,
-) -> dict:
-    """
-    Compute simplified macro contest-level features for Stage 1 model.
-    
-    Args:
-        total_entries: Contest size
-        entry_fee: Entry fee (proxy for contest difficulty)
-        player_ownership: Array of player ownership percentages
-    
-    Returns:
-        dict with keys: total_entries, entry_fee, ownership_gini
-    """
-    # Ownership concentration (Gini coefficient)
-    ownership_gini = calculate_gini(player_ownership) if len(player_ownership) > 1 else 0.5
-    
-    return {
-        'total_entries': total_entries,
-        'entry_fee': entry_fee,
-        'ownership_gini': ownership_gini,
-    }
-
-
 def build_lineup_matrix(session: Session):
     """
     Build sparse lineup matrix and metadata.
@@ -558,49 +461,6 @@ def build_player_samples(session: Session, pid_to_col: Dict[int, int]) -> np.nda
     
     return P
 
-
-def build_player_samples_independent(
-    session: Session, 
-    pid_to_col: Dict[int, int], 
-    n_sims: int | None = None,
-    seed: int | None = None
-) -> np.ndarray:
-    """
-    Build independent (uncorrelated) player samples by shuffling each player separately.
-    This breaks correlations while preserving individual player distributions.
-    
-    Used for popularity-based features where we want player means without correlation effects.
-    """
-    raw = generate_correlated_samples_gaussian(session, seed=seed_for("field/independent"))
-    sizes = [len(v) for v in raw.values() if isinstance(v, np.ndarray) and v.size]
-    if not sizes:
-        raise RuntimeError("No player samples available.")
-    
-    base_ns = int(min(sizes))
-    ns = int(n_sims or base_ns)
-
-    P = np.zeros((ns, len(pid_to_col)), dtype=np.float32)
-    rng = np.random.default_rng(seed)
-    
-    for pid, col in pid_to_col.items():
-        v = raw.get(pid)
-        if not isinstance(v, np.ndarray) or v.size == 0:
-            continue
-        
-        w = v.astype(np.float32, copy=False)
-        
-        # Resample to match desired n_sims
-        if w.shape[0] < ns:
-            reps = int(np.ceil(ns / w.shape[0]))
-            w = np.tile(w, reps)[:ns]
-        else:
-            w = w[:ns]
-        
-        # Shuffle to break correlations
-        rng.shuffle(w)
-        P[:, col] = w
-    
-    return P
 
 # ==============================================================================
 # OWNERSHIP EXTRACTION
@@ -767,119 +627,6 @@ def get_player_ownership(session: Session, pid_to_col: Dict[int, int]) -> np.nda
 # FEATURE COMPUTATION FOR LEARNED MODEL
 # ==============================================================================
 
-def compute_lineup_features_for_model(
-    lineup_ids: np.ndarray,
-    L,  # sparse lineup matrix [n_lineups x n_players]
-    spends: np.ndarray,
-    cpt_col_by_row: np.ndarray,
-    player_ownership: np.ndarray,  # [n_players] actual ownership
-    total_entries: int,
-    verbose: bool = False,
-) -> np.ndarray:
-    """
-    Compute simplified 4-feature matrix for trained duplication model.
-    
-    Features (must match training order):
-        1. salary_remaining_pct - % of salary cap unused
-        2. ownership_sum - Sum of all player ownership percentages
-        3. cpt_ownership_pct - Captain's ownership percentage
-        4. log_total_entries - Log10 of contest total entries
-    
-    Returns: [n_lineups x 4] array ready for model prediction
-    """
-    n_lineups = L.shape[0]
-    
-    if verbose:
-        print("\n" + "="*70)
-        print("SIMPLIFIED FEATURE COMPUTATION (4 features)")
-        print("="*70)
-        print(f"Number of lineups: {n_lineups:,}")
-        print(f"Number of players: {L.shape[1]:,}")
-        print(f"Contest size: {total_entries:,} entries")
-    
-    # ====================================================================
-    # Feature 1: Salary remaining (% of cap unused)
-    # ====================================================================
-    remaining = (SALARY_CAP - spends).astype(np.int32)
-    salary_remaining_pct = remaining / SALARY_CAP
-    
-    if verbose:
-        print(f"\n1. SALARY REMAINING:")
-        print(f"   Min: ${remaining.min()} ({salary_remaining_pct.min():.3%})")
-        print(f"   Max: ${remaining.max()} ({salary_remaining_pct.max():.3%})")
-        print(f"   Mean: ${remaining.mean():.0f} ({salary_remaining_pct.mean():.3%})")
-    
-    # ====================================================================
-    # Feature 2: Total lineup ownership (sum of all players)
-    # ====================================================================
-    ownership_sum = np.asarray(L @ player_ownership, dtype=np.float64)
-    
-    if verbose:
-        print(f"\n2. TOTAL LINEUP OWNERSHIP:")
-        print(f"   Min: {ownership_sum.min():.2f}%")
-        print(f"   Max: {ownership_sum.max():.2f}%")
-        print(f"   Mean: {ownership_sum.mean():.2f}%")
-        print(f"   Zero-ownership lineups: {(ownership_sum == 0).sum()} / {n_lineups}")
-    
-    # ====================================================================
-    # Feature 3: Captain ownership
-    # ====================================================================
-    cpt_ownership = np.zeros(n_lineups, dtype=np.float64)
-    mask = cpt_col_by_row >= 0
-    if mask.any():
-        cpt_ownership[mask] = player_ownership[cpt_col_by_row[mask]]
-    
-    if verbose:
-        print(f"\n3. CAPTAIN OWNERSHIP:")
-        print(f"   Valid captains: {mask.sum()} / {n_lineups}")
-        if mask.any():
-            print(f"   Min: {cpt_ownership[mask].min():.2f}%")
-            print(f"   Max: {cpt_ownership[mask].max():.2f}%")
-            print(f"   Mean: {cpt_ownership[mask].mean():.2f}%")
-            print(f"   Zero-ownership captains: {(cpt_ownership[mask] == 0).sum()}")
-    
-    # ====================================================================
-    # Feature 4: Contest size (log scale)
-    # ====================================================================
-    log_total_entries = np.log10(max(1, total_entries))
-    log_total_entries_array = np.full(n_lineups, log_total_entries, dtype=np.float64)
-    
-    if verbose:
-        print(f"\n4. CONTEST SIZE:")
-        print(f"   Total entries: {total_entries:,}")
-        print(f"   Log10(entries): {log_total_entries:.3f}")
-    
-    # ====================================================================
-    # Build feature matrix (ORDER MATTERS - must match training!)
-    # ====================================================================
-    feature_array = np.column_stack([
-        salary_remaining_pct,
-        ownership_sum,
-        cpt_ownership,
-        log_total_entries_array,
-    ])
-    
-    if verbose:
-        print(f"\n{'='*70}")
-        print("FEATURE MATRIX SUMMARY")
-        print(f"{'='*70}")
-        print(f"Shape: {feature_array.shape}")
-        
-        # Show sample features for first 3 lineups
-        if n_lineups >= 3:
-            print(f"\nSample features (first 3 lineups):")
-            print(f"{'Feature':<25} {'Lineup 1':>12} {'Lineup 2':>12} {'Lineup 3':>12}")
-            print("-" * 70)
-            feature_names = ['salary_remaining_pct', 'ownership_sum', 
-                           'cpt_ownership_pct', 'log_total_entries']
-            for i, name in enumerate(feature_names):
-                vals = [f"{feature_array[j, i]:12.4f}" for j in range(3)]
-                print(f"{name:<25} {' '.join(vals)}")
-        
-        print(f"{'='*70}\n")
-    
-    return feature_array
-
 # ==============================================================================
 # DIVERSITY SAMPLING WITH EUCLIDEAN DISTANCES
 # ==============================================================================
@@ -974,55 +721,6 @@ def compute_lineup_diversity_matrix(
         print(f"  WARNING: Diversity computation failed ({e}), using uniform diversity")
         return np.ones((n_lineups, n_lineups)), {'error': str(e)}
 
-
-def apply_diversity_penalty_to_weights(
-    predicted_dupes: np.ndarray,
-    dist_mat: np.ndarray,
-    diversity_lambda: float = 0.1,
-) -> np.ndarray:
-    """
-    Adjust predicted duplicate weights using diversity penalty based on Euclidean distances.
-
-    Lineups that are far apart in fpts space get higher relative weight.
-    Lineups that are close together get lower relative weight (penalized).
-
-    Formula:
-        adjusted_weight[i] = predicted_dupes[i] * (1 + lambda * mean_distance_to_all[i])
-
-    Args:
-        predicted_dupes: Original predicted duplicate counts [n_lineups]
-        dist_mat: Pairwise distance matrix [n_lineups x n_lineups]
-        diversity_lambda: Strength of diversity penalty (0.0 = no penalty, higher = stronger)
-
-    Returns:
-        adjusted_weights: Normalized weights [n_lineups] that sum to 1
-    """
-    n_lineups = len(predicted_dupes)
-
-    if n_lineups <= 1 or dist_mat.size == 0:
-        return predicted_dupes / (predicted_dupes.sum() + 1e-9)
-
-    # Compute mean distance from each lineup to all others
-    mean_distances = np.zeros(n_lineups, dtype=np.float64)
-    for i in range(n_lineups):
-        # Average distance to all other lineups (excluding self, which is 0)
-        other_dists = np.delete(dist_mat[i], i)
-        if other_dists.size > 0:
-            mean_distances[i] = float(np.mean(other_dists))
-
-    # Normalize distances to [0, 1]
-    if mean_distances.max() > 0:
-        norm_distances = mean_distances / (mean_distances.max() + 1e-9)
-    else:
-        norm_distances = np.zeros_like(mean_distances)
-
-    # Apply diversity penalty: increase weight for diverse lineups
-    diversity_multiplier = 1.0 + diversity_lambda * norm_distances
-
-    adjusted_weights = predicted_dupes * diversity_multiplier
-    adjusted_weights = adjusted_weights / (adjusted_weights.sum() + 1e-9)
-
-    return adjusted_weights
 
 # ==============================================================================
 # UNIFIED DIVERSITY-GATED DUPLICATION SAMPLER

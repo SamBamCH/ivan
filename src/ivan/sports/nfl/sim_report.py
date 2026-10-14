@@ -622,5 +622,3 @@ def save_report(session: Session, report: dict, diag_dir: str | Path = DIAG_DIR)
     return out / "report.json"
 
 
-def load_reports(session: Session) -> List[ContestSimReport]:
-    return session.query(ContestSimReport).order_by(ContestSimReport.contest_name).all()

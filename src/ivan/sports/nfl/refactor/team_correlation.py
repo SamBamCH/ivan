@@ -39,7 +39,6 @@ import pandas as pd
 from scipy.stats import spearmanr
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from ivan.sports.nfl.actuals import history_cutoff
 
 from ivan.database.session import read_sql
 from ivan.sports.nfl.models import NFLStat
@@ -64,12 +63,6 @@ LEAGUE_SHRINK_GAMES = 300.0  # pseudo-observations pulling a team's matrices tow
 _SLOT_TABLE_CACHE: Dict[int, pd.DataFrame] = {}
 _WIDE_CACHE: Dict[int, pd.DataFrame] = {}
 _LEAGUE_CACHE: Dict[Tuple[int, Tuple[int, int] | None], Tuple[np.ndarray, np.ndarray, int]] = {}
-
-
-def clear_correlation_cache() -> None:
-    _SLOT_TABLE_CACHE.clear()
-    _WIDE_CACHE.clear()
-    _LEAGUE_CACHE.clear()
 
 
 def _assign_season_slot_labels(season_df: pd.DataFrame) -> Dict[str, str]:
@@ -345,9 +338,3 @@ def _default_cross_correlation() -> np.ndarray:
     return corr
 
 
-def get_team_correlations(session: Session, team_a: str, team_b: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(within A, within B, A x B cross) for a matchup."""
-    corr_a, _ = build_team_correlation(session, team_a, before=history_cutoff(session))
-    corr_b, _ = build_team_correlation(session, team_b, before=history_cutoff(session))
-    corr_cross, _ = build_cross_team_correlation(session, team_a, team_b)
-    return corr_a, corr_b, corr_cross

@@ -76,68 +76,6 @@ def get_upcoming_contest_ids(
     #    here 'dg' is the DraftGroupId shorthand in this payload
     return filtered
 
-def build_requests_session(profile_dir: str, headless: bool = False) -> requests.Session:
-    """
-    Launch Chrome with your real profile, ensure you're logged in,
-    copy cookies + UA into a requests.Session.
-    """
-    # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from webdriver_manager.chrome import ChromeDriverManager
-    opts = Options()
-    # run non-headless so Chrome can fully load the persisted profile/cookies
-    if headless:
-        opts.add_argument("--headless=new")  # if you must, but prefer False
-    opts.add_argument(f"--user-data-dir={profile_dir}")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--lang=en-US")
-
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=opts)
-
-    time.sleep(10)
-    try:
-        driver.get("https://www.draftkings.com/")
-        # Give time for any SSO redirect
-        time.sleep(3)
-
-        # Wait (briefly) until a DK cookie that only exists when logged in appears.
-        # Adjust names if your cookies differ; examples: 'dkng', 'dkng_session', 'api_token'
-        wanted = {"dkng", "dkng_session", "api_token", "csrf_token"}
-        for _ in range(20):
-            names = {c["name"] for c in driver.get_cookies()}
-            if wanted & names:
-                break
-            time.sleep(0.25)
-        else:
-            print("[warn] Did not detect an authenticated cookie. You may not be logged in for this profile.")
-
-        user_agent = driver.execute_script("return navigator.userAgent")
-        cookies    = driver.get_cookies()
-    finally:
-        driver.quit()
-
-    sess = requests.Session()
-    # Copy cookies verbatim for the right domain
-    for c in cookies:
-        # requests needs domain like '.draftkings.com' or 'www.draftkings.com'
-        sess.cookies.set(c["name"], c["value"], domain=c.get("domain") or "www.draftkings.com")
-
-    # Browser-like headers
-    sess.headers.update({
-        "User-Agent": user_agent,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Upgrade-Insecure-Requests": "1",
-        "Connection": "keep-alive",
-    })
-    return sess
-
 def _cookies_to_requests_session(driver: webdriver.Chrome) -> requests.Session:
     """Copy all visible cookies + user agent from Selenium into a requests.Session."""
     # Selenium is only needed for the logged-in DK scraper; keep it optional on servers.
@@ -430,23 +368,6 @@ def summarize_slates(contests: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]
             summary[dg]["count"] += 1
 
     return summary
-
-
-def get_upcoming_slate_ids(sport: str = "MLB") -> List[int]:
-    """
-    Returns all unique draftGroupIds for upcoming slates.
-    """
-    contests = fetch_all_contests(sport, raw_sport=raw_sport)
-    seen: List[int] = []
-    for c in contests:
-        dg = c.get("dg")
-        if dg and dg not in seen:
-            seen.append(dg)
-
-    if not seen:
-        raise RuntimeError(f"No upcoming slates for '{sport}'")
-    logging.info("Found %d slates: %s", len(seen), seen)
-    return seen
 
 
 def get_players_for_slate(draft_group_id: int, raw_sport: str | None = None) -> List[Dict[str, Any]]:

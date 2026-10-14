@@ -376,39 +376,6 @@ class ContestSimReport(NFLBase):
     report       = Column(JSON, nullable=False)
 
 
-class NFLTeamWeekPositionalFPTS(NFLBase):
-    __tablename__ = "nfl_team_week_positional_fpts"
-
-    season        = Column(Integer, primary_key=True)
-    season_type   = Column(String,  primary_key=True)   # e.g., 'REG', 'POST', 'PRE'
-    week          = Column(Integer, primary_key=True)
-    team          = Column(String,  primary_key=True)   # team code (same as 'recent_team' normalization)
-    opponent      = Column(String,  nullable=True)
-
-    # Own team
-    QB   = Column(Float, nullable=True)
-    RB1  = Column(Float, nullable=True)
-    RB2  = Column(Float, nullable=True)
-    WR1  = Column(Float, nullable=True)
-    WR2  = Column(Float, nullable=True)
-    WR3  = Column(Float, nullable=True)
-    TE1  = Column(Float, nullable=True)
-    TE2  = Column(Float, nullable=True)
-    K    = Column(Float, nullable=True)   # placeholder for future backfill
-    DST  = Column(Float, nullable=True)   # placeholder for future backfill
-
-    # Opponent
-    OPPQB   = Column(Float, nullable=True)
-    OPPRB1  = Column(Float, nullable=True)
-    OPPRB2  = Column(Float, nullable=True)
-    OPPWR1  = Column(Float, nullable=True)
-    OPPWR2  = Column(Float, nullable=True)
-    OPPWR3  = Column(Float, nullable=True)
-    OPPTE1  = Column(Float, nullable=True)
-    OPPTE2  = Column(Float, nullable=True)
-    OPPK    = Column(Float, nullable=True)  # placeholder
-    OPPDST  = Column(Float, nullable=True)  # placeholder
-
 class NFLGameOdds(NFLBase):
     __tablename__ = "game_odds"
 

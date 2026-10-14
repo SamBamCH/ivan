@@ -29,6 +29,7 @@ MODULES = [
     "ivan.sports.nfl.correlated_samples", "ivan.sports.nfl.choose", "ivan.sports.nfl.ownership",
     "ivan.sports.nfl.refactor.player", "ivan.sports.common.draftkings", "ivan.sports.common.odds",
     "ivan.web.app", "fastapi", "uvicorn", "jinja2", "multipart", "rich.progress", "pandas", "dotenv",
+    "matplotlib.pyplot",   # imported lazily by the backtest report the web UI can launch
 ]
 # uvicorn[standard] extras; plain uvicorn is enough for a LAN UI
 EXCLUDE = {"uvloop", "httptools", "watchfiles", "websockets", "ujson", "ivan"}

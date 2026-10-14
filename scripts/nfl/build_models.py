@@ -2,7 +2,12 @@
 """
 scripts/nfl/build_models.py
 
-Build marginals + copulas for NFL player and team data.
+Build the NFL models the pipeline reads from data/nfl/models/:
+
+    build_models.py                      live models: DST game table + DST odds fit, classic field models
+    build_models.py --cutoff 2025-11-01  an as-of version (DST params, classic field models, dupe model,
+                                         sd calibration, ownership calibration + model) trained only on
+                                         data before the cutoff, into data/nfl/models/asof/<cutoff>/
 """
 import warnings, numpy as _np
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -12,34 +17,17 @@ import argparse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from ivan.core import model_store
-
-import joblib
-import numpy as np
 import pandas as pd
 warnings.simplefilter("ignore", pd.errors.SettingWithCopyWarning)
-from scipy.stats import kstest, anderson_ksamp
-from sqlalchemy.orm import Session
 
+from ivan.core import model_store
 from ivan.sports.nfl.paths import MODELS_DIR
-from ivan.sports.nfl.player_level_calculations import build_models as build_player_models
-from ivan.sports.nfl.build_team10_vine import build_team10_vine
-from ivan.sports.nfl.calibrate_game_factors import calibrate_game_factors
 from ivan.sports.nfl.dst_scoring import build_dst_game_table
 from ivan.sports.nfl.refactor.dst import fit_dst_odds_model, describe_dst_odds_model
 from ivan.sports.nfl.refactor.historical.data_fetch import seasons_to_fetch
-from ivan.sports.nfl.team_level_calculations   import build_team_models, _compute_fpts
-from ivan.sports.nfl.build_team_positional_table import build_team_positional_table
 from ivan.sports.nfl.slate_models import build_slate_models
-from ivan.sports.nfl.diagnostics              import (
-    plot_marginal_fit,
-    test_marginal_ks,
-    plot_copula_corr,
-    compare_empirical_vs_model_scatter,
-    estimate_tail_dependence
-)
-from ivan.sports.nfl.models import NFLStat
 from ivan.database.session import init_db, get_session
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -47,16 +35,13 @@ def main():
     parser.add_argument('--model-dir', default=None)
     parser.add_argument('--cutoff', default=None,
                         help="build an as-of version from data before this date (YYYY-MM-DD) into MODELS_DIR/asof/<cutoff>: "
-                             "DST params, classic field models, the dupe model and the sd calibration (the legacy marginals/vine are skipped)")
+                             "DST params, classic field models, the dupe model, the sd calibration and the ownership models")
     args = parser.parse_args()
 
     if args.cutoff:
         return build_asof(date.fromisoformat(args.cutoff), args.db_url)
     model_dir = Path(args.model_dir or MODELS_DIR)
     model_dir.mkdir(parents=True, exist_ok=True)
-
-    print("→ Building player‐level models")
-    build_player_models(args.db_url, model_dir) 
 
     _years = seasons_to_fetch()   # every season in nfl_stats through the one in progress
     nrows = build_dst_game_table(args.db_url, years=_years)
@@ -67,21 +52,8 @@ def main():
     params = fit_dst_odds_model(get_session(engine), model_dir)
     print("\n".join("   " + line for line in describe_dst_odds_model(params).splitlines()))
 
-    # new: fixed-width team-week positional fpts table
-    n_team_rows = build_team_positional_table(args.db_url)
-    print(f"   wrote {n_team_rows} rows to nfl_team_week_positional_fpts") 
-
-    # === fit HGV-20 artifacts === 
-    print("→ Building team‐level models")
-    try: 
-        import pyvinecopulib
-    except ImportError:
-        raise SystemExit("pyvinecopulib is required for NFL team models; please install it and try again")
-    print("→ Fitting per-team 10D vine (QB..DST)")
-    build_team10_vine(model_dir, args.db_url)     # writes team10_vine.pkl
-
     build_slate_models()
-    model_store.write_manifest(model_dir, None, {"dst_odds_params": {"n": params.get("n")}, "team10_vine": {}, "classic_models": {}, "player_models": {}})
+    model_store.write_manifest(model_dir, None, {"dst_odds_params": {"n": params.get("n")}, "classic_models": {}})
 
 
 def build_asof(cutoff: date, db_url: str | None = None) -> int:
@@ -125,7 +97,7 @@ def build_asof(cutoff: date, db_url: str | None = None) -> int:
     print("→ " + " ".join(cmd))
     rc5 = subprocess.run(cmd).returncode
     built["dupe_model_v2"] = {"cutoff": cutoff.isoformat(), "ok": rc5 == 0}
-    m = model_store.write_manifest(out, cutoff, built, notes=["legacy player marginals / team vine not built for as-of versions (the pipeline does not read them)"])
+    m = model_store.write_manifest(out, cutoff, built)
     print(f"✅ as-of models written to {out} ({', '.join(sorted(m['built']))})")
     return 0 if rc == 0 and rc2 == 0 else 1
 

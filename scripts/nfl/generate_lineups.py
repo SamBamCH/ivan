@@ -19,9 +19,6 @@ BATCH_COMMIT_SIZE = 100 # commit every n lineups
 
 SCRIPT_NAME = Path(sys.argv[0]).stem
 
-def _prefix(script: str, proc_no: int, sub_no: int) -> str:
-    return f"[{script}][{proc_no}][{sub_no}]"
-
 def worker(worker_id: int, num_lineups: int, config_path: str, total_workers: int, q: Queue):
     """Updated worker with diversity strategy for parallel showdown generation."""
     engine = init_db('nfl')

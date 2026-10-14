@@ -122,15 +122,6 @@ def bracket_tax(taxable: float, brackets: Sequence[Tuple[float, float]]) -> floa
     return tax
 
 
-def marginal_rate_at(taxable: float, brackets: Sequence[Tuple[float, float]]) -> float:
-    rows = sorted((float(lo), float(r)) for lo, r in brackets)
-    rate = rows[0][1]
-    for lo, r in rows:
-        if taxable >= lo:
-            rate = r
-    return rate
-
-
 # --------------------------------------------------------------------------- the engine
 def compute_tax(W: float, L: float, cfg: TaxConfig, total_fees: Optional[float] = None) -> TaxResult:
     """

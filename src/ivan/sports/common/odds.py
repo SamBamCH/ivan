@@ -303,13 +303,6 @@ def get_historical_event_odds(sport: str, api_key: str, event_id: str, at: str, 
     return _historical_get(f"{HISTORICAL_BASE}/{sport}/events/{event_id}/odds", params)
 
 
-def get_historical_game_odds(sport: str, api_key: str, at: str, markets: str = "h2h,spreads,totals", regions: str = "us"):
-    """Every event's game lines as they stood at `at`; parse with parse_game_odds(). Returns (events, timestamp, headers)."""
-    params = {"apiKey": api_key, "regions": regions, "markets": markets, "oddsFormat": "american",
-              "dateFormat": "iso", "date": at}
-    return _historical_get(f"{HISTORICAL_BASE}/{sport}/odds", params)
-
-
 def credits_remaining(headers) -> tuple[int | None, int | None]:
     """(remaining, used) from the API's quota headers, or Nones."""
     try:

@@ -39,10 +39,6 @@ def utc_naive_to_local(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
 
-def local_naive_to_utc(dt: datetime) -> datetime:
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 GAME_RX = re.compile(r"\(([A-Z]{2,3})\s*(?:@|vs\.?|v)\s*([A-Z]{2,3})\)", re.I)
 
 
