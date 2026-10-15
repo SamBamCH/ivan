@@ -434,8 +434,10 @@ def fit_fpts_distributions(session, config: dict | None = None):
             if target is None:
                 target = volume.predict(player.position, stat, player.salary, item.p_td)
                 source = "salary"
-                if target is not None and stat in USAGE_STATS and not usage.fitted:
-                    usage.add_fixed(player, stat, target)        # a QB's rushing, settled for the allocation
+                # a QB's rushing is settled for the allocation; an RB / WR / TE's salary-model volume is not a settled
+                # line, and counting it made the usage diagnostic report the priced lines at 115-120% of the team total
+                if target is not None and stat in USAGE_STATS and not usage.fitted and player.position == "QB":
+                    usage.add_fixed(player, stat, target)
             if stat in VOLUME_STAT_NAMES:
                 unpriced.append(stat)
                 sources.add(source)

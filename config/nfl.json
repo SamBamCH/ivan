@@ -3,7 +3,7 @@
     "entries_csv": "data/nfl/input/entries.csv"
   },
   "projection": {
-    "unpriced_volume": "salary",
+    "unpriced_volume": "environment",
     "_note": "how stats no book prices get their mean: 'salary' (refactor.volume: salary + TD odds) or 'environment' (refactor.usage: team volume from the QB line / game environment, minus the priced players, split by depth-rank priors); IVAN_UNPRICED_VOLUME overrides"
   },
   "ownership": {

@@ -32,11 +32,13 @@ from scipy.optimize import nnls
 # Players nobody prices carry less volume than priced players at the same
 # salary and TD odds: the books post a line when they trust the role. Measured
 # 2026-09-17 on the week 3 slate against 2025 per-game actuals, unpriced
-# players ran at 0.60-0.85 of the priced curve (RB receiving lowest, TE
-# highest) after netting out the priced group's own 0.9 ratio. One factor
-# rather than a per-stat table: the per-stat numbers are noisy and partly
-# reflect 2025 roles that have since changed.
-UNPRICED_SHADE = 0.75
+# players ran at 0.60-0.85 of the priced curve, and 0.75 was the first value.
+# Scored against the box scores on 2026-10-15 (week 6 replay, one row per
+# player-game, 171 unpriced): they ran at about 0.5 of the curve, 0.38 in the
+# $2.5-4k band, and 63% of them scored nothing at all. 0.5 takes out most of
+# the bias; the real fix is a zero-inflated calibration fitted on history
+# (see the Models page, projections).
+UNPRICED_SHADE = 0.5
 
 # Minimum priced players needed before trusting a slate fit.
 MIN_N_JOINT = 12    # salary + TD probability

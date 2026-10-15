@@ -96,6 +96,21 @@ def _american_to_prob(american: int | float) -> float:
     return (-a) / ((-a) + 100.0)
 
 
+# A one-sided price (an alternate line with only the Over quoted) carries the
+# whole hold plus the longshot shade, so a flat haircut undercounts it in the
+# tail, and the tail is what sets a right-skewed stat's mean. Power devig:
+# p = q^k. Measured on the 2026 week 5 slates (7,458 alternate over prices on
+# receiving / rushing yards and receptions against the box scores): quoted 7%
+# realised 4%, 20% -> 14%, 30% -> 27%, 50% -> 45%, which k = 1.2 reproduces
+# (0.07^1.2 = .041, .20^1.2 = .145, .50^1.2 = .435). The old 0.955 haircut
+# left the fitted receiving means 17% above the actuals.
+ONE_SIDED_POWER = 1.2
+
+
+def _devig_one_sided(p_quoted: float) -> float:
+    return float(np.clip(p_quoted, 0.0, 1.0) ** ONE_SIDED_POWER)
+
+
 def _devig_two_way(p_over: float, p_under: float) -> Tuple[float, float]:
     """Simple de-vig: normalize over/under to sum to 1."""
     total = p_over + p_under
@@ -446,11 +461,9 @@ def extract_odds_points(
             # Yes/No market (e.g., anytime TD): de-vig
             p_over, p_under = _devig_two_way(side_probs["yes"], side_probs["no"])
         elif "over" in side_probs:
-            # Only over: rough de-vig with haircut
-            p_over = side_probs["over"] * 0.955
+            p_over = _devig_one_sided(side_probs["over"])
         elif "yes" in side_probs:
-            # Only yes: rough de-vig with haircut
-            p_over = side_probs["yes"] * 0.955
+            p_over = _devig_one_sided(side_probs["yes"])
         else:
             # No over/yes at this point, skip
             continue

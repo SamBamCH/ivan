@@ -211,6 +211,20 @@ def describe_dst_odds_model(params: dict) -> str:
 
 
 # ----------------------------------------------------------------------------- lines
+def _updated_at(value) -> datetime | None:
+    """A game_odds last_update (ISO 8601, usually with a Z) as naive local time, comparable with clock.now(); None when unreadable."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        d = value
+    else:
+        try:
+            d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
+
+
 def matchup_lines(session, team: str, opponent: str, now: datetime | None = None,
                   max_age: timedelta = timedelta(hours=12), horizon: timedelta = timedelta(days=10)):
     """
@@ -218,7 +232,9 @@ def matchup_lines(session, team: str, opponent: str, now: datetime | None = None
     from game_odds, or None. home_margin follows nfl_schedule's convention:
     positive when the home side is favored. Only a game starting within
     `horizon` (and not more than `max_age` ago) counts, so a stale line from
-    a previous meeting is never used.
+    a previous meeting is never used, and only snapshots taken by `now` count:
+    the table also holds in-game lines fetched by later slates' ingests, and a
+    replay pinned to the lock must not see the fourth-quarter spread.
     """
     now = now or clock.now()
     rows = session.query(NFLGameOdds).filter(
@@ -227,7 +243,8 @@ def matchup_lines(session, team: str, opponent: str, now: datetime | None = None
             and_(NFLGameOdds.home_abbr == opponent, NFLGameOdds.away_abbr == team)),
     ).all()
     rows = [r for r in rows if r.point is not None and r.commence_time is not None
-            and now - max_age <= r.commence_time <= now + horizon]
+            and now - max_age <= r.commence_time <= now + horizon
+            and (_updated_at(r.last_update) or now) <= now]
     if not rows:
         return None
     game_id = max(rows, key=lambda r: r.commence_time).game_id
