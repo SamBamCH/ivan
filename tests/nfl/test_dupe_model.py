@@ -39,7 +39,7 @@ def test_save_and_load_round_trip(tmp_path):
     m = DM.ProductDupeModel(params={"showdown": {"k": 0.05, "beta": 0.6}, "classic": {"k": 1e-4, "beta": 0.1}}, fitted_on="2026-10-13", contests={"showdown": 27})
     m.save(tmp_path)
     back = DM.load(tmp_path)
-    assert back.params["showdown"] == {"k": 0.05, "beta": 0.6, "beta_cpt": None, "gamma": 0.0, "knee": DM.SALARY_KNEE, "delta_proj": 0.0, "stack": {}, "method": "wls"}   # an older file loads with the extra terms off
+    assert back.params["showdown"] == {"k": 0.05, "beta": 0.6, "beta_cpt": None, "gamma": 0.0, "knee": DM.SALARY_KNEE, "delta_proj": 0.0, "delta_logproj": 0.0, "stack": {}, "method": "wls"}   # an older file loads with the extra terms off
     assert back.contests == {"showdown": 27} and "27 fields" in back.describe()
     assert DM.load(tmp_path / "nowhere").params == DM.DEFAULTS
 
@@ -90,7 +90,7 @@ def test_captain_exponent_and_stack_terms_are_recovered():
     assert abs(p["stack"]["qb_mates"] - 0.3) < 0.1 and abs(p["stack"]["two_qb"] - 0.4) < 0.15 and abs(p["stack"]["no_qb"] + 0.8) < 0.2
     assert abs(p["delta_proj"] + 0.05) < 0.01 and "pts below best" in m.describe()
     gap = m.copies(10000, True, np.array([-8.0, -8.0]), proj_gap=np.array([0.0, 10.0]))
-    assert np.isclose(gap[0] / gap[1], np.exp(-10 * p["delta_proj"]))
+    assert np.isclose(gap[0] / gap[1], np.exp(-10 * p["delta_proj"] - np.log1p(10) * p["delta_logproj"]))   # linear + log gap terms
     assert "cpt ^" in m.describe() and "qb_mates" in m.describe()
     # the terms only apply when their inputs are given; the captain's log ownership is counted once
     base = m.copies(10000, True, np.array([-8.0]), log_own_cpt=np.array([-2.0]))

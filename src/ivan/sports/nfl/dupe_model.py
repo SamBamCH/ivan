@@ -81,10 +81,10 @@ MAX_MATES = 3
 STACK_KEYS = ("qb_mates", "two_qb", "no_qb")
 DEFAULTS = {"showdown": {"k": 0.044, "beta": 0.56, "beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "stack": {}},
             "classic": {"k": 4e-5, "beta": 0.07, "beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "stack": {}}}   # 2026-10-13; extra terms off
-ALL_TERMS = ("salary", "cpt", "proj", "stack")
+ALL_TERMS = ("salary", "cpt", "proj", "logproj", "stack")
 CPT_MULT = 1.5
 METHOD = "wls"            # copy-weighted least squares on log copies; "ztp" = zero-truncated Poisson likelihood (held-out worse, 2026-10-14: see docstring)
-TERMS = ("salary", "cpt", "proj")   # the default fit; the stack deltas were unstable across held-out slates (2026-10-14) and stay off
+TERMS = ("salary", "cpt", "logproj")   # the default fit (2026-10-14 held-out ablation); the linear gap and the stack deltas stay off
 PASS_CATCHERS = {"WR", "TE"}
 MIN_CONTESTS = 4
 MIN_SLATES = 3            # distinct lock times a format needs before the extra terms are fitted (else ownership only)
@@ -251,11 +251,16 @@ class ProductDupeModel:
         return (float(st.get("qb_mates", 0.0)) * m + float(st.get("two_qb", 0.0)) * (nq >= 2) + float(st.get("no_qb", 0.0)) * (nq == 0))
 
     def _proj_term(self, p: dict, proj_gap) -> np.ndarray:
-        """delta_proj x points below the field's best lineup (delta_proj < 0: the top projected lineups draw the optimizer crowd)."""
-        d = float(p.get("delta_proj", 0.0) or 0.0)
-        if d == 0.0 or proj_gap is None:
+        """
+        delta_proj x points below the field's best lineup + delta_logproj x log(1 + points below): the top
+        projected lineups draw the optimizer crowd, and the log term makes the first few points below the
+        optimum count the most (both deltas < 0).
+        """
+        d, dl = float(p.get("delta_proj", 0.0) or 0.0), float(p.get("delta_logproj", 0.0) or 0.0)
+        if (d == 0.0 and dl == 0.0) or proj_gap is None:
             return 0.0
-        return d * np.maximum(np.nan_to_num(np.asarray(proj_gap, dtype=float), nan=0.0), 0.0)
+        g = np.maximum(np.nan_to_num(np.asarray(proj_gap, dtype=float), nan=0.0), 0.0)
+        return d * g + dl * np.log1p(g)
 
     def log_rate(self, is_showdown: bool, sum_log_own, salary_left=None, log_own_cpt=None, qb_mates=None, n_qb=None, proj_gap=None) -> np.ndarray:
         """log of the lineup's relative weight: the ownership, salary, projection and stack terms (no scale)."""
@@ -288,6 +293,8 @@ class ProductDupeModel:
                 t += f" x exp({p['gamma']:.2f} x min($left, {p.get('knee', SALARY_KNEE):.0f})/1k)"
             if p.get("delta_proj"):
                 t += f" x exp({p['delta_proj']:.3f} x pts below best)"
+            if p.get("delta_logproj"):
+                t += f" x exp({p['delta_logproj']:.2f} x log(1 + pts below best))"
             st = p.get("stack") or {}
             if st:
                 t += " x exp(" + " ".join(f"{v:+.2f}*{k}" for k, v in st.items()) + ")"
@@ -331,6 +338,10 @@ def _design(d: pd.DataFrame, terms, knee: float):
         pg = np.maximum(d.proj_gap.fillna(0).values.astype(float), 0.0)
         if pg.std() > 0:
             cols.append(pg); names.append("delta_proj")
+    if "logproj" in terms and "proj_gap" in d and d.proj_gap.notna().any():
+        lg = np.log1p(np.maximum(d.proj_gap.fillna(0).values.astype(float), 0.0))
+        if lg.std() > 0:
+            cols.append(lg); names.append("delta_logproj")
     if "stack" in terms and "n_qb" in d:
         nq = d.n_qb.values.astype(float)
         for name, x in (("qb_mates", np.minimum(d.qb_mates.values.astype(float), MAX_MATES)), ("two_qb", (nq >= 2).astype(float)), ("no_qb", (nq == 0).astype(float))):
@@ -381,6 +392,7 @@ def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, method:
     c = dict(zip(names, coef))
     p = {"k": float(np.exp(c["const"])), "beta": float(np.clip(c["beta"], 0.0, 2.0)), "beta_cpt": float(np.clip(c["beta_cpt"], 0.0, 2.0)) if "beta_cpt" in c else None,
          "gamma": float(np.clip(c.get("gamma", 0.0), -5.0, 1.0)), "knee": float(knee), "delta_proj": float(np.clip(c.get("delta_proj", 0.0), -2.0, 0.0)),
+         "delta_logproj": float(np.clip(c.get("delta_logproj", 0.0), -5.0, 0.0)),
          "stack": {k: float(np.clip(c[k], -3.0, 3.0)) for k in STACK_KEYS if k in c}, "method": method}
     if method == "wls":
         # least squares: re-centre k after clipping so the copy-weighted mean is still matched
@@ -413,7 +425,7 @@ def load(model_dir=None) -> ProductDupeModel:
         return ProductDupeModel()
     try:
         raw = json.loads(path.read_text())
-        return ProductDupeModel(params={k: {"beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "stack": {}, "method": "wls", **dict(v)} for k, v in raw["params"].items()}, fitted_on=raw.get("fitted_on"), cutoff=raw.get("cutoff"),
+        return ProductDupeModel(params={k: {"beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "delta_logproj": 0.0, "stack": {}, "method": "wls", **dict(v)} for k, v in raw["params"].items()}, fitted_on=raw.get("fitted_on"), cutoff=raw.get("cutoff"),
                                 contests=raw.get("contests") or {}, cv=raw.get("cv") or {})
     except (OSError, ValueError, KeyError):
         return ProductDupeModel()
@@ -452,7 +464,8 @@ def predict(params: Dict[str, float], d: pd.DataFrame) -> np.ndarray:
 
 
 ABLATION = (("none/wls", (), "wls"), ("salary+cpt/wls", ("salary", "cpt"), "wls"), ("salary+cpt+proj/wls", ("salary", "cpt", "proj"), "wls"),
-            ("proj/wls", ("proj",), "wls"), ("all/wls", ALL_TERMS, "wls"), ("salary+cpt+proj/ztp", ("salary", "cpt", "proj"), "ztp"))
+            ("+logproj/wls", ("salary", "cpt", "proj", "logproj"), "wls"), ("logproj only/wls", ("salary", "cpt", "logproj"), "wls"),
+            ("all/wls", ALL_TERMS, "wls"))
 
 
 def backtest(df: pd.DataFrame, terms=TERMS, method: str = METHOD) -> dict:
@@ -475,6 +488,7 @@ def backtest(df: pd.DataFrame, terms=TERMS, method: str = METHOD) -> dict:
             sc = scores(te, predict(p, te))
             fold = {"held_out": held, "contests": int(te.contest_id.nunique()), "k": round(p["k"], 5), "beta": round(p["beta"], 3),
                     "beta_cpt": None if p["beta_cpt"] is None else round(p["beta_cpt"], 3), "gamma": round(p["gamma"], 3), "delta_proj": round(p["delta_proj"], 4),
+                    "delta_logproj": round(p["delta_logproj"], 3),
                     "stack": {k: round(v, 3) for k, v in p["stack"].items()}, **{k: sc[k] for k in keys}}
             fold["ablation"] = {}
             for name, t, meth in ABLATION:

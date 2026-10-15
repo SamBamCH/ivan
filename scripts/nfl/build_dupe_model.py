@@ -34,7 +34,7 @@ def main(argv=None) -> int:
         for fmt, v in r.items():
             print(f"{fmt}: {v['contests']} fields; fit {v['fit']}")
             for f in v["folds"]:
-                print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']} cpt {f['beta_cpt']} gamma {f['gamma']} proj {f.get('delta_proj')} stack {f['stack']}")
+                print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']} cpt {f['beta_cpt']} gamma {f['gamma']} proj {f.get('delta_proj')} logproj {f.get('delta_logproj')} stack {f['stack']}")
                 print(f"      copies/entry pred {f['copies_per_entry_pred']:6.1f} actual {f['copies_per_entry_actual']:6.1f}; held-out by terms/method "
                       f"(MAE | bias | top-lineup ratio | log slope, 1 = calibrated):")
                 for name, a in f["ablation"].items():
