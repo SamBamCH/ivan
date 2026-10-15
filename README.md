@@ -227,6 +227,17 @@ accumulate; the as-of build writes a version per cutoff. (The earlier
 two-stage quantile + GBM model, which under-predicted the chalk about 3x,
 was removed in 2026-10.)
 
+Where the dupe model misses: the Dupes page of the web UI (`/dupes`) and
+`scripts/nfl/dupe_report.py` put the model's expected copies against the
+copies every scraped field actually held, lineup by lineup
+(`ivan.sports.nfl.dupe_analysis`): calibration by predicted copies, the
+copy-weighted residual by captain, ownership-sum decile, team split, QB
+stack, bring-back and salary left on the table, and the most duplicated
+lineups. Each residual is shown twice, from the ownership we projected
+(what the pipeline runs on) and from the ownership the field showed, so a
+miss can be attributed to the dupe rule or to the ownership projection
+upstream.
+
 ### Raw artifacts: every payload, as received
 
 `ivan.core.raw` keeps every payload a fetcher receives, gzip, under

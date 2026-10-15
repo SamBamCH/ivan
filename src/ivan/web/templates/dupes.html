@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Dupes · Ivan{% endblock %}
+{% macro n(x, p=2) %}{{ x|num(p) if (x is defined and x is not none and x == x) else '' }}{% endmacro %}
+{% macro lr(x) %}{% if x is defined and x is not none and x == x %}<span class="{{ 'pos' if x > 0.1 else ('neg' if x < -0.1 else '') }}">{{ '%+.2f'|format(x) }}</span>{% endif %}{% endmacro %}
+{% block content %}
+<style>
+  .pos { color:#1f7a3a } .neg { color:#a11b1b }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px } @media (max-width:900px) { .grid2 { grid-template-columns:1fr } }
+  .slate { margin:4px 0 } .slate summary { cursor:pointer; font-weight:600 } .slate label { display:block; font-size:13px; margin:2px 0 2px 16px }
+  details summary { cursor:pointer }
+  .feature h3 { margin-top:0 }
+</style>
+<h1>Dupes <span class="muted small">how many copies the field holds of a lineup, predicted vs actual</span></h1>
+
+<div class="card">
+  <form method="get" action="/dupes">
+    <p class="small muted" style="margin:0 0 6px">Scraped fields, by slate. Tick contests and compare; the latest slate is picked by default.</p>
+    {% for s in slates %}
+    <details class="slate" {% if loop.index <= 1 or s.selected %}open{% endif %}>
+      <summary>{{ s.date.strftime('%a %Y-%m-%d %H:%M') }} {{ s.game }} <span class="muted small">{{ 'showdown' if s.showdown else 'classic' }} · {{ s.contests|length }} contest(s)</span></summary>
+      {% for c in s.contests %}<label><input type="checkbox" name="c" value="{{ c.id }}" {% if c.id in selected %}checked{% endif %}> {{ c.name }}
+        <span class="muted">{{ '{:,}'.format(c.entries) }} entries · ${{ '%g'|format(c.fee) }}{% if not c.has_actual_own %} · no actual ownership stored{% endif %}</span></label>{% endfor %}
+    </details>
+    {% endfor %}
+    <p style="margin:10px 0 0"><button class="small">Show</button></p>
+  </form>
+</div>
+
+{% if not slates %}
+<div class="card"><p>No scraped fields yet. The settle job keeps them (<code>scripts/nfl/settle.py --days 3</code>), or scrape a contest with <code>get_contest_data.py --contest-ids ...</code>.</p></div>
+{% elif not rep.contests %}
+<div class="card"><p>Nothing to show for that selection: the fields are on disk but the capture or the player ownership rows for those contests are missing.</p></div>
+{% else %}
+
+<div class="card">
+  <p class="small muted" style="margin:0 0 8px">Model in use: <code>{{ rep.model }}</code>. Residual = log(actual copies / predicted copies), copy-weighted (a lineup counts as many times as it was entered, the way the model is fitted). +0.69 means twice as duplicated as predicted.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ rep.totals.contests }}</div><div class="l">contests</div><div class="s">{{ '{:,}'.format(rep.totals.entries) }} entries, {{ '{:,}'.format(rep.totals.unique) }} unique lineups</div></div>
+    <div class="tile"><div class="v">{{ lr(rep.totals.bias_w_proj) }}</div><div class="l">bias, from projected ownership</div><div class="s">MAE {{ n(rep.totals.mae_w_proj) }} · what the pipeline runs on</div></div>
+    {% if rep.totals.bias_w_actual == rep.totals.bias_w_actual %}
+    <div class="tile"><div class="v">{{ lr(rep.totals.bias_w_actual) }}</div><div class="l">bias, from actual ownership</div><div class="s">MAE {{ n(rep.totals.mae_w_actual) }} · the dupe rule alone, ownership known</div></div>
+    {% endif %}
+    <div class="tile"><div class="v">x{{ n(rep.totals.top1_ratio_median_proj) }}</div><div class="l">top lineup, actual / predicted</div><div class="s">median over contests{% if rep.totals.top1_ratio_median_actual == rep.totals.top1_ratio_median_actual %} · x{{ n(rep.totals.top1_ratio_median_actual) }} with actual ownership{% endif %}</div></div>
+  </div>
+  <p class="small muted" style="margin:0">Reading the two biases together: if the actual-ownership bias is near zero and the projected-ownership bias is not, the miss is upstream in the ownership projection; if both are off the same way, the dupe rule itself is off.</p>
+</div>
+
+<div class="card">
+  <h2>Per contest</h2>
+  <div class="wide"><table class="compact">
+    <tr><th>Contest</th><th class="num">entries</th><th class="num">unique</th><th class="num">in dupes</th><th class="num">top lineup</th><th class="num">pred (proj own)</th><th class="num">pred (actual own)</th>
+        <th class="num">bias proj</th><th class="num">MAE proj</th><th class="num">bias actual</th><th class="num">corr</th></tr>
+    {% for c in rep.contests %}<tr>
+      <td>{{ c.name }} <span class="muted small">${{ '%g'|format(c.entry_fee) }} · {{ c.date.strftime('%Y-%m-%d') }}</span></td>
+      <td class="num">{{ '{:,}'.format(c.entries) }}</td><td class="num">{{ '{:,}'.format(c.unique) }} <span class="muted small">{{ '%.0f'|format(c.unique_share * 100) }}%</span></td>
+      <td class="num">{{ '%.0f'|format(c.dupe_share * 100) }}%</td>
+      <td class="num">{{ c.top1_actual }}</td><td class="num">{{ n(c.top1_pred_proj, 1) }}</td><td class="num">{{ n(c.top1_pred_actual, 1) }}</td>
+      <td class="num">{{ lr(c.bias_w_proj) }}</td><td class="num">{{ n(c.mae_w_proj) }}</td><td class="num">{{ lr(c.bias_w_actual) }}</td><td class="num">{{ n(c.corr_proj) }}</td></tr>{% endfor %}
+  </table></div>
+  <p class="help">"in dupes" = share of entries sitting in a lineup someone else also entered. corr = correlation of log copies, actual vs predicted, over unique lineups.</p>
+</div>
+
+<div class="card">
+  <h2>Calibration <span class="muted small">every unique lineup, predicted vs actual copies</span></h2>
+  <div class="grid2">
+    {% for s, svg in rep.charts.items() %}
+    <div>
+      <h3>from {{ 'projected' if s == 'proj' else 'actual' }} ownership</h3>
+      {{ svg|safe }}
+      <table class="compact">
+        <tr><th>predicted</th><th class="num">lineups</th><th class="num">copies</th><th class="num">pred mean</th><th class="num">actual mean</th><th class="num">actual / pred</th></tr>
+        {% for r in rep.calibration[s] %}<tr><td>{{ r.pred_bin }}</td><td class="num">{{ '{:,}'.format(r.lineups) }}</td><td class="num">{{ '{:,}'.format(r.copies) }}</td>
+          <td class="num">{{ n(r.pred_mean) }}</td><td class="num">{{ n(r.actual_mean) }}</td><td class="num {{ 'pos' if r.ratio > 1.25 else ('neg' if r.ratio < 0.8 else '') }}">x{{ n(r.ratio) }}</td></tr>{% endfor %}
+      </table>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="help">A straight line along the diagonal is a calibrated model. Points above it are lineups the field duplicated more than the model expected; the ringed ones are the chalk, where the product rule's known tail miss lives.</p>
+</div>
+
+<div class="card">
+  <h2>Where the misses cluster <span class="muted small">copy-weighted residual by feature</span></h2>
+  <p class="small muted">Solid bar: residual from projected ownership (what the pipeline runs on). Outline: from actual ownership (the dupe rule alone). A bucket that is off in both is a dupe-rule tendency; off only in the solid bar is an ownership-projection tendency.</p>
+  <div class="grid2">
+    {% for f in rep.feature_charts %}
+    <div class="feature">
+      <h3>{{ f.label }}</h3>
+      {{ f.svg|safe }}
+      <details><summary class="small muted">table</summary>
+        <table class="compact">
+          <tr><th>bucket</th><th class="num">lineups</th><th class="num">copies</th><th class="num">share</th><th class="num">actual mean</th><th class="num">pred mean</th><th class="num">bias proj</th><th class="num">MAE proj</th><th class="num">bias actual</th></tr>
+          {% for r in rep.features[loop.index0].rows %}<tr><td>{{ r.bucket }}</td><td class="num">{{ '{:,}'.format(r.lineups) }}</td><td class="num">{{ '{:,}'.format(r.copies) }}</td>
+            <td class="num">{{ '%.1f'|format(r.share_of_entries * 100) }}%</td><td class="num">{{ n(r.actual_mean) }}</td><td class="num">{{ n(r.pred_mean_proj) }}</td>
+            <td class="num">{{ lr(r.bias_w_proj) }}</td><td class="num">{{ n(r.mae_w_proj) }}</td><td class="num">{{ lr(r.bias_w_actual) }}</td></tr>{% endfor %}
+        </table>
+      </details>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Most duplicated lineups</h2>
+  <div class="wide"><table class="compact">
+    <tr><th class="num">copies</th><th class="num">share</th><th class="num">pred (proj)</th><th class="num">pred (actual)</th><th>lineup</th><th>shape</th><th>contest</th></tr>
+    {% for r in rep.top %}<tr><td class="num">{{ r.count }}</td><td class="num">{{ '%.2f'|format(r.share * 100) }}%</td><td class="num">{{ n(r.pred_proj, 1) }}</td><td class="num">{{ n(r.pred_actual, 1) }}</td>
+      <td class="small">{{ r.lineup }}</td><td class="small muted">{{ r.split }} · ${{ r.salary_left }} left · {{ r.qb_stack }}</td><td class="small muted">{{ r.name[:48] }}</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endif %}
+{% endblock %}

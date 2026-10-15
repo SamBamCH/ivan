@@ -9,9 +9,9 @@ import json
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,6 +22,7 @@ from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web import backtest_view as bv
 from ivan.web import validate_view as vv
+from ivan.web import dupes_view as dv
 from ivan.web import plan_view as pv
 from ivan.web import backtest_hub as hub
 from ivan.web.jobs import JobRunner
@@ -578,6 +579,17 @@ async def validate_run(request: Request):
     label = f"replay {root.name} repeat {repeat}" if root else f"live {since}..{until}"
     runner.submit(f"Validation: {label}", cmd, meta={"step": "validate", "form": form})
     return _redirect("/validate", f"Running the validation ({label}); it appears here when the job finishes (see Jobs).")
+
+
+@app.get("/dupes", response_class=HTMLResponse)
+def dupes_page(request: Request, c: Optional[List[int]] = Query(None)):
+    """Predicted vs actual lineup duplication over scraped fields (ivan.sports.nfl.dupe_analysis)."""
+    slate_list = _with_db(dv.slates) or []
+    selected = [int(x) for x in c] if c else dv.default_selection(slate_list)
+    for s in slate_list:
+        s["selected"] = any(x["id"] in selected for x in s["contests"])
+    rep = _with_db(lambda s: dv.report(s, selected)) if selected else {"contests": []}
+    return templates.TemplateResponse(request, "dupes.html", _ctx(request, slates=slate_list, selected=selected, rep=rep))
 
 
 @app.get("/backtest/plan", response_class=HTMLResponse)
