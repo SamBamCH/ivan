@@ -41,6 +41,7 @@ RANK_BUCKETS = [(1, 1, "top lineup"), (2, 10, "2-10"), (11, 100, "11-100"), (101
 SALARY_LEFT_BUCKETS = [(0, 0, "$0"), (1, 500, "$100-500"), (501, 1000, "$600-1000"), (1001, 2000, "$1.1-2k"), (2001, 5000, "$2.1-5k"), (5001, 10 ** 9, "$5k+")]
 CPT_OWN_BUCKETS = [(0, 5, "<5%"), (5, 10, "5-10%"), (10, 20, "10-20%"), (20, 35, "20-35%"), (35, 1000, "35%+")]
 PRED_BIN_EDGES = [0, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 10 ** 9]
+PROJ_GAP_BUCKETS = [(0, 5, "0-5 pts"), (5, 10, "5-10"), (10, 15, "10-15"), (15, 20, "15-20"), (20, 30, "20-30"), (30, 10 ** 9, "30+")]
 
 
 # --------------------------------------------------------------------------- what has been scraped
@@ -152,6 +153,7 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
             "cpt_own_proj": float(cpt["own_proj"]) if cpt and cpt["own_proj"] is not None else np.nan,
             "cpt_own_actual": float(cpt["own_actual"]) if cpt and cpt["own_actual"] is not None else np.nan,
             "salary_used": int(salary_used), "salary_left": int(SALARY_CAP - salary_used),
+            "fpts_proj": float(sum((p["fpts_proj"] or 0.0) * (DM.CPT_MULT if p["slot"] == "CPT" else 1.0) for p in players)),
             "split": "-".join(str(x) for x in split_counts) if len(split_counts) > 1 else f"{split_counts[0]}-0", "cpt_side": cpt_side,
             "n_qb": len(qbs), "qb_mates": qb_mates, "qb_bringback": qb_bring,
         })
@@ -163,12 +165,14 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
     df["date"] = pd.to_datetime(h.date)
     df = df.sort_values("count", ascending=False).reset_index(drop=True)
     df["rank"] = np.arange(1, len(df) + 1)
+    df["proj_gap"] = df.fpts_proj.max() - df.fpts_proj
     df["share"] = df["count"] / entries
     for s in SOURCES:
         slo = df[f"sum_log_own_{s}"].values
         cpt_lo = df[f"cpt_log_own_{s}"].values
         pred = model.copies(entries, is_showdown, np.where(np.isnan(slo), 0.0, slo), salary_left=df["salary_left"].values,
-                            log_own_cpt=cpt_lo if is_showdown else None, qb_mates=df["qb_mates"].values, n_qb=df["n_qb"].values)
+                            log_own_cpt=cpt_lo if is_showdown else None, qb_mates=df["qb_mates"].values, n_qb=df["n_qb"].values,
+                            proj_gap=df["proj_gap"].values)
         pred = np.where(np.isnan(slo), np.nan, pred)
         df[f"pred_{s}"] = pred
         df[f"resid_{s}"] = np.log(df["count"].values / pred)
@@ -198,6 +202,7 @@ def add_buckets(df: pd.DataFrame) -> pd.DataFrame:
     d["rank_bucket"] = [_bucket(r, RANK_BUCKETS) for r in d["rank"]]
     d["salary_left_bucket"] = [_bucket(v, SALARY_LEFT_BUCKETS) for v in d["salary_left"]]
     d["cpt_own_bucket"] = [_bucket(v, CPT_OWN_BUCKETS) for v in d["cpt_own_proj"]]
+    d["proj_gap_bucket"] = [_bucket(v, PROJ_GAP_BUCKETS) for v in d["proj_gap"]]
     d["qb_stack"] = [_qb_label(n, m if m is not None else 0) for n, m in zip(d["n_qb"], d["qb_mates"])]
     d["bringback"] = ["no QB" if n == 0 else (f"opp {min(int(b), 2)}" + ("+" if b >= 2 else "")) for n, b in zip(d["n_qb"], d["qb_bringback"].fillna(0))]
     if len(d):
@@ -218,7 +223,8 @@ FEATURES = [("rank_bucket", "lineup rank by actual copies", [b[2] for b in RANK_
             ("split", "team split", ["6-0", "5-1", "4-2", "3-3"]),
             ("qb_stack", "QB stack (same-team WR/TE)", ["no QB", "QB +0", "QB +1", "QB +2", "QB +3+", "2+ QBs"]),
             ("bringback", "bring-back (opponent RB/WR/TE with the QB)", ["opp 0", "opp 1", "opp 2+"]),
-            ("salary_left_bucket", "salary left on the table", [b[2] for b in SALARY_LEFT_BUCKETS])]
+            ("salary_left_bucket", "salary left on the table", [b[2] for b in SALARY_LEFT_BUCKETS]),
+            ("proj_gap_bucket", "projected points below the field's best lineup", [b[2] for b in PROJ_GAP_BUCKETS])]
 
 
 def total_entries(df: pd.DataFrame) -> int:

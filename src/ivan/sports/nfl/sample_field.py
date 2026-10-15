@@ -115,11 +115,14 @@ def _dupe_features(session: Session, L, pid_to_col: Dict[int, int], player_owner
     """The dupe model's captain and stack inputs for every lineup row (ivan.sports.nfl.dupe_model)."""
     from ivan.sports.nfl import dupe_model as DMv2
     cols = sorted(pid_to_col.items(), key=lambda kv: kv[1])
-    meta = {int(pid): (team, pos) for pid, team, pos in session.query(NFLPlayer.id, NFLPlayer.team, NFLPlayer.position).filter(NFLPlayer.id.in_([p for p, _ in cols])).all()}
-    teams = [meta.get(pid, ("", ""))[0] for pid, _ in cols]
-    positions = [meta.get(pid, ("", ""))[1] for pid, _ in cols]
+    meta = {int(pid): (team, pos, fp, slot) for pid, team, pos, fp, slot in
+            session.query(NFLPlayer.id, NFLPlayer.team, NFLPlayer.position, NFLPlayer.fpts_mean, NFLPlayer.roster_slot_id).filter(NFLPlayer.id.in_([p for p, _ in cols])).all()}
+    teams = [meta.get(pid, ("", "", None, None))[0] for pid, _ in cols]
+    positions = [meta.get(pid, ("", "", None, None))[1] for pid, _ in cols]
+    fpts = [meta.get(pid, ("", "", None, None))[2] or 0.0 for pid, _ in cols]
+    is_cpt = [meta.get(pid, ("", "", None, None))[3] == CPT_SLOT for pid, _ in cols]
     n_qb, mates = DMv2.lineup_stack_features(L, teams, positions)
-    out = {"qb_mates": mates, "n_qb": n_qb}
+    out = {"qb_mates": mates, "n_qb": n_qb, "proj_gap": DMv2.lineup_proj_gap(L, fpts, is_cpt)}
     if cpt_col_by_row is not None:
         own = np.maximum(np.nan_to_num(np.asarray(player_ownership, dtype=float), nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0
         cpt = np.asarray(cpt_col_by_row)

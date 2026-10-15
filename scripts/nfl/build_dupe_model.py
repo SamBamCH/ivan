@@ -34,9 +34,11 @@ def main(argv=None) -> int:
         for fmt, v in r.items():
             print(f"{fmt}: {v['contests']} fields; fit {v['fit']}")
             for f in v["folds"]:
-                print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']} cpt {f['beta_cpt']} gamma {f['gamma']} stack {f['stack']}")
-                print(f"      copies/entry pred {f['copies_per_entry_pred']:6.1f} actual {f['copies_per_entry_actual']:6.1f}; held-out by terms: "
-                      + "  ".join(f"{name}: MAE {a['log_mae']:.2f} bias {a['log_bias']:+.2f} top {a['top_lineup_ratio_median']:.2f}" for name, a in f["ablation"].items()))
+                print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']} cpt {f['beta_cpt']} gamma {f['gamma']} proj {f.get('delta_proj')} stack {f['stack']}")
+                print(f"      copies/entry pred {f['copies_per_entry_pred']:6.1f} actual {f['copies_per_entry_actual']:6.1f}; held-out by terms/method "
+                      f"(MAE | bias | top-lineup ratio | log slope, 1 = calibrated):")
+                for name, a in f["ablation"].items():
+                    print(f"         {name:16s} {a['log_mae']:.2f} | {a['log_bias']:+.2f} | {a['top_lineup_ratio_median']:.2f} | {a['log_slope']:.2f}")
         return 0
     out = Path(a.model_dir or MODELS_DIR)
     out.mkdir(parents=True, exist_ok=True)
