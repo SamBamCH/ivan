@@ -23,6 +23,7 @@ from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web import backtest_view as bv
 from ivan.web import validate_view as vv
 from ivan.web import dupes_view as dv
+from ivan.web import models_view as mv
 from ivan.web import plan_view as pv
 from ivan.web import backtest_hub as hub
 from ivan.web.jobs import JobRunner
@@ -613,6 +614,44 @@ def dupes_page(request: Request, c: Optional[List[int]] = Query(None)):
         s["selected"] = any(x["id"] in selected for x in s["contests"])
     rep = _with_db(lambda s: dv.report(s, selected)) if selected else {"contests": []}
     return templates.TemplateResponse(request, "dupes.html", _ctx(request, slates=slate_list, selected=selected, rep=rep))
+
+
+@app.get("/models", response_class=HTMLResponse)
+def models_page(request: Request, c: Optional[str] = None, r: Optional[str] = None):
+    """One component of the pipeline at a time: its test runs (scoreboard over commits) and the picked run's detail."""
+    comp = mv.component(c)
+    run_list = mv.runs(comp["key"], lambda jid: (runner.get(jid).status if runner.get(jid) else None))
+    picked = next((x for x in run_list if x["name"] == r), run_list[0] if run_list else None)
+    if picked is not None:
+        picked = {**picked, "report": mv.run_view(picked)}
+    today = datetime.now().date()
+    return templates.TemplateResponse(request, "models.html", _ctx(
+        request, components=mv.COMPONENTS, comp=comp, stage_params=mv.STAGE_PARAMS[comp["through"]], defaults=mv.DEFAULTS,
+        board=mv.scoreboard(run_list), view=picked,
+        default_since=(today - timedelta(days=7)).isoformat(), default_until=today.isoformat()))
+
+
+@app.post("/models/run")
+async def models_run(request: Request):
+    form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
+    comp = mv.component(form.get("component"))
+    since, until = form.get("since", "").strip(), form.get("until", "").strip()
+    back = f"/models?c={comp['key']}"
+    try:
+        params = {k: int(form.get(k) or mv.DEFAULTS[k]) for k in mv.STAGE_PARAMS[comp["through"]]}
+        run = mv.new_run(comp["key"], since, until, params, label=form.get("label", ""))
+    except ValueError:
+        return _redirect(back, "Since / until must be dates (YYYY-MM-DD); the parameters numbers.")
+    busy = next((j for j in runner.active() if (j.meta or {}).get("step") == "replay"), None)
+    if busy is not None:                   # two replays at once doubled the memory and froze the machine once
+        return _redirect(back, f"A replay is already queued or running ({busy.name}); wait for it or cancel it on the Jobs page.")
+    j1 = runner.submit(f"models {comp['key']}: replay through {comp['through']} {since}..{until}", mv.replay_command(run),
+                       meta={"step": "replay", "run": f"models/{comp['key']}/{run['name']}"})
+    j2 = runner.submit(f"models {comp['key']}: score {run['name']}", mv.validate_command(run),
+                       meta={"step": "validate", "run": f"models/{comp['key']}/{run['name']}"})
+    run["jobs"] = [{"id": j1.id, "name": "replay"}, {"id": j2.id, "name": "validate"}]
+    mv.save_run(run)
+    return _redirect(f"{back}&r={run['name']}", f"Running the {comp['label'].lower()} test through the {comp['through']} stage (see Jobs).")
 
 
 @app.get("/backtest/plan", response_class=HTMLResponse)

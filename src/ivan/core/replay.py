@@ -43,6 +43,14 @@ from ivan.core import archive, artifacts, clock, seed as seedmod
 from ivan.database.session import get_session, init_db, add_missing_columns
 
 MANIFEST = "replay.json"
+STAGES = ("restore", "project", "generate", "field", "simulate", "choose")
+
+
+def stage_rank(stage: str) -> int:
+    """Position of a stage in the pipeline; ReplayOptions.through names the last one to run."""
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage {stage!r}; one of {', '.join(STAGES)}")
+    return STAGES.index(stage)
 
 
 # --------------------------------------------------------------------------- the adapter contract
@@ -58,6 +66,10 @@ class SportAdapter(Protocol):
     def entries_csv(self, picks: List[dict], path: Path) -> int: ...
     def simulate(self, session, entries_csv: Path, n_sims: int, field_cap: int, log: Callable[[str], None]) -> dict: ...
     def choose(self, session, entries_csv: Path, out_dir: Path, weights: dict, log: Callable[[str], None]) -> dict: ...
+    # optional: the "field" stage samples each contest's field from the generated pool and writes it as an
+    # artifact without simulating outcomes (ReplayOptions.through == "field"); the validation scores that
+    # field on the actual box scores, so the field model is tested on its own
+    # def sample_field(self, session, entries_csv: Path, field_cap: int, log: Callable[[str], None]) -> dict: ...
 
 
 # --------------------------------------------------------------------------- the contest menu
@@ -178,6 +190,7 @@ class ReplayOptions:
     skip_done: bool = True
     repeats: int = 1                 # generate -> simulate -> choose this many times per slate
     seed: Optional[int] = None       # IVAN_SEED of repeat k is seed + k; None leaves every stage unseeded
+    through: str = "choose"          # the last stage to run: project | generate | field | simulate | choose
 
 
 def slate_dir_name(cap: archive.ArchivedSlate) -> str:
@@ -237,18 +250,28 @@ def _run_repeat(adapter: SportAdapter, session, k: int, seed: Optional[int], out
          "started_at": datetime.now().isoformat(timespec="seconds")}
     t_rep = time.time()
     stage_log = _tee(log_path, log)
+    through = stage_rank(opts.through)
     try:
         clear_working_tables(session, getattr(adapter, "repeat_tables", ()))
         with _env_var(seedmod.ENV, None if seed is None else str(seed)), _env_var(artifacts.ENV, str(rep_dir)):
             t0 = time.time()
             info = adapter.generate(session, opts.n_lineups, opts.jobs, stage_log) or {}
             r["stages"]["generate"] = {"seconds": round(time.time() - t0, 1), "n_lineups": opts.n_lineups, **info}
-            t0 = time.time()
-            info = adapter.simulate(session, entries_csv, opts.n_sims, opts.field_cap, stage_log) or {}
-            r["stages"]["simulate"] = {"seconds": round(time.time() - t0, 1), "n_sims": opts.n_sims, "field_cap": opts.field_cap, **info}
-            t0 = time.time()
-            info = adapter.choose(session, entries_csv, rep_dir, menu.weights, stage_log) or {}
-            r["stages"]["choose"] = {"seconds": round(time.time() - t0, 1), "weights": menu.weights, **info}
+            if opts.through == "field":                 # the sim samples its own field, so this stage only runs when it is the last
+                sample = getattr(adapter, "sample_field", None)
+                if sample is None:
+                    raise RuntimeError(f"the {adapter.sport} adapter has no field stage")
+                t0 = time.time()
+                info = sample(session, entries_csv, opts.field_cap, stage_log) or {}
+                r["stages"]["field"] = {"seconds": round(time.time() - t0, 1), "field_cap": opts.field_cap, **info}
+            if through >= stage_rank("simulate"):
+                t0 = time.time()
+                info = adapter.simulate(session, entries_csv, opts.n_sims, opts.field_cap, stage_log) or {}
+                r["stages"]["simulate"] = {"seconds": round(time.time() - t0, 1), "n_sims": opts.n_sims, "field_cap": opts.field_cap, **info}
+            if through >= stage_rank("choose"):
+                t0 = time.time()
+                info = adapter.choose(session, entries_csv, rep_dir, menu.weights, stage_log) or {}
+                r["stages"]["choose"] = {"seconds": round(time.time() - t0, 1), "weights": menu.weights, **info}
         r["status"] = "ok"
     except Exception as e:
         r["status"] = "error"
@@ -272,6 +295,11 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
     and the manifest lists them under "repeats". A slate that already has
     some repeats done is only extended to the requested count (its
     projection is fitted again, with the same seed).
+
+    opts.through stops the chain after a stage ("project" fits the slate and
+    writes the projections only; "field" generates the pool and samples each
+    contest's field without simulating). The manifest records it, and a
+    slate replayed through a later stage already covers an earlier one.
     """
     db_env = f"IVAN_{adapter.sport.upper()}_DB_URL"
     if opts.rebuild_db or not Path(replay_db).exists():
@@ -287,8 +315,10 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
     if opts.only_slate_keys:
         caps = [c for c in caps if c.slate_key in set(opts.only_slate_keys)]
     n_rep = max(1, int(opts.repeats))
+    through = stage_rank(opts.through)
+    n_rep_needed = n_rep if through >= stage_rank("generate") else 0      # a projection-only replay has no repeats
     log(f"{len(caps)} archived slate(s) to replay" + (f" between {since:%Y-%m-%d} and {until:%Y-%m-%d}" if since and until else "")
-        + (f", {n_rep} repeats each (seed {opts.seed}+k)" if n_rep > 1 else ""))
+        + (f", {n_rep} repeats each (seed {opts.seed}+k)" if n_rep > 1 else "") + (f", through {opts.through}" if opts.through != "choose" else ""))
     manifests = []
     for cap in caps:
         out_dir = Path(out_root) / adapter.sport / slate_dir_name(cap)
@@ -296,9 +326,11 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
         done: List[dict] = []
         if opts.skip_done and mpath.exists():
             prev = json.loads(mpath.read_text())
-            done = [r for r in manifest_repeats(prev) if r.get("status") == "ok"]
-            if len(done) >= n_rep and prev.get("status") == "ok":
-                log(f"skip {out_dir.name}: already replayed ({prev.get('finished_at')}, {len(done)} repeat(s))")
+            # repeats from a run that stopped earlier in the chain are not done for this one
+            covers = stage_rank(prev.get("through") or "choose") >= through
+            done = [r for r in manifest_repeats(prev) if r.get("status") == "ok"] if covers else []
+            if covers and len(done) >= n_rep_needed and prev.get("status") == "ok":
+                log(f"skip {out_dir.name}: already replayed ({prev.get('finished_at')}, {len(done)} repeat(s), through {prev.get('through') or 'choose'})")
                 manifests.append(prev)
                 continue
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -307,7 +339,7 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
         m = {"sport": adapter.sport, "capture_id": cap.id, "slate_key": cap.slate_key, "mode": cap.mode,
              "lock": cap.lock.isoformat(), "source": cap.source, "started_at": datetime.now().isoformat(timespec="seconds"),
              "options": {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in opts.__dict__.items()},
-             "status": "running", "stages": {}, "repeats": done}
+             "through": opts.through, "status": "running", "stages": {}, "repeats": done}
         mpath.write_text(json.dumps(m, indent=2))
         as_of = cap.lock - timedelta(minutes=1)
         project_seed = repeat_seed(opts, 0)
@@ -341,6 +373,9 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
                 t0 = time.time()
                 adapter.project(session, log)
                 m["stages"]["project"] = {"seconds": round(time.time() - t0, 1), "seed": project_seed}
+                if through <= stage_rank("project"):
+                    m["status"] = "ok"
+                    continue
 
                 for k in todo:
                     rep_dir = out_dir if n_rep == 1 else out_dir / repeat_dir_name(k)
@@ -396,7 +431,10 @@ def repeat_dirs(slate_dirs: Sequence[Path]) -> Dict[int, List[Path]]:
     out: Dict[int, List[Path]] = {}
     for d in slate_dirs:
         m = json.loads((Path(d) / MANIFEST).read_text())
-        for r in manifest_repeats(m):
+        reps = manifest_repeats(m)
+        if not reps and m.get("status") == "ok":            # a replay that stopped after the projection: the slate directory is the run
+            out.setdefault(0, []).append(Path(d))
+        for r in reps:
             if r.get("status") == "ok":
                 out.setdefault(int(r["k"]), []).append(Path(d) / r.get("dir", "."))
     return dict(sorted(out.items()))

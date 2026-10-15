@@ -16,6 +16,14 @@ scored here exactly as the settlement scores it.
 Slates with no run artifacts yet (the 2026 weeks before artifacts existed)
 still feed the projection check through projection_snapshot; those rows
 carry source="snapshot" and a normal-approximation PIT.
+
+A replay that stopped before the chooser (scripts/replay.py --through) has
+no choose run; its contests come from the slate's replay.json instead, with
+whatever the stages that ran left behind: the projections file, and the
+field artifact (the sampled field, no outcomes) or the sim artifact. A
+sampled field is scored on the actual box scores here, so the field checks
+(cash line, winning score, duplication, exposure) test the field model
+without a simulation.
 """
 from __future__ import annotations
 
@@ -51,39 +59,95 @@ class ContestCase:
     contest_id: int
     name: str
     lock: Optional[datetime]                 # UTC naive
-    run: bt.ChooseRun
+    run: Optional[bt.ChooseRun]              # None for a replay that stopped before the chooser
     sim: Optional[artifacts.SimRun] = None
+    field_run: Optional[artifacts.SimRun] = None     # the field stage's sampled field (no outcomes), when there is no sim
     projections: Optional[artifacts.ProjectionFile] = None
     notes: List[str] = field(default_factory=list)
+
+    @property
+    def artifact(self) -> Optional[artifacts.SimRun]:
+        """The sim artifact, else the field artifact: both hold the sampled field."""
+        return self.sim or self.field_run
 
     @property
     def slate(self) -> str:
         return bt.utc_to_local(self.lock).strftime("%Y-%m-%d %H:%M") if self.lock else "unknown"
 
 
+def _manifest_contests(dirs: Sequence[Path]) -> Dict[int, Tuple[Path, dict]]:
+    """Contest id -> (run directory, manifest) for every replayed slate in `dirs` (the manifest sits in the directory or its parent)."""
+    out: Dict[int, Tuple[Path, dict]] = {}
+    for d in dirs:
+        for cand in (Path(d) / artifacts.REPLAY_MANIFEST, Path(d).parent / artifacts.REPLAY_MANIFEST):
+            if not cand.exists():
+                continue
+            try:
+                m = json.loads(cand.read_text())
+            except (OSError, json.JSONDecodeError):
+                break
+            for c in m.get("contests") or []:
+                try:
+                    out.setdefault(int(c["contest_id"]), (Path(d), m))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            break
+    return out
+
+
 def discover(session: Session, dirs: Sequence[Path], since: Optional[datetime] = None, until: Optional[datetime] = None) -> List[ContestCase]:
-    """One case per contest with a pre-lock choose run in `dirs`, paired with its sim run and projections file."""
+    """
+    One case per contest with a pre-lock choose run in `dirs`, paired with its
+    sim run and projections file; plus one per contest of a replayed slate
+    whose run stopped before the chooser (no choose run, the manifest lists
+    the contests), paired with the field or sim artifact and projections
+    the earlier stages wrote.
+    """
     dirs = [Path(d) for d in dirs]
     runs = bt.find_choose_runs(dirs)
     sims = artifacts.find_sim_runs(dirs)
+    fields = artifacts.find_field_runs(dirs)
     projs = artifacts.find_projection_files(dirs + [d.parent for d in dirs])
-    info = bt.contest_info(session, {c for r in runs for c in bt._contests_in_run(r)})
+    from_manifest = _manifest_contests(dirs)
+    info = bt.contest_info(session, {c for r in runs for c in bt._contests_in_run(r)} | set(from_manifest))
     by_contest = bt.select_prelock_runs(runs, info)
+
+    def in_window(lock: Optional[datetime]) -> bool:
+        return not ((since and lock and lock < since) or (until and lock and lock > until))
+
     cases = []
     for cid, run in by_contest.items():
         hc = info.get(cid)
         lock = hc.date if hc is not None else None
-        if (since and lock and lock < since) or (until and lock and lock > until):
+        if not in_window(lock):
             continue
         case = ContestCase(cid, hc.name if hc is not None else "", lock, run)
         with_cid = [s for s in sims if cid in s.contests()]
         same_tree = [s for s in with_cid if s.dir.parent == run.lineups_csv.parent]       # a replay repeat: sim/ beside the choose files
         case.sim = artifacts.latest_before(same_tree or with_cid, run.when_local)
+        case.field_run = artifacts.latest_before([f for f in fields if cid in f.contests() and f.dir.parent == run.lineups_csv.parent], run.when_local)
         anchor = case.sim.when if case.sim else run.when_local
         same_tree = [p for p in projs if p.path.parent == run.lineups_csv.parent or p.path.parent == run.lineups_csv.parent.parent]
         case.projections = artifacts.latest_before(same_tree or projs, anchor)
         if case.sim is None:
             case.notes.append("no sim artifact (run predates artifacts)")
+        if case.projections is None:
+            case.notes.append("no projections file")
+        cases.append(case)
+    for cid, (d, m) in from_manifest.items():
+        if cid in by_contest:
+            continue
+        hc = info.get(cid)
+        lock = hc.date if hc is not None else None
+        if not in_window(lock):
+            continue
+        case = ContestCase(cid, hc.name if hc is not None else "", lock, None)
+        case.sim = artifacts.latest_before([s for s in sims if s.dir.parent == d and cid in s.contests()], None)
+        case.field_run = artifacts.latest_before([f for f in fields if f.dir.parent == d and cid in f.contests()], None)
+        case.projections = artifacts.latest_before([p for p in projs if p.path.parent in (d, d.parent)], None)
+        case.notes.append(f"no choose run (replay stopped after the {m.get('through') or '?'} stage)")
+        if case.sim is None and case.field_run is None:
+            case.notes.append("no field or sim artifact")
         if case.projections is None:
             case.notes.append("no projections file")
         cases.append(case)
@@ -166,8 +230,8 @@ def _player_table(case: ContestCase) -> pd.DataFrame:
                 df[c] = None
         return df[["player_id", "slot", "slot_code", "name", "team", "position", "salary", "proj_mean", "proj_sd", "own_proj",
                    "volume_source", "unpriced_stats"] + V.Q_COLS]
-    if case.sim is not None:
-        _, meta = load_sim_artifact(*artifacts.contest_artifact_paths(case.sim.dir, case.contest_id))
+    if case.artifact is not None:
+        _, meta = load_sim_artifact(*artifacts.contest_artifact_paths(case.artifact.dir, case.contest_id))
         rows = [{"player_id": p["id"], "slot": p.get("slot"), "slot_code": slot_code(p.get("slot") or "FLEX"), "name": p.get("name"), "team": p.get("team"),
                  "position": p.get("pos"), "salary": p.get("salary"), "proj_mean": p.get("fpts_mean"), "proj_sd": np.nan, "own_proj": np.nan}
                 for p in meta.get("players", [])]
@@ -178,11 +242,28 @@ def _player_table(case: ContestCase) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _score_sampled(arrays: dict, players: pd.DataFrame, act: Actuals) -> Tuple[np.ndarray, List[Optional[frozenset]]]:
+    """Every unique lineup of a sampled field scored the way the settlement scores it (NaN when a player is unknown), with its slot-key set."""
+    pm = {int(r.player_id): (str(r.slot), int(r.player_id), str(r.name), str(r.team), str(r.position), int(r.salary)) for r in players.itertuples()}
+    scores, keys_ = [], []
+    for row in arrays["lineup_players"]:
+        pl = [pm[int(pid)] for pid in row if int(pid) >= 0 and int(pid) in pm]
+        if len(pl) != int((row >= 0).sum()):
+            scores.append(np.nan); keys_.append(None); continue
+        s, _missing, _ = bt.score_lineup(pl, act.week_points, act.scraped)
+        scores.append(np.nan if s is None else s)
+        keys_.append(frozenset((slot_code(sl), t, ps.upper(), sal) for sl, _, _, t, ps, sal in pl))
+    return np.asarray(scores, dtype=float), keys_
+
+
+# --------------------------------------------------------------------------- the frames for one contest
 def contest_frames(session: Session, case: ContestCase, act: Actuals, in_field: str = "auto") -> Dict[str, pd.DataFrame]:
     """players / field / lineups / pool frames for one contest (empty frames where the inputs are missing)."""
     out = {"players": pd.DataFrame(), "field": pd.DataFrame(), "lineups": pd.DataFrame(), "pool": pd.DataFrame()}
     players = _player_table(case)
-    arrays, meta = (load_sim_artifact(*artifacts.contest_artifact_paths(case.sim.dir, case.contest_id)) if case.sim is not None else ({}, {}))
+    art = case.artifact
+    arrays, meta = (load_sim_artifact(*artifacts.contest_artifact_paths(art.dir, case.contest_id)) if art is not None else ({}, {}))
+    has_sim = bool(arrays) and "score_pct" in arrays            # a field artifact holds the sampled field but no outcomes
     tag = {"contest_id": case.contest_id, "contest_name": case.name, "slate": case.slate}
 
     # ---- players: projected vs actual points and ownership
@@ -199,32 +280,44 @@ def contest_frames(session: Session, case: ContestCase, act: Actuals, in_field: 
         p["actual_own"] = [act.scraped_own.get(k, np.nan) for k in keys]
         if arrays:
             expo = dict(zip(arrays["player_id"].tolist(), arrays["player_exposure_pct"].tolist()))
-            smean = dict(zip(arrays["player_id"].tolist(), arrays["player_mean"].tolist()))
             p["own_field"] = p.player_id.map(expo)
-            p["sim_mean"] = p.player_id.map(smean)
+            if "player_mean" in arrays:
+                p["sim_mean"] = p.player_id.map(dict(zip(arrays["player_id"].tolist(), arrays["player_mean"].tolist())))
         p["source"] = "artifact"
         for k, v in tag.items():
             p[k] = v
         p["actual_own"] = pd.to_numeric(p.actual_own, errors="coerce")
         out["players"] = p[p.actual_fpts.notna() | p.actual_own.notna()] if act.has_points or act.scraped_own else p.iloc[0:0]
 
-    # ---- field: the sim's field against the real one
-    if arrays and act.field is not None and act.tiers:
+    # ---- field: the sim's field against the real one; a field artifact's sampled field is scored on the box scores instead
+    sampled_scores: Optional[np.ndarray] = None
+    if arrays and not has_sim and act.has_points and not players.empty:
+        sampled_scores, _ = _score_sampled(arrays, players, act)
+    if arrays and act.field is not None and act.tiers and (has_sim or sampled_scores is not None):
         q = list(arrays["qgrid"].tolist())
         fld = np.asarray(act.field, dtype=float)
         paid = min(places_paid(act.tiers), fld.size)
-        sp = np.percentile(arrays["score_pct"], [10, 50, 90], axis=0)      # (3, len(q))
-        qi = {v: i for i, v in enumerate(q)}
         dupes = arrays["dupes"]
+        if has_sim:
+            sp = np.percentile(arrays["score_pct"], [10, 50, 90], axis=0)      # (3, len(q))
+            qi = {v: i for i, v in enumerate(q)}
+            cash = [float(np.percentile(arrays["cash_line"], k)) for k in (10, 50, 90)]
+            win = [float(np.percentile(arrays["winning_score"], k)) for k in (10, 50, 90)]
+            score = {k: float(sp[1, qi[k]]) for k in (10, 50, 90, 99)}
+        else:
+            # one deterministic field: every sampled entry scored on what the players actually did
+            ok = np.isfinite(sampled_scores)
+            desc = np.sort(np.repeat(sampled_scores[ok], dupes[ok]))[::-1] if ok.any() else np.zeros(0)
+            paid_sim = min(desc.size, max(1, int(round(paid * desc.size / max(1, act.field_size or fld.size))))) if desc.size else 0
+            cash = [float(desc[paid_sim - 1]) if paid_sim else np.nan] * 3
+            win = [float(desc[0]) if desc.size else np.nan] * 3
+            score = {k: (float(np.percentile(desc, k)) if desc.size else np.nan) for k in (10, 50, 90, 99)}
         real_d = np.asarray(list(act.real_dupes.values()), dtype=float) if act.real_dupes else np.zeros(0)
         row = {**tag, "sim_size": int(meta.get("simulated_size", 0)), "actual_size": int(fld.size), "contest_size": act.field_size,
                "paid_places": int(paid), "n_sims": int(meta.get("n_sims", 0)),
-               "sim_cash_p10": float(np.percentile(arrays["cash_line"], 10)), "sim_cash_p50": float(np.percentile(arrays["cash_line"], 50)),
-               "sim_cash_p90": float(np.percentile(arrays["cash_line"], 90)), "actual_cash_line": float(fld[paid - 1]) if paid else np.nan,
-               "sim_win_p10": float(np.percentile(arrays["winning_score"], 10)), "sim_win_p50": float(np.percentile(arrays["winning_score"], 50)),
-               "sim_win_p90": float(np.percentile(arrays["winning_score"], 90)), "actual_win": float(fld[0]),
-               "sim_score_p50": float(sp[1, qi[50]]), "sim_score_p90": float(sp[1, qi[90]]), "sim_score_p99": float(sp[1, qi[99]]),
-               "sim_score_p10": float(sp[1, qi[10]]),
+               "sim_cash_p10": cash[0], "sim_cash_p50": cash[1], "sim_cash_p90": cash[2], "actual_cash_line": float(fld[paid - 1]) if paid else np.nan,
+               "sim_win_p10": win[0], "sim_win_p50": win[1], "sim_win_p90": win[2], "actual_win": float(fld[0]),
+               "sim_score_p50": score[50], "sim_score_p90": score[90], "sim_score_p99": score[99], "sim_score_p10": score[10],
                "actual_score_p50": float(np.percentile(fld, 50)), "actual_score_p90": float(np.percentile(fld, 90)),
                "actual_score_p99": float(np.percentile(fld, 99)), "actual_score_p10": float(np.percentile(fld, 10)),
                # the sim samples `sim_size` entries; dupe counts are scaled to the contest size before comparing
@@ -241,7 +334,7 @@ def contest_frames(session: Session, case: ContestCase, act: Actuals, in_field: 
         out["field"] = pd.DataFrame([row])
 
     # ---- our lineups and the pool, scored the way the settlement scores them
-    ours = bt.our_entries(case.run, case.contest_id)
+    ours = bt.our_entries(case.run, case.contest_id) if case.run is not None else []
     pay = payout_vector(act.tiers, (act.field.size if act.field is not None else 0) + 1) if act.tiers else None
     by_lid = {}
     if arrays:
@@ -270,20 +363,11 @@ def contest_frames(session: Session, case: ContestCase, act: Actuals, in_field: 
             rows.append(r)
         out["lineups"] = pd.DataFrame(rows)
 
-    if arrays and act.has_points and act.field is not None and pay is not None and not players.empty:
-        pm = {int(r.player_id): (str(r.slot), int(r.player_id), str(r.name), str(r.team), str(r.position), int(r.salary)) for r in players.itertuples()}
+    if has_sim and act.has_points and act.field is not None and pay is not None and not players.empty:
         picked_counts: Dict[int, int] = {}
         for o in ours:
             picked_counts[int(o["lineup_id"])] = picked_counts.get(int(o["lineup_id"]), 0) + 1
-        scores, keys_ = [], []
-        for row in arrays["lineup_players"]:
-            pl = [pm[int(pid)] for pid in row if int(pid) >= 0 and int(pid) in pm]
-            if len(pl) != int((row >= 0).sum()):
-                scores.append(np.nan); keys_.append(None); continue
-            s, missing, _ = bt.score_lineup(pl, act.week_points, act.scraped)
-            scores.append(np.nan if s is None else s)
-            keys_.append(frozenset((slot_code(sl), t, ps.upper(), sal) for sl, _, _, t, ps, sal in pl))
-        scores = np.asarray(scores, dtype=float)
+        scores, keys_ = _score_sampled(arrays, players, act)
         ok = np.isfinite(scores)
         ranks = np.full(scores.size, np.nan); pays = np.full(scores.size, np.nan)
         if ok.any():
@@ -328,6 +412,9 @@ def environment_frame(session: Session, cases: Sequence[ContestCase], actual_gam
     if not rows:
         return pd.DataFrame()
     df = pd.concat(rows, ignore_index=True)
+    # a game is on every slate of its day (two classics, the showdowns): one row per team-game
+    df["_day"] = df.slate.astype(str).str.slice(0, 10)
+    df = df.drop_duplicates(["_day", "team"], keep="first").drop(columns=["_day"])
     a = actual[["season", "week", "team", "points", "plays", "pass_rate", "dropbacks", "rush_att"]].rename(
         columns={"points": "actual_points", "plays": "actual_plays", "pass_rate": "actual_pass_rate", "dropbacks": "actual_dropbacks", "rush_att": "actual_rushes"})
     df["season"] = pd.to_numeric(df.season, errors="coerce"); df["week"] = pd.to_numeric(df.week, errors="coerce")
@@ -346,7 +433,74 @@ def usage_frame(cases: Sequence[ContestCase]) -> pd.DataFrame:
             continue
         u = u.copy(); u["slate"] = case.slate
         rows.append(u)
-    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.concat(rows, ignore_index=True)
+    df["_day"] = df.slate.astype(str).str.slice(0, 10)          # one row per team-game and stat, as for the environment
+    return df.drop_duplicates(["_day", "team", "stat"], keep="first").drop(columns=["_day"])
+
+
+# --------------------------------------------------------------------------- one row per player-game, and an honest baseline
+def dedupe_player_games(players: pd.DataFrame) -> pd.DataFrame:
+    """
+    One row per player-game: the same game appears on every slate of the day
+    (two classics, the showdowns) and as a captain row beside the flex row.
+    The flex row is kept, so the 1.5x captain copy never double counts, and
+    the first slate's row stands for the rest. Without this the salary
+    baseline, fitted slate by slate, has already seen the scores it is judged
+    on, and every error statistic counts the big games several times.
+    """
+    if players.empty or "slate" not in players.columns:
+        return players
+    df = players.copy()
+    df["_day"] = df.slate.astype(str).str.slice(0, 10)
+    df["_cpt"] = (pd.to_numeric(df.slot_code, errors="coerce") == bt.CPT_SLOT).astype(int) if "slot_code" in df.columns else 0
+    df = df.sort_values(["_day", "name", "team", "_cpt", "slate"], kind="stable")
+    df = df.drop_duplicates(["_day", "name", "team"], keep="first")
+    return df.drop(columns=["_day", "_cpt"])
+
+
+PRIOR_WEEKS_DAYS = 70          # the salary line is fitted on this many days of snapshots before the window
+MIN_PRIOR_ROWS = 20            # per position
+
+
+def prior_salary_baseline(session: Session, players: pd.DataFrame) -> Tuple[Optional[np.ndarray], str]:
+    """
+    A salary-only projection for every row, fitted per position on the
+    projection snapshots of the weeks *before* the earliest slate in the
+    frame (actuals from nfl_stats, see backtest_projections). Out of sample by
+    construction. Returns (predictions aligned to players, note); predictions
+    None when no earlier snapshots exist.
+    """
+    from ivan.sports.nfl import backtest_projections as BP
+    if players.empty or "slate" not in players.columns:
+        return None, ""
+    first = pd.to_datetime(players.slate.astype(str).str.slice(0, 10), errors="coerce").min()
+    if pd.isna(first):
+        return None, ""
+    until = (first - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    since = (first - pd.Timedelta(days=PRIOR_WEEKS_DAYS)).strftime("%Y-%m-%d")
+    try:
+        hist = BP.scored_projections(session, since, until)
+    except ValueError:
+        return None, ""
+    hist = hist[pd.to_numeric(hist.actual, errors="coerce").notna()]
+    pred = np.full(len(players), np.nan)
+    pos = players.position.astype(str).str.upper().values
+    sal = pd.to_numeric(players.salary, errors="coerce").values.astype(float)
+    cpt = (pd.to_numeric(players.slot_code, errors="coerce") == bt.CPT_SLOT).values if "slot_code" in players.columns else np.zeros(len(players), bool)
+    fitted = []
+    for p_ in sorted(set(pos)):
+        h = hist[hist.position.astype(str).str.upper() == p_]
+        if len(h) < MIN_PRIOR_ROWS or h.salary.astype(float).std() == 0:
+            continue
+        b, a = np.polyfit(h.salary.astype(float).values, h.actual.astype(float).values, 1)
+        m = pos == p_
+        pred[m] = (a + b * sal[m]) * np.where(cpt[m], bt.CPT_MULT, 1.0)
+        fitted.append(p_)
+    if not fitted:
+        return None, ""
+    return pred, f"salary line per position fitted on {since}..{until} snapshots ({len(hist)} player-games)"
 
 
 # --------------------------------------------------------------------------- snapshot projections (no artifacts yet)
@@ -419,8 +573,9 @@ def validate_window(session: Session, dirs: Sequence[Path], out: Path, since: Op
         for k, df in fr.items():
             if not df.empty:
                 frames[k].append(df)
-        coverage.append({"contest_id": case.contest_id, "name": case.name, "slate": case.slate, "run": case.run.stamp,
-                         "sim": str(case.sim.dir) if case.sim else None, "projections": str(case.projections.path) if case.projections else None,
+        coverage.append({"contest_id": case.contest_id, "name": case.name, "slate": case.slate, "run": case.run.stamp if case.run else None,
+                         "sim": str(case.sim.dir) if case.sim else None, "field_artifact": str(case.field_run.dir) if case.field_run else None,
+                         "projections": str(case.projections.path) if case.projections else None,
                          "actual_points": act.has_points, "scraped": bool(act.scraped), "field": act.field is not None,
                          "field_coverage": (act.field.size / act.field_size) if (act.field is not None and act.field_size) else None,
                          "payouts": bool(act.tiers), "players": int(len(fr["players"])), "lineups": int(len(fr["lineups"])),
@@ -428,11 +583,8 @@ def validate_window(session: Session, dirs: Sequence[Path], out: Path, since: Op
         echo(f"{case.slate}  {case.contest_id}  {case.name[:50]:50s} players {len(fr['players']):3d}  lineups {len(fr['lineups']):3d}  "
              f"pool {len(fr['pool']):4d}  field {'y' if act.field is not None else '-'}  {'; '.join(case.notes)}")
     players = pd.concat(frames["players"], ignore_index=True) if frames["players"] else pd.DataFrame()
-    # a contest's players appear once per contest; the projection check wants one row per player per slate
-    if not players.empty:
-        players_unique = players.drop_duplicates(subset=["slate", "player_id"]).copy()
-    else:
-        players_unique = players
+    # a contest's players appear once per contest and a game on every slate of the day; the projection check wants one row per player-game
+    players_unique = dedupe_player_games(players) if not players.empty else players
     snap = pd.DataFrame()
     if include_snapshots and since is not None and until is not None:
         snap = snapshot_players(session, bt.utc_to_local(since), bt.utc_to_local(until), week_cache)
@@ -441,13 +593,27 @@ def validate_window(session: Session, dirs: Sequence[Path], out: Path, since: Op
             snap = snap[~snap.slate.str.slice(0, 10).isin(have)]        # artifacts win over snapshots for the same day
         echo(f"snapshot player-games with actuals (no artifacts): {len(snap)}")
     all_players = pd.concat([players_unique, snap], ignore_index=True) if not snap.empty else players_unique
+    all_players = dedupe_player_games(all_players) if not all_players.empty else all_players
+    # the salary baseline comes from the weeks before the window, never from the scores it is judged on
+    baseline_note = ""
+    for frame in (all_players, players_unique):
+        if frame.empty:
+            continue
+        pred, note = prior_salary_baseline(session, frame)
+        if pred is not None:
+            frame["baseline"] = pred
+            baseline_note = note
+    if baseline_note:
+        echo(f"salary baseline: {baseline_note}")
+    else:
+        echo("salary baseline: no earlier snapshots; leave-one-slate-out line (optimistic when slates share player-games)")
 
     env = environment_frame(session, cases)
     use = usage_frame(cases)
     reports = {"environment": V.environment_report(env) if not env.empty else {"n": 0},
                "usage": V.usage_report(use) if not use.empty else {"n": 0},
-               "players": V.player_report(all_players) if not all_players.empty else {"n": 0},
-               "players_artifacts": V.player_report(players_unique) if not players_unique.empty else {"n": 0},
+               "players": V.player_report(all_players, baseline_note=baseline_note or None) if not all_players.empty else {"n": 0},
+               "players_artifacts": V.player_report(players_unique, baseline_note=baseline_note or None) if not players_unique.empty else {"n": 0},
                "field": V.field_report(pd.concat(frames["field"], ignore_index=True)) if frames["field"] else {"n": 0, "rows": []},
                "lineups": V.lineup_report(pd.concat(frames["lineups"], ignore_index=True)) if frames["lineups"] else {"n": 0},
                "pool": V.pool_report(pd.concat(frames["pool"], ignore_index=True)) if frames["pool"] else {"n": 0}}

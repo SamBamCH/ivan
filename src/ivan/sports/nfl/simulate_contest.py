@@ -315,6 +315,67 @@ def simulate_one_contest(
     return sim_report.jsonable(report)
 
 
+# ----------------------------------------------------------------------------- the field alone
+def sample_contest_field(session: Session, contest_id: int, contest_name: str, config_path: str, field_cap: int,
+                         artifact_dir: str | Path) -> dict:
+    """
+    The simulator's first step on its own: sample the contest's field from the
+    generated pool and write it as a field artifact (run_artifacts.build_field_artifact),
+    with no outcomes drawn and nothing persisted to the database. The replay's
+    "field" stage (ivan.core.replay) uses it so the field model can be scored
+    against the real field without paying for the simulations.
+    """
+    t0 = time.time()
+    cfg = json.load(open(config_path, encoding="utf-8"))
+    contest = session.query(HistoricalContest).filter_by(contest_id=contest_id).one()
+    mode = "showdown" if contest.contest_type == "Showdown Captain Mode" else "classic"
+    field_sz = int(contest.total_entries)
+    capped = min(field_cap, field_sz)
+    entry_fee = float(contest.entry_fee)
+    n_candidates = session.query(Lineup).count()
+    counts_by_lineup, meta = sample_field(session, field_size=capped, config=cfg, mode=mode, contest_id=contest_id,
+                                          total_entries=field_sz, entry_fee=entry_fee)
+    M = sum(counts_by_lineup.values())
+    if M == 0:
+        raise RuntimeError(f"field sampler returned no entries for contest {contest_id} ({meta.get('error', 'no lineups?')})")
+    sampler_arrays = meta.pop("_arrays", None)
+    u_lids, pid_lists_by_lid, _, unique_pids, _, starts, ends = _expand_sampled_field(session, counts_by_lineup)
+    players = sim_report.player_meta(session, unique_pids)
+    tiers = _payout_tiers(session, contest_id)
+    scaled = _scale_payouts(tiers, M, field_sz)
+    paid_places = max((r for r, a in scaled.items() if 1 <= r <= M and a > 0), default=0)
+    pay_by_rank = np.array([float(scaled.get(r, 0.0)) for r in range(1, M + 1)])
+    from ivan.core.artifacts import contest_artifact_paths
+    from ivan.sports.nfl.run_artifacts import build_field_artifact, write_sim_artifact
+    arrays, art_meta = build_field_artifact(
+        contest={"id": contest_id, "name": contest_name, "mode": mode, "contest_type": contest.contest_type, "entry_fee": entry_fee,
+                 "total_entries": field_sz, "field_cap": field_cap, "start": contest.date, "candidates": n_candidates},
+        u_lids=u_lids, starts=starts, ends=ends, pid_lists_by_lid=pid_lists_by_lid, players=players, pay_by_rank=pay_by_rank,
+        tiers=tiers, paid_places=paid_places, sampler_arrays=sampler_arrays, sampler_meta=meta, seed=seed_for(f"sim/{contest_id}"))
+    npz_path, json_path = contest_artifact_paths(Path(artifact_dir), contest_id)
+    write_sim_artifact(npz_path, json_path, arrays, art_meta)
+    return {"contest_id": contest_id, "sampled": int(M), "unique": len(u_lids), "paid_places": int(paid_places),
+            "seconds": round(time.time() - t0, 1), "artifact": str(npz_path)}
+
+
+def sample_entries_fields(session, entries_csv, config_path, field_cap: int, artifact_dir: str | Path, log=print) -> dict:
+    """sample_contest_field for every contest in the entries file; a failure is logged and the others still run."""
+    contests = contests_in_entries(entries_csv)
+    log(f"Sampling the field of {len(contests)} contest(s): cap {field_cap:,}; artifacts -> {artifact_dir}")
+    out = {"contests": int(len(contests)), "sampled": 0, "failed": []}
+    for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
+        try:
+            r = sample_contest_field(session, int(cid), name, str(config_path), field_cap, artifact_dir)
+            out["sampled"] += 1
+            log(f"--- {i}/{len(contests)} {name}: {r['sampled']:,} entries, {r['unique']:,} unique lineups, {r['paid_places']} paid, {r['seconds']}s")
+        except Exception as e:   # noqa: BLE001
+            import traceback
+            session.rollback()
+            out["failed"].append({"contest_id": int(cid), "name": name, "error": f"{type(e).__name__}: {e}"})
+            log(f"FAILED contest {cid} ('{name}'): {e}\n{traceback.format_exc()}")
+    return out
+
+
 # ----------------------------------------------------------------------------- every contest in an entries file
 def contests_in_entries(entries_csv) -> pd.DataFrame:
     """The distinct contests of a DraftKings entries file (one row per contest name, highest id kept)."""

@@ -7,6 +7,8 @@ summary.json that scripts/nfl/validate.py writes (ivan.sports.nfl.validate
 A validation report is a directory with summary.json under
     data/nfl/output/validation/<stamp>/                  (live runs)
     data/nfl/output/replay*/nfl/validation/rep_<k>/      (replays)
+    data/nfl/output/backtests/<run>/nfl/validation/...   (the Backtest page's runs)
+    data/nfl/output/models/<component>/<run>/nfl/validation/...   (the Models page's tests)
 """
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ def _candidates() -> list[Path]:
     root = OUTPUT_DIR / "validation"
     if root.exists():
         out += [d for d in root.iterdir() if d.is_dir()]
-    for rr in list(OUTPUT_DIR.glob("replay*")) + list((OUTPUT_DIR / "backtests").glob("*")):
+    for rr in list(OUTPUT_DIR.glob("replay*")) + list((OUTPUT_DIR / "backtests").glob("*")) + list((OUTPUT_DIR / "models").glob("*/*")):
         v = rr / "nfl" / "validation"
         if v.exists():
             out += [d for d in v.iterdir() if d.is_dir()]
@@ -37,7 +39,10 @@ def _candidates() -> list[Path]:
 
 
 def report_id(d: Path) -> str:
-    return str(d.relative_to(OUTPUT_DIR))
+    try:
+        return str(d.relative_to(OUTPUT_DIR))
+    except ValueError:                  # a report outside the output tree (tests, ad hoc runs): the path itself, which report_path refuses
+        return str(d)
 
 
 def report_path(rid: str) -> Optional[Path]:

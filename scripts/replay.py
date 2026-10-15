@@ -4,7 +4,7 @@ Replay archived slates with today's code, then settle and tax the result.
 
     python scripts/replay.py --sport nfl --since 2025-11-01 --until 2025-11-30 [--menu config/replay/nfl.json]
         [--lineups 3000 --jobs 4 --sims 500 --field-cap 5000] [--rebuild-db] [--slates KEY,KEY] [--dry-run]
-        [--repeats 50 --seed 0] [--workers 3] [--report-only]
+        [--repeats 50 --seed 0] [--workers 3] [--report-only] [--through project|generate|field|simulate|choose]
         [--no-report] [--bankroll 2000] [--tax-config config/tax.json]
 
 Works on a copy of the sport's database (data/<sport>/replay/<sport>_replay.sqlite,
@@ -26,6 +26,14 @@ re-reads what is there without replaying.
 of the replay database (<sport>_replay.w<i>.sqlite). Each worker's generate
 stage uses --jobs processes, so keep workers x jobs near the core count.
 
+--through STAGE stops after that stage, for testing one model without the
+rest of the pipeline: "project" fits and writes the projections (seconds per
+slate; scores projections, ownership and the game environment), "field"
+generates the pool and samples each contest's field without simulating
+(scores the field model and the dupe model), "simulate" skips the chooser.
+The settlement report needs chosen entries, so it only runs through "choose".
+scripts/nfl/validate.py --replay reads whatever stages ran.
+
 A slate must be in the archive first: ingest archives every live capture,
 scripts/nfl/backfill_archive.py rebuilds past ones.
 """
@@ -34,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -42,6 +51,18 @@ from pathlib import Path
 from ivan.core import archive, replay as rp
 from ivan.core.utils import PROJECT_ROOT
 from ivan.database.session import DB_DIR, get_session, init_db
+
+
+def _install_term_handler() -> None:
+    """Turn SIGTERM into SystemExit so the ``finally`` blocks run.
+
+    The default SIGTERM action ends the interpreter on the spot, skipping every ``finally``; a cancel
+    from the web UI then killed only this process and its workers (each in its own session, see
+    run_workers) carried on for as long as they liked. Two full backtests ran side by side that way
+    and froze the machine."""
+    def _terminate(signum, frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, _terminate)
 
 
 def adapter_for(sport: str, config: str | None):
@@ -65,6 +86,8 @@ def parse_args(argv=None):
     ap.add_argument("--repeats", type=int, default=1, help="generate/simulate/choose this many times per slate")
     ap.add_argument("--seed", type=int, default=None, help="IVAN_SEED of repeat k is seed + k (default 0 when --repeats > 1)")
     ap.add_argument("--workers", type=int, default=1, help="replay processes, each on its own copy of the replay database")
+    ap.add_argument("--through", default="choose", choices=[s for s in rp.STAGES if s != "restore"],
+                    help="stop after this stage (default choose, the whole pipeline)")
     ap.add_argument("--rebuild-db", action="store_true", help="recreate the replay database from the live one")
     ap.add_argument("--replay-db", default=None)
     ap.add_argument("--out", default=None, help="output root (default data/<sport>/output/replay)")
@@ -105,7 +128,7 @@ def run_workers(a, sport: str, live_db: Path, replay_db: Path, out_root: Path, a
         cmd = [sys.executable, "-u", str(Path(__file__).resolve()), "--sport", sport, "--since", a.since, "--until", a.until,
                "--slates", ",".join(keys), "--replay-db", str(clone), "--out", str(out_root), "--no-report", "--workers", "1",
                "--lineups", str(a.lineups), "--jobs", str(max(1, min(a.jobs, (os.cpu_count() or 1) // max(1, a.workers)))), "--sims", str(a.sims), "--field-cap", str(a.field_cap),
-               "--repeats", str(a.repeats)]
+               "--repeats", str(a.repeats), "--through", a.through]
         if a.seed is not None:
             cmd += ["--seed", str(a.seed)]
         for flag, val in (("--menu", a.menu), ("--config", a.config)):
@@ -126,8 +149,8 @@ def run_workers(a, sport: str, live_db: Path, replay_db: Path, out_root: Path, a
             print(f"worker {i}: exit {rc}")
     finally:
         # a cancel (SIGTERM / Ctrl-C) must take the workers and their generator pools down too, or they keep
-        # writing to clone databases the next run replaces under them ("attempt to write a readonly database")
-        import signal
+        # writing to clone databases the next run replaces under them ("attempt to write a readonly database");
+        # SIGTERM only reaches this block through _install_term_handler
         for i, p, fh in procs:
             if p.poll() is None:
                 try:
@@ -149,6 +172,7 @@ def run_workers(a, sport: str, live_db: Path, replay_db: Path, out_root: Path, a
 
 
 def main(argv=None) -> int:
+    _install_term_handler()
     a = parse_args(argv)
     sport = a.sport.lower()
     live_db = Path(DB_DIR) / sport / f"{sport}_history.sqlite"
@@ -161,7 +185,7 @@ def main(argv=None) -> int:
         a.seed = 0
     opts = rp.ReplayOptions(n_lineups=a.lineups, jobs=a.jobs, n_sims=a.sims, field_cap=a.field_cap, rebuild_db=a.rebuild_db,
                             dry_run=a.dry_run, only_slate_keys=[s.strip() for s in a.slates.split(",")] if a.slates else None,
-                            skip_done=not a.redo, repeats=a.repeats, seed=a.seed)
+                            skip_done=not a.redo, repeats=a.repeats, seed=a.seed, through=a.through)
     adapter = adapter_for(sport, a.config)
     if not a.report_only:
         if a.workers > 1 and not a.dry_run:
@@ -173,6 +197,9 @@ def main(argv=None) -> int:
         print(f"\nreplayed {len(ok)} slate(s)" + (f", {len(bad)} failed: " + "; ".join(f"{m['slate_key']} ({m['error'][:80]})" for m in bad) if bad else ""))
         if a.no_report or a.dry_run or not ok:
             return 1 if bad and not ok else 0
+        if a.through != "choose":                       # nothing was entered, so there is nothing to settle
+            print(f"stopped after the {a.through} stage; scripts/nfl/validate.py --replay {out_root} scores what ran")
+            return 0
 
     if sport != "nfl":
         return 0

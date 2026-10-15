@@ -205,6 +205,52 @@ def build_sim_artifact(*, contest: dict, u_lids: Sequence[int], starts: np.ndarr
     return arrays, meta
 
 
+def build_field_artifact(*, contest: dict, u_lids: Sequence[int], starts: np.ndarray, ends: np.ndarray,
+                         pid_lists_by_lid: Dict[int, List[int]], players: Dict[int, dict], pay_by_rank: np.ndarray,
+                         tiers: List[dict], paid_places: int, sampler_arrays: Optional[dict] = None,
+                         sampler_meta: Optional[dict] = None, seed: Optional[int] = None) -> tuple[dict, dict]:
+    """
+    (arrays, meta) for one contest's sampled field with no outcomes drawn: the
+    sim artifact's lineup and player arrays (copies, predicted dupes, field
+    exposure) without the per-simulation scores. The validation scores this
+    field on the actual box scores, which tests the field model on its own.
+    """
+    M = int(ends[-1]) if len(ends) else 0
+    U = len(u_lids)
+    dupes = np.asarray([int(ends[u] - starts[u]) for u in range(U)], dtype=np.int64)
+    lineup_players = _pad([pid_lists_by_lid.get(int(l), []) for l in u_lids])
+    pred_by_lid: Dict[int, float] = {}
+    cand_lids = np.zeros(0, dtype=np.int64); cand_pred = np.zeros(0)
+    if sampler_arrays and "lineup_id" in sampler_arrays and "predicted_dupes" in sampler_arrays:
+        cand_lids = np.asarray(sampler_arrays["lineup_id"], dtype=np.int64)
+        cand_pred = np.asarray(sampler_arrays["predicted_dupes"], dtype=np.float64)
+        pred_by_lid = dict(zip(cand_lids.tolist(), cand_pred.tolist()))
+    predicted_dupes = np.asarray([pred_by_lid.get(int(l), np.nan) for l in u_lids], dtype=np.float64)
+    exposure: Dict[int, int] = {}
+    for u, lid in enumerate(u_lids):
+        for pid in pid_lists_by_lid.get(int(lid), []):
+            exposure[pid] = exposure.get(pid, 0) + int(dupes[u])
+    pids = sorted(exposure)
+    exp_pct = np.asarray([100.0 * exposure.get(pid, 0) / max(1, M) for pid in pids])
+    own_proj = np.asarray([(players.get(pid, {}).get("ownership_proj") if players.get(pid, {}).get("ownership_proj") is not None else np.nan)
+                           for pid in pids], dtype=np.float64)
+    arrays = {
+        "lineup_id": np.asarray(u_lids, dtype=np.int64), "dupes": dupes, "predicted_dupes": predicted_dupes,
+        "lineup_players": lineup_players, "cand_lineup_id": cand_lids, "cand_predicted_dupes": cand_pred,
+        "player_id": np.asarray(pids, dtype=np.int64), "player_exposure_pct": exp_pct, "player_ownership_proj": own_proj,
+        "pay_by_rank": np.asarray(pay_by_rank, dtype=np.float64), "qgrid": np.asarray(QGRID, dtype=np.int64),
+    }
+    meta = {
+        "version": ARTIFACT_VERSION, "kind": "field", "created_at": datetime.now().isoformat(timespec="seconds"), "seed": seed,
+        "contest": contest, "n_sims": 0, "simulated_size": int(M), "unique_lineups": int(U),
+        "paid_places": int(paid_places), "tiers": tiers,
+        "players": [{"id": int(pid), **{k: players.get(pid, {}).get(k) for k in ("name", "team", "pos", "slot", "salary", "fpts_mean")}}
+                    for pid in pids],
+        "sampler": sampler_meta or {},
+    }
+    return arrays, meta
+
+
 def write_sim_artifact(npz_path: Path, json_path: Path, arrays: dict, meta: dict) -> None:
     from ivan.sports.nfl.sim_report import jsonable
     Path(npz_path).parent.mkdir(parents=True, exist_ok=True)

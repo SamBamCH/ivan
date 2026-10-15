@@ -119,7 +119,18 @@ class NFLReplayAdapter:
         df.to_csv(path, index=False)
         return len(df)
 
-    # ---------------------------------------------------------------- simulate / choose
+    # ---------------------------------------------------------------- field / simulate / choose
+    def sample_field(self, session, entries_csv: Path, field_cap: int, log) -> dict:
+        """The replay's field stage: each contest's field sampled from the pool and written as an artifact, no outcomes."""
+        from ivan.core import artifacts
+        from ivan.sports.nfl.paths import OUTPUT_DIR
+        from ivan.sports.nfl.simulate_contest import sample_entries_fields
+        r = sample_entries_fields(session, entries_csv, self.config_path, field_cap, artifacts.field_dir(OUTPUT_DIR), log=log)
+        if r["failed"]:
+            raise RuntimeError(f"{len(r['failed'])} of {r['contests']} contest(s) failed to sample: "
+                               + "; ".join(f"{f['contest_id']} {f['error']}" for f in r["failed"]))
+        return {"contests": r["contests"], "sampled": r["sampled"]}
+
     def simulate(self, session, entries_csv: Path, n_sims: int, field_cap: int, log) -> dict:
         from ivan.core import artifacts
         from ivan.sports.nfl.paths import OUTPUT_DIR

@@ -73,14 +73,47 @@ class Job:
         return d
 
 
-def _signal_group(proc: subprocess.Popen, sig) -> None:
-    """Signal the job's whole process group; fall back to the process itself."""
-    try:
-        os.killpg(os.getpgid(proc.pid), sig)
-    except (ProcessLookupError, PermissionError, OSError):
+def _descendant_pids(pid: int) -> list[int]:
+    """Every live descendant of ``pid`` on this host, read from /proc (Linux only; empty elsewhere)."""
+    children: dict[int, list[int]] = {}
+    for stat in Path("/proc").glob("[0-9]*/stat"):
         try:
-            proc.send_signal(sig)
-        except (ProcessLookupError, OSError):
+            text = stat.read_text()
+            # "<pid> (<comm>) <state> <ppid> ..." and comm may contain spaces or parentheses
+            ppid = int(text[text.rindex(")") + 2:].split()[1])
+            children.setdefault(ppid, []).append(int(stat.parent.name))
+        except (OSError, ValueError, IndexError):
+            continue
+    found, todo = [], [pid]
+    while todo:
+        for kid in children.get(todo.pop(), []):
+            found.append(kid)
+            todo.append(kid)
+    return found
+
+
+def _signal_group(proc: subprocess.Popen, sig) -> None:
+    """Signal the job's process group and every descendant's group.
+
+    The job itself runs in its own session, but a replay starts each worker in a fresh session too,
+    so one killpg on the job's group never reaches them. Walking the tree first means a cancel takes
+    the workers and their pools down even when the job dies before it can forward the signal."""
+    pids = [proc.pid, *_descendant_pids(proc.pid)]
+    groups: set[int] = set()
+    for pid in pids:
+        try:
+            groups.add(os.getpgid(pid))
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+    for pgid in groups:
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    for pid in pids:                     # anything that changed group since the walk
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
 
 

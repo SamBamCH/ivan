@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}Models · Ivan{% endblock %}
+{% macro n(x, p=2) %}{{ x|num(p) if (x is defined and x is not none and x == x) else '' }}{% endmacro %}
+{% macro sp(x) %}{{ x|spct if (x is defined and x is not none) else '' }}{% endmacro %}
+{% macro p1(x) %}{{ x|pct1 if (x is defined and x is not none) else '' }}{% endmacro %}
+{% macro errblock(rows, key) %}
+<table class="compact">
+  <tr><th>{{ key }}</th><th class="num">n</th><th class="num">proj mean</th><th class="num">actual mean</th><th class="num">bias</th><th class="num">MAE</th><th class="num">salary-only MAE</th><th class="num">corr</th><th class="num">sd ratio</th><th class="num">10-90 cover</th><th>PIT shape</th></tr>
+  {% for r in rows %}<tr><td>{{ r[key] }}</td><td class="num">{{ r.n }}</td><td class="num">{{ n(r.proj_mean) }}</td><td class="num">{{ n(r.actual_mean) }}</td>
+    <td class="num {{ r.bias|scss }}">{{ n(r.bias) }}</td><td class="num">{{ n(r.mae) }}</td><td class="num">{{ n(r.baseline_mae) }}</td><td class="num">{{ n(r.corr) }}</td>
+    <td class="num">{{ n(r.sd_ratio) }}</td><td class="num">{{ p1(r.coverage_10_90) }}</td><td>{{ r.pit_shape or '' }}</td></tr>{% endfor %}
+</table>
+{% endmacro %}
+{% block content %}
+<style>
+  .pos { color:var(--ok) } .neg { color:var(--bad) }
+  .status { display:inline-block; min-width:44px; text-align:center; padding:1px 6px; border-radius:4px; font-size:12px; font-weight:600 }
+  .status.pass { background:#e3f4e8; color:#1f7a3a } .status.warn { background:#fff3d6; color:#8a5a00 } .status.fail { background:#fde2e2; color:#a11b1b } .status.na { background:#eee; color:#666 }
+  .tabs a { display:inline-block; background:#fff; color:var(--ink); border:1px solid var(--line); padding:6px 14px; border-radius:6px; text-decoration:none }
+  .tabs a.on { background:var(--ink); color:#fff; border-color:var(--ink) }
+  .kv { display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:13px } .kv b { font-weight:500; color:#444 }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px } @media (max-width:900px) { .grid2 { grid-template-columns:1fr } }
+  .hist .row { display:flex; align-items:center; gap:8px; font-size:12px; margin:2px 0 } .hist .lab { width:60px; color:#555 }
+  .hist .bar { position:relative; flex:1; height:12px; background:#f1f1ef } .hist .bar > div { position:absolute; left:0; top:0; height:100%; background:var(--accent) }
+  .hist .bar > i { position:absolute; top:-2px; height:16px; border-left:2px dashed #999 }
+  table.board td.cell { font-size:12px } .commit { font-family:ui-monospace, monospace; font-size:12px }
+  .badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600 }
+  details summary { cursor:pointer }
+</style>
+<h1>Models <span class="muted small">test one piece of the pipeline against what happened, without running the rest</span></h1>
+
+<div class="tabs">{% for c in components %}<a href="/models?c={{ c.key }}" class="{{ 'on' if c.key == comp.key }}">{{ c.label }}</a>{% endfor %}</div>
+
+<div class="card">
+  <h2>{{ comp.label }} <span class="muted small">replay through the <b>{{ comp.through }}</b> stage · {{ comp.cost }}</span></h2>
+  <div class="kv" style="margin-bottom:10px">
+    <b>Predicts</b><span>{{ comp.predicts }}</span>
+    <b>Scored against</b><span>{{ comp.against }}</span>
+    {% if comp.key == 'dupes' %}<b>Lineup level</b><span>The <a href="/dupes">Dupes page</a> scores the dupe model on every scraped field's own lineups, no replay needed: calibration, residuals by feature, the most duplicated lineups.</span>{% endif %}
+    {% if comp.key == 'chooser' %}<b>Full runs</b><span>A chooser test is the whole pipeline; the <a href="/backtest">Backtest page</a> runs it with contest selection, repeats and the settlement report.</span>{% endif %}
+  </div>
+  <form method="post" action="/models/run">
+    <input type="hidden" name="component" value="{{ comp.key }}">
+    <div class="fields">
+      <label>Since <input type="text" name="since" value="{{ default_since }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
+      <label>Until <input type="text" name="until" value="{{ default_until }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
+      {% for k in stage_params %}
+      <label>{{ {'workers': 'Workers', 'lineups': 'Lineups per slate', 'field_cap': 'Field cap', 'sims': 'Simulations', 'repeats': 'Repeats', 'seed': 'Seed'}[k] }}
+        <input type="number" name="{{ k }}" value="{{ defaults[k] }}" style="width:90px"></label>
+      {% endfor %}
+      <label>Label <input type="text" name="label" placeholder="what changed (optional)" style="width:200px"></label>
+      <label style="justify-content:flex-end"><button class="small">Run the {{ comp.label|lower }} test</button></label>
+    </div>
+    <p class="muted small" style="margin:6px 0 0">Every archived slate in the window is replayed with the code as it is now, through the {{ comp.through }} stage, then scored; the contests come from the default menu (config/replay/nfl.json). The row appears below with the current commit when the job finishes (see Jobs).</p>
+  </form>
+</div>
+
+{% set B = board %}
+<div class="card">
+  <h2>Scoreboard <span class="muted small">one row per run, one column per check · newest first</span></h2>
+  {% if B.rows %}
+  <div class="wide"><table class="compact board">
+    <tr><th>Run</th><th>Window</th><th>Code</th><th>Models</th><th class="num">Contests</th><th class="num">Stage score</th>{% for col in B.columns %}<th>{{ col }}</th>{% endfor %}<th></th></tr>
+    {% for row in B.rows %}{% set r = row.run %}
+    <tr {% if view and view.name == r.name %}style="background:#f6f6f3"{% endif %}>
+      <td><a href="/models?c={{ comp.key }}&r={{ r.name }}">{{ r.created_at[:16]|replace('T', ' ') }}</a>{% if r.label %} <span class="muted small">{{ r.label }}</span>{% endif %}
+        {% if r.status == 'running' %}<span class="badge running">running</span>{% elif r.status == 'failed' %}<span class="badge failed">failed</span>{% elif r.status == 'no report' %}<span class="badge queued">no report</span>{% endif %}</td>
+      <td class="small">{{ r.since }} .. {{ r.until }}</td>
+      <td><span class="commit" title="{{ r.git.subject }}">{{ r.git.commit }}{% if r.git.dirty %}+{% endif %}</span></td>
+      <td class="small">{% for m in r.models %}{{ 'as of ' ~ m.cutoff if m.cutoff else 'live' }}{% if m.fallback %} <span class="neg">(fallback)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+      <td class="num">{{ r.contests or '' }}</td>
+      <td class="num">{% if r.stage_score %}{{ (r.stage_score.score * 100)|num(0) }}{% endif %}</td>
+      {% for cell in row.cells %}<td class="cell">{% if cell %}<span class="status {{ cell.status }}" title="{{ cell.detail }}">{{ cell.status }}</span> {{ n(cell.value, 2) }}{% endif %}</td>{% endfor %}
+      <td class="small muted">{{ r.slates.ok }}/{{ r.slates.total }} slates{% if r.slates.first_error %} · <span class="neg">{{ r.slates.first_error[:60] }}</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="muted small">Code: the commit the run was made at; a trailing + means the working tree had uncommitted changes. Stage score: this component's part of the confidence (0-100). Hover a check for its finding.</p>
+  {% else %}<p class="muted">No {{ comp.label|lower }} test yet. Run one above.</p>{% endif %}
+</div>
+
+{% if view %}
+{% set V = view.report %}
+<div class="card">
+  <h2>{{ view.created_at[:16]|replace('T', ' ') }}{% if view.label %} · {{ view.label }}{% endif %}
+    <span class="muted small">{{ view.since }} .. {{ view.until }} · commit {{ view.git.commit }}{% if view.git.dirty %}+{% endif %} · {{ view.params.items()|map('join', ' ')|join(', ') }}{% if view.validation_id %} · <a href="/validate?r={{ view.validation_id|urlencode }}">full report</a>{% endif %}</span></h2>
+  {% if view.jobs %}<p class="small muted">Jobs: {% for j in view.jobs %}<a href="/jobs/{{ j.id }}">{{ j.name }}</a> {{ j.status or '' }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+  {% if view.checks %}
+  <table class="compact">
+    <tr><th></th><th>Check</th><th>Finding</th></tr>
+    {% for c in view.checks %}<tr><td><span class="status {{ c.status }}">{{ c.status }}</span></td><td>{{ c.name }}</td><td>{{ c.detail }}</td></tr>{% endfor %}
+  </table>
+  {% elif view.status == 'running' %}<p class="muted">Running; the checks appear when the validation job finishes.</p>
+  {% elif view.status == 'done' %}<p class="muted">The validation found nothing to score for this component (no actuals in the window, or the stage did not produce what it needs).</p>
+  {% else %}<p class="neg">No report. {{ view.slates.first_error or 'See the job logs.' }}</p>{% endif %}
+</div>
+
+{% if V %}
+{# ------------------------------------------------------------ component detail, ported from the Validation page #}
+{% if comp.key == 'projections' %}{% set P = V.players %}
+<div class="card">
+  <h2>Projections <span class="muted small">{{ P.n or 0 }} player-games · PIT by {{ P.pit_method }}{% if P.baseline %} · salary baseline {{ P.baseline }}{% endif %}</span></h2>
+  {% if P.n %}
+  <div class="grid2">
+    <div>
+      {{ errblock([dict(P.overall, **{'group': 'all'})], 'group') }}
+      <p class="small muted">bias = actual − projected (positive: we project too low). sd ratio = realized error sd / projected sd (1 = calibrated). salary-only MAE: a straight line through salary fitted on these same actuals.</p>
+      {% if P.by_position %}<h3>By position</h3>{{ errblock(P.by_position, 'position') }}{% endif %}
+      {% if P.by_salary_tier %}<h3>By salary tier</h3>{{ errblock(P.by_salary_tier, 'salary_tier') }}{% endif %}
+      {% if P.by_volume_source %}<h3>By volume source</h3>{{ errblock(P.by_volume_source, 'volume_source') }}{% endif %}
+      {% if P.by_slate and P.by_slate|length > 1 %}<details><summary>By slate ({{ P.by_slate|length }})</summary>{{ errblock(P.by_slate, 'slate') }}</details>{% endif %}
+    </div>
+    <div>
+      <h3>Where the actual landed in the projected distribution</h3>
+      <div class="hist">
+        {% for h in V.pit %}<div class="row"><span class="lab">{{ h.bin }}</span><span class="bar"><div style="width:{{ h.width|round(1) }}%"></div><i style="left:{{ h.ideal_width|round(1) }}%"></i></span><span style="width:48px;text-align:right">{{ (h.share * 100)|round(1) }}%</span></div>{% endfor %}
+      </div>
+      <p class="small muted">Flat at the dashed line = calibrated. U-shaped = too narrow. Humped = too wide. Leaning right = projections too low.</p>
+      {% if P.worst %}
+      <details><summary>Largest misses (25)</summary>
+        <table class="compact">
+          <tr><th>Slate</th><th>Slot</th><th>Player</th><th>Pos</th><th class="num">Salary</th><th class="num">Proj</th><th class="num">sd</th><th class="num">Actual</th><th class="num">Err</th><th class="num">PIT</th></tr>
+          {% for w in P.worst %}<tr><td>{{ w.slate }}</td><td>{{ w.slot }}</td><td>{{ w.name }}</td><td>{{ w.position }}</td><td class="num">{{ w.salary }}</td>
+            <td class="num">{{ n(w.proj_mean, 1) }}</td><td class="num">{{ n(w.proj_sd, 1) }}</td><td class="num">{{ n(w.actual_fpts, 1) }}</td><td class="num {{ w.err|scss }}">{{ n(w.err, 1) }}</td><td class="num">{{ n(w.pit, 2) }}</td></tr>{% endfor %}
+        </table>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}<p class="muted">No player-games with actuals in this window.</p>{% endif %}
+</div>
+{% endif %}
+
+{% if comp.key == 'environment' %}{% set EV = V.environment %}{% set US = V.usage %}
+<div class="card">
+  <h2>Game environment <span class="muted small">layer 1 · {{ EV.n or 0 }} team-games</span></h2>
+  {% if EV.n %}
+  <table class="compact">
+    <tr><th>quantity</th><th class="num">n</th><th class="num">proj mean</th><th class="num">actual mean</th><th class="num">bias</th><th class="num">MAE</th><th class="num">league MAE</th><th class="num">corr</th><th class="num">sd ratio</th><th class="num">10-90 cover</th></tr>
+    {% for q, r in EV.quantities.items() %}<tr><td>{{ q }}</td><td class="num">{{ r.n }}</td><td class="num">{{ n(r.proj_mean) }}</td><td class="num">{{ n(r.actual_mean) }}</td>
+      <td class="num {{ r.bias|scss }}">{{ n(r.bias) }}</td><td class="num">{{ n(r.mae, 3) }}</td><td class="num">{{ n(r.mae_league, 3) }}</td><td class="num">{{ n(r.corr) }}</td><td class="num">{{ n(r.sd_ratio) }}</td><td class="num">{{ p1(r.coverage_10_90) }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">No team-games with actuals.</p>{% endif %}
+  <h2 style="margin-top:14px">Usage <span class="muted small">layer 2 · {{ US.n or 0 }} team-stat rows</span></h2>
+  {% if US.n %}
+  <table class="compact">
+    <tr><th>Stat</th><th class="num">n</th><th class="num">Team total</th><th class="num">Settled lines</th><th class="num">Coverage median</th><th class="num">mean</th><th class="num">max</th><th class="num">Past 100%</th><th class="num">Floored</th><th class="num">Unpriced players</th><th class="num">Residual each</th></tr>
+    {% for stat, o in US.stats.items() %}<tr><td>{{ stat }}</td><td class="num">{{ o.n }}</td><td class="num">{{ n(o.total_mean, 1) }}</td><td class="num">{{ n(o.fixed_mean, 1) }}</td>
+      <td class="num">{{ p1(o.coverage_median) }}</td><td class="num">{{ p1(o.coverage_mean) }}</td><td class="num">{{ p1(o.coverage_max) }}</td><td class="num">{{ p1(o.over_share) }}</td><td class="num">{{ p1(o.floored_share) }}</td>
+      <td class="num">{{ n(o.unpriced_mean, 1) }}</td><td class="num">{{ n(o.residual_mean, 1) }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">No usage rows.</p>{% endif %}
+</div>
+{% endif %}
+
+{% if comp.key == 'ownership' %}{% set P = V.players %}{% set O = P.ownership or {} %}
+<div class="card">
+  <h2>Ownership <span class="muted small">projected ownership against what DraftKings reported</span></h2>
+  {% if O.n %}
+  <table class="compact">
+    <tr><th class="num">n</th><th class="num">bias</th><th class="num">MAE</th><th class="num">corr</th><th class="num">Spearman</th><th class="num">chalk bias (top 5)</th><th class="num">max abs err</th><th class="num">sum proj</th><th class="num">sum actual</th></tr>
+    <tr><td class="num">{{ O.n }}</td><td class="num {{ O.bias|scss }}">{{ n(O.bias, 1) }}</td><td class="num">{{ n(O.mae, 1) }}</td><td class="num">{{ n(O.corr) }}</td><td class="num">{{ n(O.spearman) }}</td>
+      <td class="num {{ O.chalk_bias|scss }}">{{ n(O.chalk_bias, 1) }}</td><td class="num">{{ n(O.max_abs_err, 1) }}</td><td class="num">{{ n(O.proj_sum, 0) }}</td><td class="num">{{ n(O.actual_sum, 0) }}</td></tr>
+  </table>
+  <p class="small muted">bias = projected − actual (positive: we expect more ownership than there was).</p>
+  {% if P.ownership_by_decile %}
+  <h3>By actual-ownership quintile</h3>
+  <table class="compact"><tr><th>Quintile</th><th class="num">n</th><th class="num">bias</th><th class="num">MAE</th><th class="num">corr</th></tr>
+    {% for r in P.ownership_by_decile %}<tr><td>{{ r.own_decile }}</td><td class="num">{{ r.n }}</td><td class="num {{ r.bias|scss }}">{{ n(r.bias, 1) }}</td><td class="num">{{ n(r.mae, 1) }}</td><td class="num">{{ n(r.corr) }}</td></tr>{% endfor %}</table>
+  {% endif %}
+  {% if P.worst %}
+  <details><summary>Players ({{ P.worst|length }} largest point misses, with their ownership)</summary>
+    <table class="compact"><tr><th>Slate</th><th>Player</th><th>Pos</th><th class="num">Salary</th><th class="num">Own proj</th><th class="num">Own actual</th></tr>
+      {% for w in P.worst %}<tr><td>{{ w.slate }}</td><td>{{ w.name }}</td><td>{{ w.position }}</td><td class="num">{{ w.salary }}</td><td class="num">{{ n(w.own_proj, 1) }}</td><td class="num">{{ n(w.actual_own, 1) }}</td></tr>{% endfor %}</table>
+  </details>
+  {% endif %}
+  {% else %}<p class="muted">No actual ownership in this window (needs scraped contests).</p>{% endif %}
+</div>
+{% endif %}
+
+{% if comp.key in ('field', 'dupes') %}{% set F = V.field %}{% set OF = V.players.ownership_field or {} %}
+<div class="card">
+  <h2>Field <span class="muted small">the sampled field against the real one, per contest{% if F.deterministic %} · {{ F.deterministic }} sampled field(s) scored on the box scores{% endif %}</span></h2>
+  {% if F.n %}
+  <div class="kv" style="margin-bottom:8px">
+    {% if OF.n %}<b>exposure</b><span>MAE {{ n(OF.mae, 1) }} pts against actual ownership over {{ OF.n }} player-contests · chalk bias {{ n(OF.chalk_bias, 1) }}</span>{% endif %}
+    <b>cash line</b><span>{% if F.cash_line.in_band_share is not none %}actual inside the sim's p10-p90 in {{ p1(F.cash_line.in_band_share) }} of {{ F.cash_line.n }} contests · {% endif %}bias {{ n(F.cash_line.bias, 1) }} pts · MAE {{ n(F.cash_line.mae, 1) }}</span>
+    <b>winning score</b><span>{% if F.winning_score.in_band_share is not none %}inside band {{ p1(F.winning_score.in_band_share) }} · {% endif %}bias {{ n(F.winning_score.bias, 1) }} pts</span>
+    <b>entry scores</b><span>p50 bias {{ n(F.entry_score.p50_bias, 1) }} · p90 bias {{ n(F.entry_score.p90_bias, 1) }} (actual − sampled)</span>
+    <b>duplication</b><span>top lineup's share of the field, sampled / actual: {{ n(F.dupes.top_share_ratio_median) }}x · max dupes scaled to contest size: {{ n(F.dupes.dupe_max_ratio_median) }}x</span>
+  </div>
+  <table class="compact">
+    <tr><th>Slate</th><th>Contest</th><th class="num">Sampled</th><th class="num">Real</th><th class="num">Paid</th><th class="num">Cash sampled</th><th class="num">Cash actual</th><th class="num">Win sampled</th><th class="num">Win actual</th><th class="num">Score p50 s/a</th><th class="num">p90 s/a</th><th class="num">Top share s/a</th></tr>
+    {% for r in F.rows %}<tr><td>{{ r.slate }}</td><td>{{ r.contest_name[:44] }}</td><td class="num">{{ r.sim_size }}</td><td class="num">{{ r.contest_size }}</td><td class="num">{{ r.paid_places }}</td>
+      <td class="num">{% if r.n_sims %}{{ n(r.sim_cash_p10, 1) }} / {{ n(r.sim_cash_p50, 1) }} / {{ n(r.sim_cash_p90, 1) }}{% else %}{{ n(r.sim_cash_p50, 1) }}{% endif %}</td>
+      <td class="num">{{ n(r.actual_cash_line, 1) }}</td><td class="num">{{ n(r.sim_win_p50, 1) }}</td><td class="num">{{ n(r.actual_win, 1) }}</td>
+      <td class="num">{{ n(r.sim_score_p50, 1) }} / {{ n(r.actual_score_p50, 1) }}</td><td class="num">{{ n(r.sim_score_p90, 1) }} / {{ n(r.actual_score_p90, 1) }}</td>
+      <td class="num">{{ p1(r.sim_top_share) }} / {{ p1(r.actual_top_share) }}</td></tr>{% endfor %}
+  </table>
+  <p class="small muted">A sampled field scored on the box scores has one cash line and one winner (no band): the distance to the real ones is the field model's error with the outcome model taken out. The sim rows show p10 / p50 / p90 instead.</p>
+  {% else %}<p class="muted">No contest with both a sampled field and a scraped real field.</p>{% endif %}
+</div>
+{% endif %}
+
+{% if comp.key == 'simulator' %}{% set Q = V.pool %}
+<div class="card">
+  <h2>Simulator <span class="muted small">every lineup the sim scored, settled in the real field</span></h2>
+  {% if Q.contests %}
+  <p>median Spearman(sim ROI, actual ROI) = {{ n(Q.spearman_median) }} · positive in {{ p1(Q.spearman_positive_share) }} of {{ Q.contests }} contests</p>
+  {% if V.deciles %}
+  <table class="compact"><tr><th>Sim decile</th><th class="num">contests</th><th class="num">sim ROI</th><th class="num">actual ROI</th><th class="num">actual cash rate</th></tr>
+    {% for d in V.deciles %}<tr><td>{{ d.sim_decile }}{{ ' (best)' if d.sim_decile == 10 else (' (worst)' if d.sim_decile == 1 else '') }}</td><td class="num">{{ d.contests }}</td><td class="num">{{ sp(d.sim_roi) }}</td><td class="num {{ d.actual_roi|scss }}">{{ sp(d.actual_roi) }}</td><td class="num">{{ p1(d.actual_cash_rate) }}</td></tr>{% endfor %}</table>
+  <p class="small muted">If the sim knows anything, actual ROI rises with the decile. A flat column means the sim's ROI ranking is noise.</p>
+  {% endif %}
+  <details><summary>Per contest ({{ Q.contests }})</summary>
+    <table class="compact"><tr><th>Slate</th><th>Contest</th><th class="num">Pool</th><th class="num">Spearman ROI</th><th class="num">Spearman cash</th><th class="num">Pool actual ROI</th></tr>
+      {% for r in Q.rows %}<tr><td>{{ r.slate }}</td><td>{{ r.contest_name[:40] }}</td><td class="num">{{ r.pool_lineups }}</td><td class="num {{ r.spearman_sim_roi_vs_actual|scss }}">{{ n(r.spearman_sim_roi_vs_actual) }}</td><td class="num">{{ n(r.spearman_sim_cash_vs_actual) }}</td><td class="num">{{ sp(r.pool_actual_roi) }}</td></tr>{% endfor %}</table>
+  </details>
+  {% else %}<p class="muted">No contest with a sim artifact, actual points and a real field.</p>{% endif %}
+</div>
+{% endif %}
+
+{% if comp.key == 'chooser' %}{% set L = V.lineups %}{% set Q = V.pool %}
+<div class="card">
+  <h2>Chooser <span class="muted small">what the sim promised for the lineups we chose, and what they did</span></h2>
+  {% if L.settled %}
+  <div class="kv" style="margin-bottom:8px">
+    <b>money</b><span>fees ${{ n(L.fees, 2) }} · actual profit {{ L.actual_profit|smoney }} ({{ sp(L.actual_roi) }}) · sim expected {{ L.sim_expected_profit|smoney }} ({{ sp(L.sim_roi) }})</span>
+    <b>cash</b><span>sim cash % {{ p1(L.sim_cash_pct) }} · actual cash rate {{ p1(L.actual_cash_rate) }}</span>
+    {% if Q.picked_actual_roi is not none %}<b>picks vs the pool</b><span>picks {{ sp(Q.picked_actual_roi) }} · random K {{ sp(Q.random_k_actual_roi) }} · top-K by sim ROI {{ sp(Q.topk_by_sim_roi_actual_roi) }} · whole pool {{ sp(Q.pool_actual_roi) }}</span>{% endif %}
+  </div>
+  <table class="compact">
+    <tr><th>Slate</th><th>Contest</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Sim profit</th><th class="num">Actual profit</th><th class="num">Sim cash %</th><th class="num">Actual cash</th><th class="num">Best rank</th></tr>
+    {% for r in L.by_contest %}<tr><td>{{ r.slate }}</td><td>{{ r.contest_name[:44] }}</td><td class="num">{{ r.entries }}</td><td class="num">${{ n(r.fees, 2) }}</td>
+      <td class="num">{{ r.sim_expected_profit|smoney }}</td><td class="num {{ r.actual_profit|scss }}">{{ r.actual_profit|smoney }}</td><td class="num">{{ p1(r.sim_cash_pct) }}</td><td class="num">{{ p1(r.actual_cash_rate) }}</td><td class="num">{{ r.best_rank or '' }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">No settled entries in this window.</p>{% endif %}
+</div>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

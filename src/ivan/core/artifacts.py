@@ -65,6 +65,14 @@ def sim_dir(output_dir: Path, when: Optional[datetime] = None) -> Path:
     return Path(output_dir) / "sim" / stamp(when)
 
 
+def field_dir(output_dir: Path, when: Optional[datetime] = None) -> Path:
+    """Where the field stage writes its sampled fields (the sim artifact's layout, minus the outcomes)."""
+    rd = run_dir()
+    if rd is not None:
+        return rd / "field"
+    return Path(output_dir) / "field" / stamp(when)
+
+
 def contest_artifact_paths(sim_directory: Path, contest_id: int) -> tuple[Path, Path]:
     base = Path(sim_directory) / f"contest_{int(contest_id)}"
     return base.with_suffix(".npz"), base.with_suffix(".json")
@@ -128,9 +136,18 @@ def find_projection_files(dirs: Iterable[Path]) -> List[ProjectionFile]:
 
 def find_sim_runs(dirs: Iterable[Path]) -> List[SimRun]:
     """Simulator artifact directories under the given directories (<dir>/sim or <dir>/sim/<stamp>), oldest first."""
+    return _find_artifact_runs(dirs, "sim")
+
+
+def find_field_runs(dirs: Iterable[Path]) -> List[SimRun]:
+    """Field-stage artifact directories (<dir>/field or <dir>/field/<stamp>), oldest first; same layout as a sim run."""
+    return _find_artifact_runs(dirs, "field")
+
+
+def _find_artifact_runs(dirs: Iterable[Path], sub: str) -> List[SimRun]:
     out: List[SimRun] = []
     for d in dirs:
-        root = Path(d) / "sim"
+        root = Path(d) / sub
         if not root.exists():
             continue
         if any(root.glob("contest_*.npz")):                      # a replay's run directory
@@ -138,11 +155,11 @@ def find_sim_runs(dirs: Iterable[Path]) -> List[SimRun]:
             if when is not None:
                 out.append(SimRun(when, root))
             continue
-        for sub in root.iterdir():
-            if sub.is_dir() and any(sub.glob("contest_*.npz")):
-                when = when_of(sub, sub.name)
+        for stamped in root.iterdir():
+            if stamped.is_dir() and any(stamped.glob("contest_*.npz")):
+                when = when_of(stamped, stamped.name)
                 if when is not None:
-                    out.append(SimRun(when, sub))
+                    out.append(SimRun(when, stamped))
     return sorted(out, key=lambda r: r.when)
 
 

@@ -217,13 +217,16 @@ def _ownership_block(df: pd.DataFrame, proj_col: str = "own_proj") -> dict:
     return out
 
 
-def player_report(players: pd.DataFrame, pit_source: str = "auto") -> dict:
+def player_report(players: pd.DataFrame, pit_source: str = "auto", baseline_note: Optional[str] = None) -> dict:
     """
     players: one row per player-slot per slate with
       required  slot, position, salary, proj_mean, actual_fpts
       optional  proj_sd, q01..q99 (projected quantiles), own_proj, own_field (the sim's field exposure %),
-                actual_own, name, team, slate, contest_id, source
+                actual_own, name, team, slate, contest_id, source,
+                baseline (a salary-only projection fitted elsewhere, e.g. on earlier weeks; when absent a
+                leave-one-slate-out line is fitted here, which is only honest when the slates share no player-games)
     pit_source: "quantiles" (the stored grid), "normal" (mean/sd), "auto" (grid when present)
+    baseline_note: how the baseline column was made, for the report
     """
     df = players.copy()
     if df.empty:
@@ -238,7 +241,12 @@ def player_report(players: pd.DataFrame, pit_source: str = "auto") -> dict:
         df["pit"] = pit_normal(df.actual_fpts.values, df.proj_mean.values, pd.to_numeric(df.proj_sd, errors="coerce").values)
     else:
         df["pit"] = np.nan
-    df["baseline"] = _salary_baseline(df)
+    if "baseline" in df.columns and pd.to_numeric(df.baseline, errors="coerce").notna().any():
+        df["baseline"] = pd.to_numeric(df.baseline, errors="coerce")
+        note = baseline_note or "precomputed"
+    else:
+        df["baseline"] = _salary_baseline(df)
+        note = _salary_baseline_note(df)
     df["err"] = df.actual_fpts - df.proj_mean
     df["scored"] = np.where(df.actual_fpts > 0, "scored > 0", np.where(df.actual_fpts.notna(), "zero", "no actual"))
     if "salary" in df.columns and df.salary.notna().any():
@@ -262,7 +270,7 @@ def player_report(players: pd.DataFrame, pit_source: str = "auto") -> dict:
             rows.append({key: str(k), **_error_block(g)})
         return rows
 
-    out = {"n": int(len(df)), "pit_method": method, "baseline": _salary_baseline_note(df), "overall": _error_block(df),
+    out = {"n": int(len(df)), "pit_method": method, "baseline": note, "overall": _error_block(df),
            "by_volume_source": grouped("volume_source") if "volume_source" in df.columns and df.volume_source.notna().any() else [],
            "by_scored": [r for r in grouped("scored") if r["scored"] != "no actual"],
            "by_position": grouped("position"), "by_slot": grouped("slot"), "by_salary_tier": grouped("salary_tier"),
@@ -298,9 +306,12 @@ def field_report(field: pd.DataFrame) -> dict:
     if df.empty:
         return {"n": 0, "rows": []}
     num = lambda c: pd.to_numeric(df[c], errors="coerce") if c in df.columns else pd.Series(np.nan, index=df.index)
-    df["cash_in_band"] = (num("actual_cash_line") >= num("sim_cash_p10")) & (num("actual_cash_line") <= num("sim_cash_p90"))
+    # a sampled field scored on the box scores (n_sims 0) has one cash line and one winner: a distance, no band
+    det = (num("n_sims").fillna(1) == 0) if "n_sims" in df.columns else pd.Series(False, index=df.index)
+    df["deterministic"] = det
+    df["cash_in_band"] = np.where(det, np.nan, ((num("actual_cash_line") >= num("sim_cash_p10")) & (num("actual_cash_line") <= num("sim_cash_p90"))).astype(float))
     df["cash_err"] = num("actual_cash_line") - num("sim_cash_p50")
-    df["win_in_band"] = (num("actual_win") >= num("sim_win_p10")) & (num("actual_win") <= num("sim_win_p90"))
+    df["win_in_band"] = np.where(det, np.nan, ((num("actual_win") >= num("sim_win_p10")) & (num("actual_win") <= num("sim_win_p90"))).astype(float))
     df["win_err"] = num("actual_win") - num("sim_win_p50")
     df["score_p50_err"] = num("actual_score_p50") - num("sim_score_p50")
     df["score_p90_err"] = num("actual_score_p90") - num("sim_score_p90")
@@ -309,12 +320,13 @@ def field_report(field: pd.DataFrame) -> dict:
     df["dupe_max_ratio"] = num("sim_dupe_max_scaled") / num("actual_dupe_max").replace(0, np.nan)
     df["dupe_p90_ratio"] = num("sim_dupe_p90_scaled") / num("actual_dupe_p90").replace(0, np.nan)
     ok_cash = num("actual_cash_line").notna() & num("sim_cash_p50").notna()
-    out = {"n": int(len(df)),
-           "cash_line": {"n": int(ok_cash.sum()), "in_band_share": _f(df.cash_in_band[ok_cash].mean()) if ok_cash.any() else None,
+    band_cash, band_win = ok_cash & ~det, df.win_err.notna() & ~det
+    out = {"n": int(len(df)), "deterministic": int(det.sum()),
+           "cash_line": {"n": int(ok_cash.sum()), "in_band_share": _f(df.cash_in_band[band_cash].mean()) if band_cash.any() else None,
                          "bias": _f(df.cash_err[ok_cash].mean()) if ok_cash.any() else None,
                          "mae": _f(df.cash_err[ok_cash].abs().mean()) if ok_cash.any() else None},
-           "winning_score": {"n": int(df.win_err.notna().sum()), "in_band_share": _f(df.win_in_band[df.win_err.notna()].mean()) if df.win_err.notna().any() else None,
-                             "bias": _f(df.win_err.mean())},
+           "winning_score": {"n": int(df.win_err.notna().sum()), "in_band_share": _f(df.win_in_band[band_win].mean()) if band_win.any() else None,
+                             "bias": _f(df.win_err.mean()), "mae": _f(df.win_err.abs().mean())},
            "entry_score": {"p50_bias": _f(df.score_p50_err.mean()), "p90_bias": _f(df.score_p90_err.mean())},
            "dupes": {"unique_share_bias": _f(df.unique_share_err.mean()), "dupe_max_ratio_median": _f(df.dupe_max_ratio.median()),
                      "dupe_p90_ratio_median": _f(df.dupe_p90_ratio.median()), "top_share_ratio_median": _f(df.top_share_ratio.median()),
@@ -559,7 +571,8 @@ def build_checks(players: Optional[dict] = None, field: Optional[dict] = None, l
             if o.get("baseline_mae") is not None:
                 better = o["mae"] < o["baseline_mae"]
                 out.append(_check("pass" if better else "fail", "projections", "beats salary baseline",
-                                  f"MAE {o['mae']:.2f} vs salary-only {o['baseline_mae']:.2f}", o["mae"] - o["baseline_mae"]))
+                                  f"MAE {o['mae']:.2f} vs salary-only {o['baseline_mae']:.2f} ({players.get('baseline') or 'in-sample line'})",
+                                  o["mae"] - o["baseline_mae"]))
             cov = o.get("coverage_10_90")
             if cov is not None:
                 out.append(_check("pass" if 0.72 <= cov <= 0.88 else ("warn" if 0.65 <= cov <= 0.92 else "fail"), "projections",
@@ -579,12 +592,22 @@ def build_checks(players: Optional[dict] = None, field: Optional[dict] = None, l
     # ---- field
     if field and field.get("n"):
         c = field["cash_line"]
-        if c.get("n"):
+        if c.get("n") and c.get("in_band_share") is None:          # sampled fields scored on the box scores: a distance, no band
+            mae = c.get("mae") or 0.0
+            out.append(_check("pass" if mae <= 5.0 else ("warn" if mae <= 10.0 else "fail"), "field", "cash line",
+                              f"the sampled field, scored on the box scores, puts the cash line {c['bias']:+.1f} pts from the real one "
+                              f"(MAE {mae:.1f}) over {c['n']} contests", mae))
+        elif c.get("n"):
             share = c["in_band_share"]
             out.append(_check("pass" if share >= 0.6 else ("warn" if share >= 0.4 else "fail"), "field", "cash line",
                               f"actual cash line inside the sim's p10-p90 in {share:.0%} of {c['n']} contests; bias {c['bias']:+.1f} pts", share))
         w = field["winning_score"]
-        if w.get("n"):
+        if w.get("n") and w.get("in_band_share") is None:
+            bias = w.get("bias") or 0.0
+            out.append(_check("pass" if abs(bias) <= 10.0 else ("warn" if abs(bias) <= 20.0 else "fail"), "field", "winning score",
+                              f"the sampled field's best entry, scored on the box scores, vs the real winner: bias {bias:+.1f} pts "
+                              f"(MAE {w.get('mae') or 0:.1f}) over {w['n']} contests", bias))
+        elif w.get("n"):
             out.append(_check("pass" if (w["in_band_share"] or 0) >= 0.5 else "warn", "field", "winning score",
                               f"actual winner inside the sim's p10-p90 in {w['in_band_share']:.0%} of contests; bias {w['bias']:+.1f}", w["in_band_share"]))
         d = field["dupes"]
@@ -676,10 +699,13 @@ def confidence_report(reports: dict) -> dict:
             "mae": (own.get("mae"), _score_up(own.get("mae"), 6.0, 1.5) if own.get("mae") is not None else None),
             "spearman": (own.get("spearman"), _score_up(own.get("spearman"), 0.60, 0.95)),
             "chalk_bias": (own.get("chalk_bias"), _score(own.get("chalk_bias"), 0.0, 10.0))}},
-        "field": {"n": cl.get("n", 0), "metrics": {
+        "field": {"n": cl.get("n", 0) or ownf.get("n", 0), "metrics": {
             "exposure_mae": (ownf.get("mae"), _score_up(ownf.get("mae"), 6.0, 1.5) if ownf.get("mae") is not None else None),
             "cash_line_in_band": (cl.get("in_band_share"), _score(cl.get("in_band_share"), 0.80, 0.30)),
             "winning_score_in_band": (ws.get("in_band_share"), _score(ws.get("in_band_share"), 0.80, 0.30)),
+            # a sampled field scored on the box scores (no band): the distance instead
+            "cash_line_mae": (cl.get("mae"), _score(cl.get("mae"), 0.0, 15.0) if cl.get("n") and cl.get("in_band_share") is None else None),
+            "winning_score_bias": (ws.get("bias"), _score(ws.get("bias"), 0.0, 30.0) if ws.get("n") and ws.get("in_band_share") is None else None),
             "exposure_chalk_bias": (ownf.get("chalk_bias"), _score(ownf.get("chalk_bias"), 0.0, 10.0))}},
         "dupes": {"n": fd.get("n", 0), "metrics": {
             "our_copies_ratio": (ld.get("ratio"), _score_log_ratio(ld.get("ratio"), 3.0)),
