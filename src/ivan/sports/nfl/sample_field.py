@@ -773,12 +773,12 @@ def sample_showdown_field_learned(
     # ================================================================
 
     if dupe_mode == "product":
-        # copies = N x k x prod(own)^beta, fitted on real fields (ivan.sports.nfl.dupe_model); the same function gives the
+        # copies = N x k x prod(own)^beta x salary term, fitted on real fields (ivan.sports.nfl.dupe_model); the same function gives the
         # sampling weights, so the sampled field's concentration and every candidate's predicted copies agree
         from ivan.sports.nfl import dupe_model as DMv2
         dm = DMv2.load()
         slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
-        predicted_dupes = dm.copies(total_entries, True, slo)
+        predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float))
         dupe_clip_floor = 1e-6
         dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
                      "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries)}
@@ -977,8 +977,9 @@ def sample_classic_field_learned(
         dm = DMv2.load()
         slo = np.asarray(L @ np.log(np.maximum(np.nan_to_num(player_ownership, nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0), dtype=np.float64)
         n_real = float(total_entries or field_size)
-        predicted_copies_classic = dm.copies(n_real, False, slo)
-        weights = weights * dm.weights(False, slo)
+        salary_left = DMv2.SALARY_CAP - np.asarray(spends, dtype=float)
+        predicted_copies_classic = dm.copies(n_real, False, slo, salary_left=salary_left)
+        weights = weights * dm.weights(False, slo, salary_left=salary_left)
         print(f"  dupes (classic): {dm.params['classic']}; candidates' expected copies at {int(n_real)} entries: "
               f"median {np.median(predicted_copies_classic):.2f}, max {predicted_copies_classic.max():.1f}")
 

@@ -34,8 +34,10 @@ def main(argv=None) -> int:
         for fmt, v in r.items():
             print(f"{fmt}: {v['contests']} fields; fit {v['fit']}")
             for f in v["folds"]:
-                print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']}  copies/entry pred {f['copies_per_entry_pred']:6.1f} actual {f['copies_per_entry_actual']:6.1f}  "
-                      f"log MAE {f['log_mae']:.2f} bias {f['log_bias']:+.2f}  top ratio {f['top_lineup_ratio_median']:.2f}")
+                print(f"   held-out {f['held_out']} ({f['contests']}): k {f['k']} beta {f['beta']} gamma {f['gamma']}  copies/entry pred {f['copies_per_entry_pred']:6.1f} actual {f['copies_per_entry_actual']:6.1f}  "
+                      f"log MAE {f['log_mae']:.2f} bias {f['log_bias']:+.2f}  top ratio {f['top_lineup_ratio_median']:.2f}"
+                      + (f"   | without salary term: MAE {f['log_mae_no_salary']:.2f} bias {f['log_bias_no_salary']:+.2f} top ratio {f['top_lineup_ratio_median_no_salary']:.2f}"
+                         if "log_mae_no_salary" in f else ""))
         return 0
     out = Path(a.model_dir or MODELS_DIR)
     out.mkdir(parents=True, exist_ok=True)

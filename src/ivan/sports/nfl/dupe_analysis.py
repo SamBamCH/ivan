@@ -164,7 +164,7 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
     df["share"] = df["count"] / entries
     for s in SOURCES:
         slo = df[f"sum_log_own_{s}"].values
-        pred = model.copies(entries, is_showdown, np.where(np.isnan(slo), 0.0, slo))
+        pred = model.copies(entries, is_showdown, np.where(np.isnan(slo), 0.0, slo), salary_left=df["salary_left"].values)
         pred = np.where(np.isnan(slo), np.nan, pred)
         df[f"pred_{s}"] = pred
         df[f"resid_{s}"] = np.log(df["count"].values / pred)

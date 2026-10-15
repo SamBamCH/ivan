@@ -6,13 +6,16 @@ The settle job keeps every scraped contest's lineups (data/nfl/derived/
 contests/<id>/lineups.parquet). Each unique lineup in a field is a row:
 its copy count, the field size and the players' projected ownership (what
 the sampler has before lock). The model is the product rule with a fitted
-exponent and scale per format:
+exponent and scale per format, times a salary term:
 
-    copies(L) = N * k * prod_i (own_i / 100) ** beta
+    copies(L) = N * k * prod_i (own_i / 100) ** beta * exp(gamma * min(salary_left, knee) / 1000)
 
 fitted by copy-weighted least squares on the log scale, so it targets the
 copies of the lineup an entry actually holds (the chalk), not the million
-singletons. Measured 2026-10-13 on 50 October fields: showdown k 0.044,
+singletons. The salary term (2026-10-14, from the Dupes page): the public
+spends to the cap, so a lineup leaving money on the table is duplicated far
+less than its ownership alone says (lineups leaving $2k+ were over-predicted
+about 8x without it); the effect flattens past `knee` dollars left. Measured 2026-10-13 on 50 October fields: showdown k 0.044,
 beta 0.56 (leave-one-slate-out bias within +-0.2 in log terms; the extreme
 top lineup is still under-predicted, a tail the product rule does not
 reach); classic k 4e-5, beta 0.07 on two slates, i.e. classic fields barely
@@ -47,7 +50,10 @@ FILE = "dupe_model_v2.json"
 DERIVED_DIR = NFL_DATA_DIR / "derived" / "contests"
 SLOT_IDS = {"CPT": 511, "FLEX": 512, "QB": 66, "RB": 67, "WR": 68, "TE": 69, "DST": 71}      # classic FLEX is 70
 MIN_OWN = 0.05
-DEFAULTS = {"showdown": {"k": 0.044, "beta": 0.56}, "classic": {"k": 4e-5, "beta": 0.07}}     # 2026-10-13, 27 + 23 fields
+SALARY_CAP = 50000
+SALARY_KNEE = 2000.0      # dollars left past which the salary effect stops growing
+DEFAULTS = {"showdown": {"k": 0.044, "beta": 0.56, "gamma": 0.0, "knee": SALARY_KNEE},
+            "classic": {"k": 4e-5, "beta": 0.07, "gamma": 0.0, "knee": SALARY_KNEE}}     # 2026-10-13, 27 + 23 fields; gamma 0 = no salary term
 MIN_CONTESTS = 4
 
 
@@ -88,7 +94,7 @@ def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj
     counts = lp[slot_cols].astype(str).agg("|".join, axis=1).value_counts()
     rows = []
     for lineup, c in counts.items():
-        lo, miss = [], False
+        lo, miss, salary = [], False, 0
         for tok in lineup.split("|"):
             if tok in ("None", "nan", ""):
                 continue
@@ -100,17 +106,18 @@ def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj
                 miss = True
                 break
             lo.append(np.log(max(own, MIN_OWN) / 100.0))
+            salary += info[2]
         if miss or not lo:
             continue
         rows.append({"contest_id": int(contest_id), "count": int(c), "entries": int(len(lp)), "is_showdown": float(is_showdown),
-                     "n_players": len(lo), "sum_log_own": float(sum(lo))})
+                     "n_players": len(lo), "sum_log_own": float(sum(lo)), "salary_left": int(SALARY_CAP - salary)})
     return pd.DataFrame(rows) if rows else None
 
 
 def training_frame(session, own_col: str = "ownership_proj", cutoff: Optional[str] = None) -> pd.DataFrame:
     ids = sorted(int(Path(p).parent.name) for p in glob.glob(str(DERIVED_DIR / "*" / "meta.json")))
     if not ids:
-        return pd.DataFrame(columns=["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "date"])
+        return pd.DataFrame(columns=["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "salary_left", "date"])
     q = ",".join(map(str, ids))
     dates = read_sql(session, text(f"SELECT contest_id, date FROM historical_contest_information WHERE contest_id IN ({q})"))
     if cutoff:
@@ -121,7 +128,7 @@ def training_frame(session, own_col: str = "ownership_proj", cutoff: Optional[st
         if f is not None and len(f):
             frames.append(f)
     if not frames:
-        return pd.DataFrame(columns=["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "date"])
+        return pd.DataFrame(columns=["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "salary_left", "date"])
     df = pd.concat(frames, ignore_index=True).merge(dates, on="contest_id")
     df["date"] = pd.to_datetime(df.date)
     return df
@@ -136,18 +143,28 @@ class ProductDupeModel:
     contests: Dict[str, int] = field(default_factory=dict)
     cv: Dict[str, dict] = field(default_factory=dict)
 
-    def copies(self, entries: float, is_showdown: bool, sum_log_own: np.ndarray) -> np.ndarray:
-        """Expected copies of each lineup in a field of `entries`; sum_log_own = sum over its players of log(own/100)."""
-        p = self.params["showdown" if is_showdown else "classic"]
-        return float(entries) * float(p["k"]) * np.exp(float(p["beta"]) * np.asarray(sum_log_own, dtype=float))
+    def _salary_term(self, p: dict, salary_left) -> np.ndarray:
+        """exp(gamma x min(salary left, knee) / 1000); 1 when the model has no salary term or no salary is given."""
+        gamma = float(p.get("gamma", 0.0))
+        if gamma == 0.0 or salary_left is None:
+            return 1.0
+        knee = float(p.get("knee", SALARY_KNEE))
+        return np.exp(gamma * np.minimum(np.maximum(np.asarray(salary_left, dtype=float), 0.0), knee) / 1000.0)
 
-    def weights(self, is_showdown: bool, sum_log_own: np.ndarray) -> np.ndarray:
+    def copies(self, entries: float, is_showdown: bool, sum_log_own: np.ndarray, salary_left=None) -> np.ndarray:
+        """Expected copies of each lineup in a field of `entries`; sum_log_own = sum over its players of log(own/100), salary_left in dollars."""
+        p = self.params["showdown" if is_showdown else "classic"]
+        return float(entries) * float(p["k"]) * np.exp(float(p["beta"]) * np.asarray(sum_log_own, dtype=float)) * self._salary_term(p, salary_left)
+
+    def weights(self, is_showdown: bool, sum_log_own: np.ndarray, salary_left=None) -> np.ndarray:
         """Relative lineup weights for the field sampler (the same function, without the scale)."""
         p = self.params["showdown" if is_showdown else "classic"]
-        return np.exp(float(p["beta"]) * np.asarray(sum_log_own, dtype=float))
+        return np.exp(float(p["beta"]) * np.asarray(sum_log_own, dtype=float)) * self._salary_term(p, salary_left)
 
     def describe(self) -> str:
-        return "; ".join(f"{f}: copies = N x {p['k']:.3g} x prod(own)^{p['beta']:.2f}" + (f" ({self.contests.get(f, 0)} fields)" if self.contests.get(f) else " (default)")
+        return "; ".join(f"{f}: copies = N x {p['k']:.3g} x prod(own)^{p['beta']:.2f}"
+                         + (f" x exp({p['gamma']:.2f} x min($left, {p.get('knee', SALARY_KNEE):.0f})/1k)" if p.get("gamma") else "")
+                         + (f" ({self.contests.get(f, 0)} fields)" if self.contests.get(f) else " (default)")
                          for f, p in self.params.items())
 
     def save(self, model_dir: Path = MODELS_DIR) -> Path:
@@ -161,24 +178,40 @@ def sum_log_own(ownerships: Sequence[float]) -> float:
     return float(sum(np.log(max(float(o), MIN_OWN) / 100.0) for o in ownerships))
 
 
-def _fit_format(d: pd.DataFrame) -> Dict[str, float]:
-    """Copy-weighted least squares of log(copies / N) on sum_log_own."""
+def _salary_x(d: pd.DataFrame, knee: float = SALARY_KNEE) -> np.ndarray:
+    """The salary regressor: min(salary left, knee) / 1000, 0 when the frame has no salary."""
+    if "salary_left" not in d or d.salary_left.isna().all():
+        return np.zeros(len(d))
+    return np.minimum(np.maximum(d.salary_left.fillna(0).values.astype(float), 0.0), knee) / 1000.0
+
+
+def _fit_format(d: pd.DataFrame, salary_term: bool = True, knee: float = SALARY_KNEE) -> Dict[str, float]:
+    """Copy-weighted least squares of log(copies / N) on sum_log_own (and the salary regressor)."""
     y = np.log(d["count"].values.astype(float)) - np.log(d.entries.values.astype(float))
     x = d.sum_log_own.values.astype(float)
     w = d["count"].values.astype(float)
-    xm, ym = (x * w).sum() / w.sum(), (y * w).sum() / w.sum()
-    denom = (w * (x - xm) ** 2).sum()
-    beta = float(((w * (x - xm) * (y - ym)).sum()) / denom) if denom > 0 else DEFAULTS["showdown"]["beta"]
-    beta = float(np.clip(beta, 0.0, 1.5))
-    return {"k": float(np.exp(ym - beta * xm)), "beta": beta}
+    sx = _salary_x(d, knee) if salary_term else np.zeros(len(d))
+    cols = [np.ones(len(d)), x] + ([sx] if salary_term and sx.std() > 0 else [])
+    X = np.column_stack(cols)
+    sw = np.sqrt(w)
+    try:
+        coef, *_ = np.linalg.lstsq(X * sw[:, None], y * sw, rcond=None)
+    except np.linalg.LinAlgError:
+        coef = np.array([np.log(DEFAULTS["showdown"]["k"]), DEFAULTS["showdown"]["beta"]] + ([0.0] if X.shape[1] == 3 else []))
+    beta = float(np.clip(coef[1], 0.0, 1.5))
+    gamma = float(np.clip(coef[2], -5.0, 1.0)) if X.shape[1] == 3 else 0.0
+    # re-centre k for the clipped slopes so the copy-weighted mean is still matched
+    resid = y - beta * x - gamma * sx
+    k = float(np.exp((resid * w).sum() / w.sum()))
+    return {"k": k, "beta": beta, "gamma": gamma, "knee": float(knee)}
 
 
-def fit(df: pd.DataFrame, cutoff: Optional[str] = None) -> ProductDupeModel:
+def fit(df: pd.DataFrame, cutoff: Optional[str] = None, salary_term: bool = True) -> ProductDupeModel:
     m = ProductDupeModel(fitted_on=datetime.now().strftime("%Y-%m-%d"), cutoff=cutoff)
     for fmt, flag in (("showdown", 1.0), ("classic", 0.0)):
         d = df[df.is_showdown == flag] if len(df) else df
         if len(d) and d.contest_id.nunique() >= MIN_CONTESTS:
-            m.params[fmt] = _fit_format(d)
+            m.params[fmt] = _fit_format(d, salary_term)
             m.contests[fmt] = int(d.contest_id.nunique())
     return m
 
@@ -191,7 +224,7 @@ def load(model_dir=None) -> ProductDupeModel:
         return ProductDupeModel()
     try:
         raw = json.loads(path.read_text())
-        return ProductDupeModel(params={k: dict(v) for k, v in raw["params"].items()}, fitted_on=raw.get("fitted_on"), cutoff=raw.get("cutoff"),
+        return ProductDupeModel(params={k: {"gamma": 0.0, "knee": SALARY_KNEE, **dict(v)} for k, v in raw["params"].items()}, fitted_on=raw.get("fitted_on"), cutoff=raw.get("cutoff"),
                                 contests=raw.get("contests") or {}, cv=raw.get("cv") or {})
     except (OSError, ValueError, KeyError):
         return ProductDupeModel()
@@ -214,11 +247,21 @@ def scores(df: pd.DataFrame, pred: np.ndarray) -> dict:
             "top_lineup_ratio_median": round(float(np.median([t["pred_top"] / t["actual_top"] for t in tops])), 2), "by_contest": tops}
 
 
-def backtest(df: pd.DataFrame) -> dict:
-    """Leave one slate (lock time) out per format: fit on the rest, score the held-out slate."""
+def predict(params: Dict[str, float], d: pd.DataFrame) -> np.ndarray:
+    """Expected copies for the rows of a training frame under `params` (one format's k / beta / gamma / knee)."""
+    m = ProductDupeModel(params={"showdown": params, "classic": params})
+    return m.copies(1.0, True, d.sum_log_own.values, salary_left=d.salary_left.values if "salary_left" in d else None) * d.entries.values.astype(float)
+
+
+def backtest(df: pd.DataFrame, salary_term: bool = True) -> dict:
+    """
+    Leave one slate (lock time) out per format: fit on the rest, score the held-out slate.
+    Each fold also carries the score of the fit without the salary term ("..._no_salary") for the A/B.
+    """
     out = {}
     df = df.copy()
     df["slate"] = df.date.dt.strftime("%Y-%m-%d %H")
+    keys = ("copies_per_entry_pred", "copies_per_entry_actual", "log_mae", "log_bias", "top_lineup_ratio_median")
     for fmt, flag in (("showdown", 1.0), ("classic", 0.0)):
         d = df[df.is_showdown == flag]
         folds = []
@@ -226,10 +269,14 @@ def backtest(df: pd.DataFrame) -> dict:
             tr, te = d[d.slate != held], d[d.slate == held]
             if tr.contest_id.nunique() < MIN_CONTESTS or te.empty:
                 continue
-            p = _fit_format(tr)
-            pred = te.entries.values * p["k"] * np.exp(p["beta"] * te.sum_log_own.values)
-            sc = scores(te, pred)
-            folds.append({"held_out": held, "contests": int(te.contest_id.nunique()), "k": round(p["k"], 5), "beta": round(p["beta"], 3),
-                          **{k: sc[k] for k in ("copies_per_entry_pred", "copies_per_entry_actual", "log_mae", "log_bias", "top_lineup_ratio_median")}})
-        out[fmt] = {"contests": int(d.contest_id.nunique()), "fit": _fit_format(d) if d.contest_id.nunique() >= MIN_CONTESTS else None, "folds": folds}
+            p = _fit_format(tr, salary_term)
+            sc = scores(te, predict(p, te))
+            fold = {"held_out": held, "contests": int(te.contest_id.nunique()), "k": round(p["k"], 5), "beta": round(p["beta"], 3), "gamma": round(p["gamma"], 3),
+                    **{k: sc[k] for k in keys}}
+            if salary_term:
+                p0 = _fit_format(tr, salary_term=False)
+                sc0 = scores(te, predict(p0, te))
+                fold.update({f"{k}_no_salary": sc0[k] for k in ("log_mae", "log_bias", "top_lineup_ratio_median")})
+            folds.append(fold)
+        out[fmt] = {"contests": int(d.contest_id.nunique()), "fit": _fit_format(d, salary_term) if d.contest_id.nunique() >= MIN_CONTESTS else None, "folds": folds}
     return out
