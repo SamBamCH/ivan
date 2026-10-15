@@ -147,6 +147,8 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
             "sum_log_own_actual": float(sum(lo_a)) if all(v is not None for v in lo_a) else np.nan,
             "min_own_proj": min((float(p["own_proj"]) for p in players if p["own_proj"] is not None), default=np.nan),
             "cpt_name": cpt["name"] if cpt else None, "cpt_pos": cpt["position"] if cpt else None, "cpt_team": cpt["team"] if cpt else None,
+            "cpt_log_own_proj": _log_own(cpt["own_proj"]) if cpt and cpt["own_proj"] is not None else np.nan,
+            "cpt_log_own_actual": _log_own(cpt["own_actual"]) if cpt and cpt["own_actual"] is not None else np.nan,
             "cpt_own_proj": float(cpt["own_proj"]) if cpt and cpt["own_proj"] is not None else np.nan,
             "cpt_own_actual": float(cpt["own_actual"]) if cpt and cpt["own_actual"] is not None else np.nan,
             "salary_used": int(salary_used), "salary_left": int(SALARY_CAP - salary_used),
@@ -164,7 +166,9 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
     df["share"] = df["count"] / entries
     for s in SOURCES:
         slo = df[f"sum_log_own_{s}"].values
-        pred = model.copies(entries, is_showdown, np.where(np.isnan(slo), 0.0, slo), salary_left=df["salary_left"].values)
+        cpt_lo = df[f"cpt_log_own_{s}"].values
+        pred = model.copies(entries, is_showdown, np.where(np.isnan(slo), 0.0, slo), salary_left=df["salary_left"].values,
+                            log_own_cpt=cpt_lo if is_showdown else None, qb_mates=df["qb_mates"].values, n_qb=df["n_qb"].values)
         pred = np.where(np.isnan(slo), np.nan, pred)
         df[f"pred_{s}"] = pred
         df[f"resid_{s}"] = np.log(df["count"].values / pred)

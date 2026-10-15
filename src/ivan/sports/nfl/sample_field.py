@@ -111,6 +111,22 @@ def _stats(x: np.ndarray) -> dict:
     return {"min": float(x.min()), "mean": float(x.mean()), "max": float(x.max()),
             "p10": float(q[0]), "p25": float(q[1]), "p50": float(q[2]), "p75": float(q[3]), "p90": float(q[4])}
 
+def _dupe_features(session: Session, L, pid_to_col: Dict[int, int], player_ownership: np.ndarray, cpt_col_by_row) -> dict:
+    """The dupe model's captain and stack inputs for every lineup row (ivan.sports.nfl.dupe_model)."""
+    from ivan.sports.nfl import dupe_model as DMv2
+    cols = sorted(pid_to_col.items(), key=lambda kv: kv[1])
+    meta = {int(pid): (team, pos) for pid, team, pos in session.query(NFLPlayer.id, NFLPlayer.team, NFLPlayer.position).filter(NFLPlayer.id.in_([p for p, _ in cols])).all()}
+    teams = [meta.get(pid, ("", ""))[0] for pid, _ in cols]
+    positions = [meta.get(pid, ("", ""))[1] for pid, _ in cols]
+    n_qb, mates = DMv2.lineup_stack_features(L, teams, positions)
+    out = {"qb_mates": mates, "n_qb": n_qb}
+    if cpt_col_by_row is not None:
+        own = np.maximum(np.nan_to_num(np.asarray(player_ownership, dtype=float), nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0
+        cpt = np.asarray(cpt_col_by_row)
+        out["log_own_cpt"] = np.where(cpt >= 0, np.log(own[np.maximum(cpt, 0)]), np.nan)
+    return out
+
+
 def build_lineup_matrix(session: Session):
     """
     Build sparse lineup matrix and metadata.
@@ -778,7 +794,8 @@ def sample_showdown_field_learned(
         from ivan.sports.nfl import dupe_model as DMv2
         dm = DMv2.load()
         slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
-        predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float))
+        feats = _dupe_features(session, L, pid_to_col, player_ownership, cpt_col_by_row)
+        predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float), **feats)
         dupe_clip_floor = 1e-6
         dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
                      "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries)}
@@ -978,8 +995,9 @@ def sample_classic_field_learned(
         slo = np.asarray(L @ np.log(np.maximum(np.nan_to_num(player_ownership, nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0), dtype=np.float64)
         n_real = float(total_entries or field_size)
         salary_left = DMv2.SALARY_CAP - np.asarray(spends, dtype=float)
-        predicted_copies_classic = dm.copies(n_real, False, slo, salary_left=salary_left)
-        weights = weights * dm.weights(False, slo, salary_left=salary_left)
+        feats = _dupe_features(session, L, pid_to_col, player_ownership, None)
+        predicted_copies_classic = dm.copies(n_real, False, slo, salary_left=salary_left, **feats)
+        weights = weights * dm.weights(False, slo, salary_left=salary_left, **feats)
         print(f"  dupes (classic): {dm.params['classic']}; candidates' expected copies at {int(n_real)} entries: "
               f"median {np.median(predicted_copies_classic):.2f}, max {predicted_copies_classic.max():.1f}")
 
