@@ -171,6 +171,63 @@ def derive_contest(contest_id: int, csv_text: Optional[str] = None, out_dir: Pat
     return meta
 
 
+def derive_from_lineups(session, contest_ids: Optional[Sequence[int]] = None, out_dir: Path = DERIVED_DIR, echo=print) -> int:
+    """
+    Derived field files for scraped showdown contests that predate the raw standings exports
+    (the 2025 fields): one row per entry from showdown_lineup x dupe_count, players named through
+    the slate's capture (matched by slot, team, position and salary, since the old scraper's player
+    ids are its own). Skips contests that already have derived files. Returns how many were derived.
+    """
+    from ivan.core.utils import normalize_name
+    q = """SELECT DISTINCT l.contest_id, h.draft_group_id FROM showdown_lineup l JOIN historical_contest_information h USING (contest_id)"""
+    cands = read_sql(session, text(q))
+    if contest_ids is not None:
+        cands = cands[cands.contest_id.isin([int(c) for c in contest_ids])]
+    caps = {c.slate_key: c for c in archive.slates(session, SPORT)}
+    names_by_cap: Dict[int, dict] = {}
+    done = 0
+    for cid, dg in zip(cands.contest_id.astype(int), cands.draft_group_id):
+        out = Path(out_dir) / str(cid)
+        if (out / "meta.json").exists():
+            continue
+        cap = caps.get(str(dg))
+        if cap is None:
+            echo(f"[settle] derive {cid}: no capture for draft group {dg}; skipped")
+            continue
+        if cap.id not in names_by_cap:
+            names_by_cap[cap.id] = {(int(pl["roster_slot_id"]), str(pl.get("team")), str(pl.get("position", "")).upper(), int(pl.get("salary") or 0)): str(pl.get("name", ""))
+                                    for pl in archive.load_blobs(session, cap.id).get("players", [])}
+        names = names_by_cap[cap.id]
+        sp = read_sql(session, text("SELECT player_id, roster_slot_id AS slot, team, position, salary FROM showdown_player WHERE contest_id = :c").bindparams(c=cid))
+        tok = {}
+        for r in sp.itertuples():
+            nm = names.get((int(r.slot), r.team, str(r.position).upper(), int(r.salary)))
+            if nm:
+                tok[int(r.player_id)] = ("CPT " if int(r.slot) == 511 else "FLEX ") + normalize_name(nm)
+        lus = read_sql(session, text("SELECT cpt_player_id, flex_player_ids, dupe_count FROM showdown_lineup WHERE contest_id = :c").bindparams(c=cid))
+        rows, missed = [], 0
+        for r in lus.itertuples():
+            pids = [int(r.cpt_player_id)] + [int(x) for x in (json.loads(r.flex_player_ids) if isinstance(r.flex_player_ids, str) else list(r.flex_player_ids))]
+            toks = [tok.get(pid) for pid in pids]
+            if any(t is None for t in toks) or len(toks) != 6:
+                missed += 1
+                continue
+            for _ in range(int(r.dupe_count or 1)):
+                rows.append(toks)
+        if not rows:
+            echo(f"[settle] derive {cid}: no lineup could be named ({len(lus)} lineups); skipped")
+            continue
+        df = pd.DataFrame(rows, columns=[f"slot{i}" for i in range(1, 7)])
+        df.insert(0, "points", np.nan); df.insert(0, "entry_name", ""); df.insert(0, "entry_id", np.arange(1, len(df) + 1)); df.insert(0, "rank", 0)
+        out.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(out / "lineups.parquet", index=False)
+        (out / "meta.json").write_text(json.dumps({"contest_id": int(cid), "entries": int(len(df)), "slots": 6, "source": "showdown_lineup",
+                                                   "lineups_unnamed": int(missed), "derived_at": datetime.now().isoformat(timespec="seconds")}))
+        done += 1
+        echo(f"[settle] derived contest {cid} from the lineup table: {len(df)} entries, {len(lus)} lineups" + (f", {missed} unnamed" if missed else ""))
+    return done
+
+
 def derive_missing(contest_ids: Optional[Sequence[int]] = None, out_dir: Path = DERIVED_DIR, echo=print) -> int:
     """Derive every raw standings export that has no derived files yet (or only the given ids). Returns how many were derived."""
     arts = raw.find(SPORT, "dk/standings")
