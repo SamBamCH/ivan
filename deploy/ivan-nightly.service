@@ -13,7 +13,7 @@ EnvironmentFile=__ROOT__/.env
 Environment=PYTHONUNBUFFERED=1
 # the scraper's Chrome needs the desktop session's display; the user manager imports these at login
 PassEnvironment=DISPLAY WAYLAND_DISPLAY XAUTHORITY
-ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/nightly.py --days 10
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/nightly.py --days 13
 StandardOutput=append:__ROOT__/data/nfl/logs/nightly.log
 StandardError=append:__ROOT__/data/nfl/logs/nightly.log
 # the scrape may wait for a login; the box score fetch is a few minutes

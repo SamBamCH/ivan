@@ -10,7 +10,7 @@ status row per slate). It writes nothing else and deletes nothing, so it is
 safe on a timer; settle is idempotent, so running it several times a day only
 fetches what is still missing.
 
-    nightly.py [--days 10] [--no-scrape] [--headless] [--no-notify]
+    nightly.py [--days 13] [--no-scrape] [--headless] [--no-notify]
 
 The DraftKings scrape uses the saved Chrome profile (chrome-selenium/dk-profile)
 and IVAN_DK_USERNAME from .env so our finishes are recorded. With a display it
@@ -20,8 +20,8 @@ the slate login_needed (the Backtest page shows it; settle again after logging
 in). Anything still pending after a run raises a desktop notification, so a
 stale login is seen the same day and not after DraftKings has expired the
 contest data. deploy/ivan-nightly.timer runs this three times a day with
-catch-up, so a laptop asleep overnight runs it when it wakes; the ten-day
-window keeps retrying a slate the laptop missed for a few days.
+catch-up, so a laptop asleep overnight runs it when it wakes; the window
+keeps retrying a missed slate until DraftKings purges it (14 days).
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def log(msg: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--days", type=int, default=10, help="settle slates locked in the last N days (default 10: a slate missed for a few days is still retried)")
+    ap.add_argument("--days", type=int, default=13, help="settle slates locked in the last N days (default 13: DraftKings purges contest data after 14, so a missed slate is retried until then)")
     ap.add_argument("--no-notify", action="store_true", help="no desktop notification when a slate is still pending")
     ap.add_argument("--no-scrape", action="store_true", help="box scores and status only; no DraftKings scrape")
     ap.add_argument("--headless", action="store_true", help="force headless Chrome (the default when there is no display)")

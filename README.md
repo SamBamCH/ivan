@@ -293,7 +293,7 @@ start a new one with a name and a window. A new run walks through:
 
 Going forward, every slate played is settled on its own: the ingest archives
 the capture at lock, and the nightly data job (`scripts/nfl/nightly.py`:
-schedules, box scores, the DST table, then `settle --days 10`) scrapes the
+schedules, box scores, the DST table, then `settle --days 13`, DraftKings purges contest data after 14) scrapes the
 contests the chooser entered and the slate's largest public contests, with
 `IVAN_DK_USERNAME` from `.env` so our finishes are recorded. It deletes
 nothing, so it runs on a timer: `deploy/install_nightly_timer.sh` installs it
