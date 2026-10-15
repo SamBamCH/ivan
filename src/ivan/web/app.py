@@ -164,6 +164,12 @@ def _job_view(job_id: Optional[str], tail: int) -> dict:
 
 
 # ------------------------------------------------------------------- pages
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Browsers ask for this on every page; serve the tab icon instead of logging a 404."""
+    return FileResponse(HERE / "static" / "favicon.svg", media_type="image/svg+xml")
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     entries = entries_summary()
