@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Ivan NFL nightly data job three times a day, catching up after sleep
+
+[Timer]
+# 06:30 catches Sunday/Monday night box scores (on nflverse by the morning), 12:30 and 18:30 catch a
+# laptop that was asleep at 06:30. Persistent=true runs a missed slot at the next boot; a timer that
+# elapsed during suspend fires on resume. The job is idempotent, so extra runs only fetch what is missing.
+OnCalendar=*-*-* 06,12,18:30:00
+Persistent=true
+RandomizedDelaySec=5min
+Unit=ivan-nightly.service
+
+[Install]
+WantedBy=timers.target

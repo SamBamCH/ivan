@@ -292,10 +292,17 @@ start a new one with a name and a window. A new run walks through:
    p90 and the share of repeats that profited.
 
 Going forward, every slate played is settled on its own: the ingest archives
-the capture at lock, the overnight job fetches the box scores, and
-`scripts/nfl/settle.py --days 3` scrapes the contests the chooser entered in
-the last days (the overnight job runs it when `IVAN_DK_USERNAME` is set and
-a display exists for Chrome).
+the capture at lock, and the nightly data job (`scripts/nfl/nightly.py`:
+schedules, box scores, the DST table, then `settle --days 3`) scrapes the
+contests the chooser entered and the slate's largest public contests, with
+`IVAN_DK_USERNAME` from `.env` so our finishes are recorded. It deletes
+nothing, so it runs on a timer: `deploy/install_nightly_timer.sh` installs it
+as a systemd *user* timer on the producer (three slots a day with catch-up, so
+a laptop asleep overnight runs it when it wakes; log in
+`data/nfl/logs/nightly.log`). An expired DraftKings login marks the slate
+`login_needed` on the Backtest page; log in once in the scraper's Chrome
+window and settle again. `scripts/nfl/overnight.py` is the manual new-slate
+reset (it also clears the lineups and sim results) and is not for the timer.
 
 Underneath: `ivan.sports.nfl.readiness` (what the window holds),
 `ivan.web.backtest_hub` (the steps and the job commands), `scripts/replay.py`

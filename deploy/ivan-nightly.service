@@ -1,0 +1,21 @@
+# The data job that keeps played slates backtestable (scripts/nfl/nightly.py): box scores,
+# schedules, the DST table and the settle job. A *user* unit on the producer (the laptop with the
+# DraftKings Chrome profile); rendered and installed by deploy/install_nightly_timer.sh.
+[Unit]
+Description=Ivan NFL nightly data job (box scores + settle)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+EnvironmentFile=__ROOT__/.env
+Environment=PYTHONUNBUFFERED=1
+# the scraper's Chrome needs the desktop session's display; the user manager imports these at login
+PassEnvironment=DISPLAY WAYLAND_DISPLAY XAUTHORITY
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/nightly.py --days 3
+StandardOutput=append:__ROOT__/data/nfl/logs/nightly.log
+StandardError=append:__ROOT__/data/nfl/logs/nightly.log
+# the scrape may wait for a login; the box score fetch is a few minutes
+TimeoutStartSec=45min
+Nice=10
