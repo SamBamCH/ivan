@@ -10,15 +10,18 @@ status row per slate). It writes nothing else and deletes nothing, so it is
 safe on a timer; settle is idempotent, so running it several times a day only
 fetches what is still missing.
 
-    nightly.py [--days 3] [--no-scrape] [--headless]
+    nightly.py [--days 10] [--no-scrape] [--headless] [--no-notify]
 
 The DraftKings scrape uses the saved Chrome profile (chrome-selenium/dk-profile)
 and IVAN_DK_USERNAME from .env so our finishes are recorded. With a display it
 opens Chrome and, when the login has expired, waits up to ten minutes for a
 login in that window; without one it runs headless, and an expired login marks
 the slate login_needed (the Backtest page shows it; settle again after logging
-in). deploy/ivan-nightly.timer runs this three times a day with catch-up, so a
-laptop asleep overnight runs it when it wakes.
+in). Anything still pending after a run raises a desktop notification, so a
+stale login is seen the same day and not after DraftKings has expired the
+contest data. deploy/ivan-nightly.timer runs this three times a day with
+catch-up, so a laptop asleep overnight runs it when it wakes; the ten-day
+window keeps retrying a slate the laptop missed for a few days.
 """
 from __future__ import annotations
 
@@ -40,7 +43,8 @@ def log(msg: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--days", type=int, default=3, help="settle slates locked in the last N days (default 3)")
+    ap.add_argument("--days", type=int, default=10, help="settle slates locked in the last N days (default 10: a slate missed for a few days is still retried)")
+    ap.add_argument("--no-notify", action="store_true", help="no desktop notification when a slate is still pending")
     ap.add_argument("--no-scrape", action="store_true", help="box scores and status only; no DraftKings scrape")
     ap.add_argument("--headless", action="store_true", help="force headless Chrome (the default when there is no display)")
     ap.add_argument("--public", type=int, default=3, help="largest public contests per slate to settle as well (default 3)")
@@ -70,12 +74,38 @@ def main() -> int:
         log(f"settle FAILED: {type(e).__name__}: {e}\n{traceback.format_exc()}")
         return 1
     for s in items:
-        log(f"  {s.slate_key} {s.mode} lock {s.lock:%Y-%m-%d %H:%M}: {s.status}" + (f" ({'; '.join(s.missing)})" if s.missing else ""))
-    pending = [s for s in items if s.status in ("waiting", "login_needed")]
+        note = "; ".join(s.missing)
+        if s.status not in ("open",) and not s.played:
+            note = (note + "; " if note else "") + "no chooser output for this slate on this machine (only the public contests are scraped)"
+        log(f"  {s.slate_key} {s.mode} lock {s.lock:%Y-%m-%d %H:%M}: {s.status}" + (f" ({note})" if note else ""))
+    pending = [s for s in items if s.status in ("waiting", "login_needed", "no_contests")]
     if pending:
         log(f"{len(pending)} slate(s) still {', '.join(sorted({s.status for s in pending}))}")
+    if (pending or rc) and not a.no_notify:
+        notify(pending, rc)
     log("done" if rc == 0 and not pending else "done with issues")
     return rc or (1 if pending else 0)
+
+
+def notify(pending, rc: int) -> None:
+    """A desktop notification (notify-send) so a login_needed or a failed fetch is seen the same day; silent without a display."""
+    import shutil
+    import subprocess
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return
+    if not shutil.which("notify-send"):
+        return
+    lines = [f"{s.lock:%a %m-%d %H:%M} {s.mode} {s.slate_key}: {s.status}" for s in pending]
+    if rc:
+        lines.append("box score fetch failed (see data/nfl/logs/nightly.log)")
+    urgency = "critical" if any(s.status == "login_needed" for s in pending) or rc else "normal"
+    body = "\n".join(lines[:8]) + ("\n..." if len(lines) > 8 else "")
+    if any(s.status == "login_needed" for s in pending):
+        body += "\nLog in to DraftKings in the scraper's Chrome window, then settle again (Backtest page)."
+    try:
+        subprocess.run(["notify-send", "-u", urgency, "-a", "Ivan", "Ivan NFL: slates not settled", body], timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 if __name__ == "__main__":
