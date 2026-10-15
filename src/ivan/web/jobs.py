@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -70,6 +71,17 @@ class Job:
         d = asdict(self)
         d["duration"] = self.duration
         return d
+
+
+def _signal_group(proc: subprocess.Popen, sig) -> None:
+    """Signal the job's whole process group; fall back to the process itself."""
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            pass
 
 
 class JobRunner:
@@ -137,11 +149,17 @@ class JobRunner:
             return False
         proc = self._procs.get(job_id)
         if proc and proc.poll() is None:
-            proc.terminate()
+            # the job runs in its own process group (start_new_session), so the replay's worker
+            # processes and the generator's pool die with it instead of outliving the cancel
+            _signal_group(proc, signal.SIGTERM)
             try:
-                proc.wait(timeout=10)
+                proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal_group(proc, signal.SIGKILL)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             return True
         if job.status == "queued":
             job.status = "cancelled"
@@ -170,7 +188,7 @@ class JobRunner:
         with open(self.log_path(job), "w", buffering=1) as log:
             log.write(f"$ {' '.join(job.cmd)}\n\n")
             try:
-                proc = subprocess.Popen(cmd, cwd=self.cwd, env=env,
+                proc = subprocess.Popen(cmd, cwd=self.cwd, env=env, start_new_session=True,
                                         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 self._procs[job.id] = proc
                 job.pid = proc.pid
@@ -181,7 +199,7 @@ class JobRunner:
             finally:
                 self._procs.pop(job.id, None)
         job.finished = time.time()
-        job.status = "done" if job.returncode == 0 else ("cancelled" if job.returncode in (-15, 143) else "failed")
+        job.status = "done" if job.returncode == 0 else ("cancelled" if job.returncode in (-15, 143, -9, 137) else "failed")
         self._save_meta(job)
 
     def _meta_path(self, job: Job) -> Path:

@@ -188,7 +188,8 @@ def write_selection(run: dict) -> Path:
     return path
 
 
-def replay_command(run: dict) -> list[str]:
+def replay_command(run: dict, redo: bool = True) -> list[str]:
+    """The replay for this run; redo=False resumes (finished slates and repeats are kept, only the missing ones run)."""
     p = run["params"]
     root = run_root(run["name"])
     cmd = [sys.executable, "-u", str(PROJECT_ROOT / "scripts" / "replay.py"), "--since", run["since"], "--until", run["until"],
@@ -197,7 +198,7 @@ def replay_command(run: dict) -> list[str]:
            "--replay-db", str(root / "replay.sqlite")]
     if not (root / "replay.sqlite").exists():                 # a fresh copy of the live database, so new captures are in it
         cmd.append("--rebuild-db")
-    if (root / "nfl").is_dir():
+    if redo and (root / "nfl").is_dir():
         cmd.append("--redo")
     return cmd
 

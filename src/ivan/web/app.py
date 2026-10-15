@@ -453,14 +453,28 @@ async def backtest_contests(request: Request, name: str):
     return _redirect(f"/backtest/{name}?step=params")
 
 
+def _replay_in_progress(name: str) -> Optional[str]:
+    """The id of a queued or running replay / validate job of this run, if any (two at once corrupt the replay databases)."""
+    for j in runner.active():
+        if (j.meta or {}).get("run") == name and (j.meta or {}).get("step") in ("replay", "validate", "resettle"):
+            return j.id
+    return None
+
+
 @app.post("/backtest/{name}/rerun")
 async def backtest_rerun(request: Request, name: str):
     """Run the saved parameters again (after a fix, or when the replay found nothing)."""
     run = hub.load_run(name)
     if run is None or not run.get("picks") or not run.get("params"):
         return _redirect(f"/backtest/{name}", "Nothing to rerun: choose contests and parameters first.")
+    busy = _replay_in_progress(name)
+    if busy:
+        return _redirect(f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    resume = form.get("mode") == "resume"
     hub.write_selection(run)
-    j1 = runner.submit(f"{name}: replay {len(run['picks'])} contests x {run['params']['repeats']}", hub.replay_command(run), meta={"step": "replay", "run": name})
+    j1 = runner.submit(f"{name}: {'resume' if resume else 'replay'} {len(run['picks'])} contests x {run['params']['repeats']}",
+                       hub.replay_command(run, redo=not resume), meta={"step": "replay", "run": name})
     j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
     run.setdefault("jobs", []).extend([{"id": j1.id, "name": "replay", "at": datetime.now().isoformat(timespec="seconds")},
                                        {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
@@ -496,6 +510,9 @@ async def backtest_run(request: Request, name: str):
                   "seed": int(form.get("seed") or 0)}
     except ValueError:
         return _redirect(f"/backtest/{name}?step=params", "The parameters must be numbers.")
+    busy = _replay_in_progress(name)
+    if busy:
+        return _redirect(f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
     run["params"] = params
     hub.write_selection(run)
     j1 = runner.submit(f"{name}: replay {len(run['picks'])} contests x {params['repeats']}", hub.replay_command(run), meta={"step": "replay", "run": name})

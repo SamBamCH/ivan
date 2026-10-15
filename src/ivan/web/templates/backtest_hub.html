@@ -175,7 +175,8 @@
   {% if not progress.active %}
   <div class="actions" style="margin-top:8px">
     <form method="post" action="/backtest/{{ run.name }}/resettle"><button class="small">Re-settle results</button> <span class="muted small">place the same lineups in the real fields again (after a scrape or a data fix); no re-run</span></form>
-    <form method="post" action="/backtest/{{ run.name }}/rerun"><button class="small">Run again</button> <span class="muted small">re-run the pipeline on every slate</span></form>
+    <form method="post" action="/backtest/{{ run.name }}/rerun" style="display:inline"><input type="hidden" name="mode" value="resume"><button class="small">Resume</button> <span class="muted small">finish the slates and repeats that did not complete (after a cancel or a crash)</span></form>
+    <form method="post" action="/backtest/{{ run.name }}/rerun" style="display:inline"><input type="hidden" name="mode" value="redo"><button class="small">Run again</button> <span class="muted small">re-run the pipeline on every slate (after a model change)</span></form>
   </div>
   {% endif %}
 </div>

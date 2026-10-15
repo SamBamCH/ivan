@@ -119,11 +119,31 @@ def run_workers(a, sport: str, live_db: Path, replay_db: Path, out_root: Path, a
         # each replay worker gets its share of the cores for its own sim pool and lineup jobs
         share = str(max(1, (os.cpu_count() or 1) // max(1, a.workers)))
         env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "IVAN_SIM_WORKERS": share}
-        procs.append((i, subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=fh, stderr=subprocess.STDOUT, env=env), fh))
-    for i, p, fh in procs:
-        rc = p.wait()
-        fh.close()
-        print(f"worker {i}: exit {rc}")
+        procs.append((i, subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=fh, stderr=subprocess.STDOUT, env=env, start_new_session=True), fh))
+    try:
+        for i, p, fh in procs:
+            rc = p.wait()
+            print(f"worker {i}: exit {rc}")
+    finally:
+        # a cancel (SIGTERM / Ctrl-C) must take the workers and their generator pools down too, or they keep
+        # writing to clone databases the next run replaces under them ("attempt to write a readonly database")
+        import signal
+        for i, p, fh in procs:
+            if p.poll() is None:
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
+        for i, p, fh in procs:
+            if p.poll() is None:
+                try:
+                    p.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+            fh.close()
     dirs = [d for d in rp.replayed_dirs(out_root, sport) if since <= _lock_of(d) <= until]
     return [json.loads((d / rp.MANIFEST).read_text()) for d in dirs]
 
