@@ -205,6 +205,74 @@ def build_sim_artifact(*, contest: dict, u_lids: Sequence[int], starts: np.ndarr
     return arrays, meta
 
 
+def build_conditioned_artifact(*, contest: dict, lineup_ids: np.ndarray, pid_lists_by_lid: Dict[int, List[int]], own: np.ndarray,
+                               ev, roi: np.ndarray, mean_score: np.ndarray, lineup_sd: np.ndarray, raw_samples: Dict[int, np.ndarray],
+                               players: Dict[int, dict], pay_by_rank: np.ndarray, tiers: List[dict], paid_places: int, pool_in_field: float,
+                               score_pct: np.ndarray, cash_line: np.ndarray, winning_score: np.ndarray,
+                               sampler_arrays: Optional[dict] = None, sampler_meta: Optional[dict] = None, seed: Optional[int] = None,
+                               world=None) -> tuple[dict, dict]:
+    """
+    (arrays, meta) for one conditioned contest evaluation, with the keys the
+    validation layer reads from a simulated artifact (per-lineup cash_pct /
+    avg_roi / mean_rank / mean_score / win_pct, the field's per-world score
+    quantiles, cash line and winning score, the payout ladder) plus what is
+    new: each lineup's expected copies and conditional sd, and the worlds'
+    team points.
+    """
+    N = len(lineup_ids)
+    W = roi.shape[1]
+    own = np.asarray(own, dtype=np.float64)
+    lineup_players = _pad([pid_lists_by_lid.get(int(l), []) for l in lineup_ids])
+    pred_by_lid: Dict[int, float] = {}
+    cand_lids = np.zeros(0, dtype=np.int64); cand_pred = np.zeros(0)
+    if sampler_arrays and "lineup_id" in sampler_arrays and "predicted_dupes" in sampler_arrays:
+        cand_lids = np.asarray(sampler_arrays["lineup_id"], dtype=np.int64)
+        cand_pred = np.asarray(sampler_arrays["predicted_dupes"], dtype=np.float64)
+        pred_by_lid = dict(zip(cand_lids.tolist(), cand_pred.tolist()))
+    predicted_dupes = np.asarray([pred_by_lid.get(int(l), np.nan) for l in lineup_ids], dtype=np.float64)
+    M = float(own.sum())
+    exposure: Dict[int, float] = {}
+    for i, lid in enumerate(lineup_ids):
+        for pid in pid_lists_by_lid.get(int(lid), []):
+            exposure[pid] = exposure.get(pid, 0.0) + float(own[i])
+    pids = sorted(set(raw_samples) | set(exposure))
+    q = np.full((len(pids), len(QGRID)), np.nan); mean = np.full(len(pids), np.nan); sd = np.full(len(pids), np.nan)
+    for i, pid in enumerate(pids):
+        v = raw_samples.get(pid)
+        if isinstance(v, np.ndarray) and v.size:
+            q[i] = np.percentile(v, QGRID); mean[i] = v.mean(); sd[i] = v.std()
+    exp_pct = np.asarray([100.0 * exposure.get(pid, 0.0) / max(1.0, M) for pid in pids])
+    own_proj = np.asarray([(players.get(pid, {}).get("ownership_proj") if players.get(pid, {}).get("ownership_proj") is not None else np.nan)
+                           for pid in pids], dtype=np.float64)
+    arrays = {
+        "lineup_id": np.asarray(lineup_ids, dtype=np.int64), "dupes": np.round(1.0 + own).astype(np.int64), "predicted_dupes": predicted_dupes,
+        "expected_copies": own, "lineup_sd": np.asarray(lineup_sd, dtype=np.float32),
+        "cash_pct": ev.cash.mean(axis=1).astype(np.float64), "avg_roi": roi.mean(axis=1).astype(np.float64),
+        "roi_se": (roi.std(axis=1) / np.sqrt(W)).astype(np.float64),
+        "mean_rank": ev.rank.mean(axis=1).astype(np.float64), "mean_score": np.asarray(mean_score, dtype=np.float64),
+        "win_pct": np.asarray(ev.win, dtype=np.float64),
+        "lineup_players": lineup_players,
+        "cand_lineup_id": cand_lids, "cand_predicted_dupes": cand_pred,
+        "player_id": np.asarray(pids, dtype=np.int64), "player_q": q, "player_mean": mean, "player_sd": sd,
+        "player_exposure_pct": exp_pct, "player_ownership_proj": own_proj,
+        "score_pct": np.asarray(score_pct, dtype=np.float32), "cash_line": np.asarray(cash_line, dtype=np.float32),
+        "winning_score": np.asarray(winning_score, dtype=np.float32),
+        "pay_by_rank": np.asarray(pay_by_rank, dtype=np.float64), "qgrid": np.asarray(QGRID, dtype=np.int64),
+    }
+    if world is not None:
+        arrays["world_teams"] = np.asarray(list(world.teams), dtype="U8")
+        arrays["world_team_points"] = np.asarray(world.team_points, dtype=np.float32)
+    meta = {
+        "version": ARTIFACT_VERSION, "kind": "conditioned", "created_at": datetime.now().isoformat(timespec="seconds"), "seed": seed,
+        "contest": contest, "n_sims": int(W), "simulated_size": int(round(M)), "unique_lineups": int(N),
+        "paid_places": int(paid_places), "pool_in_field": float(pool_in_field), "tiers": tiers,
+        "players": [{"id": int(pid), **{k: players.get(pid, {}).get(k) for k in ("name", "team", "pos", "slot", "salary", "fpts_mean")}}
+                    for pid in pids],
+        "sampler": sampler_meta or {},
+    }
+    return arrays, meta
+
+
 def build_field_artifact(*, contest: dict, u_lids: Sequence[int], starts: np.ndarray, ends: np.ndarray,
                          pid_lists_by_lid: Dict[int, List[int]], players: Dict[int, dict], pay_by_rank: np.ndarray,
                          tiers: List[dict], paid_places: int, sampler_arrays: Optional[dict] = None,

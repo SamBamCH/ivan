@@ -43,7 +43,11 @@ def run_report(session, runs: Sequence[bt.ChooseRun], cfg: TaxConfig, *, bankrol
 
     years = pd.Series([e.tax_year for e in entries if e.tax_year]).value_counts()
     year = tax_year or (int(years.idxmax()) if len(years) else datetime.now().year)
-    entries = [e for e in entries if e.tax_year == year or e.tax_year is None]
+    if tax_year is not None:                      # an explicit year restricts the report; otherwise the whole window counts
+        entries = [e for e in entries if e.tax_year == year or e.tax_year is None]
+    elif len(years) > 1:
+        echo(f"Window spans tax years {', '.join(str(y) for y in sorted(years.index))}: every slate is reported; "
+             f"the tax ledger treats them as one year ({year}). Pass --tax-year to restrict.")
     settled = [e for e in entries if e.settled]
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)

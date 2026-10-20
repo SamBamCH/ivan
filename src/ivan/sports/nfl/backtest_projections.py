@@ -29,7 +29,7 @@ from sqlalchemy import text
 
 from ivan.database.session import read_sql
 from ivan.sports.nfl.actuals import dk_kicker_points, dk_offense_points, week_lookup
-from ivan.sports.nfl.refactor.spread import MIN_ROWS
+from ivan.sports.nfl.refactor.spread import POWER_B_RANGE, MIN_ROWS
 
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
 
@@ -104,6 +104,35 @@ def summarize(m: pd.DataFrame, label: str) -> str:
     except ValueError:
         pass
     return "\n".join(lines)
+
+
+def sd_calibration_powers(scored: pd.DataFrame, positions: Iterable[str] = POSITIONS, min_rows: int = 300,
+                          bins: int = 4) -> dict:
+    """
+    Per position with at least min_rows scored rows: realized sd = a x model sd^b,
+    fitted log-log on the realized rmse within each model-sd quantile bin. The
+    flat factor is the special case b = 1; b < 1 means the model's spread grows
+    faster than reality's across the projection range.
+    """
+    out = {}
+    for pos in positions:
+        m = scored[scored.position == pos.upper()].dropna(subset=["actual"]).copy()
+        model_sd = m.fpts_std_model.fillna(m.fpts_std) if "fpts_std_model" in m else m.fpts_std
+        m = m.assign(model_sd=model_sd)
+        m = m[m.model_sd > 0]
+        if len(m) < min_rows:
+            continue
+        m["bin"] = pd.qcut(m.model_sd, bins, labels=False, duplicates="drop")
+        g = m.groupby("bin")
+        x = np.log(g.model_sd.mean().values)
+        y = np.log(np.sqrt(g.apply(lambda h: ((h.actual - h.fpts_mean) ** 2).mean()).values))
+        if len(x) < 2 or np.ptp(x) < 0.5:            # the bins must span a real range of model sd for a slope to mean anything
+            continue
+        b, _ = np.polyfit(x, y, 1)
+        b = float(np.clip(b, *POWER_B_RANGE))
+        loga = float(np.mean(y - b * x))              # a refitted at the (clipped) slope
+        out[pos] = {"a": float(np.exp(loga)), "b": b, "n": int(len(m)), "bins": int(len(x))}
+    return out
 
 
 def sd_calibration_factors(scored: pd.DataFrame, positions: Iterable[str] = POSITIONS,

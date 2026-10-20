@@ -361,6 +361,11 @@ def contest_frames(session: Session, case: ContestCase, act: Actuals, in_field: 
                 rk, py = place_alone(np.array([s]), field_for_us, payout_vector(act.tiers, field_for_us.size + 1))
                 r["actual_rank"], r["actual_payout"] = int(rk[0]), float(py[0])
             rows.append(r)
+        luck = contest_luck(ours, rows)
+        honest = honest_roi(case.run, case.contest_id)
+        for r in rows:
+            r.update(luck)
+            r["sim_honest_roi"] = honest
         out["lineups"] = pd.DataFrame(rows)
 
     if has_sim and act.has_points and act.field is not None and pay is not None and not players.empty:
@@ -553,6 +558,46 @@ def replay_models(dirs: Sequence[Path]) -> List[dict]:
                     out.append({"cutoff": m.get("cutoff"), "fallback": bool(m.get("fallback")), "built": m.get("built") or []})
                 break
     return out
+
+
+def contest_luck(ours: Sequence[dict], rows: Sequence[dict]) -> dict:
+    """
+    Where the contest's realized P/L sits in the sim's own spread for the entries we played:
+    the per-world P/L of the book (every entry's fee x its ROI in that world, summed) against
+    the actual. sim_pl_pctile is the share of worlds at or below the actual (uniform over
+    contests when the sim is calibrated), sim_p_loss the sim's P(the book loses) and
+    sim_pl_p50_roi its median-world ROI.
+    """
+    traces, fees, actual = [], [], 0.0
+    by_eid = {int(o["entry_id"]): o for o in ours}
+    for r in rows:
+        o = by_eid.get(int(r["entry_id"]))
+        t = o.get("sim_roi") if o else None
+        pay = r.get("actual_payout")
+        if t is None or pay is None or not np.isfinite(pay):
+            continue
+        traces.append(np.asarray(t, dtype=np.float64)); fees.append(float(r["entry_fee"])); actual += float(pay) - float(r["entry_fee"])
+    if not traces:
+        return {"sim_pl_pctile": np.nan, "sim_p_loss": np.nan, "sim_pl_p50_roi": np.nan}
+    S = min(t.size for t in traces)
+    if S == 0:
+        return {"sim_pl_pctile": np.nan, "sim_p_loss": np.nan, "sim_pl_p50_roi": np.nan}
+    pl = np.vstack([f * t[:S] for f, t in zip(fees, traces)]).sum(axis=0)
+    return {"sim_pl_pctile": float((pl <= actual).mean()), "sim_p_loss": float((pl < 0).mean()),
+            "sim_pl_p50_roi": float(np.median(pl) / sum(fees))}
+
+
+def honest_roi(run, contest_id: int) -> float:
+    """The chooser's cross-fit (out-of-sample) mean ROI for a contest, from the run's choose json; nan when absent."""
+    if run is None or run.lineups_csv is None:
+        return np.nan
+    base, stamp = run.lineups_csv.name.split(".")[0], run.stamp
+    f = run.lineups_csv.with_name(f"{base}.choose.{stamp}.json")
+    try:
+        d = json.loads(f.read_text()).get(str(int(contest_id))) or {}
+        return float(d["book"]["cross_fit"]["out_of_sample"]["mean"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return np.nan
 
 
 def validate_window(session: Session, dirs: Sequence[Path], out: Path, since: Optional[datetime] = None, until: Optional[datetime] = None,

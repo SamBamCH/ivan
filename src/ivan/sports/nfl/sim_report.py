@@ -278,6 +278,51 @@ def simulation_section(full_scores: np.ndarray, full_payouts: np.ndarray, full_r
     }
 
 
+def conditioned_section(ev, roi: np.ndarray, own: np.ndarray, pool, meta: Dict[int, dict], entry_fee: float, ladder,
+                        conservation: dict, score_pct: np.ndarray, cash_line: np.ndarray, winning: np.ndarray,
+                        seconds: float, missing_sample_pids: List[int], tables) -> dict:
+    """
+    The conditioned evaluation's invariants and best candidates (same keys as
+    the Monte Carlo section it replaced, plus what is new). Conservation here
+    is a model check, not an arithmetic one: with Poisson copies the field is
+    expected to collect exactly the prize pool in every world, and the gap
+    measures the Poisson-limit and binning approximations.
+    """
+    N, W = roi.shape
+    F = int(ladder.F)
+    expected_roi = ladder.pool / (F * entry_fee) - 1 if F and entry_fee else None
+    field_roi = float((own[:, None] * ev.pay).sum() / (own.sum() * W * entry_fee) - 1) if own.sum() > 0 else None
+    per: List[dict] = []
+    for i, lid in enumerate(pool.lineup_ids):
+        per.append({"lineup_id": int(lid), "dupes": _f(1.0 + own[i]), "expected_copies": _f(own[i]),
+                    "cash_pct": _f(ev.cash[i].mean()), "avg_roi": _f(roi[i].mean()),
+                    "mean_rank": _f(ev.rank[i].mean()), "mean_score": _f(pool.m[i].mean()), "score_sd": _f(pool.s[i]),
+                    "win_pct": _f(ev.win[i]), "roi_se": _f(roi[i].std() / math.sqrt(W))})
+    for r in per:
+        r["players"] = [_label(meta, p) for p in pool.players.get(r["lineup_id"], [])]
+    rois = np.array([r["avg_roi"] for r in per], dtype=float)
+    cash = np.array([r["cash_pct"] for r in per], dtype=float)
+    return {
+        "method": "conditioned", "n_sims": int(W), "entries": F, "seconds": _f(seconds), "workers": 1,
+        "conservation": {"expected_pool": _f(conservation["expected_pool"]), "max_abs_error": _f(conservation["max_abs_error"]),
+                         "sims_off": int(conservation["sims_off"]), "rel_error_mean": _f(conservation["rel_error_mean"]),
+                         "rel_error_max": _f(conservation["rel_error_max"])},
+        "tie_anomalies": 0, "payouts_above_top_prize": 0,
+        "field_roi": _f(field_roi), "expected_field_roi": _f(expected_roi),
+        "expected_cashing_entries": _f(float((own * ev.cash.mean(axis=1)).sum())), "paid_places": int(ladder.paid_places),
+        "expected_tied_winners": _f(float((own * ev.win).sum())),
+        "entry_score": _stats(np.repeat(pool.m.mean(axis=1), 1)),
+        "winning_score": _stats(winning), "cash_line_score": _stats(cash_line),
+        "lineup_roi": _stats(rois), "lineup_cash_pct": _stats(cash),
+        "lineups_positive_roi": int((rois > 0).sum()),
+        "roi_se_median": _f(float(np.median([r["roi_se"] for r in per]))) if per else None,
+        "exact_window_points": int(tables.n_top), "copies_classes": int(len(tables.own_vals)),
+        "top_by_roi": sorted(per, key=lambda r: -(r["avg_roi"] or -9))[:TOP_N],
+        "top_by_cash": sorted(per, key=lambda r: -(r["cash_pct"] or 0))[:TOP_N],
+        "players_without_samples": [{"id": p, "name": meta.get(p, {}).get("name", f"#{p}")} for p in missing_sample_pids],
+    }
+
+
 def correlation_section(raw: Dict[int, np.ndarray], diag: dict, meta: Dict[int, dict]) -> dict:
     """Compare what the correlated sampler drew against the targets it was given."""
     n = int(diag.get("n_samples") or 0)
@@ -423,7 +468,13 @@ def build_checks(report: dict) -> List[dict]:
     c, f, p, s, r = (report.get(k, {}) for k in ("contest", "field", "payouts", "simulation", "correlation"))
 
     # --- field
-    if f:
+    if f and c.get("method") == "conditioned":
+        ec = f.get("expected_copies") or {}
+        add("ok", "Field", f"the real field of {c.get('total_entries', 0):,} entries, every candidate weighted by its expected copies "
+                           f"(p50 {ec.get('p50', 0):.1f}, p90 {ec.get('p90', 0):.1f}, max {ec.get('max', 0):.0f}; "
+                           f"{ec.get('lineups_with_copies_ge_1', 0):,} candidates expected at least once); "
+                           f"the {f['entries']:,}-entry sample below only illustrates it")
+    elif f:
         add("ok" if f["entries"] == c.get("simulated_size") else "bad", "Field size",
             f"{f['entries']:,} entries sampled, {c.get('simulated_size', 0):,} requested")
         add("ok", "Field coverage",
@@ -464,7 +515,30 @@ def build_checks(report: dict) -> List[dict]:
             + (f", {p['ranks_beyond_field']} beyond the field" if p["ranks_beyond_field"] else ""))
 
     # --- simulation
-    if s:
+    if s and s.get("method") == "conditioned":
+        cons = s["conservation"]
+        rel = abs(cons.get("rel_error_mean") or 0)
+        add("ok" if rel <= 0.02 else ("warn" if rel <= 0.05 else "bad"), "Prize pool conservation",
+            f"the field is expected to collect {1 + (cons.get('rel_error_mean') or 0):.1%} of the ${cons['expected_pool']:,.0f} pool "
+            f"(worst world {cons.get('rel_error_max') or 0:.1%} off); exact in the model, so the gap is the Poisson-limit and binning error")
+        if s.get("expected_cashing_entries") is not None and s.get("paid_places"):
+            d = s["expected_cashing_entries"] / s["paid_places"] - 1
+            add("ok" if -0.02 <= d <= 0.05 else ("warn" if -0.05 <= d <= 0.10 else "bad"), "Paid places conservation",
+                f"{s['expected_cashing_entries']:,.0f} entries expected in the money vs {s['paid_places']:,} paid places "
+                f"(a duplicated lineup straddling the cash line cashes as a whole, so slightly more is normal)")
+        if s["expected_field_roi"] is not None and s["field_roi"] is not None:
+            d = abs(s["field_roi"] - s["expected_field_roi"])
+            add("ok" if d <= 0.02 else ("warn" if d <= 0.05 else "bad"), "Field ROI equals the rake",
+                f"expected ROI across the whole field {s['field_roi']:+.2%}, the rake says {s['expected_field_roi']:+.2%}")
+        add("info", "Ties at the top", f"{s.get('expected_tied_winners') or 0:.1f} entries expected tied for first "
+                                        f"(the winning lineup's copies); per-lineup ROI standard error median {(s.get('roi_se_median') or 0):+.2f}")
+        if s["players_without_samples"]:
+            names = ", ".join(x["name"] for x in s["players_without_samples"][:8])
+            add("bad", "Players without samples", f"{len(s['players_without_samples'])} players in the field have no projection "
+                                                 f"(scored as zero): {names}")
+        else:
+            add("ok", "Player samples", "every player in the field has a sampled score")
+    elif s:
         cons = s["conservation"]
         add("ok" if (cons["max_abs_error"] or 0) <= 0.01 else "bad", "Payout conservation",
             f"every simulation pays out ${cons['expected_pool']:,.2f}; largest deviation ${cons['max_abs_error'] or 0:.4f}"
@@ -584,7 +658,13 @@ def format_summary(report: dict) -> str:
                      f"pays {o['paid_places']:,}/{o['field_size']:,} ({(o['paid_share'] or 0):.1%}) -> "
                      f"{sc['paid_places']:,}/{sc['field_size']:,} ({(sc['paid_share'] or 0):.1%}), "
                      f"1st ${o['first_place']:,.0f} -> ${sc['first_place']:,.2f} (avg of real top {p['first_place_represents']})")
-    if s:
+    if s and s.get("method") == "conditioned":
+        c = s["conservation"]
+        lines.append(f"  eval:     {s['n_sims']} worlds, field collects {1 + (c.get('rel_error_mean') or 0):.1%} of the pool, field ROI {s['field_roi']:+.1%} "
+                     f"(rake {s['expected_field_roi']:+.1%}), winning score p50 {s['winning_score'].get('p50', 0):.1f}, "
+                     f"cash line p50 {s['cash_line_score'].get('p50', 0):.1f}, best lineup ROI {s['lineup_roi'].get('max', 0):+.1%}, "
+                     f"{s['lineups_positive_roi']} lineups +EV, ROI se median {(s.get('roi_se_median') or 0):.2f}")
+    elif s:
         lines.append(f"  sim:      payout error ${s['conservation']['max_abs_error'] or 0:.4f}, field ROI {s['field_roi']:+.1%} "
                      f"(expected {s['expected_field_roi']:+.1%}), winning score p50 {s['winning_score'].get('p50', 0):.1f}, "
                      f"cash line p50 {s['cash_line_score'].get('p50', 0):.1f}, best lineup ROI {s['lineup_roi'].get('max', 0):+.1%}")

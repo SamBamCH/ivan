@@ -88,12 +88,15 @@ def build_sd_calibration(session, out_dir: Path, since: str = SD_SINCE, until: O
     until = until or date.today().isoformat()
     scored = BP.scored_projections(session, since, until, positions)
     factors, counts, skipped = BP.sd_calibration_factors(scored, positions)
+    powers = BP.sd_calibration_powers(scored, positions)
     for pos, n in skipped.items():
         log(f"   sd calibration: {pos} has {n} scored rows (need {BP.MIN_ROWS}); factor unchanged")
-    cal = write_sd_calibration(factors, counts, (since, until), model_dir=out_dir)
+    cal = write_sd_calibration(factors, counts, (since, until), model_dir=out_dir, powers=powers)
     log("   sd calibration: " + " ".join(f"{p} x{f:.2f} (n={counts[p]})" for p, f in sorted(factors.items()))
+        + ("; power laws " + " ".join(f"{p} {v['a']:.2f}*sd^{v['b']:.2f}" for p, v in sorted(powers.items())) if powers else
+           "; no position has enough rows for a power law")
         + f"; all factors now {cal['factors']}")
-    return {"since": since, "until": until, "factors": cal["factors"], "n": counts, "skipped": skipped}
+    return {"since": since, "until": until, "factors": cal["factors"], "power": cal.get("power", {}), "n": counts, "skipped": skipped}
 
 
 def build_ownership_calibration(session, out_dir: Path, cutoff: Optional[str] = None, min_n: int = 30, log: Log = print) -> dict:

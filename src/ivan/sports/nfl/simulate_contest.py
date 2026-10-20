@@ -1,14 +1,26 @@
 # src/ivan/sports/nfl/simulate_contest.py
 """
-Simulate one DraftKings contest against the generated candidate field.
+Simulate or evaluate one DraftKings contest for every candidate lineup.
 
-    field   sample_field() draws an opposing field of `field_cap` entries from
-            the candidate lineups, with duplication learned from history
-    scores  one correlated draw per simulation for every player on the slate
-    payouts the contest's real payout table scaled to the simulated field size
-    results per unique lineup: fpts / payout / ROI / rank per simulation,
-            aggregated over its copies, replacing any earlier results for the
-            contest, plus a ContestSimReport documenting the run (see sim_report)
+Two methods, picked by config `sim.method` (default "montecarlo"):
+
+montecarlo  the sampled field of `field_cap` entries, one correlated draw per
+            simulation for every player, ranks and payouts counted, the payout
+            table scaled to the sampled field (simulate_one_contest_mc).
+conditioned the evaluation below, in the lab until its count model handles a
+            field whose lineups are deterministic given the world:
+
+    worlds  one draw per world of the slate's game latents (team points), shared
+            by every contest of the run (ivan.sports.nfl.conditioned.build_world_model)
+    field   the field sampler's lineup weights give each candidate its expected
+            copies in the contest's real field; nothing is sampled
+    payouts the contest's real payout table, unscaled
+    results per candidate lineup: expected payout / ROI / rank / cash probability
+            in every world, computed in closed form from the lineup's conditional
+            score distribution against the field's (conditioned.evaluate_contest),
+            plus one realized draw per world for the calibration tests; the rows
+            replace any earlier results for the contest, and a ContestSimReport
+            documents the run (see sim_report)
 """
 from __future__ import annotations
 
@@ -18,6 +30,7 @@ import os
 import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List
@@ -28,10 +41,13 @@ from sqlalchemy.orm import Session
 
 from ivan.core.utils import coerce_player_ids as _coerce_player_ids
 from ivan.core.seed import seed_for
+from ivan.database.session import add_missing_columns
 from ivan.sports.common.payouts import scale_payouts_by_rank_average
 from ivan.sports.nfl import sim_report
+from ivan.sports.nfl.conditioned import (Ladder, LineupPool, WorldModel, build_lineup_pool, build_world_model, contest_tables,
+                                         describe_world_model, evaluate_contest, field_quantiles, lineup_moments, pool_conservation)
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
-from ivan.sports.nfl.models import ContestPayout, HistoricalContest, Lineup, LineupSimulationResult
+from ivan.sports.nfl.models import ContestPayout, HistoricalContest, Lineup, LineupSimulationResult, NFLBase
 from ivan.sports.nfl.paths import DIAG_DIR
 from ivan.sports.nfl.sample_field import sample_field
 
@@ -123,7 +139,193 @@ def _player_samples_matrix(session: Session, pid_to_idx: Dict[int, int], n_sampl
     return P, raw, diag, missing
 
 
+
+# ------------------------------------------------------------------------- samples (diagnostic draw)
+def _player_samples(session: Session, pids, n_samples: int, model_dir: str | Path | None = None, seed: int | None = None):
+    """
+    One correlated draw per world for the correlation report and the players'
+    sampled quantiles in the artifact. The contest itself is not scored from
+    these draws (see simulate_one_contest); they document what the game model
+    says about each player.
+    """
+    raw, diag = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples, seed=seed,
+                                                     return_diagnostics=True)
+    missing = [pid for pid in pids if not isinstance(raw.get(pid), np.ndarray) or raw[pid].size == 0]
+    return raw, diag, missing
+
+
+# ------------------------------------------------------------------------- the slate's worlds
+@dataclass
+class SlateWorlds:
+    """The world model and the candidate pool, shared by every contest of a run."""
+    world: WorldModel
+    pool: LineupPool
+    n_worlds: int
+    seed: int
+
+    @classmethod
+    def build(cls, session: Session, n_worlds: int, seed: int | None = None, log=print) -> "SlateWorlds":
+        if seed is None:
+            seed = seed_for("sim/worlds")
+        if seed is None:                                            # no IVAN_SEED: draw one and record it with the run
+            seed = int(np.random.SeedSequence().entropy % (2 ** 32))
+        seed = int(seed)
+        t0 = time.time()
+        world = build_world_model(session, n_worlds=n_worlds, seed=seed)
+        lineups = {int(lid): _coerce_player_ids(j) for lid, j in session.query(Lineup.id, Lineup.player_ids_list).all()}
+        pool = build_lineup_pool(world, lineups)
+        pool.m, pool.s = lineup_moments(world, pool.L)
+        log(describe_world_model(world))
+        log(f"pool: {len(pool.lineup_ids):,} candidate lineups, conditional sd {pool.s.min():.1f}-{pool.s.max():.1f} "
+            f"({time.time() - t0:.1f}s)" + (f"; {len(pool.missing_players)} player id(s) in lineups have no model row" if pool.missing_players else ""))
+        return cls(world=world, pool=pool, n_worlds=int(n_worlds), seed=seed)
+
+
 # ------------------------------------------------------------------------- simulate
+def simulate_one_contest_conditioned(
+    session: Session,
+    contest_id: int,
+    contest_name: str,
+    config_path: str,
+    field_cap: int = 0,
+    num_sims: int = 1000,
+    use_classic_dupes: bool = False,
+    artifact_dir: str | Path | None = None,
+    worlds: SlateWorlds | None = None,
+) -> dict:
+    """
+    Evaluate a contest end to end and persist the per-lineup results and the
+    run's report. Returns the report (see sim_report for its layout).
+
+    The contest is the real field (its full size and its real payout table):
+    the field sampler's lineup weights give every candidate its expected
+    copies, the slate's worlds (ivan.sports.nfl.conditioned) give every
+    candidate a conditional score distribution in each world, and the
+    conditioned evaluation turns the two into each lineup's expected payout,
+    cash probability and rank per world, plus one realized draw per world for
+    the calibration tests. `field_cap` is accepted for the old call sites and
+    ignored: nothing is sampled or scaled any more. With `artifact_dir` the
+    run's assumptions are also written there for the validation layer; a
+    failure to write them never sinks the evaluation.
+    """
+    t0 = time.time()
+    cfg = json.load(open(config_path, encoding="utf-8"))
+    contest = session.query(HistoricalContest).filter_by(contest_id=contest_id).one()
+    mode = "showdown" if contest.contest_type == "Showdown Captain Mode" else "classic"
+    F = int(contest.total_entries)
+    entry_fee = float(contest.entry_fee)
+    n_candidates = session.query(Lineup).count()
+    if worlds is None:
+        worlds = SlateWorlds.build(session, n_worlds=num_sims)
+    pool, world = worlds.pool, worlds.world
+    W = worlds.n_worlds
+
+    report: dict = {
+        "version": sim_report.REPORT_VERSION,
+        "contest": {"id": contest_id, "name": contest_name, "mode": mode, "contest_type": contest.contest_type,
+                    "entry_fee": entry_fee, "total_entries": F, "field_cap": None, "simulated_size": F,
+                    "num_sims": W, "use_classic_dupes": use_classic_dupes, "candidates": n_candidates,
+                    "start": contest.date, "started_at": datetime.now(), "method": "conditioned",
+                    "config": {k: cfg.get(k) for k in ("field", "randomness") if k in cfg}},
+    }
+
+    # 1) the field: every candidate's expected copies from the sampler's weights (the sampled counts only feed the report)
+    counts_by_lineup, meta = sample_field(session, field_size=min(F, 10_000), config=cfg, mode=mode, contest_id=contest_id,
+                                          use_classic_dupes=use_classic_dupes, total_entries=F, entry_fee=entry_fee)
+    sampler_arrays = meta.pop("_arrays", None) or {}
+    if "lineup_id" not in sampler_arrays or "combined_weights" not in sampler_arrays:
+        raise RuntimeError(f"field sampler returned no lineup weights for contest {contest_id} ({meta.get('error', 'no lineups?')})")
+    w_by_lid = dict(zip(np.asarray(sampler_arrays["lineup_id"]).tolist(), np.asarray(sampler_arrays["combined_weights"], dtype=float).tolist()))
+    weights = np.asarray([w_by_lid.get(int(l), 0.0) for l in pool.lineup_ids], dtype=np.float64)
+    if weights.sum() <= 0:
+        raise RuntimeError(f"field sampler weights do not cover the candidate pool for contest {contest_id}")
+    own = weights / weights.sum() * F                                   # expected copies of each candidate in the field
+    u_lids = [int(l) for l in pool.lineup_ids]
+    pid_lists_by_lid = {lid: pool.players[lid] for lid in u_lids}
+    unique_pids = sorted({p for lid in u_lids for p in pid_lists_by_lid[lid]})
+    players = sim_report.player_meta(session, unique_pids)
+
+    # 2) the real payout table
+    tiers = _payout_tiers(session, contest_id)
+    pay_by_rank = np.zeros(F)
+    for t in tiers:
+        lo, hi = max(1, int(t["min"])), min(F, int(t["max"]))
+        if hi >= lo:
+            pay_by_rank[lo - 1:hi] = float(t["amount"])
+    ladder = Ladder(pay_by_rank, F)
+    scaled = {r: float(pay_by_rank[r - 1]) for r in range(1, F + 1) if pay_by_rank[r - 1] > 0}
+    report["payouts"] = sim_report.payout_section(tiers, scaled, entry_fee, F, F)
+    paid_places = ladder.paid_places
+
+    # 3) the diagnostic draw: correlation report and player quantiles (the contest is not scored from it)
+    sim_seed = seed_for(f"sim/{contest_id}")
+    raw, diag, missing = _player_samples(session, unique_pids, min(W, 2000), seed=sim_seed)
+    players.update(sim_report.player_meta(session, [p for g in diag["games"] for p in g["player_ids"]]
+                                          + [d["id"] for d in diag["independent"]]))
+    report["field"] = sim_report.field_section(counts_by_lineup, pid_lists_by_lid, players, meta, n_candidates)
+    report["field"]["expected_copies"] = {"sum": float(own.sum()), "max": float(own.max()), "p50": float(np.median(own)),
+                                          "p90": float(np.percentile(own, 90)), "lineups_with_copies_ge_1": int((own >= 1).sum())}
+    report["correlation"] = sim_report.correlation_section(raw, diag, players)
+
+    # 4) the conditioned evaluation
+    t_sim = time.time()
+    rng = np.random.default_rng(seed_for(f"sim/draw/{contest_id}"))
+    tables = contest_tables(pool.m, pool.s, own, ladder)
+    ev = evaluate_contest(pool.m, pool.s, own, ladder, tables, rng=rng)
+    roi = ev.roi(entry_fee)
+    roi_draw = ev.roi_draw(entry_fee)
+    conservation = pool_conservation(ev, own, ladder)
+    score_pct, cash_line, winning = field_quantiles(tables.lam, tables.grid, F, paid_places)
+    report["simulation"] = sim_report.conditioned_section(
+        ev, roi, own, pool, players, entry_fee, ladder, conservation, score_pct, cash_line, winning,
+        time.time() - t_sim, missing, tables)
+    report["worlds"] = {"n": W, "seed": worlds.seed, "teams": list(world.teams),
+                        "team_points": np.round(world.team_points, 1).tolist(),
+                        "games": [g for g in world.games if "teams" in g]}
+
+    # 5) persist per-lineup rows, replacing earlier results for this contest
+    session.query(LineupSimulationResult).filter(LineupSimulationResult.contest_id == contest_id).delete(synchronize_session=False)
+    now = datetime.utcnow()
+    copies = 1.0 + own
+    for a in range(0, len(u_lids), 1000):
+        rows = []
+        for i in range(a, min(a + 1000, len(u_lids))):
+            rows.append(dict(lineup_id=u_lids[i], contest_id=contest_id, contest_name=contest_name, created_at=now,
+                             fpts=np.round(pool.m[i], 1).tolist(),                      # conditional mean score per world
+                             payout=np.round(ev.pay[i] * copies[i], 2).tolist(),        # expected prize, total over the lineup's copies
+                             roi=np.round(roi[i], 4).tolist(),                           # expected ROI of one entry per world
+                             rank=np.round(ev.rank[i], 0).tolist(),                      # expected rank per world
+                             cash=np.round(ev.cash[i], 4).tolist(),                      # P(cash) per world
+                             roi_draw=np.round(roi_draw[i], 3).tolist()))                # one realized ROI per world
+        session.bulk_insert_mappings(LineupSimulationResult, rows)
+
+    report["contest"]["finished_at"] = datetime.now()
+    report["contest"]["seconds"] = time.time() - t0
+    report["checks"] = sim_report.build_checks(report)
+    report["check_counts"] = sim_report.summarise_checks(report["checks"])
+    sim_report.save_report(session, report)
+    session.commit()
+
+    if artifact_dir is not None:
+        try:
+            from ivan.core.artifacts import contest_artifact_paths
+            from ivan.sports.nfl.run_artifacts import build_conditioned_artifact, write_sim_artifact
+            arrays, art_meta = build_conditioned_artifact(
+                contest={"id": contest_id, "name": contest_name, "mode": mode, "contest_type": contest.contest_type,
+                         "entry_fee": entry_fee, "total_entries": F, "field_cap": None, "start": contest.date,
+                         "candidates": n_candidates},
+                lineup_ids=pool.lineup_ids, pid_lists_by_lid=pid_lists_by_lid, own=own, ev=ev, roi=roi, mean_score=pool.m.mean(axis=1),
+                lineup_sd=pool.s, raw_samples=raw, players=players, pay_by_rank=pay_by_rank, tiers=tiers, paid_places=paid_places,
+                pool_in_field=ladder.pool, score_pct=score_pct, cash_line=cash_line, winning_score=winning,
+                sampler_arrays=sampler_arrays, sampler_meta=meta, seed=worlds.seed, world=world)
+            npz_path, json_path = contest_artifact_paths(Path(artifact_dir), contest_id)
+            write_sim_artifact(npz_path, json_path, arrays, art_meta)
+            report["artifact"] = str(npz_path)
+        except Exception as e:                      # never sink a run over its paper trail
+            print(f"  WARNING: could not write the run artifact for contest {contest_id}: {type(e).__name__}: {e}")
+    return sim_report.jsonable(report)
+
+
 def _simulate_chunk(start: int, end: int, lineup_ix: List[List[int]], P_chunk: np.ndarray,
                     entry_fee: float, scaled_payouts: Dict[int, float]) -> Dict[str, object]:
     """
@@ -185,7 +387,7 @@ def _simulate_chunk(start: int, end: int, lineup_ix: List[List[int]], P_chunk: n
             "rois": rois.astype(np.float32), "ranks": ranks, "stats": stats}
 
 
-def simulate_one_contest(
+def simulate_one_contest_mc(
     session: Session,
     contest_id: int,
     contest_name: str,
@@ -196,8 +398,10 @@ def simulate_one_contest(
     artifact_dir: str | Path | None = None,
 ) -> dict:
     """
-    Simulate a contest end to end and persist the per-lineup results and the
-    run's report. Returns the report (see sim_report for its layout). With
+    The Monte Carlo contest simulation (the live default): the sampled field of
+    `field_cap` entries, one correlated draw per simulation, ranks and payouts
+    counted, the payout table scaled to the sampled field. Persists the
+    per-lineup results and the run's report, returns the report. With
     `artifact_dir` the run's assumptions are also written there for the
     validation layer (ivan.sports.nfl.run_artifacts); a failure to write
     them never sinks the simulation.
@@ -284,7 +488,9 @@ def simulate_one_contest(
                          fpts=full_scores[:, a:b].mean(axis=1).tolist(),
                          payout=full_payouts[:, a:b].sum(axis=1).tolist(),     # total over the lineup's copies
                          roi=full_rois[:, a:b].mean(axis=1).tolist(),          # mean ROI per entry
-                         rank=full_ranks[:, a:b].mean(axis=1).tolist()))
+                         rank=full_ranks[:, a:b].mean(axis=1).tolist(),
+                         cash=(full_payouts[:, a] > 0).astype(float).tolist(),  # cashed in that simulation (one copy)
+                         roi_draw=full_rois[:, a:b].mean(axis=1).tolist()))     # a counted outcome is its own realization
     session.bulk_insert_mappings(LineupSimulationResult, rows)
 
     report["contest"]["finished_at"] = datetime.now()
@@ -313,6 +519,33 @@ def simulate_one_contest(
         except Exception as e:                      # never sink a simulation over its paper trail
             print(f"  WARNING: could not write the run artifact for contest {contest_id}: {type(e).__name__}: {e}")
     return sim_report.jsonable(report)
+
+
+
+
+# ------------------------------------------------------------------------- dispatch
+SIM_METHODS = ("montecarlo", "conditioned")
+DEFAULT_SIM_METHOD = "montecarlo"
+
+
+def sim_method(cfg: dict) -> str:
+    """config `sim.method`: "montecarlo" (the live default) or "conditioned" (ivan.sports.nfl.conditioned, lab use)."""
+    m = str(((cfg or {}).get("sim") or {}).get("method") or DEFAULT_SIM_METHOD).strip().lower()
+    if m not in SIM_METHODS:
+        raise ValueError(f"unknown sim method {m!r}; expected one of {SIM_METHODS}")
+    return m
+
+
+def simulate_one_contest(session: Session, contest_id: int, contest_name: str, config_path: str, field_cap: int = 10000,
+                         num_sims: int = 1000, use_classic_dupes: bool = False, artifact_dir: str | Path | None = None,
+                         worlds: "SlateWorlds | None" = None) -> dict:
+    """One contest by the configured method (sim_method)."""
+    cfg = json.load(open(config_path, encoding="utf-8"))
+    if sim_method(cfg) == "conditioned":
+        return simulate_one_contest_conditioned(session, contest_id, contest_name, config_path, field_cap, num_sims,
+                                                use_classic_dupes, artifact_dir, worlds)
+    return simulate_one_contest_mc(session, contest_id, contest_name, config_path, field_cap or 10000, num_sims,
+                                   use_classic_dupes, artifact_dir)
 
 
 # ----------------------------------------------------------------------------- the field alone
@@ -393,14 +626,25 @@ def simulate_entries(session, entries_csv, config_path, n_sims: int, field_cap: 
     """
     contests = contests_in_entries(entries_csv)
     art = Path(artifact_dir) if artifact_dir is not None else None
-    log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}"
-        + (f"; run artifacts -> {art}" if art is not None else ""))
+    method = sim_method(json.load(open(config_path, encoding="utf-8")))
+    if method == "conditioned":
+        log(f"Evaluating {len(contests)} contest(s) over {n_sims} worlds (conditioned: expected payout per world, real field size and payouts)"
+            + (f"; run artifacts -> {art}" if art is not None else ""))
+    else:
+        log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}"
+            + (f"; run artifacts -> {art}" if art is not None else ""))
     out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}}
+    try:
+        add_missing_columns(session.get_bind(), NFLBase.metadata)        # cash / roi_draw on an older database
+    except Exception as e:   # noqa: BLE001
+        log(f"WARNING: could not add missing columns: {e}")
+    worlds = SlateWorlds.build(session, n_worlds=n_sims, log=log) if method == "conditioned" else None
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         log(f"--- {i}/{len(contests)} ---")
         try:
             report = simulate_one_contest(session=session, contest_id=int(cid), contest_name=name, config_path=str(config_path),
-                                          field_cap=field_cap, num_sims=n_sims, use_classic_dupes=use_classic_dupes, artifact_dir=art)
+                                          field_cap=field_cap, num_sims=n_sims, use_classic_dupes=use_classic_dupes, artifact_dir=art,
+                                          worlds=worlds)
             out["reports"][int(cid)] = report
             out["simulated"] += 1
             log(sim_report.format_summary(report))

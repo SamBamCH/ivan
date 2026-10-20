@@ -131,12 +131,19 @@
       <label>Repeats per contest <input type="number" name="repeats" value="{{ P.repeats or 1 }}" min="1" max="500" style="width:80px"></label>
       <label>Workers <input type="number" name="workers" value="{{ P.workers or 3 }}" min="1" max="8" style="width:60px"></label>
       <label>Lineups per slate <input type="number" name="lineups" value="{{ P.lineups or 3000 }}" min="100" step="100" style="width:90px"></label>
-      <label>Simulations <input type="number" name="sims" value="{{ P.sims or 500 }}" min="50" step="50" style="width:80px"></label>
-      <label>Field cap <input type="number" name="field_cap" value="{{ P.field_cap or 5000 }}" min="500" step="500" style="width:80px"></label>
+      <label>Worlds <input type="number" name="sims" value="{{ P.sims or 500 }}" min="50" step="50" style="width:80px" title="draws of the game latents per slate; the conditioned sim needs no more than 500-1000"></label>
+      <label>Field cap <input type="number" name="field_cap" value="{{ P.field_cap or 5000 }}" min="500" step="500" style="width:80px" title="ignored by the conditioned sim (real field size and payouts are used)"></label>
       <label>Seed <input type="number" name="seed" value="{{ P.seed or 0 }}" style="width:70px"></label>
+      <label>Chooser <select name="method"><option value="greedy" {% if P.method != 'portfolio' %}selected{% endif %}>greedy</option><option value="portfolio" {% if P.method == 'portfolio' %}selected{% endif %}>portfolio</option></select></label>
+      <label>Bankroll × fees <input type="number" name="bankroll" value="{{ P.bankroll or 3 }}" min="1.05" step="0.5" style="width:70px"></label>
+      <label>Cash % weight <input type="number" name="cash_pct" value="{{ P.cash_pct if P.cash_pct is not none else 0.5 }}" min="0" max="1" step="0.05" style="width:70px"></label>
+      <label>ROI weight <input type="number" name="avg_roi_win" value="{{ P.avg_roi_win if P.avg_roi_win is not none else 0.5 }}" min="0" max="1" step="0.05" style="width:70px"></label>
+      <label>Diversity λ <input type="number" name="diversity_lambda" value="{{ P.diversity_lambda if P.diversity_lambda is not none else 0.1 }}" min="0" max="2" step="0.05" style="width:70px"></label>
     </div>
     <div class="kv" style="margin-top:10px">
       <b>Models</b><span>{{ ('as of ' ~ models.cutoff) if models.cutoff else 'live' }}{% if models.fallback %} <span class="neg">no as-of version precedes {{ run.since }}; the live models have seen these slates (build one in step 1)</span>{% endif %}</span>
+      <b>Weights</b><span>what "quality" means for the greedy chooser: cash % and ROI weights blend the two sim features (each scaled 0–1 across the candidates), λ scales the diversity bonus; the portfolio chooser ignores all three and uses the bankroll. The same weights go to every contest of the run.</span>
+      <b>Chooser</b><span><b>greedy</b> picks lineup by lineup on quality + diversity (what the live runs used so far); <b>portfolio</b> picks the book that maximises its log return summed over the simulated worlds, bankroll = the scale in multiples of the contest's fees. Everything before the choose stage is identical, so two runs that differ only here compare the choosers.</span>
       <b>Repeats</b><span>each repeat re-generates the pool, re-simulates and re-chooses with seed + k; the projection is fitted once per slate. 100 repeats of a showdown slate take about an hour per worker.</span>
     </div>
     <div class="actions" style="margin-top:12px"><button class="small">Run the backtest</button></div>
@@ -182,7 +189,7 @@
 </div>
 {% endif %}
 <div class="card">
-  <h2>{{ run.name }} <span class="muted small">{{ run.since }} .. {{ run.until }} · {{ view.slates_ok }}/{{ view.slates_total }} slates · {{ view.repeats }} repeats · models {{ view.models|join(', ') or '-' }}{% if view.progress and view.progress.running %} · running{% endif %}</span></h2>
+  <h2>{{ run.name }} <span class="muted small">{{ run.since }} .. {{ run.until }} · {{ view.slates_ok }}/{{ view.slates_total }} slates · {{ view.repeats }} repeats · chooser {{ (run.params or {}).method or 'greedy' }} · models {{ view.models|join(', ') or '-' }}{% if view.progress and view.progress.running %} · running{% endif %}</span></h2>
   {% if view.failed %}<p class="neg small">{% for f in view.failed %}{{ f.lock }} {{ f.slate }}: {{ f.error }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
   {% set C = V.summary.confidence if V and V.summary.confidence else None %}
   <div style="display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; margin:6px 0 10px">

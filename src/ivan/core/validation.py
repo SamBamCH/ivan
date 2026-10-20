@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Sequence
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -190,6 +192,11 @@ def _error_block(df: pd.DataFrame, pit_col: str = "pit") -> dict:
         if oks.sum() >= 5:
             out["sd_ratio"] = _f((a[oks] - p[oks]).std() / sd[oks].mean())     # > 1: the model's sd is too small
             out["z_abs_mean"] = _f(np.abs((a[oks] - p[oks]) / sd[oks]).mean())  # 0.80 for a normal
+            if oks.sum() >= 40:                                                  # the same ratio by projected-sd quartile
+                q = pd.qcut(pd.Series(sd[oks]), 4, labels=False, duplicates="drop").values
+                err_s, sd_s = (a[oks] - p[oks]), sd[oks]
+                out["sd_ratio_by_level"] = [{"proj_sd": _f(sd_s[q == k].mean()), "ratio": _f(np.sqrt((err_s[q == k] ** 2).mean()) / sd_s[q == k].mean()),
+                                             "n": int((q == k).sum())} for k in sorted(set(q.tolist()))]
     if pit_col in df.columns:
         pit = df[pit_col].values.astype(float); okp = np.isfinite(pit)
         if okp.any():
@@ -377,7 +384,57 @@ def lineup_report(lineups: pd.DataFrame) -> dict:
                    "actual_dupes": _f(pd.to_numeric(g.actual_dupes, errors="coerce").mean()) if "actual_dupes" in g.columns else None,
                    "best_rank": int(pd.to_numeric(g.actual_rank, errors="coerce").min()) if pd.to_numeric(g.actual_rank, errors="coerce").notna().any() else None})
     out["by_contest"] = by
+    if settled.any() and "sim_honest_roi" in df.columns:
+        h = num("sim_honest_roi")
+        ok = settled & h.notna()
+        if ok.any() and fee[ok].sum():
+            out["honest_roi"] = _f((fee[ok] * h[ok]).sum() / fee[ok].sum())
+            out["honest_entries"] = int(ok.sum())
+    out["luck"] = luck_summary(df)
     out["frame"] = df
+    return out
+
+
+def luck_summary(df: pd.DataFrame) -> Optional[dict]:
+    """
+    Did we get unlucky, or is the sim's spread wrong? Per contest, sim_pl_pctile is where the
+    realized P/L of the entries we played sits in the sim's own distribution of the book's P/L
+    (uniform on [0, 1] over contests when the sim is calibrated). Contests of one slate share a
+    world, so the slate-level test takes each slate's largest contest and combines those
+    percentiles (Fisher, two-sided); the mean percentile and the sim's P(loss) against the
+    share of contests we lost are reported alongside.
+    """
+    if df.empty or "sim_pl_pctile" not in df.columns:
+        return None
+    num = lambda c: pd.to_numeric(df[c], errors="coerce")
+    fee, pay = num("entry_fee"), num("actual_payout")
+    rows = []
+    for cid, g in df.groupby("contest_id"):
+        pct = pd.to_numeric(g.sim_pl_pctile, errors="coerce").dropna()
+        if pct.empty:
+            continue
+        f, p = fee[g.index], pay[g.index]
+        rows.append({"contest_id": int(cid), "slate": str(g.slate.iloc[0]) if "slate" in g.columns else "",
+                     "fees": float(f.sum()), "actual_profit": float((p - f)[p.notna()].sum()),
+                     "pctile": float(pct.iloc[0]), "p_loss": float(pd.to_numeric(g.sim_p_loss, errors="coerce").iloc[0]),
+                     "p50_roi": float(pd.to_numeric(g.sim_pl_p50_roi, errors="coerce").iloc[0])})
+    if not rows:
+        return None
+    c = pd.DataFrame(rows)
+    big = c.sort_values("fees", ascending=False).groupby("slate").head(1)
+    out = {"contests": int(len(c)), "slates": int(big.slate.nunique()), "mean_pctile": _f(c.pctile.mean()),
+           "sim_p_loss": _f(c.p_loss.mean()), "actual_loss_share": _f((c.actual_profit < 0).mean()),
+           "sim_p50_roi": _f(c.p50_roi.mean()), "slate_pctiles": [round(float(x), 3) for x in big.pctile],
+           "by_contest": rows}
+    try:
+        from scipy import stats
+        p = np.clip(big.pctile.values, 1e-4, 1 - 1e-4)
+        low = stats.combine_pvalues(p, method="fisher")[1]
+        high = stats.combine_pvalues(1 - p, method="fisher")[1]
+        out["p_value"] = _f(min(1.0, 2 * min(low, high)))
+        out["direction"] = "below" if low < high else "above"
+    except Exception:   # noqa: BLE001 - scipy missing: the percentiles still tell the story
+        out["p_value"] = None
     return out
 
 
@@ -581,6 +638,14 @@ def build_checks(players: Optional[dict] = None, field: Optional[dict] = None, l
             if sr is not None:
                 out.append(_check("pass" if 0.85 <= sr <= 1.15 else ("warn" if 0.7 <= sr <= 1.3 else "fail"), "projections", "spread",
                                   f"realized error sd / projected sd = {sr:.2f} (1 = calibrated; >1 too confident)", sr))
+            lv = o.get("sd_ratio_by_level")
+            if lv:
+                worst = max(lv, key=lambda r: abs(math.log(r["ratio"])) if r.get("ratio") else 0)
+                dev = abs(math.log(worst["ratio"])) if worst.get("ratio") else 0.0
+                out.append(_check("pass" if dev <= math.log(1.15) else ("warn" if dev <= math.log(1.3) else "fail"), "projections", "spread by level",
+                                  "realized / projected sd by projected-sd quartile: " + ", ".join(f"sd {r['proj_sd']:.1f}: x{r['ratio']:.2f}" for r in lv)
+                                  + " (a slope here means the sd model is heteroscedastic: the high-sd players lineups are built from carry "
+                                    "the error into the top of the payout ladder)", worst["ratio"]))
         own = players.get("ownership") or {}
         if own.get("n", 0) >= min_n:
             out.append(_check("pass" if own["mae"] <= 3.0 else ("warn" if own["mae"] <= 6.0 else "fail"), "ownership", "projected ownership",
@@ -618,9 +683,20 @@ def build_checks(players: Optional[dict] = None, field: Optional[dict] = None, l
                               f"the sim's field is {'too concentrated' if r > 1 else 'too flat'} at the top" if r is not None else "no dupe data", r))
     # ---- our lineups
     if lineups and lineups.get("settled"):
-        gap = (lineups.get("sim_roi") or 0) - (lineups.get("actual_roi") or 0)
+        honest = lineups.get("honest_roi")
+        claim = honest if honest is not None else (lineups.get("sim_roi") or 0)
+        gap = claim - (lineups.get("actual_roi") or 0)
         out.append(_check("pass" if abs(gap) <= 0.25 else ("warn" if abs(gap) <= 0.75 else "fail"), "chooser", "sim ROI vs actual ROI",
-                          f"sim {lineups['sim_roi']:+.0%} vs actual {lineups['actual_roi']:+.0%} over {lineups['settled']} entries (${lineups['fees']:.0f})", gap))
+                          (f"honest (cross-fit) {honest:+.0%}, in-sample {lineups['sim_roi']:+.0%}" if honest is not None else f"sim {lineups['sim_roi']:+.0%}")
+                          + f" vs actual {lineups['actual_roi']:+.0%} over {lineups['settled']} entries (${lineups['fees']:.0f})", gap))
+        lk = lineups.get("luck")
+        if lk and lk.get("contests"):
+            pv = lk.get("p_value")
+            status = "pass" if pv is None or pv >= 0.05 else ("warn" if pv >= 0.01 else "fail")
+            out.append(_check(status, "chooser", "luck: realized P/L in the sim's own spread",
+                              f"actual at the {lk['mean_pctile']:.0%} percentile of the sim's book P/L on average over {lk['contests']} contests; "
+                              f"per slate (largest contest) {lk['slate_pctiles']}" + (f", combined p = {pv:.3f} ({lk.get('direction')} the sim's spread)" if pv is not None else "")
+                              + f"; sim P(loss) {lk['sim_p_loss']:.0%} vs lost {lk['actual_loss_share']:.0%}; sim median-world ROI {lk['sim_p50_roi']:+.0%}", pv))
         cg = (lineups.get("sim_cash_pct") or 0) - (lineups.get("actual_cash_rate") or 0)
         out.append(_check("pass" if abs(cg) <= 0.08 else ("warn" if abs(cg) <= 0.15 else "fail"), "chooser", "sim cash % vs actual",
                           f"sim {lineups['sim_cash_pct']:.0%} vs actual {lineups['actual_cash_rate']:.0%}", cg))

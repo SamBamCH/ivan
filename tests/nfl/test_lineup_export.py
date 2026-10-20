@@ -43,7 +43,7 @@ def test_entries_and_weights(tmp_path):
     w = LE.weights_resolver(prompter=prompter)
     assert w(100, "Showdown A", LE.DEFAULT_WEIGHTS)["cash_pct"] == 0.9 and asked == [100]
     w = LE.weights_resolver(flags={"cash_pct": None, "diversity_lambda": 0.3}, prompter=prompter)
-    assert w(100, "Showdown A", LE.DEFAULT_WEIGHTS) == {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.3} and asked == [100]
+    assert w(100, "Showdown A", LE.DEFAULT_WEIGHTS) == {**LE.DEFAULT_WEIGHTS, "diversity_lambda": 0.3} and asked == [100]
     w = LE.weights_resolver(overrides={"default": {"cash_pct": 0.2}, "Big": {"diversity_lambda": 0.7}, "100": {"avg_roi_win": 1.0}}, prompter=prompter)
     assert w(200, "Big", {})["diversity_lambda"] == 0.7 and w(200, "Big", {})["cash_pct"] == 0.2 and w(100, "x", {})["avg_roi_win"] == 1.0
 

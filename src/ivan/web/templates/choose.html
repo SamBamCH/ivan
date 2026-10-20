@@ -18,13 +18,22 @@
   <div class="tiles">
     <div class="tile"><div class="v">{{ '{:,}'.format(v.n_candidates) }}</div><div class="l">candidate lineups</div><div class="s">simulated for this contest, duplicates removed{% if v.n_shown < v.n_candidates %}; {{ '{:,}'.format(v.n_shown) }} drawn below{% endif %}</div></div>
     <div class="tile"><div class="v">{{ v.entries }}</div><div class="l">picks to make</div><div class="s">one per entry</div></div>
+    <div class="tile"><div class="v">{{ v.method or 'greedy' }}</div><div class="l">method</div><div class="s">{% if v.method == 'portfolio' %}log utility of the book over sim worlds, bankroll {{ v.bankroll|num(1) }}× fees{% else %}quality + diversity, lineup by lineup{% endif %}</div></div>
     <div class="tile"><div class="v">{{ v.weights.cash_pct }} / {{ v.weights.avg_roi_win }}</div><div class="l">weight on cash % / ROI</div><div class="s">what "quality" means here</div></div>
-    <div class="tile"><div class="v">{{ v['lambda'] }}</div><div class="l">diversity λ</div><div class="s">how much being different is worth</div></div>
+    <div class="tile"><div class="v">{{ v['lambda'] }}</div><div class="l">diversity λ</div><div class="s">how much being different is worth{% if v.method == 'portfolio' %} (not used by portfolio){% endif %}</div></div>
     <div class="tile"><div class="v">{{ v.chosen.roi|pct1 }} · {{ v.chosen.cash|pct1 }}</div><div class="l">picked: mean ROI · cash %</div><div class="s">quality alone would give {{ v.top.roi|pct1 }} · {{ v.top.cash|pct1 }}</div></div>
     <div class="tile"><div class="v">{{ v.overlap }} of {{ v.chosen.n }}</div><div class="l">picks that quality alone would also make</div><div class="s">the rest were taken for diversity</div></div>
+    {% if v.book and v.book.chosen %}{% set b = v.book.chosen %}{% set t = v.book.top_quality %}
+    <div class="tile"><div class="v">{{ b.p50|pct1 }} · {{ b.p5|pct1 }}</div><div class="l">book ROI: median · 5th pct over {{ b.worlds }} sim worlds</div><div class="s">quality alone: {{ t.p50|pct1 }} · {{ t.p5|pct1 }}</div></div>
+    <div class="tile"><div class="v">{{ b.p_loss|pct1 }} · {{ b.p_lose_half|pct1 }}</div><div class="l">P(book loses) · P(loses half)</div><div class="s">quality alone: {{ t.p_loss|pct1 }} · {{ t.p_lose_half|pct1 }}; between-world risk only (each world's cell is an expectation, so the realized spread is wider)</div></div>
+    {% if v.book.cross_fit %}{% set c = v.book.cross_fit %}
+    <div class="tile"><div class="v">{{ c.out_of_sample.mean|pct1 }}</div><div class="l">honest mean ROI (chosen on half the worlds, scored on the rest)</div><div class="s">in-sample {{ c.in_sample.mean|pct1 }}; selection bias {{ c.selection_bias|pct1 }}</div></div>
+    {% endif %}
+    {% endif %}
     {% if v.spread.chosen is not none %}<div class="tile"><div class="v">{{ v.spread.chosen|num(2) }} vs {{ v.spread.top_quality|num(2) }}</div><div class="l">spread of the picks vs quality-only picks</div><div class="s">mean distance between lineups, 0–1 (all candidates: {{ v.spread.all|num(2) }})</div></div>{% endif %}
   </div>
-  <p class="help">The chooser scores every candidate on <b>quality</b> (a weighted blend of its simulated cash % and ROI, each scaled 0–1 across the candidates), takes the best one, and then repeatedly takes the lineup with the highest <i>quality + λ × distance from the lineups already picked</i>. Distance is measured between the lineups' simulated point totals across all simulations: two lineups that boom and bust together are close, even if they share few players.</p>
+  {% if v.method == 'portfolio' %}<p class="help">The <b>portfolio</b> chooser judges the book, not the lineup. Every candidate carries its ROI in each simulated world; each step adds the lineup that most raises the book's log return summed over worlds, with the bankroll as the scale. A lineup that wins in worlds the book already wins adds little, so the picks spread across outcomes, and a lineup that wins two of two thousand worlds no longer outranks one that cashes steadily. The chart below still shows quality (cash % and ROI) for reference; the trace's "gain" is the utility each pick added.</p>
+  {% else %}<p class="help">The chooser scores every candidate on <b>quality</b> (a weighted blend of its simulated cash % and ROI, each scaled 0–1 across the candidates), takes the best one, and then repeatedly takes the lineup with the highest <i>quality + λ × distance from the lineups already picked</i>. Distance is measured between the lineups' simulated point totals across all simulations: two lineups that boom and bust together are close, even if they share few players.</p>{% endif %}
 </div>
 
 <p class="legend"><svg width="14" height="12"><circle cx="7" cy="6" r="3" fill="#8a8a8a" opacity=".6"/></svg> candidate lineup (darker = higher quality) &nbsp;
@@ -43,6 +52,29 @@
     <p class="caption">The same candidates laid out so that lineups whose simulated totals move together sit close ({{ (v.explained_variance[0] + v.explained_variance[1])|pct1 }} of the differences between lineups are captured by these two axes). Quality-only picks cluster in one region; the diversity term spreads the blue picks across the map so your entries don't all win and lose in the same simulations.</p>
   </div>
 </div>
+
+<div class="card">
+  <h2>How the numbers behind the picks are made</h2>
+  <p class="help">A <b>world</b> is one way the slate could go: a draw of every game's score (the team-points latents the player model is built on). The sim draws {{ v.book.chosen.worlds if v.book and v.book.chosen else 'a thousand' }} of them, and every contest on the slate sees the same worlds.</p>
+  <p class="help">Inside a world, a lineup's score is still uncertain, because its players have their own game-to-game noise, but that uncertainty is a plain bell curve with a known centre and width. The field is the sum of such curves, one per candidate lineup, each weighted by how many copies of it the field is expected to hold. So for every score the lineup could post, the sim knows how many entries it would expect ahead, how many of those are lumps of duplicated chalk, and what the ladder pays at that rank once its own copies split the prize. The cell is that payout averaged over the lineup's bell curve: <i>"in this world, this lineup is positioned for this much money."</i></p>
+  <p class="help">That is the same expectation a counted simulation would converge to, with the sampling noise integrated out (Rao–Blackwell). A lineup is no longer rewarded for the one world in two thousand where its single draw happened to finish first; it is rewarded in every world where it was genuinely close, and a chalk lineup that shares its top finishes with hundreds of copies is charged for them. Row means are expectations, so the picks are chosen on positioning, not on luck, and the <b>honest mean ROI</b> tile above should sit close to the in-sample one.</p>
+  <p class="help">Everything downstream is unchanged: the rows are stacked into the same lineup × world matrix, the greedy or portfolio method reads it exactly as before, and the distance between lineups is still measured on their per-world traces.</p>
+</div>
+
+{% if v.rooting and v.rooting.teams %}
+<div class="card">
+  <h2>What to root for</h2>
+  <p class="help">The book's expected ROI in the worlds where each team scores in a given range, and how much each team's points move the book (correlation across {{ v.rooting.worlds }} worlds). "Root for" means the book makes its money when that team scores; "root against" means it needs them held down.</p>
+  <div class="wide"><table class="compact">
+    <tr><th>Team</th><th>Lean</th><th class="num">corr</th><th class="num">pts, all worlds</th><th class="num">pts, best 10% of worlds</th>{% for b in v.rooting.bins %}<th class="num">{{ b }}</th>{% endfor %}</tr>
+    {% for t in v.rooting.teams %}
+    <tr><td><b>{{ t.team }}</b></td><td>{{ t.lean }}</td><td class="num">{{ t.corr|num(2) }}</td><td class="num">{{ t.mean|num(1) }}</td><td class="num">{{ t.best_mean|num(1) }}</td>
+      {% for b in t.bins %}<td class="num" title="{{ b.n }} worlds">{% if b.roi is not none %}{{ b.roi|pct1 }}{% else %}—{% endif %}</td>{% endfor %}</tr>
+    {% endfor %}
+  </table></div>
+  <p class="caption">Cells are the book's mean ROI in the worlds where that team's points fall in the column's range; the tooltip shows how many worlds.</p>
+</div>
+{% endif %}
 
 <div class="card">
   <h2>3 · The greedy walk</h2>

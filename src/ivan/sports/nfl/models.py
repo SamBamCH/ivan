@@ -341,11 +341,16 @@ class LineupSimulationResult(NFLBase):
     lineup_id  = Column(Integer, ForeignKey("lineup.id"), index=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    # store per-simulation arrays; each JSON list has length = num_simulations
-    fpts    = Column(JSON, nullable=False)
-    payout  = Column(JSON, nullable=False)
-    roi     = Column(JSON, nullable=False)
-    rank    = Column(JSON, nullable=False)
+    # per-world arrays; each JSON list has length = number of worlds. Under the conditioned
+    # evaluation (ivan.sports.nfl.conditioned) fpts is the lineup's conditional mean score,
+    # payout / roi / rank / cash its expected prize (over its copies) / ROI / rank / P(cash)
+    # in that world, and roi_draw one realized ROI per world for the calibration tests.
+    fpts     = Column(JSON, nullable=False)
+    payout   = Column(JSON, nullable=False)
+    roi      = Column(JSON, nullable=False)
+    rank     = Column(JSON, nullable=False)
+    cash     = Column(JSON, nullable=True)
+    roi_draw = Column(JSON, nullable=True)
 
     # attach each sim‐result row to exactly one contest
     contest_id = Column(

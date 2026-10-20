@@ -143,9 +143,17 @@
 <section id="tab-sim" hidden>
 <div class="card">
   <h2>Simulation</h2>
+  {% if s.method == 'conditioned' %}
+  <p class="muted small">{{ s.n_sims }} worlds × the real field of {{ '{:,}'.format(s.entries) }} entries in {{ s.seconds|num(1) }}s. Each world is one draw of the game scores; in it every candidate's score is a bell curve, the field is the sum of those curves weighted by expected copies, and each lineup is paid what it was positioned for (exact count distribution over the top {{ s.exact_window_points }} grid scores, Normal below). Conservation is a model check: with Poisson copies the field should collect the whole pool.</p>
+  {% else %}
   <p class="muted small">{{ s.n_sims }} simulations × {{ '{:,}'.format(s.entries) }} entries in {{ s.seconds|num(1) }}s on {{ s.workers }} workers. In every simulation the whole field is scored from one correlated draw, ranked, and paid from the scaled table; ties split the pooled prize of their rank range.</p>
+  {% endif %}
   <div class="tiles">
+    {% if s.method == 'conditioned' %}
+    <div class="tile"><div class="v">{{ (1 + (s.conservation.rel_error_mean or 0))|pct1 }}</div><div class="l">of the prize pool the field expects to collect</div><div class="s">should be 100%; worst world {{ (s.conservation.rel_error_max or 0)|pct1 }} off</div></div>
+    {% else %}
     <div class="tile"><div class="v">{{ s.conservation.max_abs_error|money(4) }}</div><div class="l">largest payout-conservation error</div><div class="s">every sim should pay exactly {{ s.conservation.expected_pool|money }}</div></div>
+    {% endif %}
     <div class="tile"><div class="v">{{ s.field_roi|pct1 }}</div><div class="l">mean ROI of the whole field</div><div class="s">expected {{ s.expected_field_roi|pct1 }} (the rake)</div></div>
     <div class="tile"><div class="v">{{ s.winning_score.p50|num(1) }}</div><div class="l">winning score (median)</div><div class="s">p10 {{ s.winning_score.p10|num(1) }} · p90 {{ s.winning_score.p90|num(1) }}</div></div>
     <div class="tile"><div class="v">{{ s.cash_line_score.p50|num(1) }}</div><div class="l">cash line (median)</div><div class="s">score of rank {{ '{:,}'.format(s.paid_places) }} · p10 {{ s.cash_line_score.p10|num(1) }} · p90 {{ s.cash_line_score.p90|num(1) }}</div></div>

@@ -6,7 +6,7 @@ write a status row per slate (ivan.core.slates).
 For every archived slate (an ingest or backfill capture) whose lock passed
 more than `grace` hours ago:
 
-  played     the contests the chooser entered (chosen_entries.choose.<stamp>.json
+  played     the contests the chooser entered (chosen_entries.choose.<stamp>.json / web chosen.choose.<stamp>.json
              in the output directories), by draft group
   public     the draft group's largest contests of the slate's mode, even when
              we did not play them (the field models learn from public fields)
@@ -83,7 +83,7 @@ def played_contests(dirs: Sequence[Path] = (OUTPUT_DIR, OUTPUT_DIR / "web"), sin
     """contest id -> stamp of the choose run that entered it (the latest), from the chooser's json outputs."""
     out: Dict[int, str] = {}
     for d in dirs:
-        for f in sorted(glob.glob(str(Path(d) / "chosen_entries.choose.*.json"))):
+        for f in sorted(glob.glob(str(Path(d) / "chosen*.choose.*.json"))):   # chosen_entries.* (CLI) and chosen.* (web)
             stamp = Path(f).name.split(".")[2]
             try:
                 when = datetime.strptime(stamp, "%Y%m%d-%H%M%S")

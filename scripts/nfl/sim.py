@@ -2,14 +2,16 @@
 """
 scripts/nfl/sim.py
 
-Simulate every contest in the entries CSV against the generated field
-(ivan.sports.nfl.simulate_contest.simulate_entries).
+Evaluate every contest in the entries CSV for every candidate lineup, world
+by world (ivan.sports.nfl.simulate_contest.simulate_entries): the slate's
+worlds are drawn once, and each contest gets every lineup's expected payout,
+ROI, rank and cash chance per world against its real field and payouts.
 
-    scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-c 10000] [-d]
+    scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-d]
 
 Each contest's per-lineup results replace any earlier ones, and a report of
-the run (field sample, payout scaling, invariants, correlation check) is
-stored for the web UI's Contests page and written to data/nfl/diagnostics/.
+the run (field, payouts, conservation checks, correlation check, the worlds)
+is stored for the web UI's Contests page and written to data/nfl/diagnostics/.
 """
 import argparse
 
@@ -25,8 +27,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Run NFL simulations for each contest in entries_csv")
     p.add_argument("--config", default=str(config_path("nfl")), help="path to nfl json config file")
     p.add_argument("--entries", default=None, help="entries CSV (default: paths.entries_csv from config, or $IVAN_ENTRIES_CSV)")
-    p.add_argument("-n", type=int, default=1000, help="Number of simulation samples per contest (default: 1000)")
-    p.add_argument("-c", type=int, default=10000, help="Field cap: largest field size to simulate (default: 10000)")
+    p.add_argument("-n", type=int, default=1000, help="Simulations per contest (worlds, under config sim.method = conditioned) (default: 1000)")
+    p.add_argument("-c", type=int, default=10000, help="Field cap: largest field size to simulate (default: 10000; unused by the conditioned method)")
     p.add_argument("-d", action="store_true", help="Allow duplicates in classic slates (default: False)")
     a = p.parse_args()
     cfg = load_config("nfl", a.config)

@@ -24,7 +24,8 @@ def prompt_float(prompt_text: str, default: float) -> float:
 
 def prompt_weights(contest_id: int, contest_name: str, last: dict) -> dict:
     print(f"\n> Contest {contest_id}: \"{contest_name}\"")
-    return {"cash_pct": prompt_float("  Weight on cash_pct?", last["cash_pct"]),
+    return {**last,
+            "cash_pct": prompt_float("  Weight on cash_pct?", last["cash_pct"]),
             "avg_roi_win": prompt_float("  Weight on avg_roi_win?", last["avg_roi_win"]),
             "diversity_lambda": prompt_float("  Diversity lambda?", last["diversity_lambda"])}
 
@@ -38,13 +39,17 @@ def main() -> int:
     w.add_argument("--cash-pct", type=float, default=None, help="Weight on cash_pct for every contest")
     w.add_argument("--avg-roi-win", type=float, default=None, help="Weight on avg_roi_win for every contest")
     w.add_argument("--diversity-lambda", type=float, default=None, help="Diversity lambda for every contest")
+    w.add_argument("--method", choices=("greedy", "portfolio"), default=None,
+                   help="greedy: quality + diversity lineup by lineup (default); portfolio: log utility of the whole book over the sim worlds")
+    w.add_argument("--bankroll", type=float, default=None, help="portfolio method: utility scale in multiples of the entries' fees (default 3)")
     w.add_argument("--weights-json", default=None,
                    help='JSON file or literal: {"default": {...}, "<contest id>": {...}} keyed by contest id or name')
     w.add_argument("--no-prompt", action="store_true", help="Use defaults for anything not given; never prompt")
     a = ap.parse_args()
 
     cfg = load_config("nfl")
-    weights_for = LE.weights_resolver(flags={"cash_pct": a.cash_pct, "avg_roi_win": a.avg_roi_win, "diversity_lambda": a.diversity_lambda},
+    weights_for = LE.weights_resolver(flags={"cash_pct": a.cash_pct, "avg_roi_win": a.avg_roi_win, "diversity_lambda": a.diversity_lambda,
+                                             "method": a.method, "bankroll": a.bankroll},
                                       overrides=LE.load_weights_json(a.weights_json), no_prompt=a.no_prompt, prompter=prompt_weights)
     session = get_session(init_db("nfl"))
     LE.run_choose(session, a.entries or cfg["paths"]["entries_csv"], a.output_csv, weights_for)

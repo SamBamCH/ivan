@@ -1,7 +1,8 @@
 from __future__ import annotations
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict, Tuple
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
 import json
 import numpy as np
@@ -147,56 +148,53 @@ def summarize_sampling(samples: Dict[int, np.ndarray], diag: dict, max_pairs_rep
     return "\n".join(lines)
 
 
-def generate_correlated_samples_gaussian(
-    session: Session,
-    model_dir: str | Path | None = None,
-    n_samples: int = 1000,
-    seed: int | None = None,
-    use_hgv20: bool = False,
-    use_team_specific_corr: bool = True,
-    randomness: float = 1.0,
-    return_diagnostics: bool = False,
-) -> Dict[int, np.ndarray] | Tuple[Dict[int, np.ndarray], dict]:
+@dataclass
+class GameSpec:
     """
-    One correlated draw per *game*. Every offensive player and kicker is
-    Normal(mu, sigma) on a latent Gaussian with a slot-structured correlation:
-    a within-team matrix for each side plus a cross-team block, each team's
-    own history shrunk toward the league matrices (refactor/team_correlation.py).
-    When the game
-    has lines and the DST model is fitted, the draw also carries one latent
-    per team for its points scored (implied total plus a historical residual),
-    correlated with that team's slots and the opponent's from history. Each
-    DST is then built inside the universe: the points-allowed bracket of the
-    opponent's drawn score plus takeaway points on the DST's own latent, so a
-    universe where an offense scores is the universe where the opposing DST
-    does not. Without lines a DST falls back to its fitted Normal.
-
-    Players need NFLPlayer.slot_label in TEAM10 (set by assign_slots at ingest)
-    and a paired opponent on the slate; anything else is sampled independently.
-    Captain rows (roster_slot_id 511) are the same draw times 1.5.
-
-    randomness scales the spread (0 = every sample at the mean, 1 = full
-    distribution). With return_diagnostics=True the second return value records
-    what was actually sampled, so a run can be verified afterwards:
-
-        {"n_samples", "randomness", "method",
-         "games": [{"teams", "player_ids", "slots", "player_teams", "mu", "sigma",
-                    "requested_corr", "corr", "sources", "pooled_pairs",
-                    "latent": {"implied", "lines", "points_mean", "points_sd",
-                               "corr": {player_id: {"own_pts", "opp_pts"}}} | None}],
-         "independent": [{"id", "reason"}]}
-
-    where `requested_corr` is the player block of the correlation assembled
-    from the model and `corr` is what was sampled from after clipping and the
-    SPD projection (also the player block).
+    One game's correlation structure, assembled from the models: the player
+    rows of both teams in depth-chart order, each Normal(mu, sigma) on a latent
+    Gaussian, and the correlation of all nodes (players first, then, when the
+    game has lines, one team-points node per team at indices n_p and n_p + 1).
+    `corr` is what gets sampled from (clipped and projected to SPD);
+    `requested` the player block before that. The sampler draws from it and
+    the conditioned contest evaluation (ivan.sports.nfl.conditioned) conditions
+    on its team-points nodes.
     """
-    rng = np.random.default_rng(seed)
+    teams: tuple
+    players: list
+    mu: np.ndarray
+    sigma: np.ndarray
+    corr: np.ndarray
+    requested: np.ndarray
+    implied: Optional[dict]
+    lines: Optional[dict]
+    sources: dict
+    pooled: int
+
+    @property
+    def n_players(self) -> int:
+        return len(self.players)
+
+    @property
+    def points_nodes(self) -> Optional[dict]:
+        """{team: node index} of the team-points latents, or None without lines."""
+        if not self.implied:
+            return None
+        a, b = self.teams
+        return {a: self.n_players, b: self.n_players + 1}
+
+
+def assemble_games(session: Session, model_dir: str | Path | None = None, use_hgv20: bool = False,
+                   use_team_specific_corr: bool = True) -> Tuple[list, list, str, Optional[dict]]:
+    """
+    Build every game's GameSpec from the slate and the models. Returns
+    (games, independent players, correlation method, dst model params);
+    players with no depth-chart slot or no opponent on the slate are independent.
+    """
     model_dir = Path(models_dir() if model_dir is None else model_dir)
-    randomness = float(np.clip(randomness, 0.0, 1.0))
-
     players = session.query(NFLPlayer).all()
     if not players:
-        return ({}, {"games": [], "independent": []}) if return_diagnostics else {}
+        return [], [], "none", None
 
     team_to_opp: Dict[str, str] = {}
     by_team: Dict[str, list] = defaultdict(list)
@@ -236,7 +234,7 @@ def generate_correlated_samples_gaussian(
         np.fill_diagonal(Rw, 1.0)
         method = "hgv20"
     else:
-        d = json.loads((Path(models_dir() if model_dir is None else model_dir) / "team10_spearman.json").read_text())
+        d = json.loads((model_dir / "team10_spearman.json").read_text())
         Rw, Rx = _spearman_to_pearson(np.array(d["within"], float)), _spearman_to_pearson(np.array(d["cross"], float))
         np.fill_diagonal(Rw, 1.0)
         method = "team10_spearman.json"
@@ -273,9 +271,8 @@ def generate_correlated_samples_gaussian(
     # The game layer needs the fitted DST model (residual pools) and the lines.
     dst_params = load_dst_odds_model(model_dir) if use_team_specific_corr else None
 
-    # --- one multivariate normal per game ----------------------------------------------
-    out: Dict[int, np.ndarray] = {}
-    games: list[dict] = []
+    games: list = []
+    placed: set = set()
     for a, b in matchups:
         A = sort_team([p for p in by_team.get(a, []) if p.slot_label in SLOT_IDX])
         B = sort_team([p for p in by_team.get(b, []) if p.slot_label in SLOT_IDX])
@@ -317,9 +314,77 @@ def generate_correlated_samples_gaussian(
                 requested[i, j] = requested[j, i] = r
         pooled = _separate_pooled_players(requested, A, 0, Rw_a) + _separate_pooled_players(requested, B, len(A), Rw_b)
         corr = _near_spd(np.clip(requested, -0.999, 0.999))
+        np.fill_diagonal(requested, 1.0)
+        games.append(GameSpec(teams=(a, b), players=players_game, mu=mu, sigma=sigma, corr=corr, requested=requested,
+                              implied=implied, lines=lines, sources={a: src_a, b: src_b, "cross": src_x}, pooled=pooled))
+        placed.update(p.id for p in players_game)
 
-        Z = rng.multivariate_normal(mean=np.zeros(n), cov=corr, size=n_samples)
-        X = mu + sigma * randomness * Z[:, :n_p]
+    independent = [p for p in players if p.id not in placed]
+    for p in independent:
+        p._independent_reason = ("no depth-chart slot label" if p.slot_label not in SLOT_IDX
+                                 else "no opponent on the slate" if not any(p.team in m for m in matchups)
+                                 else "not placed in a game")
+    return games, independent, method, dst_params
+
+
+def generate_correlated_samples_gaussian(
+    session: Session,
+    model_dir: str | Path | None = None,
+    n_samples: int = 1000,
+    seed: int | None = None,
+    use_hgv20: bool = False,
+    use_team_specific_corr: bool = True,
+    randomness: float = 1.0,
+    return_diagnostics: bool = False,
+) -> Dict[int, np.ndarray] | Tuple[Dict[int, np.ndarray], dict]:
+    """
+    One correlated draw per *game* (assemble_games builds the structure).
+    Every offensive player and kicker is Normal(mu, sigma) on a latent Gaussian
+    with a slot-structured correlation: a within-team matrix for each side plus
+    a cross-team block, each team's own history shrunk toward the league
+    matrices (refactor/team_correlation.py). When the game has lines and the
+    DST model is fitted, the draw also carries one latent per team for its
+    points scored (implied total plus a historical residual), correlated with
+    that team's slots and the opponent's from history. Each DST is then built
+    inside the universe: the points-allowed bracket of the opponent's drawn
+    score plus takeaway points on the DST's own latent, so a universe where an
+    offense scores is the universe where the opposing DST does not. Without
+    lines a DST falls back to its fitted Normal.
+
+    Players need NFLPlayer.slot_label in TEAM10 (set by assign_slots at ingest)
+    and a paired opponent on the slate; anything else is sampled independently.
+    Captain rows (roster_slot_id 511) are the same draw times 1.5.
+
+    randomness scales the spread (0 = every sample at the mean, 1 = full
+    distribution). With return_diagnostics=True the second return value records
+    what was actually sampled, so a run can be verified afterwards:
+
+        {"n_samples", "randomness", "method",
+         "games": [{"teams", "player_ids", "slots", "player_teams", "mu", "sigma",
+                    "requested_corr", "corr", "sources", "pooled_pairs",
+                    "latent": {"implied", "lines", "points_mean", "points_sd",
+                               "corr": {player_id: {"own_pts", "opp_pts"}}} | None}],
+         "independent": [{"id", "reason"}]}
+
+    where `requested_corr` is the player block of the correlation assembled
+    from the model and `corr` is what was sampled from after clipping and the
+    SPD projection (also the player block).
+    """
+    rng = np.random.default_rng(seed)
+    randomness = float(np.clip(randomness, 0.0, 1.0))
+    games_spec, independent_players, method, dst_params = assemble_games(
+        session, model_dir, use_hgv20=use_hgv20, use_team_specific_corr=use_team_specific_corr)
+    if not games_spec and not independent_players:
+        return ({}, {"games": [], "independent": []}) if return_diagnostics else {}
+
+    out: Dict[int, np.ndarray] = {}
+    games: list[dict] = []
+    for g in games_spec:
+        a, b = g.teams
+        players_game, n_p, n = g.players, g.n_players, g.corr.shape[0]
+        implied = g.implied
+        Z = rng.multivariate_normal(mean=np.zeros(n), cov=g.corr, size=n_samples)
+        X = g.mu + g.sigma * randomness * Z[:, :n_p]
 
         latent = None
         if implied:
@@ -332,7 +397,7 @@ def generate_correlated_samples_gaussian(
                 X[:, j] = dst_from_latent(dst_params, implied[p.team], implied[opp],
                                           u_opp_points=u_pts[opp], u_take=st.norm.cdf(Z[:, j]), randomness=randomness)
             latent = {"implied": {t: round(float(implied[t]), 2) for t in (a, b)},
-                      "lines": {"total": lines["total"], "home_margin": lines["home_margin"]},
+                      "lines": {"total": g.lines["total"], "home_margin": g.lines["home_margin"]},
                       "points_mean": {t: round(float(pts[t].mean()), 2) for t in (a, b)},
                       "points_sd": {t: round(float(pts[t].std()), 2) for t in (a, b)},
                       "corr": {}}
@@ -347,17 +412,16 @@ def generate_correlated_samples_gaussian(
             out[p.id] = samples * CPT_MULTIPLIER if p.roster_slot_id == CPT_SLOT else samples
 
         if return_diagnostics:
-            np.fill_diagonal(requested, 1.0)
             games.append({
                 "teams": [a, b],
                 "player_ids": [int(p.id) for p in players_game],
                 "slots": [p.slot_label for p in players_game],
                 "player_teams": [p.team for p in players_game],
-                "mu": mu.tolist(), "sigma": sigma.tolist(),
-                "requested_corr": np.round(requested[:n_p, :n_p], 4).tolist(),
-                "corr": np.round(corr[:n_p, :n_p], 4).tolist(),
-                "sources": {a: src_a, b: src_b, "cross": src_x},
-                "pooled_pairs": pooled,
+                "mu": g.mu.tolist(), "sigma": g.sigma.tolist(),
+                "requested_corr": np.round(g.requested[:n_p, :n_p], 4).tolist(),
+                "corr": np.round(g.corr[:n_p, :n_p], 4).tolist(),
+                "sources": dict(g.sources),
+                "pooled_pairs": g.pooled,
                 "latent": latent,
                 # rows whose dependence is structural (DST built from the opponent's score), so the
                 # requested matrix is not their target: skip them in correlation error checks
@@ -366,17 +430,13 @@ def generate_correlated_samples_gaussian(
 
     # --- everyone else: independent N(mu, sigma) ---------------------------------------
     independent: list[dict] = []
-    for p in players:
-        if p.id in out:
-            continue
+    for p in independent_players:
         mu_i, sd_i = _mu_sigma(p, 6.0)
         samples = rng.normal(loc=mu_i, scale=sd_i * randomness, size=n_samples).astype(np.float32, copy=False)
         out[p.id] = samples * CPT_MULTIPLIER if p.roster_slot_id == CPT_SLOT else samples
         if return_diagnostics:
-            reason = ("no depth-chart slot label" if p.slot_label not in SLOT_IDX
-                      else "no opponent on the slate" if not any(p.team in m for m in matchups)
-                      else "not placed in a game")
-            independent.append({"id": int(p.id), "reason": reason, "mu": mu_i, "sigma": sd_i})
+            independent.append({"id": int(p.id), "reason": getattr(p, "_independent_reason", "not placed in a game"),
+                                "mu": mu_i, "sigma": sd_i})
 
     if return_diagnostics:
         return out, {"n_samples": int(n_samples), "randomness": randomness, "method": method,

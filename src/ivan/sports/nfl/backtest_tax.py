@@ -175,13 +175,13 @@ def find_choose_runs(dirs: Sequence[Path] = (OUTPUT_DIR, OUTPUT_DIR / "web")) ->
     for d in dirs:
         if not Path(d).exists():
             continue
-        for p in Path(d).glob("chosen_entries.lineups.*.csv"):
+        for p in Path(d).glob("chosen*.lineups.*.csv"):   # chosen_entries.* (CLI) and chosen.* (web)
             stamp = p.name.split(".")[2]
             try:
                 when = datetime.strptime(stamp, "%Y%m%d-%H%M%S")
             except ValueError:
                 continue
-            sim = p.with_name(f"chosen_entries.simroi.{stamp}.npz")
+            sim = p.with_name(f"{p.name.split('.')[0]}.simroi.{stamp}.npz")
             manifest = p.with_name("replay.json")
             if not manifest.exists():
                 manifest = p.parent.parent / "replay.json"
@@ -226,7 +226,10 @@ def our_entries(run: ChooseRun, contest_id: int) -> List[dict]:
     traces: Dict[int, np.ndarray] = {}
     if run.simroi_npz is not None:
         z = np.load(run.simroi_npz)
-        for eid, cid, roi in zip(z["entry_id"], z["contest_id"], z["roi"]):
+        # realized draws (one outcome per world) when the conditioned sim wrote them; the expected-ROI rows would
+        # understate the spread of outcomes in every luck or ladder test
+        source = z["roi_draw"] if "roi_draw" in z.files and np.isfinite(z["roi_draw"]).any() else z["roi"]
+        for eid, cid, roi in zip(z["entry_id"], z["contest_id"], source):
             if int(cid) == contest_id:
                 traces[int(eid)] = roi
     out = []
@@ -442,7 +445,8 @@ def assemble(session: Session, runs: Optional[Sequence[ChooseRun]] = None, dk_hi
                 for o in ours]
         # sim traces still in the database (the current slate) when the run predates the npz files
         if all(e.sim_roi is None for e in base):
-            traces = sim_roi_traces(session, name, [o["lineup_id"] for o in ours])
+            traces = (sim_roi_traces(session, name, [o["lineup_id"] for o in ours], column="roi_draw")
+                      or sim_roi_traces(session, name, [o["lineup_id"] for o in ours]))
             for e in base:
                 e.sim_roi = traces.get(e.lineup_id)
 
@@ -517,6 +521,8 @@ def assemble(session: Session, runs: Optional[Sequence[ChooseRun]] = None, dk_hi
                         e.played = False
         if played_only:
             base = [e for e in base if e.played]
+            if not base:                       # nothing of ours in this contest: neither settled nor unsettled
+                continue
         results.extend(base)
         if any(e.settled for e in base):
             cov.contests_settled += 1

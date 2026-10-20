@@ -180,8 +180,16 @@ def contests_view(session, run: dict, top: int = TOP_CONTESTS) -> list[dict]:
 # --------------------------------------------------------------------------- job commands
 def write_selection(run: dict) -> Path:
     base = json.loads(MENU_PATH.read_text()) if MENU_PATH.exists() else {}
+    weights = dict(base.get("weights") or {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1})
+    p = run.get("params") or {}
+    if p.get("method"):                                         # the chooser and its weights picked on the parameters step
+        weights["method"] = str(p["method"])
+        weights["bankroll"] = float(p.get("bankroll") or 3.0)
+        for k in ("cash_pct", "avg_roi_win", "diversity_lambda"):
+            if p.get(k) is not None:
+                weights[k] = float(p[k])
     sel = {"_note": "written by the Backtest page: the run's contest selection for scripts/replay.py",
-           "weights": base.get("weights") or {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1},
+           "weights": weights,
            "picks": [{"contest_id": int(c), "entries": int(n)} for c, n in sorted(run["picks"].items(), key=lambda kv: int(kv[0]))]}
     path = run_root(run["name"]) / "selection.json"
     path.write_text(json.dumps(sel, indent=1))

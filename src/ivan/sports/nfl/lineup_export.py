@@ -8,7 +8,8 @@ DraftKings wants them uploaded, plus what the web UI and the tax backtest read:
     <base>.exposures.<stamp>.csv     player exposure per slot (showdown) / position (classic)
     <base>.lineups.<stamp>.csv       one row per player per chosen entry, with the lineup's sim cash % / ROI
     <base>.choose.<stamp>.json       what the chooser saw per contest (candidates, picks, greedy trace)
-    <base>.simroi.<stamp>.npz        each pick's per-simulation ROI (the sim tables are cleared weekly)
+    <base>.simroi.<stamp>.npz        each pick's per-world expected ROI (roi) and one realized ROI per
+                                     world (roi_draw) for the calibration tests (the sim tables are cleared weekly)
 
 read_entries() parses the entries file, weights_resolver() decides the per-contest
 weights (file / flags / prompt), choose_entries() does the picking and slot
@@ -39,7 +40,9 @@ POSITION_ORDER_CLASSIC = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST
 SLOT_CODE = {"CPT": 511, "FLEX": 512, "QB": 66, "RB": 67, "WR": 68, "TE": 69, "DST": 71}
 CODE_TO_SLOT = {v: k for k, v in SLOT_CODE.items()}
 BASE_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"]
-DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1}
+DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": "greedy", "bankroll": 3.0}
+# method: "greedy" (quality + diversity, lineup by lineup) or "portfolio" (log utility of the whole book over the
+# simulated worlds; bankroll = its scale in multiples of the entries' fees). See ivan.sports.nfl.choose.
 WEIGHT_KEYS = tuple(DEFAULT_WEIGHTS)
 EXPOSURE_ORDER = ["CPT", "FLEX", "QB", "RB", "WR", "TE", "DST"]
 
@@ -214,7 +217,7 @@ class ChooseRun:
     total_classic: int = 0
     lineup_rows: List[dict] = field(default_factory=list)      # one row per player per chosen entry
     choose_viz: Dict[str, dict] = field(default_factory=dict)  # per contest, what the chooser saw
-    sim_rows: List[tuple] = field(default_factory=list)        # (entry_id, contest_id, lineup_id, fee, roi trace)
+    sim_rows: List[tuple] = field(default_factory=list)        # (entry_id, contest_id, lineup_id, fee, roi trace, realized draws)
     contests: List[dict] = field(default_factory=list)         # per contest summary (stats)
 
     def exposures(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -239,7 +242,9 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
         log(f"\n=== Contest {cid} \"{cname}\" -> {n_entries} entries ===")
         w = weights_for(cid, cname, last)
         last = w
-        log(f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
+        method = str(w.get("method") or "greedy")
+        log(f"  method: {method}" + (f" (bankroll {w.get('bankroll', 3.0)}x fees)" if method == "portfolio" else "")
+            + f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
 
         stats: dict = {}
         chosen_ids = choose_lineup_ids(session=session, weights=w, num_lineups=n_entries, contest_name=cname, stats=stats)
@@ -260,8 +265,22 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
             run.choose_viz[str(cid)] = {"contest_name": cname, "entries": n_entries, **stats["viz"]}
         log(f"  chosen {stats['chosen']}: mean ROI {stats['chosen_roi']:+.1%}, cash {stats['chosen_cash']:.1%}"
             f"  (top-{stats['chosen']} by quality alone: ROI {stats['top_quality_roi']:+.1%}, cash {stats['top_quality_cash']:.1%})")
+        book = stats.get("book") or {}
+        if book.get("chosen"):
+            b, t = book["chosen"], book.get("top_quality") or {}
+            log(f"  book over {b['worlds']} sim worlds: median ROI {b['p50']:+.0%}, p5 {b['p5']:+.0%}, P(loss) {b['p_loss']:.0%}, "
+                f"P(lose half) {b['p_lose_half']:.0%}" + (f"  (quality alone: median {t['p50']:+.0%}, p5 {t['p5']:+.0%}, P(lose half) {t['p_lose_half']:.0%})" if t else ""))
+            sh = book.get("shrinkage") or {}
+            if sh.get("tau") is not None:
+                log(f"  shrinkage: per-lineup ROI se median {sh['se_median']:.2f} vs spread of true means {sh['tau']:.2f}; "
+                    f"top-20 claimed mean {sh['top_mean_before']:+.0%} -> {sh['top_mean_after']:+.0%} after shrinking (median weight on a top-decile lineup's own estimate {sh['lambda_top_decile']:.2f})")
+            cf = book.get("cross_fit")
+            if cf:
+                log(f"  honest expectation (chosen on {cf['worlds_fit']} worlds, scored on the other {cf['worlds_score']}): mean ROI {cf['out_of_sample']['mean']:+.0%} "
+                    f"vs {cf['in_sample']['mean']:+.0%} in-sample; selection bias {cf['selection_bias']:+.0%}")
 
         traces = sim_roi_traces(session, cname, chosen_ids)
+        draws = sim_roi_traces(session, cname, chosen_ids, column="roi_draw")
         lineups = {L.id: L for L in session.query(Lineup).filter(Lineup.id.in_(chosen_ids)).all()}
         all_pids = {pid for L in lineups.values() for pid in L.player_ids_list}
         players = {p.id: p for p in session.query(NFLPlayer).filter(NFLPlayer.id.in_(all_pids)).all()}
@@ -274,7 +293,7 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
             pids = list(lineup.player_ids_list)
             objs = [players[pid] for pid in pids]
             base = rows.iloc[i % n_entries][BASE_COLS].to_list()
-            run.sim_rows.append((int(base[0]), cid, int(lid), parse_money(base[3]), traces.get(lid)))
+            run.sim_rows.append((int(base[0]), cid, int(lid), parse_money(base[3]), traces.get(lid), draws.get(lid)))
             if len(pids) == 6:
                 fmt, slots = "showdown", POSITION_ORDER_SD
                 assigned = assign_player_order_showdown(objs, slots)
@@ -349,28 +368,32 @@ def write_outputs(run: ChooseRun, output_csv, stamp: Optional[str] = None, log: 
         paths["choose"] = f"{root}.choose.{stamp}.json"
         Path(paths["choose"]).write_text(json.dumps(run.choose_viz))
     if run.sim_rows:
-        n_sims = max((len(t) for *_, t in run.sim_rows if t is not None), default=0)
+        n_sims = max((len(t) for *_, t, _d in run.sim_rows if t is not None), default=0)
         roi = np.full((len(run.sim_rows), n_sims), np.nan, dtype=np.float32)
-        for k, (*_, t) in enumerate(run.sim_rows):
+        roi_draw = np.full((len(run.sim_rows), n_sims), np.nan, dtype=np.float32)
+        for k, (*_, t, dr) in enumerate(run.sim_rows):
             if t is not None:
                 roi[k, :len(t)] = t[:n_sims]
+            if dr is not None:
+                roi_draw[k, :len(dr)] = dr[:n_sims]
         paths["simroi"] = f"{root}.simroi.{stamp}.npz"
         np.savez_compressed(paths["simroi"], entry_id=np.array([r[0] for r in run.sim_rows], dtype=np.int64),
                             contest_id=np.array([r[1] for r in run.sim_rows], dtype=np.int64),
                             lineup_id=np.array([r[2] for r in run.sim_rows], dtype=np.int64),
-                            entry_fee=np.array([r[3] for r in run.sim_rows], dtype=np.float64), roi=roi)
-        log(f"wrote simulated ROI traces ({len(run.sim_rows)} entries x {n_sims} sims) -> {paths['simroi']}")
+                            entry_fee=np.array([r[3] for r in run.sim_rows], dtype=np.float64), roi=roi, roi_draw=roi_draw)
+        log(f"wrote per-world ROI ({len(run.sim_rows)} entries x {n_sims} worlds, expected + one realized draw) -> {paths['simroi']}")
     for kind in ("exposures", "lineups", "choose"):
         if kind in paths:
             log(f"wrote {kind} -> {paths[kind]}")
     return paths
 
 
-def run_choose(session, entries_path, output_csv, weights_for, log: Log = print) -> Tuple[ChooseRun, Dict[str, str]]:
-    """read_entries -> choose_entries -> write_outputs; returns the run and the files written."""
+def run_choose(session, entries_path, output_csv, weights_for, log: Log = print,
+               stamp: Optional[str] = None) -> Tuple[ChooseRun, Dict[str, str]]:
+    """read_entries -> choose_entries -> write_outputs; returns the run and the files written (stamp: the files' timestamp, default now)."""
     log(f"Loading entries from {entries_path}...")
     run = choose_entries(session, read_entries(entries_path), weights_for, log)
-    paths = write_outputs(run, output_csv, log=log)
+    paths = write_outputs(run, output_csv, stamp=stamp, log=log)
     sd, cl = run.exposures()
     log(format_exposures(sd, f"[Showdown exposures] (n={run.total_sd} showdown lineups)", "roster_slot") or "\n[Showdown exposures] none")
     log(format_exposures(cl, f"[Classic exposures] (n={run.total_classic} classic lineups)", "position") or "\n[Classic exposures] none")

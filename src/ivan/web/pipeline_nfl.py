@@ -31,9 +31,10 @@ WEB_OUTPUT_DIR = OUTPUT_DIR / "web"
 CURRENT_ENTRIES = WEB_INPUT_DIR / "entries.csv"
 WEIGHTS_FILE = WEB_INPUT_DIR / "weights.json"        # per-contest choose weights, remembered between runs
 
-WEIGHT_KEYS = ("cash_pct", "avg_roi_win", "diversity_lambda")
-WEIGHT_LABELS = {"cash_pct": "Cash %", "avg_roi_win": "ROI", "diversity_lambda": "Diversity"}
-DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1}
+WEIGHT_KEYS = ("method", "cash_pct", "avg_roi_win", "diversity_lambda", "bankroll")
+WEIGHT_LABELS = {"method": "Method", "cash_pct": "Cash %", "avg_roi_win": "ROI", "diversity_lambda": "Diversity", "bankroll": "Bankroll x fees"}
+WEIGHT_METHODS = ("greedy", "portfolio")
+DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": "greedy", "bankroll": 3.0}
 
 
 @dataclass
@@ -140,7 +141,8 @@ STEPS: list[Step] = [
     ),
     Step(
         key="sim", title="Simulate your contests",
-        blurb="Simulates every contest in your entries file against the generated field and scores each candidate lineup (cash %, ROI, rank).",
+        blurb="Simulates every contest in your entries file against the generated field and scores each candidate lineup (cash %, ROI, rank). "
+              "The chooser then shrinks each lineup's simulated ROI by its own standard error before picking.",
         fields=[Field("n", "Simulations per contest", default=1000, min=100, step="100"),
                 Field("c", "Field cap", default=10000, min=100, step="100",
                       help="Largest field size to simulate; bigger contests are scaled down to this."),
@@ -195,6 +197,11 @@ def _build_choose(form: dict) -> list[list[str]]:
         for key in WEIGHT_KEYS:
             raw = str(form.get(f"w-{row['id']}-{key}", "")).strip()
             if raw == "":
+                continue
+            if key == "method":
+                if raw not in WEIGHT_METHODS:
+                    raise ValueError(f"'{raw}' is not a chooser method (greedy or portfolio) for {row['name']}.")
+                w[key] = raw
                 continue
             try:
                 val = float(raw)
@@ -509,7 +516,8 @@ def choose_view(choose_json: Path, lineups_csv: Optional[Path], contest_id: Opti
 
     return {"contests": contests, "contest_id": contest_id, "name": d["contest_name"], "entries": d["entries"],
             "n_candidates": d["n_candidates"], "n_shown": d["n_shown"], "weights": w, "lambda": lam,
+            "method": d.get("method") or w.get("method") or "greedy", "bankroll": d.get("bankroll"), "book": d.get("book"),
             "chosen": {"cash": _mean([p["cash"] for p in picks]), "roi": _mean([p["roi"] for p in picks]), "n": len(picks)},
             "top": {"cash": _mean([p["cash"] for p in tops]), "roi": _mean([p["roi"] for p in tops]), "n": len(tops)},
-            "overlap": overlap, "spread": d["spread"], "explained_variance": evr,
+            "overlap": overlap, "spread": d["spread"], "explained_variance": evr, "rooting": d.get("rooting"),
             "quality_svg": quality_svg, "map_svg": map_svg, "walk_svg": walk_svg, "rows": rows}
