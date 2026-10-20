@@ -27,7 +27,9 @@ from ivan.sports.common.payouts import scale_payouts_correctly
 from ivan.sports.mma.ingest import load_fights
 from ivan.sports.mma.models import HistoricalContest, Lineup, LineupSimulationResult, MMAPlayer
 from ivan.sports.mma.payouts import parse_payout_csv, payouts_from_db
-from ivan.sports.mma.sample_field import sample_field
+from ivan.sports.mma.sample_field import DEFAULTS as _FIELD_DEFAULTS, sample_field
+
+DEFAULT_MODEL_PATH = _FIELD_DEFAULTS["dupe_model_path"]
 
 
 def player_matrix(fights, n_sims: int, rng: np.random.Generator) -> tuple[np.ndarray, dict[int, int]]:
@@ -125,8 +127,16 @@ def simulate_contest(session: Session, cfg: dict, contest: dict, *, field_size: 
     rng = np.random.default_rng(seed_for("mma.simulate"))
     salary = {pid: p.salary for pid, p in players.items()}
     win_prob = {pid: (p.win_prob if p.win_prob is not None else 0.5) for pid, p in players.items()}
-    counts, field_meta = sample_field(ids, salary, win_prob, field_size, field_cfg, rng, cap)
+    fight_of = {pid: p.fight_id for pid, p in players.items()}
+    main_event = {pid for f in fights if f.rounds == 5 for pid in (f.f1.id, f.f2.id)}
+    counts, field_meta = sample_field(ids, salary, win_prob, field_size, field_cfg, rng, cap, fights=fight_of, main_event=main_event)
     in_field = np.nonzero(counts)[0]
+    predicted = None                                                             # expected copies in the real field, per candidate
+    if str(field_cfg.get("model", "original")).lower() == "fitted":
+        from ivan.sports.mma.sample_field import expected_copies, load_dupe_model
+        model = load_dupe_model(field_cfg.get("dupe_model_path", DEFAULT_MODEL_PATH))
+        if model is not None:
+            predicted = expected_copies(ids, salary, win_prob, model, contest["total_entries"], fight_of, cap, main_event=main_event)
 
     # payout table scaled to the simulated field
     scaled = scale_payouts_correctly(field_size, contest["payouts"], contest["total_entries"], contest["entry_fee"])
@@ -151,6 +161,7 @@ def simulate_contest(session: Session, cfg: dict, contest: dict, *, field_size: 
         for k, i in enumerate(in_field):
             rows.append(LineupSimulationResult(
                 lineup_id=lineups[i].id, contest_id=contest["contest_id"], contest_name=contest["name"], dupes=int(counts[i]),
+                predicted_dupes=(float(predicted[i]) if predicted is not None else None),
                 fpts=np.round(scores_u[:, k], 2).tolist(), payout=np.round(payouts_u[:, k], 4).tolist(),
                 roi=np.round(rois_u[:, k], 4).tolist(), rank=ranks_u[:, k].tolist(),
                 avg_fpts=float(scores_u[:, k].mean()), avg_payout=float(payouts_u[:, k].mean()), avg_roi=float(rois_u[:, k].mean()),

@@ -4,15 +4,17 @@ Monte Carlo model of one fight, driven by its betting markets.
 
 How a fight ends is drawn from the fight-level markets (inside 60 seconds,
 in round 1, inside the distance), who wins from the two fighters' markets
-for that kind of finish (round-1 win, ITD, or the moneyline for a
-decision), and how long it lasted uniformly inside the chosen round. Each
+isolated to that kind of finish (the round-1 price for round 1, ITD minus
+round 1 for a later stoppage, moneyline minus ITD for a decision; the
+moneyline alone when a market is blank), and how long it lasted uniformly
+inside the chosen round. Each
 fighter's output (significant strikes, takedowns) is their expected full-
 fight total scaled by the time fought with diminishing returns, plus noise.
 The winner takes the finish bonus for that round; the loser keeps half of
 their production.
 
-Ported from mma_dfs/src/Fight.py unchanged in its logic, vectorised over
-simulations: simulate(n) returns n outcomes per fighter at once.
+Ported from mma_dfs/src/Fight.py, vectorised over simulations; the winner
+split by finish kind is the one change from the original: simulate(n) returns n outcomes per fighter at once.
 """
 from __future__ import annotations
 
@@ -35,6 +37,8 @@ DEFAULT_SCORING = {
     "loser_production_share": 0.5,
     "bonus": {"u60": 115, "r1": 90, "r2": 70, "r3": 45, "r4": 40, "r5": 40, "decision": 30},
     "production_noise_cv": 0.2,      # sd of a fighter's per-second rate as a share of its mean
+    "time_exponent": 1.5,            # production by time t of a T-second fight = full-fight line x (t/T)^time_exponent
+                                     # (1.5 is the original's rate x sqrt scale; below 1 front-loads production as real fights do)
 }
 
 
@@ -56,6 +60,26 @@ class Fighter:
         if finish == DECISION:
             return self.win_odds
         return self.itd_odds
+
+    def finish_share(self, finish: str) -> Optional[float]:
+        """
+        This fighter's unnormalised probability of winning by `finish`, from
+        the markets that isolate it: the round-1 price for round 1, ITD minus
+        round 1 for a later stoppage, moneyline minus ITD for a decision.
+        None when the markets needed are missing (the caller falls back to
+        the moneyline), so a fighter never gets a share from a coin flip.
+        """
+        if finish == "r1":
+            return None if self.r1_win_odds in (None, 0) else american_to_prob(self.r1_win_odds)
+        if self.itd_odds in (None, 0):
+            return None
+        p_itd = american_to_prob(self.itd_odds)
+        if finish == DECISION:
+            if self.win_odds in (None, 0):
+                return None
+            return max(0.0, american_to_prob(self.win_odds) - p_itd)
+        p_r1 = american_to_prob(self.r1_win_odds) if self.r1_win_odds not in (None, 0) else 0.0
+        return max(0.0, p_itd - p_r1)
 
 
 @dataclass
@@ -115,17 +139,30 @@ class Fight:
                 n.prob = n.prob / total
         return out
 
+    def winner_share(self, finish: str) -> float:
+        """
+        Fighter 1's probability of being the winner given the fight ended by
+        `finish`. Both fighters' isolated finish probabilities (Fighter.
+        finish_share) are normalised against each other; when either side
+        lacks the markets for it, or both come out at zero, the split falls
+        back to the moneylines.
+        """
+        a, b = self.f1.finish_share(finish), self.f2.finish_share(finish)
+        if a is None or b is None or a + b <= 0:
+            return win_split(self.f1.win_odds, self.f2.win_odds)[0]
+        return a / (a + b)
+
     def _production(self, fighter: Fighter, finish_time: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
         """Significant strikes and takedowns landed by `finish_time` seconds, one value per simulation."""
         n = finish_time.shape[0]
         cv = float(self.scoring.get("production_noise_cv", 0.2))
-        intervals = finish_time / 10.0
-        scale = np.sqrt(finish_time / self.total_time)          # diminishing returns with time fought
+        k = float(self.scoring.get("time_exponent", 1.5))
+        share = np.power(np.clip(finish_time / self.total_time, 0.0, 1.0), k)   # share of the full-fight line landed by finish_time
 
         def draw(total: float) -> np.ndarray:
-            base_rate = float(total or 0.0) * 10.0 / self.total_time   # per 10-second interval
-            rate = rng.normal(base_rate, base_rate * cv, size=n) if base_rate > 0 else np.zeros(n)
-            return np.maximum(rate, 0.0) * intervals * scale
+            base = float(total or 0.0)
+            noisy = rng.normal(base, base * cv, size=n) if base > 0 else np.zeros(n)
+            return np.maximum(noisy, 0.0) * share
 
         return draw(fighter.sig_strikes), draw(fighter.takedowns)
 
@@ -135,8 +172,8 @@ class Fight:
         probs = np.array([nd.prob for nd in nodes], dtype=float)
         idx = rng.choice(len(nodes), size=n, p=probs)
 
-        # winner: fighter 1's share of the market that matches how the fight ended
-        p1_by_node = np.array([win_split(self.f1.odds_for(nd.finish_kind), self.f2.odds_for(nd.finish_kind))[0] for nd in nodes])
+        # winner: fighter 1's share of the way the fight ended (see winner_share)
+        p1_by_node = np.array([self.winner_share(nd.finish_kind) for nd in nodes])
         f1_wins = rng.random(n) < p1_by_node[idx]
 
         t0 = np.array([nd.t0 for nd in nodes])[idx]

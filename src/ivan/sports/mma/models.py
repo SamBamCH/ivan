@@ -123,6 +123,7 @@ class LineupSimulationResult(MMABase):
     contest_id   = Column(Integer, nullable=True, index=True)     # DK contest id when the contest came from DK
     contest_name = Column(String,  nullable=False, index=True)
     dupes        = Column(Integer, nullable=False, default=1)     # copies of this lineup in the sampled field
+    predicted_dupes = Column(Float, nullable=True)                # expected copies in the real field (fitted model, real field size)
 
     fpts   = Column(JSON, nullable=False)
     payout = Column(JSON, nullable=False)

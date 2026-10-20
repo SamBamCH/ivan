@@ -53,3 +53,25 @@ def test_projection_matches_original_formula():
     assert win_prob == pytest.approx(340 / 440)
     itd = 100 / 300
     assert proj == pytest.approx(75 * 0.4 + 2 * 5 + win_prob * (itd * 70 + (1 - itd) * 30))
+
+
+def test_winner_split_isolates_each_finish_and_matches_the_moneyline():
+    # favourite priced to finish: moneyline -300 (75%), ITD -150 (60%), R1 +200 (33%)
+    # underdog: +250 (29%), ITD +400 (20%), R1 +900 (10%)
+    f1 = Fighter(1, "fav", 9000, win_odds=-300, itd_odds=-150, r1_win_odds=200)
+    f2 = Fighter(2, "dog", 7000, win_odds=250, itd_odds=400, r1_win_odds=900)
+    fight = Fight("x", f1, f2, u60_odds=1500, r1_odds=250, itd_odds=-120)
+    assert fight.winner_share("r1") == pytest.approx(0.3333 / (0.3333 + 0.1), abs=1e-3)
+    assert fight.winner_share("itd") == pytest.approx((0.6 - 0.3333) / ((0.6 - 0.3333) + (0.2 - 0.1)), abs=1e-3)
+    # by decision the favourite's edge is much smaller than the moneyline says
+    dec = fight.winner_share("decision")
+    assert dec == pytest.approx((0.75 - 0.6) / ((0.75 - 0.6) + (0.2857 - 0.2)), abs=1e-3) and dec < 0.75
+    # without the fighters' finish markets every node falls back to the moneyline split
+    plain = Fight("y", Fighter(1, "a", 9000, win_odds=-300), Fighter(2, "b", 7000, win_odds=250), itd_odds=-120)
+    for kind in ("r1", "itd", "decision"):
+        assert plain.winner_share(kind) == pytest.approx(0.75 / (0.75 + 0.2857), abs=1e-3)
+    # and the simulated win rate stays near the moneyline either way
+    rng = np.random.default_rng(0)
+    for fx in (fight, plain):
+        a, b = fx.simulate(20000, rng)
+        assert abs((a > b).mean() - 0.75 / (0.75 + 0.2857)) < 0.04

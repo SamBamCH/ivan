@@ -135,8 +135,17 @@ class NameMatcher:
         hits = [r for r in self.rows if self.tokens[r["id"]] and self.tokens[r["id"]][-1] == q[-1]]
         if len(hits) == 1:                                       # 3. unique last-name match
             return hits[0]
-        qs = set(q) - GENERATIONAL                               # 4. unique shared token
-        hits = [r for r in self.rows if (set(self.tokens[r["id"]]) - GENERATIONAL) & qs]
+        def surname(tokens: list[str]) -> Optional[str]:         # the last token that is not a generational suffix
+            core = [t for t in tokens if t not in GENERATIONAL]
+            return core[-1] if core else None
+
+        hits = [r for r in self.rows if surname(self.tokens[r["id"]]) == surname(q)]
+        if len(hits) == 1:                                       # 4. unique surname match ignoring Jr / III
+            log.info("matched odds name %r to DK name %r", name, hits[0]["name"])
+            return hits[0]
+        qs = set(q) - GENERATIONAL                               # 5. a shared token that is a surname on one side
+        hits = [r for r in self.rows                             #    (name order swapped); a shared first name alone never matches
+                if surname(self.tokens[r["id"]]) in qs or surname(q) in (set(self.tokens[r["id"]]) - GENERATIONAL)]
         if len(hits) == 1:
             log.info("matched odds name %r to DK name %r", name, hits[0]["name"])
             return hits[0]
@@ -277,10 +286,13 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
     unmatched: list[str] = []
     fight_rows = load_fight_odds_csv(fight_path) if fight_path.exists() else []
     player_rows = load_player_odds_csv(player_path) if player_path.exists() else []
-    matched_any = any(matcher.find(fo["a"]) for fo in fight_rows) or any(matcher.find(po["name"]) for po in player_rows)
-    if (fight_rows or player_rows) and not matched_any:
-        log.warning("%s / %s name nobody in this slate (an earlier card?): writing fresh templates",
-                    fight_path.name, player_path.name)
+    # the files describe this card when most of their names are in the pool; one stray lookalike is not enough
+    names = [fo["a"] for fo in fight_rows] + [fo["b"] for fo in fight_rows] + [po["name"] for po in player_rows]
+    n_hit = sum(1 for n in names if matcher.find(n))
+    matched_any = bool(names) and n_hit * 2 > len(names)
+    if names and not matched_any:
+        log.warning("%s / %s: %d of %d names are in this slate (an earlier card?): writing fresh templates",
+                    fight_path.name, player_path.name, n_hit, len(names))
     if not matched_any:
         write_odds_templates(fights, fight_path, player_path, api_win)
         fight_rows, player_rows = [], []

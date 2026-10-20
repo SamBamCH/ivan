@@ -21,7 +21,10 @@ from ivan.core.seed import seed_for
 from ivan.sports.mma.models import Lineup, LineupSimulationResult, MMAFight, MMAPlayer
 
 DEFAULTS = {"n_candidates": 6000, "jitter_sd": 0.15, "min_salary": 48500, "salary_cap": 50000,
-            "roster_size": 6, "main_event_boost": 1.15}
+            "roster_size": 6, "main_event_boost": 1.15, "projection_share": 0.0}
+# projection_share: the share of solves whose objective is the fighter's projected points (scaled like win
+# probability) instead of win probability, so the pool also holds the field's points-chasing builds (underdog
+# finishers) that a pure win-probability objective never produces.
 
 
 def _solver():
@@ -49,10 +52,19 @@ def solve_lineup(players: list[dict], fights: list[tuple[int, int]], scores: dic
 
 
 def jittered_scores(players: list[dict], main_event: set[int], cfg: dict, rng: np.random.Generator) -> dict[int, float]:
-    """Win probability on a 0..100 scale, main-event boost, Gaussian noise, floored at zero."""
+    """
+    Win probability on a 0..100 scale (or, for projection_share of the solves,
+    projected points rescaled to the same mean), main-event boost, Gaussian
+    noise, floored at zero.
+    """
     out = {}
+    by_projection = rng.random() < float(cfg.get("projection_share", 0.0))
+    if by_projection:
+        projs = [float(p.get("projection") or 0.0) for p in players]
+        wins = [float(p["win_prob"]) for p in players]
+        scale = (100.0 * sum(wins) / len(wins)) / max(1e-9, sum(projs) / len(projs))
     for p in players:
-        base = float(p["win_prob"]) * 100.0
+        base = float(p.get("projection") or 0.0) * scale if by_projection else float(p["win_prob"]) * 100.0
         if p["id"] in main_event:
             base *= float(cfg["main_event_boost"])
         out[p["id"]] = max(0.0, base + rng.normal(0.0, float(cfg["jitter_sd"]) * 100.0))
@@ -79,7 +91,7 @@ def generate_candidates(session: Session, cfg: dict, n_candidates: Optional[int]
     """
     gen = {**DEFAULTS, **cfg.get("lineup_generation", {})}
     n_candidates = int(n_candidates or gen["n_candidates"])
-    players = [{"id": p.id, "salary": p.salary, "win_prob": p.win_prob if p.win_prob is not None else 0.5}
+    players = [{"id": p.id, "salary": p.salary, "win_prob": p.win_prob if p.win_prob is not None else 0.5, "projection": p.projection}
                for p in session.query(MMAPlayer).all()]
     if not players:
         raise SystemExit("no fighters in the slate; run scripts/mma/ingest.py first")
@@ -113,3 +125,29 @@ def generate_candidates(session: Session, cfg: dict, n_candidates: Optional[int]
     session.bulk_save_objects([Lineup(player_ids_list=list(lu)) for lu in new])
     session.commit()
     return {"requested": n_candidates, "solved": solved, "new_unique": len(new), "pool": len(existing)}
+
+
+def generate_universe(session: Session, cfg: dict, fresh: bool = True) -> dict:
+    """
+    Make the pool every valid lineup of the slate (ivan.sports.mma.universe):
+    six fighters, one per fight at most, under the cap and at or above
+    lineup_generation.universe_min_salary (default 0). The field model then
+    decides each lineup's frequency; nothing is left to an optimiser's guess.
+    """
+    from ivan.sports.mma.universe import enumerate_lineups
+    gen = {**DEFAULTS, **cfg.get("lineup_generation", {})}
+    players = session.query(MMAPlayer).all()
+    if not players:
+        raise SystemExit("no fighters in the slate; run scripts/mma/ingest.py first")
+    pool = [{"id": p.id, "salary": p.salary, "fight_id": p.fight_id} for p in players]
+    win = {p.id: (p.win_prob if p.win_prob is not None else 0.5) for p in players}
+    U = enumerate_lineups(pool, win, salary_cap=int(gen["salary_cap"]), min_salary=int(gen.get("universe_min_salary", 0)))
+    if fresh:
+        session.query(LineupSimulationResult).delete(synchronize_session=False)
+        session.query(Lineup).delete(synchronize_session=False)
+        session.commit()
+    existing = {tuple(sorted(lu.player_ids_list)) for lu in session.query(Lineup).all()}
+    new = [k for k in U.key if k not in existing]
+    session.bulk_save_objects([Lineup(player_ids_list=list(k)) for k in new])
+    session.commit()
+    return {"requested": len(U), "solved": len(U), "new_unique": len(new), "pool": len(existing) + len(new)}

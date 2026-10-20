@@ -22,7 +22,7 @@ from sqlalchemy import func
 
 from ivan.core.config import config_path, load_config
 from ivan.database.session import get_session, init_db
-from ivan.sports.mma.choose import (choose_entries, choose_lineups, export, export_entries, exposures, format_contests,
+from ivan.sports.mma.choose import (choose_entries, choose_lineups, export, export_entries, exposures, format_book, format_contests,
                                     format_exposures, lineup_rows)
 from ivan.sports.mma.entries import load_entries
 from ivan.sports.mma.models import LineupSimulationResult
@@ -31,8 +31,13 @@ from ivan.sports.mma.models import LineupSimulationResult
 def run_entries(session, cfg, entries_csv: str, args) -> int:
     entries = load_entries(entries_csv)
     print(f"{len(entries)} entries from {entries_csv}\n")
-    chosen = choose_entries(session, entries, cfg, roi_weight=args.roi_weight, diversity_weight=args.diversity_weight)
+    chosen = choose_entries(session, entries, cfg, roi_weight=args.roi_weight, diversity_weight=args.diversity_weight,
+                            method=args.method, bankroll=args.bankroll)
     print(format_contests(chosen["contests"]))
+    for c in chosen["contests"]:
+        line = format_book(c["name"])
+        if line:
+            print(f"{c['name'][:60]}:\n{line}")
     if not chosen["picks"]:
         print("\nnothing chosen: no contest in the entries file has been simulated; run scripts/mma/sim.py first")
         return 1
@@ -56,7 +61,7 @@ def run_one(session, cfg, args) -> int:
         if row is None:
             raise SystemExit("no simulation results; run scripts/mma/sim.py first")
         name = row[0]
-    picks = choose_lineups(session, name, cfg, num_lineups=args.lineups, roi_weight=args.roi_weight,
+    picks = choose_lineups(session, name, cfg, num_lineups=args.lineups, roi_weight=args.roi_weight, method=args.method, bankroll=args.bankroll,
                            diversity_weight=args.diversity_weight)
     df = lineup_rows(session, picks)
     print(f"contest {name!r}: chose {len(picks)} lineups; mean cash {df['Cash %'].mean():.1f}%, "
@@ -76,6 +81,9 @@ def main() -> int:
     p.add_argument("--lineups", type=int, default=None, help="one contest: how many to pick (default: choose.num_lineups)")
     p.add_argument("--roi-weight", type=float, default=None, help="weight on average ROI vs cash rate (default: choose.roi_weight)")
     p.add_argument("--diversity-weight", type=float, default=None, help="penalty per overlapping fighter (default: choose.diversity_weight)")
+    p.add_argument("--method", choices=("greedy", "portfolio"), default=None,
+                   help="greedy: quality minus overlap, lineup by lineup (default); portfolio: log utility of the whole book over the sim worlds")
+    p.add_argument("--bankroll", type=float, default=None, help="portfolio: utility scale in multiples of the entries' fees (default: choose.bankroll, 3)")
     args = p.parse_args()
 
     cfg = load_config("mma", args.config)

@@ -1,5 +1,7 @@
 """End to end on the sample slate under tests/mma/data: ingest -> generate -> sim -> choose -> export."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -44,6 +46,21 @@ def test_name_matcher_orders():
     assert m.find("Pérez")["id"] == 3                      # accent-insensitive last name
     assert m.find("Someone Else")["id"] == 3               # alias
     assert m.find("Nobody Here") is None
+    m = NameMatcher([{"id": 1, "name": "Melissa Croden"}, {"id": 2, "name": "Kai Kamaka III"}, {"id": 3, "name": "Allen Frye Jr"}])
+    assert m.find("Melissa Gatto") is None                 # a shared first name is not a match (an earlier card's fighter)
+    assert m.find("Kai Kamaka")["id"] == 2 and m.find("Allen Frye")["id"] == 3 and m.find("Frye Jr.")["id"] == 3
+
+
+def test_one_lookalike_does_not_make_an_old_file_describe_this_card(session, cfg, ingest, tmp_path):
+    fo, po = tmp_path / "fight_odds.csv", tmp_path / "player_odds.csv"
+    s0 = ingest(session, cfg, fight_odds_csv=fo, player_odds_csv=po)
+    real = pd.read_csv(po)["player"].iloc[0]
+    rows = [f"{real},100,200,-150,50,1"] + [f"Fighter Nobody{i},,,-200,," for i in range(6)]       # one real name among six strangers
+    po.write_text("player,1st round win,ITD,Win,sig strikes,takedowns\n" + "\n".join(rows) + "\n")
+    fo.write_text("fight,u60 sec,1st round,itd\n" + "\n".join(f"Fighter Nobody{i} vs Fighter Nobody{i + 1},800,140,-400" for i in range(0, 6, 2)) + "\n")
+    s = ingest(session, cfg, fight_odds_csv=fo, player_odds_csv=po)
+    assert s["templates_written"] and s["players_in_csv"] == 0
+    assert pd.read_csv(po)["ITD"].isna().all()               # the stale line did not leak into the fresh template
 
 
 def test_rank_and_pay_pools_ties_and_conserves_the_pool():
@@ -86,11 +103,17 @@ def test_pipeline_end_to_end(session, cfg, ingest, tmp_path, monkeypatch):
     assert all(len(x.fpts) == 60 and len(x.rank) == 60 for x in res)
     assert all(0 <= x.cash_pct <= 1 for x in res)
 
+    from ivan.sports.mma.choose import LAST_BOOK, choose_lineups, format_book
+    greedy = choose_lineups(session, "test", cfg, num_lineups=5)
+    port = choose_lineups(session, "test", cfg, num_lineups=5, method="portfolio", bankroll=1.5)
+    assert len(greedy) == 5 and len(port) == 5 and len({r.lineup_id for r in port}) == 5
+    assert LAST_BOOK["test"]["method"] == "portfolio" and LAST_BOOK["test"]["chosen"]["entries"] == 5 and "bankroll 1.5x" in format_book("test")
+
     picks = choose_lineups(session, "test", cfg, num_lineups=5)
     assert len(picks) == 5 and len({p.lineup_id for p in picks}) == 5
     paths = export(session, picks, out_dir=tmp_path, stamp="t")
     detail = pd.read_csv(paths["lineups"])
-    assert list(detail.columns) == ["F1", "F2", "F3", "F4", "F5", "F6", "Avg Payout", "Avg ROI", "Cash %", "Salary Remaining", "Dupe Count"]
+    assert list(detail.columns) == ["F1", "F2", "F3", "F4", "F5", "F6", "Avg Payout", "Avg ROI", "Cash %", "Salary Remaining", "Dupe Count", "Pred Dupes"]
     upload = pd.read_csv(paths["upload"])
     assert upload.shape == (5, 6)
     assert lineup_rows(session, picks).shape[0] == 5
@@ -126,3 +149,33 @@ def test_moneyline_events_match_fights_across_transliterations():
               {"home": "Erin Blanchfield", "away": "Jasmine Jasudavicius", "prices": {}}]
     got = match_events_to_fights(events, fights)
     assert got == {1: -135, 2: 114, 3: -238, 4: 195}
+
+
+def test_fitted_dupe_weights_follow_the_model(tmp_path):
+    from ivan.sports.mma.sample_field import dupe_weights
+    model = {"coef": {"intercept": -19.0, "b_left_per_100": -0.0854, "b_zero_left": 0.56, "b_win": 3.07, "b_same_fight": -1.7}, "left_cap": 2000.0}
+    path = tmp_path / "dupe_model.json"
+    path.write_text(json.dumps(model))
+    salary = {1: 9000, 2: 9000, 3: 8000, 4: 8000, 5: 8000, 6: 8000, 7: 7500}
+    win = {i: 0.6 for i in salary}
+    full = [1, 2, 3, 4, 5, 6]                 # 50000 exactly
+    light = [1, 2, 3, 4, 5, 7]                # 49500 left 500
+    cfg = {"model": "fitted", "dupe_model_path": str(path)}
+    w = dupe_weights([full, light], salary, win, cfg)
+    assert w[0] / w[1] == pytest.approx(np.exp(0.56 + 0.0854 * 5), rel=1e-6)
+    win2 = {**win, 7: 0.9}                    # a stronger favourite in the light lineup
+    w2 = dupe_weights([full, light], salary, win2, cfg)
+    assert w2[1] / w[1] == pytest.approx(np.exp(3.07 * 0.3), rel=1e-6)
+    fights = {1: "a", 6: "a", 2: "b", 3: "c", 4: "d", 5: "e", 7: "f"}    # 1 and 6 share a fight: only the full lineup doubles up
+    w3 = dupe_weights([full, light], salary, win, cfg, fights=fights)
+    assert (w3[0] / w3[1]) / (w[0] / w[1]) == pytest.approx(np.exp(-1.7), rel=1e-6)
+    # a version-2 model adds the rank among the candidates, the main-event count and Gamma lumpiness (seeded)
+    v2 = {"coef": {**model["coef"], "b_log_rank": -0.2, "b_main_event": 1.4}, "left_cap": 2000.0, "alpha": 2.0}
+    path.write_text(json.dumps(v2))
+    w4 = dupe_weights([full, light], salary, win, cfg, main_event={7})
+    assert (w4[1] / w4[0]) / (w[1] / w[0]) == pytest.approx(np.exp(1.4 - 0.2 * np.log(2)), rel=1e-6)   # light holds the main-event fighter and ranks 2nd
+    r1 = dupe_weights([full, light], salary, win, cfg, rng=np.random.default_rng(5)); r2 = dupe_weights([full, light], salary, win, cfg, rng=np.random.default_rng(5))
+    assert np.allclose(r1, r2) and not np.allclose(r1 / r1.max(), w4 / w4.max())
+    with pytest.raises(FileNotFoundError):
+        dupe_weights([full], salary, win, {"model": "fitted", "dupe_model_path": str(tmp_path / "nope.json")})
+    assert dupe_weights([full, light], salary, win, {"model": "original"})[0] > dupe_weights([full, light], salary, win, {"model": "original"})[1]

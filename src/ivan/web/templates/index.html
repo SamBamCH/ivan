@@ -42,13 +42,13 @@
         <table class="weights">
           <tr><th>Contest</th><th class="r">Entries</th>{% for k in weight_keys %}<th>{{ weight_labels[k] }}</th>{% endfor %}</tr>
           <tr class="all"><td>Set every contest to</td><td></td>
-            {% for k in weight_keys %}<td><input type="number" step="0.05" min="0" placeholder="all" data-all="{{ k }}"></td>{% endfor %}</tr>
+            {% for k in weight_keys %}<td>{% if k == 'method' %}<select data-all="{{ k }}"><option value="">all</option><option value="greedy">greedy</option><option value="portfolio">portfolio</option></select>{% else %}<input type="number" step="0.05" min="0" placeholder="all" data-all="{{ k }}">{% endif %}</td>{% endfor %}</tr>
           {% for r in weights_rows %}
           <tr><td>{{ r.name }}{% if r.saved %} <span class="muted small" title="weights from your last run">·</span>{% endif %}</td><td class="r">{{ r.entries }}</td>
-            {% for k in weight_keys %}<td><input type="number" step="0.05" min="0" name="w-{{ r.id }}-{{ k }}" value="{{ r.weights[k] }}"></td>{% endfor %}</tr>
+            {% for k in weight_keys %}<td>{% if k == 'method' %}<select name="w-{{ r.id }}-{{ k }}"><option value="greedy" {% if r.weights[k] != 'portfolio' %}selected{% endif %}>greedy</option><option value="portfolio" {% if r.weights[k] == 'portfolio' %}selected{% endif %}>portfolio</option></select>{% else %}<input type="number" step="0.05" min="0" name="w-{{ r.id }}-{{ k }}" value="{{ r.weights[k] }}"></td>{% endif %}{% endfor %}</tr>
           {% endfor %}
         </table>
-        <p class="help">Typical: cash-heavy (cash 0.8 / ROI 0.2) for double-ups and small fields, ROI-heavy for big tournaments. Diversity 0.1 keeps a little variety; 0.5 spreads entries far apart.</p>
+        <p class="help"><b>greedy</b> scores each lineup on its own (cash % and ROI blended, then diversity): typical cash-heavy (cash 0.8 / ROI 0.2) for double-ups and small fields, ROI-heavy for big tournaments; diversity 0.1 keeps a little variety, 0.5 spreads entries far apart. <b>portfolio</b> scores the whole book: it adds the lineup that most raises the book's log return summed over the simulated worlds, so lineups that win in the same worlds stop stacking up; the bankroll (in multiples of the contest's fees, 3 = losing every entry costs a third of it) sets how much a bad world hurts, and the weights only order the chart.</p>
       </div>
     {% endif %}
     {% if step.needs_entries and not entries %}<span class="warn small">Upload an entries file first.</span>{% endif %}
@@ -59,9 +59,10 @@
 
 <script>
   // "Set every contest to" row copies its value into every contest's input for that weight
-  document.querySelectorAll('input[data-all]').forEach(all => all.addEventListener('input', () => {
+  document.querySelectorAll('[data-all]').forEach(all => all.addEventListener(all.tagName === 'SELECT' ? 'change' : 'input', () => {
+    if (all.value === '') return;
     const form = all.closest('form');
-    form.querySelectorAll(`input[name$="-${all.dataset.all}"]`).forEach(i => i.value = all.value);
+    form.querySelectorAll(`[name$="-${all.dataset.all}"]`).forEach(i => i.value = all.value);
   }));
 </script>
 

@@ -19,19 +19,33 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from ivan.core.portfolio import DEFAULT_BANKROLL, book_summary, pick_portfolio
 from ivan.sports.mma.entries import BASE_COLS, SLOT_COLS
 from ivan.sports.mma.models import Lineup, LineupSimulationResult, MMAPlayer
 from ivan.sports.mma.paths import OUTPUT_DIR
 
-DEFAULTS = {"num_lineups": 150, "roi_weight": 0.8, "diversity_weight": 0.4}
+DEFAULTS = {"num_lineups": 150, "roi_weight": 0.8, "diversity_weight": 0.4, "method": "greedy", "bankroll": DEFAULT_BANKROLL}
+METHODS = ("greedy", "portfolio")
+LAST_BOOK: dict = {}          # contest name -> book summary of the last choose_lineups call (for the CLI's report)
 
 
 def choose_lineups(session: Session, contest_name: str, cfg: dict, num_lineups: Optional[int] = None,
-                   roi_weight: Optional[float] = None, diversity_weight: Optional[float] = None) -> list[LineupSimulationResult]:
+                   roi_weight: Optional[float] = None, diversity_weight: Optional[float] = None,
+                   method: Optional[str] = None, bankroll: Optional[float] = None) -> list[LineupSimulationResult]:
+    """
+    greedy (the original): quality = roi_weight x average ROI + (1 - roi_weight) x
+    cash rate, minus diversity_weight x the largest fighter overlap with the picks so far.
+    portfolio: ivan.core.portfolio.pick_portfolio on every candidate's per-simulation
+    ROI, bankroll in multiples of the entries' fees.
+    """
     ch = {**DEFAULTS, **cfg.get("choose", {})}
     n = int(num_lineups or ch["num_lineups"])
     w_roi = float(ch["roi_weight"] if roi_weight is None else roi_weight)
     lam = float(ch["diversity_weight"] if diversity_weight is None else diversity_weight)
+    method = str(method or ch.get("method") or "greedy").lower()
+    if method not in METHODS:
+        raise SystemExit(f"unknown chooser method {method!r}; expected one of {METHODS}")
+    bankroll = float(ch["bankroll"] if bankroll is None else bankroll)
 
     results = (session.query(LineupSimulationResult).filter(LineupSimulationResult.contest_name == contest_name)
                .order_by(LineupSimulationResult.lineup_id).all())
@@ -40,6 +54,15 @@ def choose_lineups(session: Session, contest_name: str, cfg: dict, num_lineups: 
     lineups = {lu.id: lu for lu in session.query(Lineup).filter(Lineup.id.in_([r.lineup_id for r in results])).all()}
 
     quality = np.array([w_roi * float(r.avg_roi or 0.0) + (1 - w_roi) * float(r.cash_pct or 0.0) for r in results])
+    if method == "portfolio":
+        traces = [np.asarray(r.roi, dtype=np.float32) for r in results]
+        S = min(t.size for t in traces)
+        R = np.vstack([t[:S] for t in traces])
+        picked, _ = pick_portfolio(R, min(n, len(results)), bankroll=bankroll, q=quality)
+        top = np.argsort(-quality)[:min(n, len(results))]
+        LAST_BOOK[contest_name] = {"method": method, "bankroll": bankroll, "chosen": book_summary(R[picked]), "top_quality": book_summary(R[top])}
+        return [results[k] for k in picked]
+
     pids = sorted({p for r in results for p in lineups[r.lineup_id].player_ids_list})
     col = {p: j for j, p in enumerate(pids)}
     B = np.zeros((len(results), len(pids)), dtype=np.int16)
@@ -60,6 +83,12 @@ def choose_lineups(session: Session, contest_name: str, cfg: dict, num_lineups: 
         picked.append(k)
         available[k] = False
         max_overlap = np.maximum(max_overlap, B @ B[k])
+    traces = [np.asarray(r.roi, dtype=np.float32) for r in results]
+    S = min(t.size for t in traces)
+    if S:
+        R = np.vstack([t[:S] for t in traces])
+        top = np.argsort(-quality)[:len(picked)]
+        LAST_BOOK[contest_name] = {"method": method, "bankroll": bankroll, "chosen": book_summary(R[picked]), "top_quality": book_summary(R[top])}
     return [results[k] for k in picked]
 
 
@@ -74,9 +103,10 @@ def lineup_rows(session: Session, results: list[LineupSimulationResult]) -> pd.D
         cells += [""] * (6 - len(cells))
         salary = sum(players[p].salary for p in ids if p in players)
         rows.append(cells + [round(float(r.avg_payout or 0), 2), round(float(r.avg_roi or 0), 4),
-                             round(100 * float(r.cash_pct or 0), 2), 50000 - salary, int(r.dupes or 1)])
+                             round(100 * float(r.cash_pct or 0), 2), 50000 - salary, int(r.dupes or 1),
+                             round(float(r.predicted_dupes), 1) if getattr(r, "predicted_dupes", None) is not None else None])
     return pd.DataFrame(rows, columns=["F1", "F2", "F3", "F4", "F5", "F6", "Avg Payout", "Avg ROI", "Cash %",
-                                       "Salary Remaining", "Dupe Count"])
+                                       "Salary Remaining", "Dupe Count", "Pred Dupes"])
 
 
 def exposures(session: Session, results: list[LineupSimulationResult]) -> pd.DataFrame:
@@ -114,8 +144,22 @@ def format_exposures(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def format_book(contest_name: str) -> str:
+    """One line on how the chosen book does across the simulated worlds (after choose_lineups)."""
+    b = LAST_BOOK.get(contest_name)
+    if not b or not b.get("chosen"):
+        return ""
+    c, t = b["chosen"], b.get("top_quality") or {}
+    how = b["method"] + (f", bankroll {b['bankroll']}x fees" if b["method"] == "portfolio" else "")
+    line = (f"  book ({how}) over {c['worlds']} sim worlds: "
+            f"median ROI {c['p50']:+.0%}, p5 {c['p5']:+.0%}, P(loss) {c['p_loss']:.0%}, P(lose half) {c['p_lose_half']:.0%}")
+    if t:
+        line += f"  (quality alone: median {t['p50']:+.0%}, p5 {t['p5']:+.0%}, P(lose half) {t['p_lose_half']:.0%})"
+    return line
+
+
 def choose_entries(session: Session, entries: pd.DataFrame, cfg: dict, roi_weight: Optional[float] = None,
-                   diversity_weight: Optional[float] = None) -> dict:
+                   diversity_weight: Optional[float] = None, method: Optional[str] = None, bankroll: Optional[float] = None) -> dict:
     """
     Fill the entries file: for each contest in it, choose as many lineups as
     we hold entries, from that contest's simulation results. Returns the
@@ -132,7 +176,8 @@ def choose_entries(session: Session, entries: pd.DataFrame, cfg: dict, roi_weigh
             rec["skipped"] = "not simulated"
             contests.append(rec)
             continue
-        picks = choose_lineups(session, name, cfg, num_lineups=n, roi_weight=roi_weight, diversity_weight=diversity_weight)
+        picks = choose_lineups(session, name, cfg, num_lineups=n, roi_weight=roi_weight, diversity_weight=diversity_weight,
+                               method=method, bankroll=bankroll)
         detail = lineup_rows(session, picks)
         lineups = {lu.id: lu for lu in session.query(Lineup).filter(Lineup.id.in_([r.lineup_id for r in picks])).all()}
         for i, (r, (_, erow)) in enumerate(zip(picks, group.iterrows())):
