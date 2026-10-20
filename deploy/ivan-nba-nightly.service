@@ -1,0 +1,17 @@
+# NBA box scores for the season in progress (scripts/nba/nightly.py). A *user* unit; installed by
+# deploy/install_nba_timers.sh.
+[Unit]
+Description=Ivan NBA nightly data job (box scores)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+EnvironmentFile=__ROOT__/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nba/nightly.py
+StandardOutput=append:__ROOT__/data/nba/logs/nightly.log
+StandardError=append:__ROOT__/data/nba/logs/nightly.log
+TimeoutStartSec=40min
+Nice=10

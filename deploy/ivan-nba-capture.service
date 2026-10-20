@@ -1,0 +1,17 @@
+# Game-day capture tick for NBA (scripts/nba/capture.py): DK pool + Rotowire every tick, props at
+# offsets before lock, a projection capture each time. A *user* unit; installed by deploy/install_nba_timers.sh.
+[Unit]
+Description=Ivan NBA capture tick
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+EnvironmentFile=__ROOT__/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nba/capture.py
+StandardOutput=append:__ROOT__/data/nba/logs/capture.log
+StandardError=append:__ROOT__/data/nba/logs/capture.log
+TimeoutStartSec=12min
+Nice=10

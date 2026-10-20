@@ -48,10 +48,14 @@ class LiveSlate:
         self.state = self.hist.before(horizon)
         self.team_fpts = self.hist.team_before(horizon)
         self.starters: dict[str, set[str]] = {}
+        self.starters_confirmed: dict[str, bool] = {}
+        self.starters_fetched_at = None
         if use_starters:
             for r in session.query(StartingLineups).all():
-                if getattr(r, "confirmed", 1):
-                    self.starters.setdefault(r.team, set()).add(normalize_name(r.player_name))
+                # expected lineups count as the best guess; `starters_confirmed` says whether Rotowire confirmed them
+                self.starters.setdefault(r.team, set()).add(normalize_name(r.player_name))
+                self.starters_confirmed[r.team] = bool(r.confirmed)
+                self.starters_fetched_at = r.fetched_at or self.starters_fetched_at
         self.market: dict[str, dict[str, float]] = {}
         if use_market:
             for r in session.query(NBAMarketRate).all():

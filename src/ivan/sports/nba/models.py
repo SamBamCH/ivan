@@ -91,6 +91,37 @@ class NBAPlayer(NBABase):
     # Marginal distribution as 101 quantiles (JSON list); the correlated sampler
     # maps uniforms through it. None -> Normal(fpts_mean, fpts_std).
     fpts_quantiles  = Column(JSON,      nullable=True)
+    # DraftKings' own AvgPointsPerGame from the draftables payload (free yardstick)
+    dk_avg_fpts     = Column(Float,     nullable=True)
+    draft_group_id  = Column(Integer,   nullable=True)
+
+
+class NBAProjectionCapture(NBABase):
+    """
+    One row per player per capture: what we (or a yardstick source) projected
+    at that moment, with the lock time, so accuracy can be read by offset
+    before lock. Appended by every ingest/capture tick; never updated.
+    """
+    __tablename__ = "nba_projection_capture"
+
+    id              = Column(Integer,  primary_key=True, autoincrement=True)
+    captured_at     = Column(DateTime, nullable=False, index=True)
+    draft_group_id  = Column(Integer,  nullable=True, index=True)
+    lock            = Column(DateTime, nullable=True)
+    source          = Column(String,   nullable=False, default="ours")   # ours | stokastic | dk_avg
+    player_id       = Column(Integer,  nullable=True)
+    player_name     = Column(String,   nullable=False, index=True)
+    team            = Column(String,   nullable=True)
+    opponent        = Column(String,   nullable=True)
+    gametime        = Column(DateTime, nullable=True)
+    salary          = Column(Integer,  nullable=True)
+    status          = Column(String,   nullable=True)
+    starter         = Column(String,   nullable=True)    # confirmed | expected | bench | unknown
+    minutes_proj    = Column(Float,    nullable=True)
+    fpts_mean       = Column(Float,    nullable=True)
+    fpts_std        = Column(Float,    nullable=True)
+    priced          = Column(Boolean,  nullable=True)
+    pinned          = Column(Boolean,  nullable=True)
 
 
 class NBAOdds(NBABase):
@@ -260,4 +291,5 @@ class StartingLineups(NBABase):
     team        = Column(String, nullable=False)
     position    = Column(String, nullable=False)
     confirmed   = Column(Boolean, nullable=False, default=False)  # True if lineup is confirmed, False if expected
+    fetched_at  = Column(DateTime, nullable=True)                 # when the Rotowire page was read
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Ivan NBA capture tick every 15 minutes during the day
+
+[Timer]
+# 09:00 .. 23:45 local, every 15 min. The tick exits immediately when no slate is upcoming.
+OnCalendar=*-*-* 09..23:00/15:00
+Persistent=false
+RandomizedDelaySec=30
+Unit=ivan-nba-capture.service
+
+[Install]
+WantedBy=timers.target

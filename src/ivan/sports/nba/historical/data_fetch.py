@@ -50,13 +50,21 @@ def _game_in_db(session, game_id):
     result = session.execute(stmt).first()
     return result is not None
 
-def _fetch_games():
+def current_season(today=None) -> str:
+    """NBA season string for a date: October onwards is the season that starts that year."""
+    from datetime import date as _date
+    d = today or _date.today()
+    y = d.year if d.month >= 10 else d.year - 1
+    return f"{y}-{str(y + 1)[2:]}"
+
+
+def _fetch_games(season: str | None = None):
     """
     Fetch all games for a season.
     returns dict mapping game_id to game_date.
     """
     # Request only NBA games from the API (league_id '00' = NBA)
-    season_arg = '2025-26'
+    season_arg = season or current_season()
     league_arg = '00'
     logger.debug("Calling LeagueGameFinder with season=%s league_id=%s", season_arg, league_arg)
     gamefinder = leaguegamefinder.LeagueGameFinder(
@@ -154,14 +162,13 @@ def _fetch_boxscore_for_game(game_id, max_retries=1):
             return None
 
 
-def fetch_boxscores(session: Session):
+def fetch_boxscores(session: Session, season: str | None = None, max_games: int | None = None):
     """
-    ARGS:
-        start_date: datetime object for start date
-        end_date: datetime object for end date
-        season: NBA season string (i.e. "2023-24")
+    Store box scores for every game of `season` (default: the current one) that
+    is not in nba_stats yet. max_games caps one run (nba_api rate limits).
     """
-    games_dict = _fetch_games()
+    season = season or current_season()
+    games_dict = _fetch_games(season)
 
     logger.info("Total games returned by _fetch_games: %d", len(games_dict))
 
@@ -170,9 +177,11 @@ def fetch_boxscores(session: Session):
     logger.info("Skipping %d games already in DB", already_fetched)
     logger.info("Fetching %d remaining games.", len(games_to_fetch))
 
-    for game_id, game_date in games_to_fetch.items():
+    for n_done, (game_id, game_date) in enumerate(games_to_fetch.items()):
+        if max_games is not None and n_done >= max_games:
+            logger.info("stopping after %d games (max_games)", max_games)
+            break
         boxscore_df = _fetch_boxscore_for_game(game_id)
-        print(boxscore_df)
 
         if boxscore_df is None:
             logger.warning("Boxscore fetch returned None for game %s", game_id)
@@ -183,7 +192,7 @@ def fetch_boxscores(session: Session):
             continue
 
         try:
-            stats_list = _transfer_boxscore_to_model(boxscore_df, game_date)
+            stats_list = _transfer_boxscore_to_model(boxscore_df, game_date, season=season)
         except Exception:
             logger.exception("Error transforming boxscore for game %s", game_id)
             stats_list = []
@@ -201,86 +210,65 @@ def fetch_boxscores(session: Session):
 
     logger.info("NBA stats upsert run completed")
 
-def fetch_starting_lineups(session: Session):
-    """Parse Rotowire NBA starters from lineup__list containers (name, team, position)."""
-    # Ensure schema has 'confirmed' column (non-destructive add if missing for SQLite/Postgres)
-    # This lightweight migration avoids requiring a manual recreation of the table.
+ROTOWIRE_URL = "https://www.rotowire.com/basketball/nba-lineups.php"
 
-    url = "https://www.rotowire.com/basketball/nba-lineups.php"
-    html = requests.get(url, timeout=15).text
+
+def fetch_rotowire_html(timeout: int = 15) -> str:
+    return requests.get(ROTOWIRE_URL, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}).text
+
+
+def parse_rotowire(html: str) -> pd.DataFrame:
+    """
+    Starters from the Rotowire NBA lineups page: one row per listed starter with
+    columns name, team, position, confirmed (Rotowire's is-confirmed flag).
+    Players under the "may not play" title are skipped.
+    """
     soup = BeautifulSoup(html, "html.parser")
-
-    names: list[str] = []
-    teams: list[str] = []
-    positions: list[str] = []
-    confirmed_flags: list[bool] = []
-
-    # Find all game containers
+    rows = []
     for game_container in soup.select(".lineup"):
-        # Each game has visit and home lineup lists
         for lineup_ul in game_container.select("ul.lineup__list"):
-            # Determine team abbreviation from data attributes in buttons
-            team_abbr = None
             button = lineup_ul.select_one("button[data-team]")
-            if button and button.get("data-team"):
-                team_abbr = button.get("data-team")
-            
+            team_abbr = button.get("data-team") if button else None
             if not team_abbr:
                 continue
-            # Extract lineup status (Expected vs Confirmed). Each lineup list contains a
-            # li element with class lineup__status and modifier class is-expected or is-confirmed.
             status_li = lineup_ul.select_one("li.lineup__status")
-            confirmed = False
-            if status_li:
-                cls = status_li.get("class", [])
-                # Rotowire uses 'is-confirmed' for confirmed lineups
-                confirmed = any(c == "is-confirmed" for c in cls)
-            
-            # Parse starters - only players with is-pct-play-100 before "MAY NOT PLAY" section
+            confirmed = bool(status_li and "is-confirmed" in status_li.get("class", []))
             in_may_not_play = False
             for li in lineup_ul.find_all("li", recursive=False):
-                # Check if we've hit the "MAY NOT PLAY" section
                 if "lineup__title" in li.get("class", []):
                     in_may_not_play = True
                     continue
-                
-                # Only process starter players (is-pct-play-100)
                 if "lineup__player" in li.get("class", []) and not in_may_not_play:
-                    
-                    # Extract position
                     pos_el = li.select_one(".lineup__pos")
                     position = pos_el.get_text(strip=True) if pos_el else ""
-                    
-                    # Extract name from <a title="...">
                     a = li.find("a")
                     name = a.get("title", "").strip() if a else ""
-                    
-                    if not name or not position:
-                        continue
-                    
-                    names.append(name)
-                    teams.append(team_abbr)
-                    positions.append(position)
-                    confirmed_flags.append(confirmed)
+                    if name and position:
+                        rows.append({"name": name, "team": team_abbr, "position": position, "confirmed": confirmed})
+    df = pd.DataFrame(rows, columns=["name", "team", "position", "confirmed"])
+    return df.drop_duplicates(subset=["name"], keep="first")
 
-    df = pd.DataFrame({"name": names, "team": teams, "position": positions, "confirmed": confirmed_flags})
-    
-    # Remove duplicates (keep first occurrence in case of scraping issues)
-    df = df.drop_duplicates(subset=["name"], keep="first")
 
-    # Clear existing lineups (this is a daily snapshot)
-    deleted_count = session.query(StartingLineups).delete()
+def store_starting_lineups(session: Session, df: pd.DataFrame, fetched_at=None) -> int:
+    """Replace starting_lineups with this page's starters."""
+    from datetime import datetime as _dt
+    fetched_at = fetched_at or _dt.now()
+    session.query(StartingLineups).delete()
     session.flush()
-    
-    # Insert fresh data
+    n = 0
     for _, row in df.iterrows():
-        player_name = normalize_name(row["name"])
-        team = row["team"]
-        position = row["position"]
-        
-        confirmed = bool(row.get("confirmed", False))
-        new = StartingLineups(player_name=player_name, team=team, position=position, confirmed=confirmed)
-        session.add(new)
-
+        session.add(StartingLineups(player_name=normalize_name(row["name"]), team=row["team"],
+                                    position=row["position"], confirmed=bool(row["confirmed"]), fetched_at=fetched_at))
+        n += 1
     session.commit()
-    session.close()
+    return n
+
+
+def fetch_starting_lineups(session: Session, raw_sport: str | None = "nba") -> int:
+    """Fetch, keep the page as raw rotowire/lineups, parse and store."""
+    html = fetch_rotowire_html()
+    if raw_sport:
+        from ivan.core import raw
+        from datetime import date as _date
+        raw.store(raw_sport, "rotowire/lineups", _date.today().isoformat(), html, ext="html")
+    return store_starting_lineups(session, parse_rotowire(html))

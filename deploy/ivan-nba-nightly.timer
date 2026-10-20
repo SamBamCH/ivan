@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Ivan NBA nightly data job three times a day, catching up after sleep
+
+[Timer]
+OnCalendar=*-*-* 06,12,18:45:00
+Persistent=true
+RandomizedDelaySec=5min
+Unit=ivan-nba-nightly.service
+
+[Install]
+WantedBy=timers.target
