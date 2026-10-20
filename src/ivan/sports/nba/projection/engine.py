@@ -108,7 +108,7 @@ def project_team(
                "games": r["games"], "fpm": r["fpm"] * float(bump[name]), "priced": r["priced"]}
         for s in STATS:
             rec[f"proj_{s}"] = mins * rates[s]
-        if simulate and mins > 0:
+        if simulate and mins > 0 and params.n_sims > 0:
             samples = simulate_fpts(mins, rates, n=params.n_sims,
                                     min_sd=minutes_sd(mins, r["hist_sd"]),
                                     dispersion=params.dispersion, rng=rng)

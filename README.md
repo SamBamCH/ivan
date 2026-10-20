@@ -46,7 +46,7 @@ Run these top to bottom. Each is one script; the web UI is just buttons for the 
 | 1 | Ingest the slate | `python scripts/nfl/ingest.py -p --update-odds true` | Players + salaries from DraftKings, player odds from the-odds-api, fits each player's FPTS distribution, then projects ownership by sampling a field of noisy-optimal lineups and snapshots projections for training. `-p` (pre-lock) re-fetches the player pool and prompts for the slate; `--draft-group <id>` skips the prompt. Drop `-p` to refresh odds only. `--no-ownership` / `--no-snapshot` skip those tails; `scripts/nfl/project_ownership.py` re-runs them alone. |
 | 2 | Contests & payouts | `python scripts/nfl/get_contest_ids.py && python scripts/nfl/get_payouts.py [--days N \| --all]` | Upcoming DK contests and their payout tables. The simulator needs a payout table for every contest in your entries file. Payouts are fetched only for contests starting within the last day or later; `--all` re-queries old ones too. |
 | 3 | Generate the field | `python scripts/nfl/generate_lineups.py 10000 8` | `<lineups> <parallel workers>`. Correlated player samples → ILP → the pool of candidate lineups the simulator picks from. Deduplicates at the end. |
-| 4 | Simulate | `python scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-c 10000] [-d]` | For each contest in the entries CSV: sample an opposing field with the duplication model, simulate `-n` outcomes, score every candidate lineup (cash %, ROI, rank), replacing earlier results for that contest. `-c` caps the simulated field size; `-d` allows duplicate lineups in classic. Each contest also gets a report (`contest_sim_report` table and `data/nfl/diagnostics/contest_*/report.json`) of the sampled field, the payout scaling and the invariants it checked; the web UI's Contests page renders it. |
+| 4 | Evaluate | `python scripts/nfl/sim.py [--entries file.csv] [-n 1000] [-d]` | Draws `-n` worlds of the slate's game latents (team points) once, then for each contest in the entries CSV works out every candidate lineup's expected payout, ROI, rank and cash chance in every world against the contest's real field (each candidate weighted by its expected copies from the duplication model) and real payout table (`ivan.sports.nfl.conditioned`: the lineup's conditional score is Normal given the world, the field a mixture of such Normals, the count of entries ahead a compound Poisson over duplicated lineups, inverted exactly over the top ranks). No field is sampled and no payouts are scaled; a lineup is credited with what it was positioned for in each world, so a thousand worlds carry what millions of counted simulations would. Results replace earlier ones for that contest; each contest also gets a report (`contest_sim_report` table and `data/nfl/diagnostics/contest_*/report.json`) with the conservation checks (the field should collect the whole prize pool), the correlation check and the worlds' team points; the web UI's Contests page renders it and the Choose page turns the worlds into "what to root for". |
 | 5 | Choose | `python scripts/nfl/choose.py [--entries file.csv] [--no-prompt] [--cash-pct .5 --avg-roi-win .5 --diversity-lambda .1] [-o base.csv]` | Picks lineups per contest from the sim results and writes DK-format upload CSVs, an exposures CSV, a per-lineup detail CSV (one row per player per entry with the lineup's simulated cash % and ROI) and a chooser-diagnostics JSON (every candidate's cash %, ROI, quality and map position, the picks and the greedy trace); the web UI's Exposures and Choose pages read them. With no weight flags it prompts per contest; any weight flag, `--weights-json`, or `--no-prompt` makes it non-interactive. |
 
 The entries file is the CSV you export from DraftKings for the contests you have entered
@@ -64,6 +64,17 @@ optional `"default"`:
 {"default": {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1},
  "193391004": {"diversity_lambda": 0.3}}
 ```
+
+Two chooser methods (`--method`, or `"method"` in the weights): **greedy** (the default)
+scores each candidate on its own, a blend of simulated cash % and mean ROI, then adds
+lineups by quality plus `diversity_lambda` times their distance from the picks so far.
+**portfolio** scores the book: each step adds the lineup that most raises the book's
+log return summed over the simulated worlds, `sum_w log(1 + net_w / bankroll)`, with
+`--bankroll` the scale in multiples of the entries' fees (default 3; near 1 makes the
+bad worlds matter most, large values approach plain mean ROI). Lineups that win in
+worlds the book already wins add little, so the picks spread across game scripts
+instead of stacking one. `scripts/nfl/compare_choosers.py` runs several settings on a
+slate's existing simulation and settles each book against the real fields.
 
 ### Kickers and defenses
 
@@ -506,12 +517,35 @@ The NBA side is being brought up to the NFL approach for 2026-27. What exists to
 
 | Step | Command | What it does |
 |---|---|---|
-| Ingest | `python scripts/nba/ingest.py -p --update-odds --no-projections-csv` | Upcoming contests, the DK player pool (`-p`), player props from the-odds-api turned into per-minute market rates (`--update-odds`, needs `ODDS_API_KEY` in `.env`), confirmed starters from Rotowire into `starting_lineups`. Without `--no-projections-csv` it still reads `data/nba/input/stok.csv` if present. |
-| Project | `python scripts/nba/project.py [--dry-run] [--team MIL] [--no-market]` | Minutes-anchored projections (below): market rates where a player is priced, history elsewhere. Writes `fpts_mean`, `fpts_std`, `minutes_proj` on `nba_player`; players with DK status OUT get no projection. |
-| Late news | `python scripts/nba/news.py "Giannis Antetokounmpo" [--accept] [--conditional]` | Marks him out, shows his team with and without him, asks for minutes player by player (Enter keeps the model's), saves the pins to `minutes_overrides.csv`, writes the projections. Then `sim.py --fresh`. |
+| Capture (timer) | `deploy/install_nba_timers.sh` → `scripts/nba/capture.py` every 15 min, 09:00–23:45 | On a game day: every classic draft group in the DK lobby gets its pool (statuses, DK FPPG) and the Rotowire page every tick, player props at 6h/3h/90m/45m/15m before its lock, and a projection capture each time. Everything is kept raw under `data/nba/raw/` (`dk/lobby`, `dk/draftables`, `rotowire/lineups`, `odds/events`, `odds/props`), as an `archived_slate` capture, and as `nba_projection_capture` rows (ours, DK's FPPG, any Stokastic CSV) keyed by lock time. `nba_player` ends each tick holding the slate that locks next. State in `data/nba/capture_state.json`, log in `data/nba/logs/capture.log`. |
+| Ingest (by hand) | `python scripts/nba/ingest.py --list` then `--draft-group ID [--update-odds]` | One slate, same steps as a capture tick (`ivan.sports.nba.ingest`). `--project-only` re-projects the stored pool; `--stok-csv file` records a Stokastic export as yardstick capture rows without touching our projections. |
+| News desk | `python scripts/nba/serve.py` → http://127.0.0.1:8001 | The page for the last hour before lock (below). |
+| Project | `python scripts/nba/project.py [--dry-run] [--team MIL] [--no-market]` | Minutes-anchored projections (below) from the CLI: market rates where a player is priced, history elsewhere. Writes `fpts_mean`, `fpts_std`, `minutes_proj`, `fpts_quantiles` on `nba_player`; players with DK status OUT get no projection. |
+| Late news (CLI) | `python scripts/nba/news.py "Giannis Antetokounmpo" [--accept] [--conditional]` | Terminal version of the desk for one scratch: shows his team with and without him, asks for minutes player by player, saves the pins, writes the projections. |
+| Nightly (timer) | `scripts/nba/nightly.py` at 06:45/12:45/18:45 | Box scores for the season derived from the date (nba_api, capped per run). |
 | Generate, simulate, choose | `python scripts/nba/sim.py [--num-lineups 25000] [--num-sims 1000]` | One interactive flow: GLPK lineup pool, field sampled from the historical-contest model, contest sims from the entries CSV, lineup selection. |
 | Late swap | `python scripts/nba/swap.py` | Re-optimises locked entries against the remaining games. |
 | Overnight | `python scripts/nba/overnight.py` | Box scores (nba_api), contest results and payouts, refits the field model. **Runs on import** — do not call it with `--help`. |
+
+### News desk
+
+`scripts/nba/serve.py` serves one page on port 8001, separate from the NFL
+app. Teams are cards sorted by how far they are from their norm, with alerts:
+red when volume has opened up (a rotation player OUT or scratched), amber for
+role and market signals (a confirmed starter who has been coming off the
+bench, a usual starter benched, a questionable rotation player, the market
+pricing a player 20%+ away from his history-only projection, an expected
+lineup still unconfirmed inside 75 minutes of tip), grey for information
+(no Rotowire lineup yet, the roster's history minutes far from 241, unpriced
+rotation players). Open a card for the roster: history minutes, the model's
+minutes as an input, fpts and sd, the history-only projection, the market
+fpts, DK's FPPG, and the rate source. Type minutes to pin a player and the
+team re-allocates around the pin in place; ✕ scratches; blank unpins. Pins
+are in memory until **Publish**, which writes the projections, the quantiles
+and `data/nba/input/minutes_overrides.csv`, so the sim and the next capture
+tick use them. **Refresh DK + lineups** is free; **Refresh props** costs
+about 12 credits per game. The page reloads itself when a capture tick
+rewrites the pool.
 
 ### Minutes-anchored projections
 
@@ -598,8 +632,12 @@ consensus and Stokastic correlate at 0.994: Stokastic is the market, so the
 real test of the odds layer starts when ingests snapshot projections through
 the season. Reports land in `data/nba/diagnostics/`.
 
-Not yet ported from NFL: the web pipeline and the overnight job's safety
-rails. DK status Q (questionable) is treated as playing. The projection snapshot keeps one `fpts_mean`
+Not yet ported from NFL: contests/payouts as pipeline steps, settle (standings
+scrape), the replay adapter, run artifacts for sim/choose, tests. DK status Q
+(questionable) is treated as playing. `overnight.py` is superseded by
+`capture.py` + `nightly.py` and still runs on import. Model work queued from
+opening night: market-implied minutes for priced players (a 10-minute history
+with a 25-point market line means the role changed), and a Q-status prior. The projection snapshot keeps one `fpts_mean`
 per player-day, so keep dropping `stok.csv` on a separate column if you want
 Stokastic as a season-long yardstick.
 
@@ -614,12 +652,19 @@ script per step. Run top to bottom:
 | # | Step | Command | What it does |
 |---|---|---|---|
 | 1 | Ingest the slate | `python scripts/mma/ingest.py` | No arguments: picks the Classic MMA slate on DraftKings (the one with the most contests; `--draft-group <id>` for another), pulls its fighter pool, fills each fighter's Win odds from the-odds-api (`ODDS_API_KEY`; DraftKings moneylines, matched to the fights by name similarity), fetches the slate's contests and payout tables, and writes the slate with a win probability and projection per fighter. The finish markets and volume lines are not on the-odds-api, so they are hand-entered: on a new card ingest writes `data/mma/input/fight_odds.csv` (fight, u60 sec, 1st round, itd) and `player_odds.csv` (1st round win, ITD, Win, sig strikes, takedowns) with the names and Win odds in; fill them from the sportsbook and run ingest again. Whenever those files describe the current card they are read as overrides (a non-empty cell wins over the API) and left alone. The summary says what is still blank. The latest `--main-events` fights are 5 rounds. `--players-csv <DK export>` uses DraftKings' CSV instead of the API. |
-| 2 | Generate the field's lineups | `python scripts/mma/generate_lineups.py 6000 4` | `<solves> <workers>`. Each solve maximises jittered win probability (main-event fighters boosted) under DK's rules: six fighters, cap, salary floor, one fighter per fight. Unique results form the candidate pool. Clears the previous pool unless `--append`. |
+| 2 | Generate the field's lineups | `python scripts/mma/generate_lineups.py --universe` | `--universe` enumerates every valid lineup (six fighters, one per fight, under the cap; 50-110k for a 12-13 fight card) and the fitted field model sets each one's frequency, so the sampled field matches a real one at the top too. The older MIP mode (`<solves> <workers>`) is kept: each solve maximises jittered win probability (main-event fighters boosted; `projection_share` of the solves maximise projected points instead) under DK's rules: six fighters, cap, salary floor, one fighter per fight. Unique results form the candidate pool. Clears the previous pool unless `--append`. 12,000 solves give a pool whose duplication matches a real 40k-entry field; 6,000 made the field far too concentrated. |
 | 3 | Simulate | `python scripts/mma/sim.py` | With no arguments, every contest in `data/mma/input/entries.csv` (the DraftKings entries export, as for NFL; `--entries <file>` for another), each against its own sampled field; contests ingest did not list are fetched by id. One contest instead: `--contest "mini-MAX"` (the upcoming DK contest whose name contains the text), `--contest-id <dk id>`, or hand-described with `--payouts payouts.csv --total-entries 47500 --fee 0.5 --name "UFC Sat"` (rank, prize rows as copied from the contest page). Each run samples a field of `field.size` entries from the pool, duplicating cap-spending and favourite-heavy lineups more, scales the payout table to that field, simulates every fight `n_sims` times (finish type from the fight markets, winner from the fighter markets for that finish, production by time fought) and ranks every entry, ties pooling their prizes. Writes each sampled field to `data/mma/output/field.*.csv`. |
 | 4 | Choose | `python scripts/mma/choose.py [--roi-weight 0.8] [--diversity-weight 0.4]` | With no arguments, fills every row of `entries.csv`: per contest, as many lineups as you hold entries, written to `data/mma/output/chosen_entries.<stamp>.csv` in DraftKings' upload format (your entry rows with the six F columns filled), plus `chosen_entries.{lineups,exposures}.<stamp>.csv`. One contest instead: `--name <contest> --lineups 150` writes `chosen_lineups.{lineups,upload,exposures}.<stamp>.csv`. Greedy either way: quality = ROI weight × average ROI + (1 − ROI weight) × cash rate, minus the diversity weight times the largest fighter overlap with anything already picked. |
 
 Scoring constants, the duplication model, the generator and the chooser are
-all in `config/mma.json`, with the values the original used. `IVAN_SEED`
+all in `config/mma.json`. The field's duplication model (`field.model`) is `fitted`: a Poisson
+log-linear model of copies on salary left, summed win probability and a same-fight flag, fitted by
+`scripts/mma/build_dupe_model.py` on real fields exported with `scripts/mma/get_contest_data.py
+--contest-ids ...` (DraftKings standings, kept raw under `data/mma/raw/dk/standings`, derived per
+contest by `ivan.sports.mma.standings` into `data/mma/derived/contests/<id>/`: unique lineups with
+copies, salary left, win sum; the fighter side table with drafted % and actual points). `original`
+is the hand-set exponential the port started with. The chooser takes `--method portfolio
+--bankroll 1.2` like NFL's. `IVAN_SEED`
 makes a run reproducible, as for NFL. Tests: `python -m pytest tests/mma`
 (end to end on the sample slate under `tests/mma/data`).
 
