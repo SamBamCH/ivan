@@ -64,6 +64,33 @@ free), sim/choose parity and tests (phase 2), the NFL web app's sport
 descriptor (phase 3; the desk is a separate small app for now), settle and the
 replay adapter (phase 4).
 
+## Status 2026-10-21: phase 2 landed, scripts folder trimmed
+
+Opening day found the props fetch covering only the latest-locking slate's
+teams (fixed: one fetch per tick for every due slate's teams; odds refresh
+per player). `scripts/nba/{overnight,sim,swap}.py`, `cli.py` and the
+pre_lock `slate/lineup/contest/payouts` modules are gone; their logic is now
+the stage modules the NFL has, with the same shapes:
+
+- `nba.field_generation.generate_field` (workers seeded from IVAN_SEED,
+  dedupe, `clear_lineups`) <- `scripts/nba/generate_lineups.py N JOBS [--fresh]`
+- `nba.sample_field` (the pickled projection-bin model, or projection-weighted;
+  config `field.sampler`) and `nba.simulate_contest.simulate_entries` (MC per
+  contest, results replace, sim artifact npz/json under `output/sim/<stamp>`,
+  `contest_sim_report` row + `diagnostics/<contest>/report.json` with
+  conservation checks) <- `scripts/nba/sim.py [--entries] [-n] [-c]`
+- `nba.choose.choose_lineup_ids` (greedy / portfolio, ROI rows shrunk by se,
+  cross-fit honest expectation; numerics shared with NFL in `ivan.core.chooser`)
+  and `nba.lineup_export.run_choose` (DK upload CSV, exposures, lineups,
+  choose json, simroi npz) <- `scripts/nba/choose.py [--no-prompt] [--weights-json]`
+- `nba.contests` (lobby -> contests, contest detail -> payouts, raw kept);
+  the capture tick stores the day's contests and payouts itself.
+- `tests/nba/` smoke tests; `config/nba.json` gained generate / field / sim / choose.
+
+`post_lock/` (late swap) is untouched and still importable but has no script;
+porting it is a later phase. Not yet built: standings download after settle
+(phase 4), game lines, the web descriptor (phase 3).
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.

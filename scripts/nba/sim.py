@@ -1,105 +1,46 @@
-from ivan.sports.nba.pre_lock.lineup import generate_lineups, deduplicate_lineups
-from ivan.sports.nba.pre_lock.slate import simulate_one_slate, choose_lineups_for_slate
-from ivan.sports.nba.cli import print_exposures, analyze_lineups
-from ivan.database.session import init_db, get_session
-from sqlalchemy import text
+#!/usr/bin/env python3
+"""
+scripts/nba/sim.py
+
+Simulate every contest in the entries CSV for every candidate lineup
+(ivan.sports.nba.simulate_contest.simulate_entries): the field is sampled
+from the generated pool, scored with correlated player draws, ranked and paid.
+
+    scripts/nba/sim.py [--entries file.csv] [-n 1000] [-c 10000]
+
+Each contest's per-lineup results replace any earlier ones; a report of the
+run (field, payouts, score distribution, conservation checks) is stored in
+contest_sim_report and written to data/nba/diagnostics/, and the run's
+artifacts go to data/nba/output/sim/<stamp>/.
+"""
 import argparse
 
-from rich.console import Console
-from ivan.sports.nba.paths import DEFAULT_ENTRIES_CSV, CHOSEN_LINEUPS_CSV
+from ivan.core import artifacts
+from ivan.core.config import config_path, load_config
+from ivan.database.session import get_session, init_db
+from ivan.sports.nba.ingest import ensure_schema
+from ivan.sports.nba.paths import OUTPUT_DIR
+from ivan.sports.nba.simulate_contest import clean_old_diagnostics, simulate_entries
+from ivan.sports.nba.utils import _cfg
 
 
-def main():
-    p = argparse.ArgumentParser(description="NBA pre-lock simulation flow")
-    p.add_argument("--entries-csv", default=str(DEFAULT_ENTRIES_CSV), help="Path to DK entries CSV")
-    p.add_argument("--num-lineups", default=25000, type=int, help="Number of lineups to generate before simming")
-    p.add_argument("--num-jobs", default=8, type=int, help="Number of parallel jobs for lineup generation")
-    p.add_argument("--fresh", action="store_true", help="Clear all lineups in DB prior to run")
-    p.add_argument("--min-fpts", default=None, type=float, help="Optional minimum fantasy points constraint for lineups")
-    p.add_argument("--field-cap", default=10000, type=int, help="Number of lineups to cap field at when simulating")
-    p.add_argument("--num-sims", default=1000, type=int, help="Number of Monte Carlo simulations to run")
-    p.add_argument("--output-csv", default=str(CHOSEN_LINEUPS_CSV), help="Output CSV for chosen lineups")
-
-    args = p.parse_args()
-    console = Console() 
-    
-    # Initialize DB session for exposures
-    engine = init_db('nba')
-    session = get_session(engine)
-
-    # Always clear simulation results before new run
-    session.execute(text("DELETE FROM lineup_simulation_results"))
-    session.commit()
-    console.print("[dim]✓ Cleared lineup_simulation_results table[/dim]")
-    
-    # Optionally clear lineups with --fresh flag
-    if args.fresh:
-        session.execute(text("DELETE FROM lineup"))
-        session.commit()
-        console.print("[yellow]✓ Cleared lineup table (--fresh)[/yellow]")
-    
-    # Generate lineups
-    console.print("\n[bold cyan]═══ LINEUP GENERATION ═══[/bold cyan]")
-    generate_lineups(args.num_lineups, args.num_jobs, min_fpts=args.min_fpts)
-    deduplicate_lineups()
-    
-    # Analyze lineup pool (histogram + exposures)
-    analyze_lineups(session, console=console)
-    print_exposures(session, lineups=None, title="Generated Lineup Pool Exposures", console=console)
-    
-    # Interactive loop to regenerate if needed
-    while True:
-        console.print("\n[bold cyan]Lineup Generation Complete[/bold cyan]")
-        
-        new_min_fpts = console.input("[yellow]Set min_fpts threshold (or press Enter to skip):[/yellow] ").strip()
-        new_num_lineups = console.input("[yellow]How many additional lineups to generate? (or press Enter to skip):[/yellow] ").strip()
-        
-        if not new_min_fpts and not new_num_lineups:
-            console.print("[green]✓ Proceeding with current lineups[/green]")
-            break
-        
-        if new_min_fpts:
-            try:
-                args.min_fpts = float(new_min_fpts)
-            except ValueError:
-                console.print("[red]✗ Invalid min_fpts value[/red]")
-                continue
-        
-        if new_num_lineups:
-            try:
-                args.num_lineups = int(new_num_lineups)
-            except ValueError:
-                console.print("[red]✗ Invalid num_lineups value[/red]")
-                continue
-        
-        console.print("[cyan]Regenerating lineups with new parameters...[/cyan]")
-        generate_lineups(args.num_lineups, args.num_jobs, min_fpts=args.min_fpts)
-        deduplicate_lineups()
-        
-        # Analyze updated lineup pool
-        analyze_lineups(session, console=console)
-        print_exposures(session, lineups=None, title="Generated Lineup Pool Exposures", console=console)
-    
-    # Simulate
-    console.print("\n[bold cyan]═══ CONTEST SIMULATION ═══[/bold cyan]")
-    entries_by_contest = simulate_one_slate(
-        entries_csv=args.entries_csv,
-        console=console,
-        field_cap=args.field_cap,
-        num_sims=args.num_sims,
-    )
-    
-    # Choose lineups
-    console.print("\n[bold cyan]═══ LINEUP SELECTION ═══[/bold cyan]")
-    choose_lineups_for_slate(
-        entries_csv=args.entries_csv,
-        entries_by_contest=entries_by_contest,
-        console=console,
-        output_csv=args.output_csv,
-    )
-    
-    console.print("\n[bold green]✓ Complete![/bold green]")
+def main() -> int:
+    p = argparse.ArgumentParser(description="Run NBA contest simulations for each contest in the entries CSV")
+    p.add_argument("--config", default=str(config_path("nba")), help="path to the nba json config file")
+    p.add_argument("--entries", default=None, help="entries CSV (default: paths.entries_csv from config, or $IVAN_ENTRIES_CSV)")
+    p.add_argument("-n", type=int, default=None, help="simulations per contest (default: config sim.n_sims, 1000)")
+    p.add_argument("-c", type=int, default=None, help="field cap: largest field size to simulate (default: config field.cap, 10000)")
+    a = p.parse_args()
+    cfg = load_config("nba", a.config)
+    engine = init_db("nba", cfg.get("database_url")); ensure_schema(engine); session = get_session(engine)
+    removed = clean_old_diagnostics(days_to_keep=7)
+    if removed:
+        print(f"Removed {removed} old diagnostics folder(s).")
+    r = simulate_entries(session, a.entries or cfg["paths"]["entries_csv"], a.config,
+                         n_sims=a.n or int(_cfg(cfg, "sim.n_sims", 1000)), field_cap=a.c or int(_cfg(cfg, "field.cap", 10000)),
+                         artifact_dir=artifacts.sim_dir(OUTPUT_DIR))
+    return 1 if r["failed"] else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

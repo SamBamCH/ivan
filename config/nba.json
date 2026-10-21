@@ -7,5 +7,26 @@
   "max_salary": 50000,
   "randomness": 1,
   "max_salary_per_team": 30000,
-  "player_min_fpts": 15.0
+  "player_min_fpts": 15.0,
+  "generate": {
+    "n_samples": 5000,
+    "randomness": 1.0,
+    "jitter": 0.05,
+    "min_fpts": null,
+    "player_min_fpts": 15.0
+  },
+  "field": {
+    "sampler": "projection_model",
+    "cap": 10000
+  },
+  "sim": {
+    "n_sims": 1000
+  },
+  "choose": {
+    "cash_pct": 0.5,
+    "avg_roi_win": 0.5,
+    "diversity_lambda": 0.1,
+    "method": "greedy",
+    "bankroll": 3.0
+  }
 }

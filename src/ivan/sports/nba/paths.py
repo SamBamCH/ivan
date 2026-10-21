@@ -15,7 +15,7 @@ LOGS_DIR     = NBA_DATA_DIR / "logs"
 DEFAULT_ENTRIES_CSV   = INPUT_DIR / "entries.csv"
 PROJECTIONS_CSV       = INPUT_DIR / "stok.csv"
 MINUTES_OVERRIDES_CSV = INPUT_DIR / "minutes_overrides.csv"
-CHOSEN_LINEUPS_CSV    = OUTPUT_DIR / "chosen_lineups.csv"
+CHOSEN_ENTRIES_CSV    = OUTPUT_DIR / "chosen_entries.csv"      # base name; lineup_export stamps the files
 LATESWAP_BEST_CSV     = OUTPUT_DIR / "lateswap_best.csv"
 FIELD_MODEL_PKL       = MODELS_DIR / "field_distribution_model.pkl"
 

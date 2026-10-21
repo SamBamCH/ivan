@@ -241,6 +241,21 @@ class LineupSimulationResult(NBABase):
         index=True
     )
 
+class ContestSimReport(NBABase):
+    """
+    One row per simulated contest: everything simulate_one_contest knew about
+    the run (field sample, payout scaling, invariants) as a JSON document, so
+    a person can verify the sim after the fact. Per-slate working data, like
+    lineup_simulation_results.
+    """
+    __tablename__ = "contest_sim_report"
+
+    contest_id   = Column(Integer, primary_key=True)
+    contest_name = Column(String, nullable=False)
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    report       = Column(JSON, nullable=False)
+
+
 class ProjectionSnapshot(NBABase):
     """
     Frozen snapshot of player projections at a specific time.

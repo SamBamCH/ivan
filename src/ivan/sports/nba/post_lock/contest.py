@@ -7,13 +7,12 @@ from rich.console import Console
 from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
 import numpy as np
 from ivan.sports.nba.models import NBAPlayer, HistoricalContest, ContestPayout
-from ivan.sports.nba.pre_lock.contest import _load_and_scale_payouts_from_db as _scale_payouts
+from ivan.sports.nba.simulate_contest import load_scaled_payouts as _scale_payouts
 from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer
 from ivan.sports.nba.utils import _coerce_positions
 from ivan.sports.common.draftkings import download_contest_dataframe
 from ivan.sports.nba.post_lock.lineup import finish_lineup, generate_candidate
 from ivan.sports.nba.pre_lock.player import generate_player_samples
-from ivan.sports.nba.cli import print_exposures
 
 WORKERS = 8
 console = Console()
@@ -185,16 +184,6 @@ def _sample_field_lineups(
         console.print(f"[yellow]⚠ {failed_count:,} lineups dropped (name lookup failures)[/yellow]")
     
     console.print(f"[green]✓ Field sampling complete:[/green] {len(completed):,} field entries")
-    
-    # Print field exposures
-    if completed:
-        print_exposures(
-            session=session,
-            lineups=completed,
-            title=f"Sampled Field Exposures ({contest_name})",
-            console=console,
-            top_n=15,
-        )
     
     return completed, id_to_fp, base_scores
 
@@ -406,13 +395,6 @@ def lateswap_one_contest(
         console.print(f"\n[bold green]═══ Chosen Entries for: {contest_name} ═══[/bold green]")
         console.print(f"[dim]Selected {len(best_per_entry)} optimal lineups from {len(entries)} entries[/dim]")
         
-        print_exposures(
-            session=session,
-            lineups=chosen_lineups,
-            title=f"Chosen Entry Exposures ({contest_name})",
-            console=console,
-            top_n=15,
-        )
 
     return best_per_entry, all_candidate_stats
 
