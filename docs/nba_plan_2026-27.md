@@ -91,6 +91,35 @@ the stage modules the NFL has, with the same shapes:
 porting it is a later phase. Not yet built: standings download after settle
 (phase 4), game lines, the web descriptor (phase 3).
 
+## Validation: projected vs actual is the bread and butter (2026-10-21)
+
+Every capture now records why a player's minutes are what they are
+(`baseline_min`, `hist_team`, `hist_games`, `hist_min`, `start_ewm`,
+`play_ewm`, `fpm`, `usage_mult`, `market_fpts`). `ivan.sports.nba.validation`:
+
+- scorecard: the last capture before lock joined to `nba_stats` by player;
+  each fpts miss split into minutes x projected rate + actual minutes x rate
+  gap; classes by starter label, priced, salary tier and history class
+  (same team / new team / no history / pinned); DK's season average and
+  the books' implied points as yardsticks; rule-based findings; one CSV +
+  JSON per slate in `data/nba/diagnostics/scorecard/`. The nightly job
+  writes the pending ones after the box scores; `scripts/nba/validate.py
+  scorecard|history` by hand.
+- review: the current pool per team with each player's minutes provenance
+  (history team and games, last five games, play rate, baseline before the
+  allocation, market-implied minutes) and flags: new team, no history,
+  dnp-prone, above recent max, deep bench, market minutes gap. The desk
+  shows the same flags; `scripts/nba/validate.py review [--team]` prints them.
+
+Opening night (two slates, three games, n=78 rotation players): minutes bias
++0.1, MAE 3.1; fpts bias +2.5 (almost all rate, not minutes), MAE 6.5 vs DK
+average 6.7. The misses were role changes the history could not see: Caleb
+Love (22 min from Portland history, DNP for Philadelphia), Drummond (6 -> 24
+for New York), and stale play rates. The review flags all three patterns
+before lock. Candidate model change once a week of scorecards agrees: a
+salary-informed minutes prior for players whose history is on another team
+or whose play rate is stale, weighted down as this season's games arrive.
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.

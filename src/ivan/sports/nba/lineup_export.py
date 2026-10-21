@@ -50,8 +50,12 @@ def parse_money(x) -> float:
 
 
 def read_entries(path) -> pd.DataFrame:
-    """The DraftKings entries export, cut at the first blank Entry ID (DK appends an instructions block), Contest ID as int."""
-    df = pd.read_csv(path, engine="python", header=0, dtype=str, keep_default_na=False)
+    """
+    The DraftKings entries export: the first twelve columns only (DK puts an
+    instructions block and a ragged player table to their right), cut at the
+    first blank Entry ID, Contest ID as int.
+    """
+    df = pd.read_csv(path, engine="python", header=0, usecols=range(len(BASE_COLS) + len(POSITION_ORDER)), dtype=str, keep_default_na=False)
     for col in BASE_COLS:
         if col not in df.columns:
             raise RuntimeError(f"Expected column '{col}' in entries CSV but not found.")

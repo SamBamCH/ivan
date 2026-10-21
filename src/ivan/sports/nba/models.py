@@ -122,6 +122,16 @@ class NBAProjectionCapture(NBABase):
     fpts_std        = Column(Float,    nullable=True)
     priced          = Column(Boolean,  nullable=True)
     pinned          = Column(Boolean,  nullable=True)
+    # why the minutes are what they are (added 2026-10-21; older captures have NULLs)
+    baseline_min    = Column(Float,    nullable=True)    # history baseline before the team allocation
+    hist_team       = Column(String,   nullable=True)    # team of the last game in his history (a change = new role)
+    hist_games      = Column(Integer,  nullable=True)    # games behind the history (0 = salary prior)
+    hist_min        = Column(Float,    nullable=True)    # trailing minutes x play rate
+    start_ewm       = Column(Float,    nullable=True)    # trailing share of games started
+    play_ewm        = Column(Float,    nullable=True)    # trailing share of dressed games played
+    fpm             = Column(Float,    nullable=True)    # projected fantasy points per minute (after the usage bump)
+    usage_mult      = Column(Float,    nullable=True)
+    market_fpts     = Column(Float,    nullable=True)    # the books' implied fantasy points when priced
 
 
 class NBAOdds(NBABase):

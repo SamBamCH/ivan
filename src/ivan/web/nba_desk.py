@@ -33,6 +33,7 @@ from ivan.sports.nba.models import NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, read_overrides, write_overrides
+from ivan.sports.nba.validation import market_points, recent_minutes, review_team
 
 HERE = Path(__file__).parent
 engine = init_db("nba")
@@ -102,8 +103,15 @@ class Desk:
             out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
         return out
 
+    def review(self, team: str) -> dict:
+        """The rotation review (ivan.sports.nba.validation.review_team): provenance of every player's minutes and the flags."""
+        if getattr(self, "_recent", None) is None or self._recent_stamp != self.pool_stamp:
+            self._recent = recent_minutes(self.slate.box); self._recent_stamp = self.pool_stamp
+        return review_team(self.slate, team, self.proj[team], self._recent, market_points(self.session), self.overrides)
+
     def team_rows(self, team: str) -> list[dict]:
         proj, hist = self.proj[team], self.hist_only[team]
+        review_flags = {r["name"]: r["flags"] for r in self.review(team)["rows"]}
         state = self.slate.state
         starters = self.slate.starters.get(team)
         confirmed = self.slate.starters_confirmed.get(team, False)
@@ -140,6 +148,7 @@ class Desk:
                     flags.append(f"market {gap:+.0%} vs history")
             if r is not None and not r.get("priced") and float(r["minutes"]) >= 20:
                 flags.append("unpriced")
+            flags += [f for f in review_flags.get(name, []) if not f.startswith(("questionable", "pinned"))]
             rows.append(dict(id=p.id, name=p.name, key=name, salary=p.salary, pos=p.position, status=status if status != "NONE" else "",
                              starter=("S" if starter else ("" if starter is not None else "?")),
                              confirmed=confirmed, out=out,
@@ -169,6 +178,10 @@ class Desk:
                     alerts.append(("warn", f"{r['name']}: questionable ({r['hist_min']:.0f} min)"))
                 elif f.endswith("vs history") and r["minutes"] and r["minutes"] >= 12:
                     alerts.append(("info", f"{r['name']}: {f}"))
+                elif f.startswith(("dnp-prone", "deep bench")):
+                    alerts.append(("bad", f"{r['name']}: {f}"))
+                elif f.startswith(("new team", "above recent", "market implies", "no history")) and r["minutes"] and r["minutes"] >= 10:
+                    alerts.append(("warn", f"{r['name']}: {f}"))
         if starters is None:
             alerts.append(("warn" if (mins_to_tip is not None and mins_to_tip <= NEAR_TIP_MIN) else "info", "no lineup from Rotowire"))
         elif not confirmed and mins_to_tip is not None and mins_to_tip <= NEAR_TIP_MIN:
@@ -177,6 +190,8 @@ class Desk:
         base_sum = sum((r["hist_min"] or 0) for r in avail)
         if abs(base_sum - 241) >= 25:
             alerts.append(("info", f"history minutes of the available roster sum to {base_sum:.0f} (team gets 241)"))
+        rv = self.review(team)
+        alerts += [(k, t) for k, t in rv["alerts"] if t.startswith("rotation depth")]
         unpriced = [r for r in avail if not r["priced"] and (r["minutes"] or 0) >= 20]
         if unpriced:
             alerts.append(("info", f"{len(unpriced)} rotation players unpriced"))

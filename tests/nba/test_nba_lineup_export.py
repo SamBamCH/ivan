@@ -32,7 +32,8 @@ def test_entries_and_weights(tmp_path):
     f = tmp_path / "entries.csv"
     f.write_text("Entry ID,Contest Name,Contest ID,Entry Fee,PG,SG,SF,PF,C,G,F,UTIL,,Instructions\n"
                  "1,Big,100,$5,,,,,,,,,,1. Column A lists\n2,Big,100,$5,,,,,,,,,,\n3,Small,200,$1,,,,,,,,,,\n,,,,,,,,,,,,,\n"
-                 ",Instructions row DraftKings appends,,,,,,,,,,,,\n")
+                 ",Instructions row DraftKings appends,,,,,,,,,,,,\n"
+                 ",,,,,,,,,,,,,,PG,Luka Doncic (1),Luka Doncic,1,PG/G/UTIL,11000,LAL@GSW 10:00PM ET,LAL,52.1\n")   # the ragged player table
     e = LE.read_entries(f)
     assert len(e) == 3 and e["Contest ID"].tolist() == [100, 100, 200] and LE.parse_money("$0.50") == 0.5
     assert "Instructions" not in e.columns and "UTIL" in e.columns

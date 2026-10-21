@@ -218,6 +218,25 @@ def starter_label(slate: LiveSlate, name: str, team: str) -> str:
     return "confirmed" if slate.starters_confirmed.get(team) else "expected"
 
 
+def history_context(slate: LiveSlate, name: str) -> dict:
+    """Where a player's minutes baseline came from: his trailing state (team of the last game, games, minutes, start and play rates)."""
+    st = slate.state
+    if name not in st.index:
+        return dict(hist_team=None, hist_games=0, hist_min=None, start_ewm=None, play_ewm=None)
+    s = st.loc[name]
+    return dict(hist_team=s["team"], hist_games=int(s["games"]), hist_min=float(s["min_ewm"]) * float(s["play_ewm"]),
+                start_ewm=float(s["start_ewm"]), play_ewm=float(s["play_ewm"]))
+
+
+def market_fpts_by_player(session: Session) -> dict[str, float]:
+    """The books' implied fantasy points per priced player: the market means at DK weights (turnovers, never priced, left out)."""
+    from ivan.sports.nba.projection.rates import DK_WEIGHTS
+    out: dict[str, float] = {}
+    for r in session.query(NBAMarketRate).all():
+        out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
+    return out
+
+
 def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool = True, write_csv: bool = True,
                   log: Log = print, source: str = "ours") -> ProjectInfo:
     info = ProjectInfo()
@@ -238,18 +257,23 @@ def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool =
     allp = pd.concat(frames)
     info.players = int(len(allp)); info.priced = int(allp["priced"].sum()) if "priced" in allp else 0
     by_name = {normalize_name(p.name): p for p in slate.players}
+    market_fpts = market_fpts_by_player(session)
     rows = []
     for name, r in allp.iterrows():
         p = by_name[name]
         rows.append(dict(player_id=p.id, player_name=name, team=p.team, opponent=p.opponent, gametime=p.gametime,
                          salary=p.salary, status=p.status, starter=starter_label(slate, name, p.team),
                          minutes_proj=float(r["minutes"]), fpts_mean=float(r["fpts_mean"]), fpts_std=float(r["fpts_std"]),
-                         priced=bool(r.get("priced", False)), pinned=bool(r.get("pinned", False))))
+                         priced=bool(r.get("priced", False)), pinned=bool(r.get("pinned", False)),
+                         baseline_min=float(r["baseline"]), fpm=float(r["fpm"]), usage_mult=float(r["usage_mult"]),
+                         market_fpts=market_fpts.get(name), **history_context(slate, name)))
     for p in slate.players:   # players ruled out: a row with no projection keeps the record of the scratch
         if normalize_name(p.name) not in allp.index:
             rows.append(dict(player_id=p.id, player_name=normalize_name(p.name), team=p.team, opponent=p.opponent,
                              gametime=p.gametime, salary=p.salary, status=p.status, starter="out",
-                             minutes_proj=0.0, fpts_mean=None, fpts_std=None, priced=False, pinned=False))
+                             minutes_proj=0.0, fpts_mean=None, fpts_std=None, priced=False, pinned=False,
+                             baseline_min=None, fpm=None, usage_mult=None, market_fpts=market_fpts.get(normalize_name(p.name)),
+                             **history_context(slate, normalize_name(p.name))))
     dg = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
     lock = min((p.gametime for p in slate.players if p.gametime), default=None)
     if write_capture:
