@@ -165,7 +165,11 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
     if fetched.starters is not None:
         info.starters = store_starting_lineups(session, fetched.starters, fetched_at=fetched.fetched_at)
     if fetched.odds is not None:
-        session.query(NBAOdds).delete(synchronize_session=False)
+        # refresh the players just fetched; other players keep their latest lines (a fetch for one
+        # slate's teams must not strip the market rates of another slate's games)
+        players = [str(x) for x in fetched.odds.player.dropna().unique()]
+        for i in range(0, len(players), 500):
+            session.query(NBAOdds).filter(NBAOdds.player.in_(players[i:i + 500])).delete(synchronize_session=False)
         session.bulk_insert_mappings(NBAOdds, fetched.odds.to_dict("records"))
         session.commit()
         info.odds = len(fetched.odds)

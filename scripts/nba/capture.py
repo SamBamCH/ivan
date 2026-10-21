@@ -7,7 +7,9 @@ Each tick, for every classic draft group in today's DK lobby that has not locked
   * DraftKings draftables (free) -> raw dk/draftables, nba_player, archive capture
   * Rotowire lineups page (free) -> raw rotowire/lineups, starting_lineups
   * player props at fixed offsets before the slate's lock (costs odds-api credits:
-    about 12 per game on the slate) -> raw odds/*, odds, nba_market_rate
+    about 12 per game) -> raw odds/*, odds, nba_market_rate. One fetch per tick
+    covers the teams of every slate that crossed an offset, and the rows are
+    stored for every slate captured in that tick.
   * a projection -> nba_projection_capture rows (ours + DK's FPPG) and a CSV artifact
 Slates are processed latest lock first, so nba_player ends the tick holding the
 slate that locks next, which is the one the news desk manages.
@@ -25,7 +27,10 @@ from pathlib import Path
 
 from ivan.database.session import get_session, init_db
 from ivan.sports.common.draftkings import fetch_all_contests, summarize_slates
-from ivan.sports.nba.ingest import IngestError, ensure_schema, fetch_slate, project_slate, store_slate
+from ivan.sports.common.odds import get_odds, parse_odds
+from ivan.core.config import require_env
+from ivan.sports.nba.ingest import IngestError, ODDS_SPORT, ensure_schema, fetch_slate, project_slate, store_slate
+from ivan.sports.nba.projection.market import NBA_MARKETS
 from ivan.sports.nba.paths import NBA_DATA_DIR, LOGS_DIR
 
 STATE = NBA_DATA_DIR / "capture_state.json"
@@ -63,7 +68,7 @@ def todays_classic_slates() -> list[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--offsets", default=",".join(map(str, DEFAULT_OFFSETS)), help="props offsets in minutes before lock")
-    ap.add_argument("--max-props-per-day", type=int, default=8)
+    ap.add_argument("--max-props-per-day", type=int, default=20, help="safety cap on props fetches per day (each costs ~12 credits per game)")
     ap.add_argument("--no-props", action="store_true")
     ap.add_argument("--sims", type=int, default=2000)
     ap.add_argument("--grace", type=int, default=5, help="minutes after lock during which a slate is still captured")
@@ -98,26 +103,41 @@ def main() -> int:
         log.info("every slate has locked; nothing to do")
         save_state(st); return 0
 
-    # props: one fetch covers all teams playing today; fire when any slate crosses an undone offset
-    want_props = False
+    # props: one fetch per tick for the teams of every slate that crossed an undone offset
+    props_teams: set = set()
     if not args.no_props and st["props_fetches"] < args.max_props_per_day:
         for s, f in fetched:
             mins = (f.lock - now).total_seconds() / 60
             done = set(st["slates"].setdefault(str(s["id"]), {}).setdefault("props_done", []))
             due = [o for o in offsets if mins <= o and o not in done]
             if due:
-                want_props = True
+                props_teams |= set(f.teams)
                 st["slates"][str(s["id"])]["props_done"] = sorted(done | set(due), reverse=True)
                 log.info(f"{s['id']}: {mins:.0f} min to lock, props offsets due {due}")
-    # Rotowire once per tick, props once per tick: ride them on the first slate processed
+    props_df = None
+    if props_teams:
+        try:
+            odds = get_odds(ODDS_SPORT, require_env("ODDS_API_KEY"), sorted(props_teams), markets=NBA_MARKETS, raw_sport="nba")
+            df = parse_odds(odds)
+            if df is not None and len(df):
+                props_df = df
+                st["props_fetches"] += 1
+                log.info(f"props: {len(df)} rows, {df.player.nunique()} players, {df.sportsbook.nunique()} books, "
+                         f"{len(props_teams)} teams")
+            else:
+                log.warning("the-odds-api returned no NBA props; check ODDS_API_KEY and the plan")
+        except Exception as e:   # noqa: BLE001 - a props failure must not cost the draftables capture
+            log.warning(f"props fetch failed: {type(e).__name__}: {e}")
+    # Rotowire once per tick: ride it on the first slate processed; props rows go to every slate of the tick
     order = sorted(fetched, key=lambda sf: sf[1].lock, reverse=True)
     for i, (s, f) in enumerate(order):
         try:
-            full = fetch_slate(session, s["id"], update_odds=(want_props and i == 0), starters=(i == 0), log=log.info)
+            full = fetch_slate(session, s["id"], update_odds=False, starters=(i == 0), log=log.info)
         except IngestError as e:
             log.warning(f"{s['id']}: {e}"); continue
-        if want_props and i == 0 and full.odds is not None:
-            st["props_fetches"] += 1
+        if props_df is not None:
+            pool = {p["name"] for p in full.players}
+            full.odds = props_df[props_df.player.isin(pool)].reset_index(drop=True)
         store_slate(session, full, log=log.info)
         project_slate(session, n_sims=args.sims, log=log.info)
         st["slates"].setdefault(str(s["id"]), {}).update(lock=str(full.lock), last_tick=str(now), name=s["name"])
