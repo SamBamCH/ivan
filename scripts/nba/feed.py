@@ -28,8 +28,12 @@ import os
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from ivan.core import feed
 from ivan.core.utils import PROJECT_ROOT
+
+load_dotenv(PROJECT_ROOT / ".env")        # IVAN_FEED_URL / IVAN_FEED_TOKEN / IVAN_FEED_PUSH
 
 
 def do_pull(a) -> dict:
