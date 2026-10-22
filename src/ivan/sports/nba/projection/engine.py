@@ -19,7 +19,7 @@ from .rates import shrunk_rates, fpts_per_minute, apply_usage_bump, USAGE_RECOVE
 from .market import blend_rates
 from .team_minutes import load_params as load_team_params, role_of, sample_team_minutes, scratch_probability, tau_from_band
 
-MINUTES_MODELS = ("independent", "team")
+MINUTES_MODELS = ("independent", "team", "rotation")
 
 
 @dataclass
@@ -52,6 +52,7 @@ class ProjectionParams:
     minutes_model: str = "independent"   # "independent": each player's minutes a clipped normal; "team": the joint team draw
     rebalance: bool = False              # True: a pin re-allocates the rest of the team to 241; False: the others keep the model's
                                          # minutes and the difference is left for a person to place (the desk shows it)
+    rotation: dict | None = None         # minutes_model "rotation": {"grid": DataFrame, "spreads": {name: sd}, "curve": DataFrame|None}
     spread: float | None = None          # the team's own line for the team draw (negative = favoured); None = pick'em
     team_params: dict | None = None      # team_minutes.load_params() when None
 
@@ -141,7 +142,7 @@ def project_team(
     if params.minutes_model not in MINUTES_MODELS:
         raise ValueError(f"unknown minutes_model {params.minutes_model!r}; expected one of {MINUTES_MODELS}")
     by_name = {p.name: p for p in avail}
-    team_params = params.team_params or (load_team_params() if params.minutes_model == "team" else None)
+    team_params = params.team_params or (load_team_params() if params.minutes_model in ("team", "rotation") else None)
     roles, p_out = {}, {}
     for name in alloc.index:
         p = by_name[name]
@@ -150,7 +151,31 @@ def project_team(
         roles[name] = role_of(float(recs[name]["baseline"]), p.starter)
         p_out[name] = 0.0 if (alloc.loc[name, "pinned"] or p.starter) else scratch_probability(p.status, st.play_prob if params.use_play_prob else None, mu, team_params or {"scratch": {}})
     draw = None
-    if params.minutes_model == "team" and simulate and params.n_sims > 0 and len(alloc):
+    if params.minutes_model == "rotation" and params.rotation is not None and simulate and params.n_sims > 0 and len(alloc):
+        from .rotation import sample_worlds
+        rot = params.rotation; grid = rot["grid"]
+        names = list(alloc.index)
+        taus = {n: tau_from_band(by_name[n].minutes_low, by_name[n].minutes_high) for n in names}
+        spreads = dict(rot.get("spreads") or {})
+        for n, t in taus.items():                                        # a hand band sets the player's own spread
+            if t is not None:
+                spreads[n] = float(t) * float(alloc.loc[n, "minutes"]) / 1.2816 / np.sqrt(2.0)
+        d = sample_worlds(grid, spreads, params.n_sims, rng, spread=params.spread, p_out={n: p_out[n] for n in names if n in grid.index},
+                          curve=rot.get("curve"), margin_sd=float((team_params or {}).get("margin_sd", 14.75)), p_ot=float((team_params or {}).get("p_ot", 0.052)))
+        M = np.zeros((params.n_sims, len(names)))
+        col = {nm: j for j, nm in enumerate(d["names"])}
+        for j, n in enumerate(names):
+            if n in col:
+                M[:, j] = d["minutes"][:, col[n]]
+                # the allocation is the mean (it already averages over blowouts); the grid gives the shape and the
+                # world-to-world redistribution. A drawn grid is its own mean (the pins hold it).
+                mu = float(M[:, j].mean()); a_min = float(alloc.loc[n, "minutes"])
+                if mu > 0:
+                    M[:, j] *= a_min / mu
+        class _D:  # the TeamDraw shape the loop below reads
+            minutes = M
+        draw = _D()
+    elif params.minutes_model == "team" and simulate and params.n_sims > 0 and len(alloc):
         names = list(alloc.index)
         # a pin sets the mean (the allocation already holds it); a band sets the player's own spread; nobody is frozen
         taus = [tau_from_band(by_name[n].minutes_low, by_name[n].minutes_high) for n in names]

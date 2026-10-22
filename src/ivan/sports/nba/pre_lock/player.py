@@ -53,9 +53,30 @@ def sample_game_team_model(players: list, n_samples: int, rng: np.random.Generat
         ok = [p for p in ps if isinstance(p.rates, dict) and p.minutes_role and (p.minutes_proj or 0) > 0]
         if ok:
             mu = [float(p.minutes_proj) for p in ok]
-            draw = sample_team_minutes(mu, [p.minutes_role for p in ok], n_samples, rng,
-                                       spread=spreads.get(team), p_out=[float(p.p_out or 0.0) for p in ok], params=params,
-                                       margin=margin if team == home else -margin, overtime=overtime)
+            with_grid = [p for p in ok if isinstance(p.rotation_cells, list) and len(p.rotation_cells) == 48]
+            if len(with_grid) >= 8 and sum(sum(p.rotation_cells) for p in with_grid) >= 200:
+                import pandas as pd
+                from ivan.sports.nba.projection.rotation import sample_worlds
+                grid = pd.DataFrame([[bool(x) for x in p.rotation_cells] for p in with_grid], index=[normalize_name(p.name) for p in with_grid], columns=list(range(48)))
+                sp = {normalize_name(p.name): float(p.boundary_sd) for p in with_grid if p.boundary_sd}
+                d = sample_worlds(grid, sp, n_samples, rng, spread=spreads.get(team), p_out={normalize_name(p.name): float(p.p_out or 0.0) for p in with_grid},
+                                  margin=margin if team == home else -margin, overtime=overtime, margin_sd=params["margin_sd"], p_ot=params["p_ot"])
+                col = {nm: j for j, nm in enumerate(d["names"])}
+                M = np.zeros((n_samples, len(ok)))
+                for j, p in enumerate(ok):
+                    nm = normalize_name(p.name)
+                    if nm in col:
+                        mu = float(d["minutes"][:, col[nm]].mean())
+                        M[:, j] = d["minutes"][:, col[nm]] * (float(p.minutes_proj) / mu if mu > 0 else 1.0)
+                    else:
+                        M[:, j] = float(p.minutes_proj)
+                class _D:
+                    minutes = M
+                draw = _D()
+            else:
+                draw = sample_team_minutes(mu, [p.minutes_role for p in ok], n_samples, rng,
+                                           spread=spreads.get(team), p_out=[float(p.p_out or 0.0) for p in ok], params=params,
+                                           margin=margin if team == home else -margin, overtime=overtime)
             for j, p in enumerate(ok):
                 fp = fpts_from_minutes(draw.minutes[:, j], p.rates, dispersion, rng)
                 if randomness < 1.0:
@@ -104,7 +125,7 @@ def generate_player_samples(
         for p in players:
             key = tuple(sorted([p.team or "", p.opponent or ""])) if correlated else (p.id,)
             games.setdefault(key, []).append(p)
-        if minutes_model == "team":
+        if minutes_model in ("team", "rotation"):
             from ivan.sports.nba.projection.lines import GameLines
             try:
                 lines = GameLines.load(session)

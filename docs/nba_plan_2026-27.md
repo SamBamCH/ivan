@@ -213,10 +213,27 @@ Propose / Apply / Clear; Apply saves `data/nba/input/rotations/<team>.json`
 and pins every drawn player's minutes (0 = scratched), so the projection,
 the capture loop and the sim use the drawn rotation.
 
-Not yet: the sampler still draws totals (team_minutes.py) rather than the
-drawn stints; next is per-boundary jitter from the stint spreads, garbage
-time removing closers' last stint toward the players who take garbage
-minutes, and the scorecard's last-ten-minutes check.
+The stint-level sampler (`rotation.sample_worlds`, 2026-10-22): the grid's
+substitutions are jittered once per world (five stay on the floor), each
+player's boundary spread is the one that reproduces his game-to-game minutes
+sd, scratches hand each stint to the best substitute off the floor then,
+garbage time (margin path as a bridge to the world's final margin crossing
+the pull threshold: 12 up with 90s left, 15 with 3 min, 20 with 6, 25 with
+8) sends the closers off and the garbage minutes to the end of the bench,
+overtime adds five to whoever closes. Proposals are the close-game plan
+(historical garbage minutes counted as closers-on), each player's own
+pattern from any team, targets scaled like the allocator (surplus off the
+bottom), a 40-minute ceiling and a forced breather after 15 straight.
+
+January walk-forward (115 games, real spreads): the proposal alone is a
+worse projector of totals than the allocator (MAE 5.3 vs 4.5), so the live
+configuration keeps the allocator's mean per player and uses the grid for
+the shape and the world-to-world redistribution (each player's worlds are
+scaled to his allocation); boundary jitter x1.6 puts the 10-90 band at
+79.6% coverage (star 88, starter 83, rotation 74, deep 58). Switched on
+2026-10-22: config projection.minutes_model = "rotation"; a drawn grid is
+its own mean through the pins; nba_player carries rotation_cells and
+boundary_sd so the contest sampler draws the same worlds per game.
 
 ## Phase 1: capture from opening night (must be live Thursday)
 

@@ -130,6 +130,29 @@ class LiveSlate:
                                        fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high")))
         return roster
 
+    def rotation_for(self, team: str, overrides: dict, forced_out: set[str]) -> dict | None:
+        """The team's drawn grid, else the proposal from the players' stints; None when there are no stints at all."""
+        from .rotation import boundary_spreads, curves, load_drawn, propose
+        from .minutes import salary_prior_minutes
+        roster = self.roster(team, overrides, forced_out)
+        avail = [p.name for p in roster if p.available]
+        if not avail:
+            return None
+        curve = curves(self.session, players=avail, n_games=10)
+        drawn = load_drawn(team)
+        if drawn is not None:
+            grid = drawn.reindex([n for n in drawn.index if n in avail]).fillna(False)
+            for n in avail:
+                if n not in grid.index:
+                    grid.loc[n] = False
+        else:
+            if curve.empty:
+                return None
+            starters = [p.name for p in roster if p.available and p.starter]
+            prior = {p.name: salary_prior_minutes(p.salary) for p in roster}
+            grid = propose(curve, avail, starters, salary_prior=prior)
+        return {"grid": grid, "spreads": boundary_spreads(self.session, avail), "curve": curve if not curve.empty else None, "drawn": drawn is not None}
+
     def spread(self, team: str) -> float | None:
         """The team's own consensus spread from game_odds (negative = favoured); None when unpriced."""
         if getattr(self, "_lines", None) is None:
@@ -144,8 +167,12 @@ class LiveSlate:
                 params: ProjectionParams | None = None, rate_mults: dict[str, float] | None = None,
                 rng: np.random.Generator | None = None) -> pd.DataFrame:
         params = params or ProjectionParams.from_config()
-        if params.minutes_model == "team" and params.spread is None:
+        if params.minutes_model in ("team", "rotation") and params.spread is None:
             params = replace(params, spread=self.spread(team))
+        if params.minutes_model == "rotation" and params.rotation is None:
+            params = replace(params, rotation=self.rotation_for(team, overrides, forced_out))
+        if params.rotation is not None:
+            self._last_rotation = {**getattr(self, "_last_rotation", {}), team: params.rotation}
         return project_team(self.roster(team, overrides, forced_out, rate_mults), self.state, self.hist,
                             self.team_fpts.get(team), params, rng=rng)
 
@@ -165,9 +192,13 @@ class LiveSlate:
                 p.rates = {k: float(v) for k, v in r["rates"].items()} if isinstance(r.get("rates"), dict) else None
                 p.minutes_p10 = None if pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"])
                 p.minutes_p90 = None if pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"])
+                rot = getattr(self, "_last_rotation", {}).get(team)
+                p.rotation_cells = [int(x) for x in rot["grid"].loc[name].values] if rot and name in rot["grid"].index else None
+                p.boundary_sd = float(rot["spreads"][name]) if rot and name in (rot.get("spreads") or {}) else None
             else:
                 p.fpts_mean = None; p.fpts_std = None; p.minutes_proj = 0.0; p.fpts_quantiles = None
                 p.minutes_role = None; p.p_out = None; p.rates = None; p.minutes_p10 = None; p.minutes_p90 = None
+                p.rotation_cells = None; p.boundary_sd = None
         return n
 
 

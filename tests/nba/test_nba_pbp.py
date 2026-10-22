@@ -15,7 +15,7 @@ def test_clock_and_segments():
     assert P.game_length(4) == 2880 and P.game_length(5) == 3180
     seg = P.segment_minutes(0, 720)
     assert seg[0] == 6 and seg[1] == 6 and seg[2] == 0 and P.segment_minutes(2700, 3000).sum() == 5
-    assert P.garbage_threshold(60) == 10 and P.garbage_threshold(300) == 15 and P.garbage_threshold(1000) == 99
+    assert P.garbage_threshold(60) == 12 and P.garbage_threshold(180) == 15 and P.garbage_threshold(360) == 20 and P.garbage_threshold(1000) == 99
 
 
 def test_stints_follow_substitutions_and_scale_to_the_box():

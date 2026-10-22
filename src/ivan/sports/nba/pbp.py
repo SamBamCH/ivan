@@ -110,8 +110,8 @@ def game_length(max_period: int) -> float:
 
 
 def garbage_threshold(seconds_left: float) -> float:
-    """Margin beyond which the game is decided for the time left: 20 at 8 min, 15 at 5, 10 at 2, flat outside."""
-    pts = [(120.0, 10.0), (300.0, 15.0), (480.0, 20.0)]
+    """Margin at which coaches pull the closers for the time left: 12 up with 90 seconds, 15 with 3 minutes, 20 with 6, 25 with 8; never before."""
+    pts = [(90.0, 12.0), (180.0, 15.0), (360.0, 20.0), (480.0, 25.0)]
     if seconds_left <= pts[0][0]:
         return pts[0][1]
     if seconds_left >= pts[-1][0]:

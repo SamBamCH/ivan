@@ -145,7 +145,7 @@ class Desk:
         names = {normalize_name(p.name): p for p in players}
         avail = [n for n, p in names.items() if (p.status or "").upper() not in OUT_STATUSES and (override_of(self.overrides, n).get("minutes") is None or override_of(self.overrides, n).get("minutes") > 0)]
         starters = self.slate.starters.get(team) or set()
-        curve = ROT.curves(self.session, team, n_games=10)
+        curve = ROT.curves(self.session, players=list(names), n_games=10)
         prior = {n: salary_prior_minutes(p.salary) for n, p in names.items()}
         drawn = ROT.load_drawn(team)
         proposal = ROT.propose(curve, avail, [n for n in avail if n in starters], salary_prior=prior) if avail else None

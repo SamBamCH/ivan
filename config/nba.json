@@ -31,7 +31,7 @@
     "bankroll": 3.0
   },
   "projection": {
-    "minutes_model": "team",
+    "minutes_model": "rotation",
     "n_sims": 4000,
     "rebalance": false
   }

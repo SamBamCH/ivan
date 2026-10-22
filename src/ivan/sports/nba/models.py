@@ -100,6 +100,8 @@ class NBAPlayer(NBABase):
     rates           = Column(JSON,      nullable=True)   # stat -> per-minute rate after the usage bump
     minutes_p10     = Column(Float,     nullable=True)
     minutes_p90     = Column(Float,     nullable=True)
+    rotation_cells  = Column(JSON,      nullable=True)   # his row of the rotation grid (48 x 0/1), when the rotation model projected him
+    boundary_sd     = Column(Float,     nullable=True)   # spread of his substitution times, minutes
 
 
 class NBAProjectionCapture(NBABase):
