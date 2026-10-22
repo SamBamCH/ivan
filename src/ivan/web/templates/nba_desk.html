@@ -9,20 +9,63 @@
   :root { --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2e2; --bg:#f7f7f5; --card:#fff; --accent:#1f5fbf; --ok:#1a7f37; --bad:#b42318; --warn:#9a6700; }
   * { box-sizing:border-box } body { margin:0; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
   header { background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5 }
-  .bar { max-width:1400px; margin:0 auto; padding:8px 16px; display:flex; gap:18px; align-items:center; flex-wrap:wrap }
+  .bar { max-width:1700px; margin:0 auto; padding:16px 20px; display:flex; gap:22px; align-items:center; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; border-bottom:1px solid var(--line) }
+  .bar .spacer { flex:1 } .bar select { font:inherit; font-size:13px; max-width:280px; padding:5px 8px } .bar .clock { font-variant-numeric:tabular-nums }
+  .bar label { font-size:12px; color:var(--muted); display:flex; gap:6px; align-items:center }
   .bar .brand { font-weight:700; font-size:16px } .bar .muted { color:var(--muted); font-size:12px }
-  .bar form { display:inline } .bar button { font:inherit; font-size:13px; padding:5px 10px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
+  .bar form { display:inline } .bar button { font:inherit; font-size:13px; padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
   .bar button.primary { background:var(--accent); color:#fff } .bar button:hover { filter:brightness(1.08) }
   .countdown { font-weight:700; font-variant-numeric:tabular-nums } .countdown.soon { color:var(--bad) }
-  main { max-width:1400px; margin:0 auto; padding:14px 16px }
+  main { max-width:1700px; margin:0 auto; padding:28px 20px }
+  .menu { max-width:1700px; margin:0 auto; padding:14px 20px 14px; display:flex; gap:26px; flex-wrap:nowrap; align-items:flex-start; overflow-x:auto; scrollbar-width:thin }
+  .menu::-webkit-scrollbar { height:6px } .menu::-webkit-scrollbar-thumb { background:#ccc; border-radius:3px }
+  .slot { display:flex; gap:8px; align-items:flex-start; flex:0 0 auto } .slot-time { font-size:11px; font-weight:700; color:var(--muted); padding-top:6px; width:38px }
+  .gm { border:1px solid var(--line); border-radius:8px; padding:5px 8px 4px; background:#fafafa; min-width:112px; flex:0 0 auto } .gm.locked { opacity:.45 }
+  .gm-teams { display:flex; gap:4px; align-items:center } .gm-teams .at { font-size:11px; color:var(--muted) }
+  .gm-line { font-size:11px; color:var(--muted); margin-top:3px; text-align:center; font-variant-numeric:tabular-nums }
+  .menu a { text-decoration:none; font-size:12px; font-weight:700; padding:3px 8px; border-radius:10px; background:#eee; color:#444; border:1px solid transparent }
+  .menu a.confirmed { background:#dcfce7; color:var(--ok) } .menu a.expected { background:#fef3c7; color:var(--warn) } .menu a.none { background:#fee2e2; color:var(--bad) }
+  .menu a.locked { opacity:.45 } .menu a:hover { border-color:currentColor }
+  .pipe { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:18px }
+  .pipe-row { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin:4px 0; font-size:13px } .pipe-row .spacer { flex:1 }
+  .pipe-form { display:flex; gap:14px; align-items:center; flex-wrap:wrap; width:100% } .pipe-form label { font-size:12px; color:var(--muted); display:flex; gap:5px; align-items:center }
+  .pipe-form input, .pipe-form select { font:inherit; font-size:13px; padding:4px 6px; border:1px solid #cfcfcf; border-radius:4px }
+  .pipe button, .pipe-row button { font:inherit; font-size:13px; padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
+  .pipe button.primary { background:var(--accent); color:#fff } .pipe button:disabled { opacity:.45; cursor:default }
+  .brand-sm { font-weight:700 } .inline { display:inline-flex; gap:8px; align-items:center } .bad { color:var(--bad) }
+  .jobstat { font-weight:600 } .jobstat.running, .jobstat.queued { color:var(--warn) } .jobstat.done { color:var(--ok) } .jobstat.failed, .jobstat.cancelled { color:var(--bad) }
+  pre.log { background:#1b1b1b; color:#ddd; font:12px/1.35 ui-monospace,Menlo,Consolas,monospace; padding:8px 10px; border-radius:6px; max-height:230px; overflow:auto; margin:6px 0; white-space:pre-wrap }
+  .pipe-results { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start } .pipe-results table.mini td, .pipe-results table.mini th { border-bottom:1px solid var(--line) }
+  .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
+  .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
+  .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
+  .sides { display:grid; grid-template-columns:1fr 1fr; gap:16px } .side { min-width:0; overflow-x:auto }
+  .side h2 { font-size:15px; margin:0 0 4px; display:flex; gap:10px; align-items:baseline }
+  .side { scroll-margin-top:150px }
+  .side h2 .muted { font-weight:400; font-size:12px; color:var(--muted) } .side h2 .score { margin-left:auto; font-size:12px; color:var(--muted) }
+  @media (max-width:1300px) { .sides { grid-template-columns:1fr } }
   .flash { background:#eef4ff; border:1px solid #c9dbfb; border-radius:8px; padding:8px 12px; margin-bottom:12px; font-size:13px; white-space:pre-wrap }
-  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(420px, 1fr)); gap:12px }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(760px, 1fr)); gap:12px }
+  .band { font-size:10px; color:var(--muted); text-align:right } .small { font-size:11px } .model { font-size:10px; color:var(--muted); text-align:right; margin-top:1px }
+  td.warn { background:#fff7df } td.bad { background:#fee2e2 } td.mkt { color:var(--ok) } td.mkt input { color:var(--ok) }
+  tr.starters td { background:#eef4ff } tr.starters td.warn { background:#f6ecc9 } tr.starters td.bad { background:#f5d5d5 } tr.starters td:first-child { font-weight:600 }
+  tr.divider td { background:#fff; border-top:3px solid #c9d7f2; border-bottom:0; padding:6px 6px 2px; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+  tr.divider.out td { border-top-color:#f0c4c4 } tr.divider.bench td { border-top-color:#ddd }
+  td.dist { min-width:150px } .bar { position:relative; height:10px; background:#eee; border-radius:5px; margin:3px 0 2px }
+  .bar .range { position:absolute; top:0; height:10px; background:#9db9e8; border-radius:5px } .bar .range.pinned { background:var(--accent) }
+  .bar .tick { position:absolute; top:-2px; width:2px; height:14px; background:var(--ink) }
+  .bandin { font-size:11px; color:var(--muted) } input.min.sm { width:34px; font-size:11px; padding:1px 3px }
+  td.hover { position:relative } td.hover .pop { display:none; position:absolute; right:0; top:100%; z-index:20; background:#fff; border:1px solid var(--line); border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.12); padding:6px 8px }
+  td.hover:hover .pop { display:block } table.mini { margin:0; width:auto } table.mini td, table.mini th { padding:1px 6px; font-size:12px; border:0 } table.mini tr.mkt td { color:var(--ok) }
+  td[title=""] { cursor:default } td.warn, td.bad { cursor:help }
+  .tip { font-weight:600 } .tip.soon { color:var(--bad) }
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px }
   .card.locked { opacity:.55 } .card.hot { border-color:var(--bad); box-shadow:0 0 0 2px #fee2e2 inset }
   .card.warm { border-color:var(--warn) }
   .card h2 { font-size:15px; margin:0; display:flex; gap:10px; align-items:baseline; cursor:pointer }
   .card h2 .muted { font-weight:400; font-size:12px; color:var(--muted) } .card h2 .score { margin-left:auto; font-size:12px; color:var(--muted) }
   .pill { font-size:11px; font-weight:600; padding:1px 7px; border-radius:10px; background:#eee; color:#444 }
+  .pill.toplace, b.toplace { background:#fee2e2; color:var(--bad) } b.toplace { padding:1px 7px; border-radius:10px; font-weight:700 }
   .pill.confirmed { background:#dcfce7; color:var(--ok) } .pill.expected { background:#fef3c7; color:var(--warn) } .pill.none { background:#fee2e2; color:var(--bad) }
   ul.alerts { list-style:none; margin:6px 0 0; padding:0; font-size:13px } ul.alerts li { padding:1px 0 1px 14px; position:relative }
   ul.alerts li::before { content:""; position:absolute; left:0; top:7px; width:7px; height:7px; border-radius:50% }
@@ -36,51 +79,79 @@
   .src { font-size:10px; font-weight:700; padding:0 4px; border-radius:3px; background:#eee; color:#555 } .src.mkt { background:#dcfce7; color:var(--ok) }
   .st { font-weight:700; color:var(--accent) } .status { font-size:11px; font-weight:700; color:var(--bad) }
   .teamfoot { display:flex; gap:12px; align-items:center; margin-top:6px; font-size:12px; color:var(--muted) }
-  .teamfoot button { font:inherit; font-size:12px; padding:3px 8px; border-radius:5px; border:1px solid #cfcfcf; background:#fff; cursor:pointer }
+  .teamfoot button, .scratch { font:inherit } .teamfoot button { font-size:12px; padding:3px 8px; border-radius:5px; border:1px solid #cfcfcf; background:#fff; cursor:pointer }
   .scratch { font-size:11px; color:var(--bad); background:none; border:0; cursor:pointer; padding:0 4px }
   details summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:6px }
 </style>
 </head>
 <body>
-<header><div class="bar">
-  <span class="brand">Ivan · NBA desk</span>
+<header>
+<div class="bar">
+  <span class="brand" title="pool {{ header.pool_at.strftime('%H:%M') if header.pool_at else '—' }} · lineups {{ header.starters_at.strftime('%H:%M') if header.starters_at else 'none' }} · props {{ header.odds_at[11:16] if header.odds_at else 'none' }} UTC · {{ header.overrides }} edits">Ivan · NBA desk</span>
   {% if header.lock %}
-    <span class="countdown {% if header.mins_to_lock is not none and header.mins_to_lock < 60 %}soon{% endif %}" title="first tip of the slate">
+    <span class="countdown {% if header.mins_to_lock is not none and header.mins_to_lock < 60 %}soon{% endif %}" title="slate {{ header.draft_group }} locks {{ header.lock.strftime('%a %H:%M') }} · {{ header.n_players }} players, {{ header.n_priced }} priced">
       {% if header.mins_to_lock is not none and header.mins_to_lock > 0 %}locks in {{ (header.mins_to_lock // 60)|int }}h {{ (header.mins_to_lock % 60)|int }}m{% else %}locked{% endif %}
     </span>
-    <span class="muted">slate {{ header.draft_group }} · {{ header.lock.strftime('%a %H:%M') }} · {{ header.n_players }} players, {{ header.n_priced }} priced</span>
   {% endif %}
-  <span class="muted">pool {{ header.pool_at.strftime('%H:%M') if header.pool_at else '—' }} · lineups {{ header.starters_at.strftime('%H:%M') if header.starters_at else 'none' }} · props {{ header.odds_at[11:16] if header.odds_at else 'none' }} UTC · {{ header.overrides }} pins</span>
-  <form method="post" action="/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK + lineups</button></form>
-  <form method="post" action="/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
-  <form method="post" action="/publish"><button class="primary" title="write projections + pins (overrides CSV) for the sim and the capture loop">Publish</button></form>
   {% if header.slates|length > 1 %}
   <form method="post" action="/slate">
     <select name="draft_group" onchange="this.form.submit()">
-      {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ dg }} · {{ s.name[:40] }} · {{ s.lock[5:16] }}</option>{% endfor %}
+      {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ s.lock[11:16] }} · {{ s.name|replace('NBA ', '')|truncate(28, True, '') }}</option>{% endfor %}
     </select>
   </form>
   {% endif %}
-  <span class="muted">{{ now.strftime('%H:%M:%S') }}</span>
-</div></header>
+  <label title="hide players projected below this many fantasy points">show ≥
+    <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
+  </label>
+  <span class="spacer"></span>
+  <form method="post" action="/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
+  <form method="post" action="/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
+  <form method="post" action="/publish"><button class="primary" title="write projections + edits for the sim and the capture loop">Publish</button></form>
+  <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
+</div>
+<nav class="menu">
+  {% for grp in menu %}
+  <div class="slot">
+    <div class="slot-time">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }}</div>
+    {% for g in grp.games %}
+    <div class="gm {% if g.locked %}locked{% endif %}">
+      <div class="gm-teams">{% for c in g.teams %}<a class="{{ c.starters }}" href="#card-{{ c.team }}" title="lineup {{ c.starters }}">{{ c.team }}</a>{% if not loop.last %}<span class="at">@</span>{% endif %}{% endfor %}</div>
+      <div class="gm-line">{% if g.spread is not none %}{{ g.home }} {{ '%+g'|format(g.spread) }}{% if g.total %} · {{ '%g'|format(g.total) }}{% endif %}{% else %}no line{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</nav>
+</header>
 <main>
   {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
-  <div class="cards">
-  {% for c in cards %}
-    <div class="card {% if c.locked %}locked{% elif c.score >= 10 %}hot{% elif c.score >= 3 %}warm{% endif %}" id="card-{{ c.team }}">
-      <h2 hx-get="/team/{{ c.team }}" hx-target="#team-{{ c.team }}" hx-swap="innerHTML">
-        {{ c.team }} <span class="muted">vs {{ c.opp }} · {{ c.tip.strftime('%H:%M') if c.tip else '' }}{% if c.mins_to_tip is not none and c.mins_to_tip > 0 %} · in {{ (c.mins_to_tip // 60)|int }}h {{ (c.mins_to_tip % 60)|int }}m{% endif %}</span>
-        <span class="pill {{ c.starters }}">lineup {{ c.starters }}</span>
-        {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
-        <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
-      </h2>
-      {% if c.alerts %}<ul class="alerts">{% for k, a in c.alerts %}<li class="{{ k }}">{{ a }}</li>{% endfor %}</ul>
-      {% else %}<div class="muted" style="font-size:12px;margin-top:4px">nothing out of the ordinary</div>{% endif %}
-      <div id="team-{{ c.team }}">{% if open_team == c.team %}{% with card=c %}{% include "_nba_team.html" %}{% endwith %}{% endif %}</div>
+  {% include "_nba_pipeline.html" %}
+  {% for g in games %}
+    <div class="game {% if g.locked %}locked{% elif g.score >= 10 %}hot{% elif g.score >= 3 %}warm{% endif %}">
+      <div class="gh">
+        <span class="tip {% if g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% elif g.locked %} <span class="muted">started</span>{% endif %}</span>
+        {% if g.spread is not none %}<span class="muted">{{ g.home }} {{ '%+g'|format(g.spread) }}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line</span>{% endif %}
+      </div>
+      <div class="sides">
+      {% for c in g.teams %}
+        <div class="side" id="card-{{ c.team }}">{% include "_nba_side.html" %}</div>
+      {% endfor %}
+      </div>
     </div>
   {% endfor %}
-  </div>
-  <p class="muted" style="font-size:12px;margin-top:14px">Minutes: type a number to pin (the rest of the team re-allocates around it), blank to unpin, ✕ to scratch. Pins take effect for the sim and the capture loop only after Publish. Alerts: red = volume freed up, amber = role or market signal, grey = for information.</p>
+  <p class="muted" style="font-size:12px;margin-top:14px">Type into min, the band's low–high, or fppm to override the model for that player (blank restores it); ✕ scratches; the team re-allocates around every edit. Publish saves the edits for the sim and the capture loop. Amber cell = worth a look, red = likely wrong; hover for why. Green fppm = priced by the props; hover a projection for the stat lines behind it. Italic history = last season's.</p>
 </main>
+<script>
+  const sel = document.getElementById("minfpts");
+  const saved = localStorage.getItem("nba_minfpts"); if (saved !== null) sel.value = saved;
+  function applyFilter() {
+    const t = parseFloat(sel.value) || 0;
+    document.querySelectorAll("tr[data-fpts]").forEach(tr => { tr.style.display = (parseFloat(tr.dataset.fpts) < t) ? "none" : ""; });
+    localStorage.setItem("nba_minfpts", sel.value);
+  }
+  sel.addEventListener("change", applyFilter);
+  document.body.addEventListener("htmx:afterSwap", applyFilter);
+  applyFilter();
+</script>
 </body>
 </html>

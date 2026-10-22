@@ -10,10 +10,11 @@
   "player_min_fpts": 15.0,
   "generate": {
     "n_samples": 5000,
-    "randomness": 1.0,
+    "randomness": 0.25,
     "jitter": 0.05,
     "min_fpts": null,
-    "player_min_fpts": 15.0
+    "player_min_fpts": 15.0,
+    "min_fpts_frac": 0.9
   },
   "field": {
     "sampler": "projection_model",
@@ -28,5 +29,10 @@
     "diversity_lambda": 0.1,
     "method": "greedy",
     "bankroll": 3.0
+  },
+  "projection": {
+    "minutes_model": "team",
+    "n_sims": 4000,
+    "rebalance": false
   }
 }

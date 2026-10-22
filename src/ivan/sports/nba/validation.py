@@ -117,7 +117,7 @@ def join_actuals(ours: pd.DataFrame, act: pd.DataFrame, dk: Optional[pd.DataFram
     df["min_act"] = df["min_act"].fillna(0.0); df["fpts_act"] = df["fpts_act"].fillna(0.0)
     df["played"] = df["min_act"] > 0
     df["started_act"] = df["pos_act"].notna() & (df["pos_act"] != "BENCH") & df["played"]
-    for c in ("minutes_proj", "fpts_mean", "fpm", "hist_games", "market_fpts", "baseline_min", "hist_min"):
+    for c in ("minutes_proj", "fpts_mean", "fpm", "hist_games", "market_fpts", "baseline_min", "hist_min", "minutes_p10", "minutes_p90"):
         df[c] = pd.to_numeric(df[c], errors="coerce") if c in df else np.nan
     df["minutes_proj"] = df["minutes_proj"].fillna(0.0)
     df["fpts_proj"] = df["fpts_mean"].fillna(0.0)
@@ -208,6 +208,11 @@ def findings(df: pd.DataFrame) -> List[dict]:
     if "vs_market" in ys:
         y = ys["vs_market"]
         add("warn" if y["ours_mae"] > y["market_mae"] + 0.5 else "info", f"priced players: fpts MAE {y['ours_mae']:.1f} ours vs {y['market_mae']:.1f} the books' implied points; bias {y['ours_bias']:+.1f} vs {y['market_bias']:+.1f}", y["n"])
+    band = df[df.played & df.get("minutes_p10", pd.Series(np.nan, index=df.index)).notna()] if "minutes_p10" in df else df.iloc[0:0]
+    if len(band) >= 10:
+        inside = ((band.min_act >= band.minutes_p10) & (band.min_act <= band.minutes_p90)).mean()
+        by_role = " ".join(f"{r}:{((g.min_act >= g.minutes_p10) & (g.min_act <= g.minutes_p90)).mean():.0%}" for r, g in band.groupby("minutes_role") if len(g) >= 5)
+        add("warn" if abs(inside - 0.8) > 0.1 else "info", f"minutes 10-90 band held {inside:.0%} of played rotation players (target 80%) {by_role}", len(band))
     played = df[df.played & (df.minutes_proj >= ROTATION_MIN)]
     if len(played) >= 10:
         rate = played.err_rate.mean(); mins = played.err_minutes.mean()

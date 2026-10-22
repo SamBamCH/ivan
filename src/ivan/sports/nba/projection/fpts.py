@@ -53,6 +53,21 @@ def _nbinom(rng: np.random.Generator, mean: np.ndarray, k: float) -> np.ndarray:
     return rng.negative_binomial(k, p)
 
 
+def fpts_from_minutes(mins: np.ndarray, rates: dict[str, float], dispersion: dict[str, float] | None = None,
+                      rng: np.random.Generator | None = None) -> np.ndarray:
+    """Fantasy points for a given minutes draw (one per world): negative-binomial stats at minutes x rate, bonuses from the joint draw."""
+    rng = rng or np.random.default_rng()
+    k = dispersion or _CAL["dispersion"]
+    mins = np.asarray(mins, dtype=float)
+    draws = {s: _nbinom(rng, mins * rates[s], k[s]) for s in STATS}
+    fp = sum(DK_WEIGHTS[s] * draws[s] for s in STATS).astype(float)
+    cats = np.stack([draws["points"], draws["rebounds"], draws["assists"], draws["steals"], draws["blocks"]]) >= 10
+    n10 = cats.sum(axis=0)
+    fp += 1.5 * (n10 >= 2) + 3.0 * (n10 >= 3)
+    fp[mins <= 0] = 0.0
+    return fp
+
+
 def simulate_fpts(
     minutes_mu: float,
     rates: dict[str, float],
@@ -60,8 +75,12 @@ def simulate_fpts(
     min_sd: float | None = None,
     dispersion: dict[str, float] | None = None,
     rng: np.random.Generator | None = None,
+    minutes: np.ndarray | None = None,
 ) -> np.ndarray:
+    """n fantasy-point draws: minutes from a clipped normal around minutes_mu, or the given `minutes` array (a team draw's column)."""
     rng = rng or np.random.default_rng()
+    if minutes is not None:
+        return fpts_from_minutes(minutes, rates, dispersion, rng)
     k = dispersion or _CAL["dispersion"]
     sd = minutes_sd(minutes_mu) if min_sd is None else min_sd
     mins = np.clip(rng.normal(minutes_mu, sd, n), 0.0, 48.0)

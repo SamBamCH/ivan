@@ -1,0 +1,8 @@
+<h2>
+  {{ c.team }}
+  <span class="pill {{ c.starters }}">lineup {{ c.starters }}</span>
+  {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
+  {% if c.to_place|abs >= 0.5 %}<span class="pill toplace">{% if c.to_place > 0 %}{{ '%.0f'|format(c.to_place) }} min to place{% else %}{{ '%.0f'|format(-c.to_place) }} min over{% endif %}</span>{% endif %}
+  <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
+</h2>
+{% with card=c %}{% include "_nba_team.html" %}{% endwith %}

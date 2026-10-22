@@ -94,6 +94,12 @@ class NBAPlayer(NBABase):
     # DraftKings' own AvgPointsPerGame from the draftables payload (free yardstick)
     dk_avg_fpts     = Column(Float,     nullable=True)
     draft_group_id  = Column(Integer,   nullable=True)
+    # the team minutes model's inputs (projection/team_minutes.py), written with the projection
+    minutes_role    = Column(String,    nullable=True)   # star | starter | rotation | deep
+    p_out           = Column(Float,     nullable=True)   # scratch probability in the draw
+    rates           = Column(JSON,      nullable=True)   # stat -> per-minute rate after the usage bump
+    minutes_p10     = Column(Float,     nullable=True)
+    minutes_p90     = Column(Float,     nullable=True)
 
 
 class NBAProjectionCapture(NBABase):
@@ -132,6 +138,11 @@ class NBAProjectionCapture(NBABase):
     fpm             = Column(Float,    nullable=True)    # projected fantasy points per minute (after the usage bump)
     usage_mult      = Column(Float,    nullable=True)
     market_fpts     = Column(Float,    nullable=True)    # the books' implied fantasy points when priced
+    minutes_model   = Column(String,   nullable=True)    # independent | team
+    minutes_p10     = Column(Float,    nullable=True)    # the minutes draw's band (team model)
+    minutes_p90     = Column(Float,    nullable=True)
+    minutes_role    = Column(String,   nullable=True)
+    p_out           = Column(Float,    nullable=True)
 
 
 class NBAOdds(NBABase):
@@ -264,6 +275,33 @@ class ContestSimReport(NBABase):
     contest_name = Column(String, nullable=False)
     created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
     report       = Column(JSON, nullable=False)
+
+
+class NBAGameOdds(NBABase):
+    """
+    Game lines (moneyline, spread, total) per book and outcome, the shape of
+    ivan.sports.common.odds.parse_game_odds. Replaced per game on every fetch;
+    the history lives in the raw payloads (odds/lines) and the archive captures.
+    projection/lines.py reduces them to one consensus row per game.
+    """
+    __tablename__ = "game_odds"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    game_id       = Column(String,  nullable=False, index=True)
+    sport_key     = Column(String,  nullable=True)
+    commence_time = Column(DateTime, nullable=True)
+    home_team     = Column(String,  nullable=True)
+    away_team     = Column(String,  nullable=True)
+    home_abbr     = Column(String,  nullable=True, index=True)
+    away_abbr     = Column(String,  nullable=True, index=True)
+    bookmaker     = Column(String,  nullable=True)
+    market        = Column(String,  nullable=True)
+    last_update   = Column(String,  nullable=True)
+    outcome_name  = Column(String,  nullable=True)
+    side          = Column(String,  nullable=True)
+    point         = Column(Float,   nullable=True)
+    price         = Column(Integer, nullable=True)
+    fetched_at    = Column(DateTime, nullable=True)
 
 
 class ProjectionSnapshot(NBABase):

@@ -24,7 +24,8 @@ def test_quotas_split_the_remainder_first():
 
 def test_generate_settings_read_config_and_flag():
     s = FG.generate_settings({"generate": {"n_samples": 10, "jitter": 0.1}, "player_min_fpts": 12.0}, min_fpts=250)
-    assert (s["n_samples"], s["jitter"], s["randomness"], s["min_fpts"], s["player_min_fpts"]) == (10, 0.1, 1.0, 250.0, 12.0)
+    assert (s["n_samples"], s["jitter"], s["randomness"], s["min_fpts"], s["player_min_fpts"], s["min_fpts_frac"]) == (10, 0.1, 0.25, 250.0, 12.0, 0.9)
+    assert FG.generate_settings({}, randomness=0.5)["randomness"] == 0.5
 
 
 def test_deduplicate_keeps_the_first_of_each_composition(session):

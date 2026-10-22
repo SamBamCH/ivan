@@ -37,7 +37,11 @@ from ivan.sports.nba.utils import _cfg, _coerce_positions
 
 Log = Callable[[str], None]
 BATCH_COMMIT_SIZE = 100
-DEFAULTS = {"n_samples": 5000, "randomness": 1.0, "jitter": 0.05, "min_fpts": None, "player_min_fpts": None}
+DEFAULTS = {"n_samples": 5000, "randomness": 0.25, "jitter": 0.05, "min_fpts": None, "min_fpts_frac": 0.9, "player_min_fpts": None}
+# randomness scales each sampled world's spread around the mean projection: at 1.0 the lineup that is optimal in a
+# random world sits a median 45 points (14%) below the mean-optimal lineup (2026-10-21 slate); at 0.25 it sits ~20
+# below and the field's chalk runs 40-50%, like a real field. min_fpts_frac floors every lineup at that share of
+# the mean-optimal total; min_fpts (absolute) overrides it when given.
 
 
 def quotas(n_lineups: int, jobs: int) -> List[int]:
@@ -47,13 +51,22 @@ def quotas(n_lineups: int, jobs: int) -> List[int]:
     return [base + (1 if i < rem else 0) for i in range(jobs)]
 
 
-def generate_settings(config: dict, min_fpts: Optional[float] = None) -> dict:
+def generate_settings(config: dict, min_fpts: Optional[float] = None, randomness: Optional[float] = None) -> dict:
     s = {k: _cfg(config, f"generate.{k}", v) for k, v in DEFAULTS.items()}
     if s["player_min_fpts"] is None:                      # the older top-level key, then the solver's old floor
         s["player_min_fpts"] = _cfg(config, "player_min_fpts", 15.0)
     if min_fpts is not None:
         s["min_fpts"] = float(min_fpts)
+    if randomness is not None:
+        s["randomness"] = float(randomness)
     return s
+
+
+def optimal_total(players: List[FieldPlayer], config: dict) -> Optional[float]:
+    """The mean-projection optimal lineup's total: the anchor the pool is measured against."""
+    means = {p.id: float(p.fpts_mean or 0.0) for p in players}
+    ids = generate_single_classic_lineup(players=players, base_scores=means, config=config, max_salary_per_team=_cfg(config, "max_salary_per_team", 25000))
+    return float(sum(means[i] for i in ids)) if ids else None
 
 
 def player_pool(session: Session, player_min_fpts: float = 15.0) -> List[FieldPlayer]:
@@ -68,12 +81,12 @@ def player_pool(session: Session, player_min_fpts: float = 15.0) -> List[FieldPl
     return out
 
 
-def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optional[float], q: Queue) -> None:
+def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optional[float], q: Queue, randomness: Optional[float] = None) -> None:
     """One generator process: its own session and seed; progress messages on q."""
     session = get_session(init_db("nba"))
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
-    s = generate_settings(config, min_fpts)
+    s = generate_settings(config, min_fpts, randomness)
     seed = seed_for(f"generate/{worker_id}")
     if seed is not None:
         random.seed(seed)
@@ -82,6 +95,10 @@ def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optiona
         players = player_pool(session, s["player_min_fpts"])
         if not players:
             q.put(("done", worker_id, 0, "no players")); return
+        if s["min_fpts"] is None and s.get("min_fpts_frac"):
+            opt = optimal_total(players, config)
+            if opt:
+                s["min_fpts"] = float(s["min_fpts_frac"]) * opt
         samples = generate_player_samples(session, n_samples=int(s["n_samples"]), randomness=float(s["randomness"]), seed=seed)
         n_samples = int(s["n_samples"]); jitter = float(s["jitter"])
         max_team = _cfg(config, "max_salary_per_team", 25000)
@@ -119,10 +136,11 @@ def _store(session: Session, lineups: List[List[int]]) -> None:
     session.commit()
 
 
-def run_workers(quota: List[int], config_path: str, min_fpts: Optional[float], log: Log = print, progress: bool = True) -> int:
+def run_workers(quota: List[int], config_path: str, min_fpts: Optional[float], log: Log = print, progress: bool = True,
+                randomness: Optional[float] = None) -> int:
     """One worker per quota entry; a rich progress bar per worker when `progress`, else a line per start/finish. Returns lineups created."""
     q: Queue = Queue()
-    procs = [Process(target=worker, args=(i, n, config_path, min_fpts, q)) for i, n in enumerate(quota)]
+    procs = [Process(target=worker, args=(i, n, config_path, min_fpts, q, randomness)) for i, n in enumerate(quota)]
     for p in procs:
         p.start()
     created, done = 0, 0
@@ -211,18 +229,41 @@ def clear_lineups(session: Session) -> Tuple[int, int]:
     return int(n_lineups or 0), int(n_sims or 0)
 
 
+def pool_report(session: Session, config: dict, log: Log = print) -> dict:
+    """Where the pool sits against the mean-optimal lineup: median and p90 gap, share within 5/10%, top exposures."""
+    players = player_pool(session, generate_settings(config)["player_min_fpts"])
+    opt = optimal_total(players, config)
+    means = {p.id: float(p.fpts_mean or 0.0) for p in players}; names = {p.id: p.name for p in players}
+    L = [coerce_player_ids(x) for (x,) in session.query(Lineup.player_ids_list).all()]
+    if not L or not opt:
+        return {}
+    import numpy as np
+    from collections import Counter
+    tot = np.array([sum(means.get(i, 0.0) for i in l) for l in L])
+    exp = Counter(i for l in L for i in l)
+    rep = dict(optimal=round(opt, 1), lineups=len(L), median_gap=round(float(opt - np.median(tot)), 1), p90_gap=round(float(opt - np.percentile(tot, 90)), 1),
+               within_5pct=round(float((tot >= 0.95 * opt).mean()), 2), within_10pct=round(float((tot >= 0.90 * opt).mean()), 2), players_used=len(exp),
+               top_exposure=[(names.get(i, str(i)), round(100.0 * n / len(L), 1)) for i, n in exp.most_common(8)])
+    log(f"pool vs the mean-optimal {opt:.1f}: median {rep['median_gap']} below, p90 {rep['p90_gap']} below, {100 * rep['within_10pct']:.0f}% within 10%, "
+        f"{rep['players_used']} players used; top exposure " + ", ".join(f"{n.split()[-1]} {x:.0f}%" for n, x in rep["top_exposure"][:5]))
+    return rep
+
+
 def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log = print, progress: bool = True,
-                   min_fpts: Optional[float] = None, session: Optional[Session] = None) -> dict:
-    """The whole generate step: workers, dedupe. `session` (opened from the environment when None) is used for the dedupe. Returns counts."""
+                   min_fpts: Optional[float] = None, session: Optional[Session] = None, randomness: Optional[float] = None) -> dict:
+    """The whole generate step: workers, dedupe, the pool report. `session` (opened from the environment when None) is used for the dedupe. Returns counts."""
     own = session is None
     session = session or get_session(init_db("nba"))
     try:
-        created = run_workers(quotas(n_lineups, jobs), str(config_path), min_fpts, log, progress)
+        created = run_workers(quotas(n_lineups, jobs), str(config_path), min_fpts, log, progress, randomness)
         log(f"generated {created:,} lineups across {max(1, int(jobs))} workers")
         session.expire_all()
         removed, kept = deduplicate_lineups(session)
         log(f"deduplicator: removed {removed} duplicate lineups, kept {kept} unique")
-        return {"requested": int(n_lineups), "created": int(created), "removed": int(removed), "unique": int(kept)}
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        rep = pool_report(session, config, log)
+        return {"requested": int(n_lineups), "created": int(created), "removed": int(removed), "unique": int(kept), "pool": rep}
     finally:
         if own:
             session.close()

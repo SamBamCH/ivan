@@ -14,25 +14,28 @@ Separate process from the NFL app: python scripts/nba/serve.py (port 8001).
 from __future__ import annotations
 
 import json
+import sys
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, store_slate, IngestError
-from ivan.sports.nba.models import NBAMarketRate, NBAPlayer
-from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV
+from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAMarketRate, NBAPlayer
+from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
+from ivan.web.jobs import JobRunner
 from ivan.sports.nba.projection.engine import ProjectionParams
-from ivan.sports.nba.projection.live import LiveSlate, read_overrides, write_overrides
+from ivan.sports.nba.projection.live import LiveSlate, override_of, read_overrides_full, write_overrides
+from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team
 
 HERE = Path(__file__).parent
@@ -43,6 +46,10 @@ app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 STATE_FILE = NBA_DATA_DIR / "capture_state.json"
 LOCK = threading.Lock()
+runner = JobRunner(log_dir=NBA_DATA_DIR / "jobs", cwd=PROJECT_ROOT)
+SCRIPTS = PROJECT_ROOT / "scripts" / "nba"
+PIPELINE_DEFAULTS = {"lineups": 25000, "jobs": 8, "sims": 1000, "field_cap": 10000, "method": "greedy", "min_fpts": "", "randomness": "0.25"}
+pipeline_form: dict = dict(PIPELINE_DEFAULTS)
 
 ROTATION_MIN = 15.0        # a scratch/questionable above this baseline is news
 NEAR_TIP_MIN = 75          # minutes before tip when an unconfirmed lineup becomes a warning
@@ -67,25 +74,51 @@ class Desk:
         self.session.expire_all()
         return (max((r[0] for r in rows if r[0]), default=None), len(rows), rows[0][1] if rows else None)
 
+    def history(self):
+        """(box, HistoryState), rebuilt only when nba_stats grew (the nightly box scores)."""
+        n = self.session.execute(__import__("sqlalchemy").text("select count(*), max(game_date) from nba_stats")).one()
+        key = (int(n[0]), str(n[1]))
+        if getattr(self, "_hist_key", None) != key:
+            from ivan.sports.nba.projection.history import build_history, load_box_scores
+            box = load_box_scores(self.session)
+            self._hist = (box, build_history(box)); self._hist_key = key
+        return self._hist
+
     def rebuild(self):
         self.session.expire_all()
-        self.slate = LiveSlate(self.session)
+        self.slate = LiveSlate(self.session, history=self.history())
         self.pool_stamp = self._stamp()
-        self.overrides = read_overrides()
+        self.overrides = read_overrides_full()            # the file is the source of truth: every edit is written to it
         self.proj, self.hist_only = {}, {}
+        self.season = self.season_averages(self.slate.box)
+        self.market_rows = {}
+        for r in self.session.query(NBAMarketRate).all():
+            self.market_rows.setdefault(r.player_name, {})[r.stat] = dict(mean=float(r.market_mean), line=r.line, books=r.books, rate=float(r.rate), basis=float(r.basis_minutes))
         for t in self.slate.teams():
             self.reproject(t)
+
+    @staticmethod
+    def season_averages(box: pd.DataFrame) -> dict:
+        """player -> (games, minutes per game, fantasy points per minute) this season, and the same over last season as a fallback."""
+        today = datetime.now().date()
+        start = date(today.year if today.month >= 10 else today.year - 1, 10, 1)
+        out = {}
+        for label, sub in (("season", box[(box.game_date >= start) & box.played]), ("last", box[(box.game_date < start) & box.played])):
+            g = sub.groupby("player_name").agg(games=("minutes", "size"), minutes=("minutes", "mean"), fpts=("dk_fpts", "sum"), mins=("minutes", "sum"))
+            for name, r in g.iterrows():
+                out.setdefault(name, {})[label] = dict(games=int(r.games), minutes=float(r.minutes), fpm=float(r.fpts / r.mins) if r.mins > 0 else None)
+        return out
 
     def maybe_reload(self):
         if self._stamp() != self.pool_stamp:
             self.rebuild()
             self.flash.append("pool changed on disk (capture tick); reloaded")
 
-    def reproject(self, team: str, n_sims: int = 1000):
+    def reproject(self, team: str, n_sims: int = 600):
         rng = np.random.default_rng(0)
-        self.proj[team] = self.slate.project(team, self.overrides, set(), ProjectionParams(n_sims=n_sims), rng=rng)
+        self.proj[team] = self.slate.project(team, self.overrides, set(), ProjectionParams.from_config(n_sims=n_sims), rng=rng)
         self.hist_only[team] = self.slate.project(team, self.overrides, set(),
-                                                  ProjectionParams(n_sims=0, market_weight=0.0), rng=rng)
+                                                  ProjectionParams.from_config(n_sims=0, market_weight=0.0), rng=rng)
 
     # ---------------------------------------------------------------- views
     def players(self, team: str) -> list[NBAPlayer]:
@@ -103,11 +136,27 @@ class Desk:
             out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
         return out
 
+    def pins(self) -> dict[str, float]:
+        """player -> pinned minutes (the overrides' minutes column only)."""
+        return {k: v["minutes"] for k, v in self.overrides.items() if v.get("minutes") is not None}
+
     def review(self, team: str) -> dict:
         """The rotation review (ivan.sports.nba.validation.review_team): provenance of every player's minutes and the flags."""
         if getattr(self, "_recent", None) is None or self._recent_stamp != self.pool_stamp:
             self._recent = recent_minutes(self.slate.box); self._recent_stamp = self.pool_stamp
-        return review_team(self.slate, team, self.proj[team], self._recent, market_points(self.session), self.overrides)
+        return review_team(self.slate, team, self.proj[team], self._recent, market_points(self.session), self.pins())
+
+    def set_override(self, name: str, **fields) -> None:
+        """Set or clear a player's minutes / fppm / min_low / min_high; a player with nothing left is dropped."""
+        rec = dict(self.overrides.get(name, {}))
+        for k, v in fields.items():
+            rec[k] = v
+        rec = {k: v for k, v in rec.items() if v is not None}
+        if rec:
+            self.overrides[name] = {k: rec.get(k) for k in ("minutes", "fppm", "min_low", "min_high")}
+        else:
+            self.overrides.pop(name, None)
+        write_overrides(self.overrides)                    # persisted at once; a reload or a capture tick cannot lose it
 
     def team_rows(self, team: str) -> list[dict]:
         proj, hist = self.proj[team], self.hist_only[team]
@@ -149,16 +198,48 @@ class Desk:
             if r is not None and not r.get("priced") and float(r["minutes"]) >= 20:
                 flags.append("unpriced")
             flags += [f for f in review_flags.get(name, []) if not f.startswith(("questionable", "pinned"))]
+            # the flags as cell colours: which column each one belongs to, and how loud
+            cells = {"name": [], "min": [], "hist": [], "fpm": []}
+            for f in flags:
+                if f.startswith(("out", "scratched", "questionable")):
+                    cells["name"].append(f)
+                elif f.startswith(("new team", "no history")):
+                    cells["hist"].append(f)
+                elif f.startswith("market"):
+                    cells["fpm"].append(f)
+                else:
+                    cells["min"].append(f)
+            rotation = r is not None and float(r["minutes"]) >= ROTATION_MIN      # the deep bench's quirks are not worth a colour
+            loud = {k: ("bad" if any(x.startswith(("dnp-prone", "deep bench", "out", "scratched")) for x in v)
+                        else "warn" if v and (rotation or k == "name") else "") for k, v in cells.items()}
+            sa = self.season.get(name, {})
+            cur, last_season = sa.get("season"), sa.get("last")
+            fpts = None if r is None else float(r["fpts_mean"])
+            ov = override_of(self.overrides, name)
+            mk = self.market_rows.get(name, {})
+            stats = [] if r is None else [dict(stat=st, proj=float(r[f"proj_{st}"]), line=mk.get(st, {}).get("line"), mean=mk.get(st, {}).get("mean"),
+                                              books=mk.get(st, {}).get("books"), priced=st in mk) for st in STATS]
             rows.append(dict(id=p.id, name=p.name, key=name, salary=p.salary, pos=p.position, status=status if status != "NONE" else "",
                              starter=("S" if starter else ("" if starter is not None else "?")),
                              confirmed=confirmed, out=out,
                              hist_min=hist_min, minutes=None if r is None else float(r["minutes"]),
-                             pinned=name in self.overrides, pin=self.overrides.get(name),
-                             fpts=None if r is None else float(r["fpts_mean"]), sd=None if r is None else float(r["fpts_std"]),
+                             min_p10=None if r is None or pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"]),
+                             min_p90=None if r is None or pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"]),
+                             pinned=ov.get("minutes") is not None, pin=ov.get("minutes"),
+                             fppm_pin=ov.get("fppm"), low_pin=ov.get("min_low"), high_pin=ov.get("min_high"), stats=stats,
+                             fpts=fpts, sd=None if r is None else float(r["fpts_std"]),
+                             fpm=None if r is None else float(r["fpm"]),
+                             season_games=cur["games"] if cur else 0, season_min=cur["minutes"] if cur else None, season_fpm=cur["fpm"] if cur else None,
+                             last_games=last_season["games"] if last_season else 0, last_min=last_season["minutes"] if last_season else None,
+                             last_fpm=last_season["fpm"] if last_season else None,
+                             value=None if fpts is None or not p.salary else fpts / (p.salary / 1000.0),
+                             own=None if p.ownership in (None, 0) else float(p.ownership),
                              hist_fpts=None if h is None else float(h["fpts_mean"]), market=market,
                              dk_avg=p.dk_avg_fpts, priced=bool(r is not None and r.get("priced")),
-                             usage=None if r is None else float(r["usage_mult"]), flags=flags))
-        rows.sort(key=lambda x: (x["out"], -(x["minutes"] or 0)))
+                             usage=None if r is None else float(r["usage_mult"]), flags=flags,
+                             cells={k: " · ".join(v) for k, v in cells.items()}, loud=loud))
+        # starters first, then the players who are out, then the rest of the bench; minutes descending within each group
+        rows.sort(key=lambda x: (0 if (x["starter"] == "S" and not x["out"]) else (1 if x["out"] else 2), -(x["minutes"] or 0), -(x["salary"] or 0)))
         return rows
 
     def team_card(self, team: str, now: datetime) -> dict:
@@ -197,7 +278,10 @@ class Desk:
             alerts.append(("info", f"{len(unpriced)} rotation players unpriced"))
         score = sum({"bad": 10, "warn": 3, "info": 1}[k] for k, _ in alerts)
         team_fpts = float(self.proj[team]["fpts_mean"].sum()) if len(self.proj[team]) else 0.0
+        assigned = sum((r["minutes"] or 0) for r in avail)
+        to_place = (241.0 - assigned) if any(r["pinned"] for r in rows) else 0.0
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
+                    assigned=assigned, to_place=to_place,
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
@@ -229,35 +313,73 @@ def _render(request: Request, template: str, **ctx):
     return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, **ctx})
 
 
+def games_of(cards: list[dict], now: datetime) -> list[dict]:
+    """Pair the team cards into games (away on the left, home on the right when the lines say which is which), earliest tip first."""
+    by_team = {c["team"]: c for c in cards}
+    seen, games = set(), []
+    for c in cards:
+        if c["team"] in seen:
+            continue
+        opp = by_team.get(c["opp"])
+        pair = [c] + ([opp] if opp is not None else [])
+        seen.update(x["team"] for x in pair)
+        info = (desk.slate._lines.by_team.get(c["team"]) if getattr(desk.slate, "_lines", None) else None) or {}
+        if len(pair) == 2 and info.get("home") is True:
+            pair = [pair[1], pair[0]]                      # away first
+        home = pair[-1]["team"] if len(pair) == 2 else None
+        spread = desk.slate.spread(home) if home else None
+        total = desk.slate._lines.team_total(home) if home and getattr(desk.slate, "_lines", None) else None
+        games.append(dict(teams=pair, tip=c["tip"], mins_to_tip=c["mins_to_tip"], locked=all(x["locked"] for x in pair),
+                          score=max(x["score"] for x in pair), home=home, spread=spread, total=total))
+    return sorted(games, key=lambda g: (g["locked"], g["tip"] or now))
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, open: Optional[str] = None):
     with LOCK:
         desk.maybe_reload()
         now = datetime.now()
-        cards = sorted((desk.team_card(t, now) for t in desk.slate.teams()), key=lambda c: (c["locked"], -c["score"], c["tip"] or now))
-        return _render(request, "nba_desk.html", header=desk.header(now), cards=cards, open_team=open)
+        for t in desk.slate.teams():
+            desk.slate.spread(t)                            # loads the lines once
+        cards = [desk.team_card(t, now) for t in desk.slate.teams()]
+        games = games_of(cards, now)
+        menu = []                                            # games grouped by tip time, in order
+        for g in games:
+            if not menu or menu[-1]["tip"] != g["tip"]:
+                menu.append(dict(tip=g["tip"], games=[]))
+            menu[-1]["games"].append(g)
+        return _render(request, "nba_desk.html", header=desk.header(now), games=games, menu=menu, open_team=open, **_pipeline_ctx())
 
 
 @app.get("/team/{team}", response_class=HTMLResponse)
 def team(request: Request, team: str):
     with LOCK:
         desk.maybe_reload()
-        return _render(request, "_nba_team.html", card=desk.team_card(team, datetime.now()))
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+def _num(raw: str, label: str) -> Optional[float]:
+    raw = (raw or "").strip()
+    if raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        desk.flash.append(f"'{raw}' is not a number for {label}")
+        return None
 
 
 @app.post("/team/{team}/pin", response_class=HTMLResponse)
-def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form("")):
+def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form("")):
+    """One row's hand values: blank clears that field. Minutes 0 scratches."""
     with LOCK:
         key = normalize_name(player)
-        if minutes.strip() == "":
-            desk.overrides.pop(key, None)
-        else:
-            try:
-                desk.overrides[key] = float(minutes)
-            except ValueError:
-                desk.flash.append(f"'{minutes}' is not a number")
+        lo, hi = _num(low, "low"), _num(high, "high")
+        if (lo is None) != (hi is None) or (lo is not None and hi is not None and hi <= lo):
+            desk.flash.append("the band needs both a low and a high, low < high"); lo = hi = None
+        desk.set_override(key, minutes=_num(minutes, "minutes"), fppm=_num(fppm, "fppm"), min_low=lo, min_high=hi)
         desk.reproject(team)
-        return _render(request, "_nba_team.html", card=desk.team_card(team, datetime.now()))
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
 @app.post("/team/{team}/clear", response_class=HTMLResponse)
@@ -265,8 +387,9 @@ def clear_team(request: Request, team: str):
     with LOCK:
         for p in desk.players(team):
             desk.overrides.pop(normalize_name(p.name), None)
+        write_overrides(desk.overrides)
         desk.reproject(team)
-        return _render(request, "_nba_team.html", card=desk.team_card(team, datetime.now()))
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
 @app.post("/publish")
@@ -275,8 +398,8 @@ def publish():
     with LOCK:
         write_overrides(desk.overrides)
         try:
-            info = project_slate(desk.session, n_sims=4000, log=desk.flash.append)
-            desk.flash.append(f"published: {info.players} players projected, pins saved to {MINUTES_OVERRIDES_CSV.name}")
+            info = project_slate(desk.session, n_sims=2000, log=desk.flash.append)
+            desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
         except IngestError as e:
             desk.flash.append(f"publish failed: {e}")
         desk.rebuild()
@@ -299,6 +422,159 @@ def refresh(what: str = Form("dk")):
                 desk.flash.append(f"refresh failed: {e}")
             desk.rebuild()
     return RedirectResponse("/", status_code=303)
+
+
+# ---------------------------------------------------------------- pipeline: generate / sim / choose as jobs
+def _entries_path() -> Path:
+    try:
+        from ivan.core.config import load_config
+        return Path(load_config("nba")["paths"]["entries_csv"])
+    except Exception:   # noqa: BLE001
+        return INPUT_DIR / "entries.csv"
+
+
+def _entries_info() -> dict:
+    p = _entries_path()
+    if not p.exists():
+        return dict(path=str(p.relative_to(PROJECT_ROOT)) if p.is_relative_to(PROJECT_ROOT) else str(p), exists=False)
+    try:
+        from ivan.sports.nba.lineup_export import read_entries
+        e = read_entries(p)
+        contests = e.groupby("Contest Name").size().to_dict()
+        return dict(path=str(p.relative_to(PROJECT_ROOT)), exists=True, entries=int(len(e)), contests=contests,
+                    modified=datetime.fromtimestamp(p.stat().st_mtime))
+    except Exception as ex:   # noqa: BLE001
+        return dict(path=str(p), exists=True, error=f"{type(ex).__name__}: {ex}")
+
+
+def _slate_contest_ids() -> set[int]:
+    """The contests of the draft group loaded in the desk (historical_contest_information)."""
+    dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
+    if dg is None:
+        return set()
+    from ivan.sports.nba.models import HistoricalContest
+    return {int(c) for (c,) in desk.session.query(HistoricalContest.contest_id).filter(HistoricalContest.draft_group_id == int(dg)).all()}
+
+
+def _latest_outputs() -> Optional[dict]:
+    """
+    The newest choose run that covered a contest of the current slate: the upload CSV, the per-contest
+    summary from its choose json, and the exposures recomputed over this slate's entries only.
+    """
+    mine = _slate_contest_ids()
+    for classic in sorted(OUTPUT_DIR.glob("chosen_entries.classic.*.csv"), reverse=True):
+        stamp = classic.name.split(".")[2]
+        js = OUTPUT_DIR / f"chosen_entries.choose.{stamp}.json"
+        if not js.exists():
+            continue
+        try:
+            d = json.loads(js.read_text())
+        except ValueError:
+            continue
+        hit = {cid: v for cid, v in d.items() if int(cid) in mine}
+        if not hit:
+            continue
+        out = dict(stamp=stamp, classic=classic.name, when=datetime.strptime(stamp, "%Y%m%d-%H%M%S"), slate_only=len(hit) < len(d))
+        try:
+            out["contests"] = [dict(name=v.get("contest_name"), entries=v.get("entries"), chosen=v.get("chosen"), roi=v.get("chosen_roi"), cash=v.get("chosen_cash"),
+                                    top_roi=v.get("top_quality_roi"), book=(v.get("book") or {}).get("chosen") or {}) for v in hit.values()]
+            up = pd.read_csv(classic); up = up[up["Contest ID"].astype(int).isin(mine)]
+            out["rows"] = int(len(up))
+            lu = OUTPUT_DIR / f"chosen_entries.lineups.{stamp}.csv"
+            if lu.exists() and len(up):
+                L = pd.read_csv(lu); L = L[L["contest_id"].astype(int).isin(mine)]
+                n_entries = L["entry_id"].nunique()
+                e = (L.groupby(["player_id", "name", "team", "position", "salary"]).agg(n=("entry_id", "nunique"), projection=("projection", "first"))
+                     .reset_index())
+                e["exposure"] = e["n"] / max(1, n_entries)
+                out["exposures"] = e.sort_values("exposure", ascending=False).head(14)[["name", "team", "position", "salary", "exposure", "projection"]].to_dict("records")
+        except Exception as ex:   # noqa: BLE001
+            out["error"] = f"{type(ex).__name__}: {ex}"
+        return out
+    return None
+
+
+def _pipeline_ctx() -> dict:
+    jobs = runner.all()[:8]
+    cur = runner.current() or next((j for j in jobs if j.status == "queued"), None)
+    log = runner.read_log(cur, tail_lines=14) if cur else (runner.read_log(jobs[0], tail_lines=14) if jobs else "")
+    return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=_entries_info(),
+                outputs=_latest_outputs(), lineups_in_db=desk.session.query(Lineup).count(),
+                sims_in_db=desk.session.query(LineupSimulationResult).count())
+
+
+def _submit(step: str, form: dict) -> list:
+    py = sys.executable
+    jobs = []
+    if step in ("generate", "all"):
+        cmd = [py, str(SCRIPTS / "generate_lineups.py"), str(int(form["lineups"])), str(int(form["jobs"])), "--fresh", "--no-progress"]
+        if str(form.get("min_fpts") or "").strip():
+            cmd += ["--min-fpts", str(float(form["min_fpts"]))]
+        if str(form.get("randomness") or "").strip():
+            cmd += ["--randomness", str(float(form["randomness"]))]
+        jobs.append(runner.submit("generate", cmd, meta=dict(step="generate")))
+    if step in ("sim", "all"):
+        jobs.append(runner.submit("sim", [py, str(SCRIPTS / "sim.py"), "-n", str(int(form["sims"])), "-c", str(int(form["field_cap"]))], meta=dict(step="sim")))
+    if step in ("choose", "all"):
+        jobs.append(runner.submit("choose", [py, str(SCRIPTS / "choose.py"), "--no-prompt", "--method", str(form["method"])], meta=dict(step="choose")))
+    return jobs
+
+
+@app.get("/pipeline", response_class=HTMLResponse)
+def pipeline(request: Request):
+    with LOCK:
+        return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+
+
+@app.post("/pipeline/{step}", response_class=HTMLResponse)
+def pipeline_run(request: Request, step: str, lineups: str = Form("25000"), jobs: str = Form("8"), sims: str = Form("1000"),
+                 field_cap: str = Form("10000"), method: str = Form("greedy"), min_fpts: str = Form(""), randomness: str = Form("0.25")):
+    """generate | sim | choose | all. Generate (and all) publish the desk's projections first, so the pool is what you see."""
+    with LOCK:
+        pipeline_form.update(lineups=lineups, jobs=jobs, sims=sims, field_cap=field_cap, method=method, min_fpts=min_fpts, randomness=randomness)
+        if step not in ("generate", "sim", "choose", "all"):
+            desk.flash.append(f"unknown step {step}")
+        elif runner.active():
+            desk.flash.append("a job is already running; wait for it or cancel it")
+        else:
+            if step in ("generate", "all"):
+                write_overrides(desk.overrides)
+                try:
+                    info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
+                    desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits, then queued {step}")
+                except IngestError as e:
+                    desk.flash.append(f"publish failed: {e}")
+            try:
+                _submit(step, pipeline_form)
+            except (TypeError, ValueError) as e:
+                desk.flash.append(f"bad setting: {e}")
+        return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+
+
+@app.post("/pipeline/cancel/{job_id}", response_class=HTMLResponse)
+def pipeline_cancel(request: Request, job_id: str):
+    with LOCK:
+        runner.cancel(job_id)
+        return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+
+
+@app.post("/entries", response_class=HTMLResponse)
+async def entries_upload(request: Request, file: UploadFile = File(...)):
+    """The DraftKings entries export, saved as the configured entries file."""
+    data = await file.read()
+    with LOCK:
+        p = _entries_path(); p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        desk.flash.append(f"entries file saved: {file.filename} -> {p.name} ({len(data)} bytes)")
+        return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+
+
+@app.get("/download/{name}")
+def download(name: str):
+    p = OUTPUT_DIR / Path(name).name
+    if not p.exists() or not p.name.startswith("chosen_entries."):
+        return HTMLResponse("not found", status_code=404)
+    return FileResponse(p, filename=p.name, media_type="text/csv")
 
 
 @app.post("/slate")

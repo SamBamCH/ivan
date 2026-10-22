@@ -1,32 +1,52 @@
 <table>
-  <thead><tr><th>player</th><th class="n">sal</th><th>st</th><th class="n">hist</th><th class="n">min</th><th></th><th class="n">fpts</th><th class="n">sd</th><th class="n">hist fpts</th><th class="n">mkt</th><th class="n">dk avg</th><th>src</th><th class="flags">flags</th></tr></thead>
+  <thead><tr>
+    <th>player</th><th class="n">sal</th><th>st</th>
+    <th class="n" title="projected minutes; type to pin the mean, 0 scratches">min</th>
+    <th title="10-90 minutes band on a 0-48 scale, mean as the tick; type a low and high to set it">distribution</th>
+    <th class="n" title="this season's minutes per game when played; italic = last season's">hist min</th>
+    <th class="n" title="projected fantasy points per minute; green = from the props; type to override">fppm</th>
+    <th class="n" title="this season's fantasy points per minute; italic = last season's">fppm avg</th>
+    <th class="n" title="projected fantasy points; hover for the stat lines behind it">proj</th>
+    <th class="n" title="projected fantasy points per $1k of salary">value</th>
+    <th class="n" title="projected ownership (no NBA ownership model yet)">own</th>
+  </tr></thead>
   <tbody>
   {% for r in card.rows %}
-    <tr class="{% if r.out %}out{% endif %}">
-      <td>{{ r.name }} {% if r.status %}<span class="status">{{ r.status }}</span>{% endif %}</td>
+    {% set grp = 'starters' if (r.starter == 'S' and not r.out) else ('out' if r.out else 'bench') %}
+    {% set prev = 'starters' if (loop.previtem is defined and loop.previtem.starter == 'S' and not loop.previtem.out) else ('out' if (loop.previtem is defined and loop.previtem.out) else ('bench' if loop.previtem is defined else none)) %}
+    {% if prev is not none and grp != prev %}<tr class="divider {{ grp }}"><td colspan="11">{{ grp }}</td></tr>{% endif %}
+    <tr class="{{ grp }} {% if r.out %}out{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
+      <td class="{{ r.loud.name }}" title="{{ r.cells.name }}"><input type="hidden" name="player" value="{{ r.key }}">{{ r.name }}{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}{% if not r.out %} <button class="scratch" title="scratch (pin 0 minutes)" hx-post="/team/{{ card.team }}/pin" hx-vals='{"minutes": "0"}' hx-include="closest tr" hx-target="#card-{{ card.team }}" hx-swap="innerHTML">✕</button>{% endif %}</td>
       <td class="n">{{ r.salary }}</td>
       <td><span class="st">{{ r.starter }}</span></td>
-      <td class="n">{{ '%.1f'|format(r.hist_min) if r.hist_min is not none else '—' }}</td>
-      <td class="n">
-        <form hx-post="/team/{{ card.team }}/pin" hx-target="#team-{{ card.team }}" hx-swap="innerHTML" hx-trigger="change">
-          <input type="hidden" name="player" value="{{ r.key }}">
-          <input class="min {% if r.pinned %}pinned{% endif %}" name="minutes" value="{% if r.pinned %}{{ '%g'|format(r.pin) }}{% elif r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% endif %}" placeholder="{{ '%.1f'|format(r.minutes) if r.minutes is not none else '0' }}" title="{% if r.pinned %}pinned; blank to unpin{% else %}model; type to pin{% endif %}">
-        </form>
+      <td class="n {{ r.loud.min }}" title="{{ r.cells.min }}">
+        <input class="min {% if r.pinned %}pinned{% endif %}" name="minutes" value="{% if r.pinned %}{{ '%g'|format(r.pin) }}{% endif %}" placeholder="{{ '%.1f'|format(r.minutes) if r.minutes is not none else '0' }}" title="{% if r.pinned %}pinned mean; blank to unpin{% else %}model {{ '%.1f'|format(r.minutes) if r.minutes is not none else '' }}; type to pin the mean{% endif %}" hx-post="/team/{{ card.team }}/pin" hx-trigger="change" hx-include="closest tr" hx-target="#card-{{ card.team }}" hx-swap="innerHTML">
+        {% if not r.pinned and r.minutes is not none %}<div class="model">{{ '%.1f'|format(r.minutes) }}</div>{% endif %}
       </td>
-      <td>{% if not r.out %}<form hx-post="/team/{{ card.team }}/pin" hx-target="#team-{{ card.team }}" hx-swap="innerHTML" style="display:inline"><input type="hidden" name="player" value="{{ r.key }}"><input type="hidden" name="minutes" value="0"><button class="scratch" title="scratch (pin 0)">✕</button></form>{% endif %}</td>
-      <td class="n">{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</td>
-      <td class="n">{{ '%.1f'|format(r.sd) if r.sd is not none else '' }}</td>
-      <td class="n">{{ '%.1f'|format(r.hist_fpts) if r.hist_fpts is not none else '' }}</td>
-      <td class="n">{{ '%.1f'|format(r.market) if r.market else '' }}</td>
-      <td class="n">{{ '%.1f'|format(r.dk_avg) if r.dk_avg else '' }}</td>
-      <td>{% if r.priced %}<span class="src mkt">mkt</span>{% elif not r.out %}<span class="src">hist</span>{% endif %}{% if r.usage and (r.usage - 1)|abs > 0.02 %} <span class="muted" style="font-size:11px">×{{ '%.2f'|format(r.usage) }}</span>{% endif %}</td>
-      <td class="flags">{% for f in r.flags %}{% if f.startswith('out') or f == 'scratched' %}<b>{{ f }}</b>{% elif f in ('new starter','benched','questionable') or f.startswith('market') %}<i>{{ f }}</i>{% else %}{{ f }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</td>
+      <td class="dist">
+        {% if not r.out and r.minutes is not none %}
+        <div class="bar" title="10-90 band {{ '%.0f'|format(r.min_p10) if r.min_p10 is not none else '?' }}–{{ '%.0f'|format(r.min_p90) if r.min_p90 is not none else '?' }}, mean {{ '%.1f'|format(r.minutes) }}">
+          {% if r.min_p10 is not none %}<div class="range {% if r.low_pin is not none %}pinned{% endif %}" style="left:{{ (100 * r.min_p10 / 48)|round(1) }}%;width:{{ (100 * (r.min_p90 - r.min_p10) / 48)|round(1) }}%"></div>{% endif %}
+          <div class="tick" style="left:{{ (100 * r.minutes / 48)|round(1) }}%"></div>
+        </div>
+        <span class="bandin"><input class="min sm {% if r.low_pin is not none %}pinned{% endif %}" name="low" value="{{ '%g'|format(r.low_pin) if r.low_pin is not none else '' }}" placeholder="{{ '%.0f'|format(r.min_p10) if r.min_p10 is not none else '' }}" title="10th percentile; type with high to set the band" hx-post="/team/{{ card.team }}/pin" hx-trigger="change" hx-include="closest tr" hx-target="#card-{{ card.team }}" hx-swap="innerHTML">–<input class="min sm {% if r.high_pin is not none %}pinned{% endif %}" name="high" value="{{ '%g'|format(r.high_pin) if r.high_pin is not none else '' }}" placeholder="{{ '%.0f'|format(r.min_p90) if r.min_p90 is not none else '' }}" title="90th percentile" hx-post="/team/{{ card.team }}/pin" hx-trigger="change" hx-include="closest tr" hx-target="#card-{{ card.team }}" hx-swap="innerHTML"></span>
+        {% endif %}
+      </td>
+      <td class="n {{ r.loud.hist }}" title="{{ r.cells.hist }}">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}<span class="muted small"> ({{ r.season_games }}g)</span>{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% else %}—{% endif %}</td>
+      <td class="n {{ r.loud.fpm }} {% if r.priced %}mkt{% endif %}" title="{{ r.cells.fpm }}">{% if not r.out %}<input class="min {% if r.fppm_pin is not none %}pinned{% endif %}" name="fppm" value="{{ '%g'|format(r.fppm_pin) if r.fppm_pin is not none else '' }}" placeholder="{{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}" title="{% if r.fppm_pin is not none %}overridden; blank to restore{% else %}model {{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}; type to override{% endif %}" hx-post="/team/{{ card.team }}/pin" hx-trigger="change" hx-include="closest tr" hx-target="#card-{{ card.team }}" hx-swap="innerHTML">{% if r.fppm_pin is none and r.fpm is not none %}<div class="model">{{ '%.2f'|format(r.fpm) }}</div>{% endif %}{% endif %}</td>
+      <td class="n">{% if r.season_fpm is not none %}{{ '%.2f'|format(r.season_fpm) }}{% elif r.last_fpm is not none %}<i>{{ '%.2f'|format(r.last_fpm) }}</i>{% else %}—{% endif %}</td>
+      <td class="n hover"><b>{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</b>{% if r.sd is not none %}<span class="muted small"> ±{{ '%.0f'|format(r.sd) }}</span>{% endif %}
+        {% if r.stats %}<div class="pop"><table class="mini"><tr><th>stat</th><th class="n">proj</th><th class="n">line</th><th class="n">mkt mean</th><th class="n">books</th></tr>
+          {% for s in r.stats %}<tr class="{% if s.priced %}mkt{% endif %}"><td>{{ s.stat }}</td><td class="n">{{ '%.1f'|format(s.proj) }}</td><td class="n">{{ '%g'|format(s.line) if s.line is not none else '' }}</td><td class="n">{{ '%.1f'|format(s.mean) if s.mean is not none else '' }}</td><td class="n">{{ s.books if s.books else '' }}</td></tr>{% endfor %}
+          <tr><td colspan="5" class="muted small">{{ '%.1f'|format(r.minutes or 0) }} min × {{ '%.2f'|format(r.fpm or 0) }} fppm{% if r.market %} · books' total {{ '%.1f'|format(r.market) }}{% endif %}{% if r.dk_avg %} · DK avg {{ '%.1f'|format(r.dk_avg) }}{% endif %}</td></tr></table></div>{% endif %}
+      </td>
+      <td class="n">{{ '%.2f'|format(r.value) if r.value is not none else '' }}</td>
+      <td class="n">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 <div class="teamfoot">
-  <span>available minutes {{ '%.0f'|format(card.rows|rejectattr('out')|map(attribute='minutes')|select('number')|sum) }} / 241 · team {{ card.team_fpts|round(1) }} fpts{% if card.trailing %} (trailing {{ card.trailing|round(0)|int }}){% endif %}</span>
-  <form hx-post="/team/{{ card.team }}/clear" hx-target="#team-{{ card.team }}" hx-swap="innerHTML"><button>clear pins</button></form>
-  <span>hist = play-rate × trailing minutes · mkt = market fpts at DK weights · src mkt = market rate is gospel · ×usage = unpriced teammates' bump</span>
+  <span>{{ '%.0f'|format(card.assigned) }} / 241 min{% if card.to_place|abs >= 0.5 %} <b class="toplace">{{ '%+.0f'|format(-card.to_place) }} → {% if card.to_place > 0 %}{{ '%.0f'|format(card.to_place) }} min to place{% else %}{{ '%.0f'|format(-card.to_place) }} min over{% endif %}</b>{% endif %} · {{ card.team_fpts|round(0)|int }} fpts{% if card.trailing %} (trailing {{ card.trailing|round(0)|int }}){% endif %}</span>
+  <button hx-post="/team/{{ card.team }}/clear" hx-target="#card-{{ card.team }}" hx-swap="innerHTML">clear edits</button>
 </div>

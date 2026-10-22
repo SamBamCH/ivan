@@ -29,78 +29,8 @@ from ivan.sports.nba.paths import MODELS_DIR, DIAG_DIR
 from ivan.sports.nba.projection.history import load_box_scores, build_history, STATS, HistoryState
 from ivan.sports.nba.projection.engine import project_team, RosterPlayer, ProjectionParams
 from ivan.sports.nba.projection.rates import DK_WEIGHTS
-
-ROSTER_WINDOW_GAMES = 10   # a player seen in the team's last N games is "on the roster"
-STAR_BASELINE = 28.0       # a missing player projected above this makes it a star-out game
-
-
-def team_games(box: pd.DataFrame, start: date, end: date) -> list[tuple[str, str, date]]:
-    tg = box[["team", "game_id", "game_date"]].drop_duplicates()
-    tg = tg[(tg.game_date >= start) & (tg.game_date <= end)]
-    return list(tg.sort_values(["game_date", "game_id"]).itertuples(index=False, name=None))
-
-
-def build_cases(box: pd.DataFrame, start: date, end: date, dnp_available: bool = False) -> list[dict]:
-    """One case per team-game: roster with availability/starter flags and actuals."""
-    played = box[box.played]
-    recent = {}  # team -> list of (game_date, game_id, set(players))
-    for (team, gid, d), g in played.groupby(["team", "game_id", "game_date"], sort=False):
-        recent.setdefault(team, []).append((d, gid, set(g.player_name)))
-    for t in recent:
-        recent[t].sort()
-    cases = []
-    for team, gid, d in team_games(box, start, end):
-        today = box[(box.team == team) & (box.game_id == gid)]
-        prior = [p for p in recent[team] if p[0] < d][-ROSTER_WINDOW_GAMES:]
-        roster_names = set().union(*[p[2] for p in prior]) if prior else set()
-        roster_names |= set(today.player_name)
-        act = today.set_index("player_name")
-        roster = []
-        for n in sorted(roster_names):
-            if n in act.index and act.loc[n, "minutes"] > 0:
-                roster.append(RosterPlayer(n, True, bool(act.loc[n, "starter"] > 0)))
-            elif dnp_available and n in act.index:
-                # dressed but did not play: live we cannot tell him from the rotation
-                roster.append(RosterPlayer(n, True, False))
-            else:
-                roster.append(RosterPlayer(n, False, None))
-        cases.append(dict(team=team, game_id=gid, date=d, roster=roster,
-                          actual=act[act.minutes > 0][["minutes", "dk_fpts"] + STATS]))
-    return cases
-
-
-def run(cases, hist: HistoryState, params: ProjectionParams, simulate=False) -> pd.DataFrame:
-    rows = []
-    cache = {}
-    for c in cases:
-        d = c["date"]
-        if d not in cache:
-            cache = {d: hist.before(d)}  # cases are date-sorted; keep one
-        state = cache[d]
-        team_fpts = hist.team_before(d).get(c["team"])
-        proj = project_team(c["roster"], state, hist, team_fpts, params, simulate=simulate)
-        star_out = any((not p.available) and (p.name in state.index) and state.loc[p.name, "min_ewm"] >= STAR_BASELINE
-                       for p in c["roster"])
-        j = proj.join(c["actual"], how="inner", rsuffix="_act")
-        j["team"], j["game_id"], j["date"], j["star_out"] = c["team"], c["game_id"], d, star_out
-        rows.append(j.reset_index())
-    return pd.concat(rows, ignore_index=True)
-
-
-def metrics(df: pd.DataFrame, label: str) -> dict:
-    d = df[df.games >= 5]  # players with some history; rookies' first games are noise for every method
-    em = d.minutes - d.minutes_act
-    ef = d.fpts_mean - d.dk_fpts
-    return dict(label=label, n=len(d),
-                min_mae=em.abs().mean(), min_bias=em.mean(),
-                fpts_mae=ef.abs().mean(), fpts_rmse=np.sqrt((ef ** 2).mean()), fpts_bias=ef.mean(),
-                corr=np.corrcoef(d.fpts_mean, d.dk_fpts)[0, 1])
-
-
-def fmt(ms: list[dict]) -> str:
-    t = pd.DataFrame(ms).set_index("label")
-    return t.to_string(float_format=lambda v: f"{v:7.3f}")
-
+from ivan.sports.nba.projection.walkforward import (ROSTER_WINDOW_GAMES, STAR_BASELINE, build_cases, fmt, metrics, run,  # noqa: F401
+                                                    team_games)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -118,6 +48,8 @@ def main():
                     help="fit the role-pair correlation table and write the residuals the pair layer uses")
     ap.add_argument("--market-day", default=None,
                     help="evaluate market rates from the odds table for this date (e.g. 2025-11-30)")
+    ap.add_argument("--minutes-model", choices=("independent", "team", "both"), default=None,
+                    help="simulate fantasy points (n_sims 500) under this minutes model; 'both' compares the two on fpts MAE and the 10-90 band")
     args = ap.parse_args()
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
 
@@ -169,6 +101,18 @@ def main():
             res = run(cases, h2, ProjectionParams(prior_minutes=pm))
             ms.append(metrics(res, f"rate_halflife={rh} prior_min={pm}"))
         out = fmt(ms); report.append("RATE GRID\n" + out); print(out)
+
+    if args.minutes_model:
+        ms = []
+        for mm in (("independent", "team") if args.minutes_model == "both" else (args.minutes_model,)):
+            r = run(cases, hist, ProjectionParams(minutes_model=mm, n_sims=500, quantiles=11), simulate=True)
+            r = r[(r.games >= 5) & r.quantiles.map(lambda q: isinstance(q, list) and len(q) == 11)]
+            q = np.vstack(r.quantiles.values)                      # 11 points: index 1 = p10, 9 = p90
+            inside = ((r.dk_fpts >= q[:, 1]) & (r.dk_fpts <= q[:, 9])).mean()
+            m = metrics(r, f"minutes_model={mm}"); m["cover_10_90"] = inside; m["band_width"] = float((q[:, 9] - q[:, 1]).mean())
+            m["sd_mean"] = float(r.fpts_std.mean()); m["abs_err_mean"] = float((r.fpts_mean - r.dk_fpts).abs().mean())
+            ms.append(m); print(fmt([m]).split("\n")[-1])
+        out = fmt(ms); report.append("MINUTES MODEL\n" + out); print(out)
 
     params = ProjectionParams()
     res = run(cases, hist, params)

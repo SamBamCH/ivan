@@ -30,12 +30,12 @@ from ivan.core.utils import normalize_name
 from ivan.database.session import add_missing_columns
 from ivan.sports.common.draftkings import (get_players_for_slate, _derive_opponent_for_player,
                                            _parse_gametime_to_local, list_slates)
-from ivan.sports.common.odds import get_odds, parse_odds
+from ivan.sports.common.odds import get_game_odds, get_odds, parse_game_odds, parse_odds
 from ivan.sports.nba.historical.data_fetch import fetch_rotowire_html, parse_rotowire, store_starting_lineups
-from ivan.sports.nba.models import (NBABase, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
+from ivan.sports.nba.models import (NBABase, NBAGameOdds, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
 from ivan.sports.nba.paths import OUTPUT_DIR
 from ivan.sports.nba.projection.engine import ProjectionParams
-from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides, store_market_rates
+from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
 from ivan.sports.nba.projection.market import NBA_MARKETS, market_means
 
 Log = Callable[[str], None]
@@ -72,6 +72,7 @@ class SlateFetch:
     lock: Optional[datetime] = None
     starters: Optional[pd.DataFrame] = None
     odds: Optional[pd.DataFrame] = None
+    game_lines: Optional[pd.DataFrame] = None               # parse_game_odds rows for the slate's games
     teams: set = field(default_factory=set)
     fetched_at: datetime = field(default_factory=datetime.now)
 
@@ -144,6 +145,41 @@ def fetch_slate(session: Session, draft_group_id: int, *, update_odds: bool, sta
     return out
 
 
+def fetch_game_lines(api_key: Optional[str] = None, log: Log = print) -> Optional[pd.DataFrame]:
+    """Moneyline, spread and total for every upcoming NBA game (raw odds/lines; ~3 credits). None when the API returns nothing."""
+    key = api_key or require_env("ODDS_API_KEY")
+    payload, _ = get_game_odds(ODDS_SPORT, key, markets="h2h,spreads,totals", raw_sport="nba")
+    df = parse_game_odds(payload) if payload else None
+    if df is None or df.empty:
+        log("WARNING: the-odds-api returned no NBA game lines")
+        return None
+    df["commence_time"] = pd.to_datetime(df["commence_time"], utc=True).dt.tz_convert("America/Chicago").dt.tz_localize(None)
+    log(f"game lines: {df.game_id.nunique()} games, {len(df)} rows, {df.bookmaker.nunique()} books")
+    return df
+
+
+GAME_LINE_COLS = ["game_id", "sport_key", "commence_time", "home_team", "away_team", "home_abbr", "away_abbr", "bookmaker", "market",
+                  "last_update", "outcome_name", "side", "point", "price"]
+
+
+def store_game_lines(session: Session, lines: pd.DataFrame, fetched_at: Optional[datetime] = None) -> int:
+    """Replace the stored lines of every game in `lines`. Returns rows stored."""
+    if lines is None or lines.empty:
+        return 0
+    games = lines["game_id"].unique().tolist()
+    session.query(NBAGameOdds).filter(NBAGameOdds.game_id.in_(games)).delete(synchronize_session=False)
+    rows = lines[GAME_LINE_COLS].to_dict("records")
+    now = fetched_at or datetime.now()
+    for r in rows:
+        r["fetched_at"] = now
+        r["price"] = None if pd.isna(r.get("price")) else int(r["price"])
+        r["point"] = None if pd.isna(r.get("point")) else float(r["point"])
+        r["commence_time"] = None if pd.isna(r.get("commence_time")) else pd.Timestamp(r["commence_time"]).to_pydatetime()
+    session.bulk_insert_mappings(NBAGameOdds, rows)
+    session.commit()
+    return len(rows)
+
+
 # ------------------------------------------------------------------------------ store
 @dataclass
 class StoreInfo:
@@ -151,6 +187,7 @@ class StoreInfo:
     starters: int = 0
     odds: int = 0
     market_rates: int = 0
+    game_lines: int = 0
     capture_id: Optional[int] = None
 
 
@@ -173,6 +210,8 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
         session.bulk_insert_mappings(NBAOdds, fetched.odds.to_dict("records"))
         session.commit()
         info.odds = len(fetched.odds)
+    if fetched.game_lines is not None and len(fetched.game_lines):
+        info.game_lines = store_game_lines(session, fetched.game_lines, fetched_at=fetched.fetched_at)
     # market rates for this pool from whatever props are stored (fresh or an earlier fetch today)
     odds_df = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.get_bind())
     if len(odds_df):
@@ -181,7 +220,7 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
         if len(odds_df):
             means = market_means(odds_df)
             slate = LiveSlate(session, use_market=False)
-            basis = basis_minutes_for_market(slate, read_overrides(), set())
+            basis = basis_minutes_for_market(slate, read_overrides_full(), set())
             info.market_rates = store_market_rates(session, means, basis)
     # archive capture: players carry their starter flag so a replay can restore it
     starters = {}
@@ -189,14 +228,18 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
         starters[r.player_name] = "confirmed" if r.confirmed else "expected"
     prow = [dict(r, starter=starters.get(r["name"], "bench")) for r in fetched.players]
     odds_rows = fetched.odds.to_dict("records") if fetched.odds is not None else None
+    line_rows = None
+    if fetched.game_lines is not None and len(fetched.game_lines):
+        mine = fetched.game_lines[fetched.game_lines.home_abbr.isin(fetched.teams) | fetched.game_lines.away_abbr.isin(fetched.teams)]
+        line_rows = mine[GAME_LINE_COLS].to_dict("records") if len(mine) else None
     try:
         cap = archive_slate(session, sport="nba", slate_key=str(fetched.draft_group_id), lock=fetched.lock or datetime.now(),
-                            mode="classic", players=prow, odds=odds_rows, source="ingest", captured_at=fetched.fetched_at)
+                            mode="classic", players=prow, odds=odds_rows, game_lines=line_rows, source="ingest", captured_at=fetched.fetched_at)
         info.capture_id = cap.id
     except Exception as e:   # noqa: BLE001
         log(f"WARNING: archive capture failed: {type(e).__name__}: {e}")
     log(f"stored {info.players} players, {info.starters} starters, {info.odds} prop rows, "
-        f"{info.market_rates} market rates; capture {info.capture_id}")
+        f"{info.market_rates} market rates, {info.game_lines} line rows; capture {info.capture_id}")
     return info
 
 
@@ -238,13 +281,13 @@ def market_fpts_by_player(session: Session) -> dict[str, float]:
 
 
 def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool = True, write_csv: bool = True,
-                  log: Log = print, source: str = "ours") -> ProjectInfo:
+                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None) -> ProjectInfo:
     info = ProjectInfo()
     slate = LiveSlate(session)
     if not slate.players:
         raise IngestError("no players in nba_player")
-    overrides = read_overrides()
-    params = ProjectionParams(n_sims=n_sims)
+    overrides = read_overrides_full()
+    params = params or ProjectionParams.from_config(n_sims=n_sims)
     rng = np.random.default_rng(0)
     now = datetime.now()
     frames = []
@@ -266,7 +309,11 @@ def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool =
                          minutes_proj=float(r["minutes"]), fpts_mean=float(r["fpts_mean"]), fpts_std=float(r["fpts_std"]),
                          priced=bool(r.get("priced", False)), pinned=bool(r.get("pinned", False)),
                          baseline_min=float(r["baseline"]), fpm=float(r["fpm"]), usage_mult=float(r["usage_mult"]),
-                         market_fpts=market_fpts.get(name), **history_context(slate, name)))
+                         market_fpts=market_fpts.get(name), minutes_model=params.minutes_model, minutes_role=r.get("role"),
+                         p_out=None if r.get("p_out") is None else float(r["p_out"]),
+                         minutes_p10=None if pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"]),
+                         minutes_p90=None if pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"]),
+                         **history_context(slate, name)))
     for p in slate.players:   # players ruled out: a row with no projection keeps the record of the scratch
         if normalize_name(p.name) not in allp.index:
             rows.append(dict(player_id=p.id, player_name=normalize_name(p.name), team=p.team, opponent=p.opponent,

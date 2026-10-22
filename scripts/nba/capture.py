@@ -6,6 +6,8 @@ exits at once when nothing is upcoming.
 Each tick, for every classic draft group in today's DK lobby that has not locked:
   * DraftKings draftables (free) -> raw dk/draftables, nba_player, archive capture
   * Rotowire lineups page (free) -> raw rotowire/lineups, starting_lineups
+  * game lines (moneyline, spread, total; ~3 credits) at the first tick of the day and
+    whenever props are fetched -> raw odds/lines, game_odds, archive capture
   * player props at fixed offsets before the slate's lock (costs odds-api credits:
     about 12 per game) -> raw odds/*, odds, nba_market_rate. One fetch per tick
     covers the teams of every slate that crossed an offset, and the rows are
@@ -32,7 +34,8 @@ from ivan.sports.common.draftkings import fetch_all_contests, summarize_slates
 from ivan.sports.common.odds import get_odds, parse_odds
 from ivan.sports.nba import contests as C
 from ivan.core.config import require_env
-from ivan.sports.nba.ingest import IngestError, ODDS_SPORT, ensure_schema, fetch_slate, project_slate, store_slate
+from ivan.sports.nba.ingest import (IngestError, ODDS_SPORT, ensure_schema, fetch_game_lines, fetch_slate, project_slate,
+                                    store_slate)
 from ivan.sports.nba.projection.market import NBA_MARKETS
 from ivan.sports.nba.paths import NBA_DATA_DIR, LOGS_DIR
 
@@ -143,6 +146,15 @@ def main() -> int:
                 log.warning("the-odds-api returned no NBA props; check ODDS_API_KEY and the plan")
         except Exception as e:   # noqa: BLE001 - a props failure must not cost the draftables capture
             log.warning(f"props fetch failed: {type(e).__name__}: {e}")
+    # game lines: once a day at the first tick, then with every props fetch (the line moves with the news)
+    lines_df = None
+    if not args.no_props and (props_teams or not st.get("lines_fetched")):
+        try:
+            lines_df = fetch_game_lines(log=log.info)
+            if lines_df is not None:
+                st["lines_fetched"] = str(now)
+        except Exception as e:   # noqa: BLE001
+            log.warning(f"game lines fetch failed: {type(e).__name__}: {e}")
     # Rotowire once per tick: ride it on the first slate processed; props rows go to every slate of the tick
     order = sorted(fetched, key=lambda sf: sf[1].lock, reverse=True)
     for i, (s, f) in enumerate(order):
@@ -153,6 +165,8 @@ def main() -> int:
         if props_df is not None:
             pool = {p["name"] for p in full.players}
             full.odds = props_df[props_df.player.isin(pool)].reset_index(drop=True)
+        if lines_df is not None:
+            full.game_lines = lines_df
         store_slate(session, full, log=log.info)
         project_slate(session, n_sims=args.sims, log=log.info)
         st["slates"].setdefault(str(s["id"]), {}).update(lock=str(full.lock), last_tick=str(now), name=s["name"])

@@ -32,6 +32,12 @@ def main() -> int:
             logging.info(f"scorecards written: {len(cards)}")
         except Exception as e:   # noqa: BLE001 - the box scores are the job; the scorecard must not fail it
             logging.warning(f"scorecard failed: {type(e).__name__}: {e}")
+        try:
+            from ivan.sports.nba.standings import derive_pending
+            derived = derive_pending(session, log=logging.info)
+            logging.info(f"standings derived: {len(derived)}")
+        except Exception as e:   # noqa: BLE001
+            logging.warning(f"standings derive failed: {type(e).__name__}: {e}")
     return 0
 
 

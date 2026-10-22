@@ -4,6 +4,7 @@ projections written back. Shared by project.py and news.py.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -20,30 +21,71 @@ from .engine import project_team, RosterPlayer, ProjectionParams
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 
 
-def read_overrides(path: Path | None = None) -> dict[str, float]:
+OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high")
+
+
+def read_overrides_full(path: Path | None = None) -> dict[str, dict]:
+    """player -> {minutes, fppm, min_low, min_high} (any of them None): the hand overrides file (columns player, minutes[, fppm, min_low, min_high])."""
     path = Path(path) if path else MINUTES_OVERRIDES_CSV
     if not path.exists():
         return {}
     df = pd.read_csv(path, comment="#")
     cols = {c.lower().strip(): c for c in df.columns}
-    if "player" not in cols or "minutes" not in cols:
-        raise SystemExit(f"{path}: need columns player,minutes (got {list(df.columns)})")
-    return {normalize_name(str(r[cols["player"]])): float(r[cols["minutes"]]) for _, r in df.iterrows()}
+    if "player" not in cols:
+        raise SystemExit(f"{path}: need a player column (got {list(df.columns)})")
+    out: dict[str, dict] = {}
+    for _, r in df.iterrows():
+        rec = {}
+        for k in OVERRIDE_KEYS:
+            v = r[cols[k]] if k in cols else None
+            rec[k] = None if v is None or pd.isna(v) else float(v)
+        if any(v is not None for v in rec.values()):
+            out[normalize_name(str(r[cols["player"]]))] = rec
+    return out
 
 
-def write_overrides(overrides: dict[str, float], path: Path | None = None) -> Path:
+def read_overrides(path: Path | None = None) -> dict[str, float]:
+    """player -> pinned minutes only (the older callers' view of the same file)."""
+    return {k: v["minutes"] for k, v in read_overrides_full(path).items() if v.get("minutes") is not None}
+
+
+def write_overrides(overrides: dict, path: Path | None = None) -> Path:
+    """Write the overrides file. Values are a minutes pin (float) or a dict with any of minutes, fppm, min_low, min_high; floats keep the player's other columns from the file."""
     path = Path(path) if path else MINUTES_OVERRIDES_CSV
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"player": list(overrides), "minutes": list(overrides.values())}).to_csv(path, index=False)
+    old = read_overrides_full(path) if path.exists() else {}
+    rows = []
+    for name, v in overrides.items():
+        rec = dict(old.get(name, {}))
+        if isinstance(v, dict):
+            rec.update({k: v.get(k) for k in OVERRIDE_KEYS})
+        else:
+            rec["minutes"] = None if v is None else float(v)
+        if any(rec.get(k) is not None for k in OVERRIDE_KEYS):
+            rows.append({"player": name, **{k: rec.get(k) for k in OVERRIDE_KEYS}})
+    pd.DataFrame(rows, columns=["player", *OVERRIDE_KEYS]).to_csv(path, index=False)
     return path
 
 
+def override_of(overrides: dict, name: str) -> dict:
+    """One player's override as a full dict, whether the mapping holds floats (minutes) or dicts."""
+    v = overrides.get(name)
+    if v is None:
+        return {}
+    return dict(v) if isinstance(v, dict) else {"minutes": float(v)}
+
+
 class LiveSlate:
-    def __init__(self, session: Session, use_starters: bool = True, use_market: bool = True):
+    def __init__(self, session: Session, use_starters: bool = True, use_market: bool = True,
+                 history: tuple[pd.DataFrame, HistoryState] | None = None):
+        """history: (box, HistoryState) built earlier, to skip the box-score load and the history walk (a few seconds)."""
         self.session = session
         NBABase.metadata.create_all(session.get_bind(), tables=[NBAMarketRate.__table__])
-        self.box = load_box_scores(session)
-        self.hist: HistoryState = build_history(self.box)
+        if history is not None:
+            self.box, self.hist = history
+        else:
+            self.box = load_box_scores(session)
+            self.hist = build_history(self.box)
         horizon = datetime.now().date() + pd.Timedelta(days=1)
         self.state = self.hist.before(horizon)
         self.team_fpts = self.hist.team_before(horizon)
@@ -75,20 +117,35 @@ class LiveSlate:
             name = normalize_name(p.name)
             status = (p.status or "").upper()
             out = status in OUT_STATUSES or name in forced_out
-            pin = overrides.get(name)
+            ov = override_of(overrides, name)
+            pin = ov.get("minutes")
             if pin is not None and pin <= 0:
                 out = True
             starter = None if team_starters is None else (name in team_starters)
             roster.append(RosterPlayer(name, not out, starter, p.salary, None if out else pin,
                                        market_rates=self.market.get(name),
-                                       rate_mult=(rate_mults or {}).get(name, 1.0)))
+                                       rate_mult=(rate_mults or {}).get(name, 1.0), status=status or None,
+                                       fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high")))
         return roster
+
+    def spread(self, team: str) -> float | None:
+        """The team's own consensus spread from game_odds (negative = favoured); None when unpriced."""
+        if getattr(self, "_lines", None) is None:
+            from .lines import GameLines
+            try:
+                self._lines = GameLines.load(self.session)
+            except Exception:   # noqa: BLE001 - no lines table yet
+                self._lines = GameLines(pd.DataFrame())
+        return self._lines.team_spread(team)
 
     def project(self, team: str, overrides: dict[str, float], forced_out: set[str],
                 params: ProjectionParams | None = None, rate_mults: dict[str, float] | None = None,
                 rng: np.random.Generator | None = None) -> pd.DataFrame:
+        params = params or ProjectionParams.from_config()
+        if params.minutes_model == "team" and params.spread is None:
+            params = replace(params, spread=self.spread(team))
         return project_team(self.roster(team, overrides, forced_out, rate_mults), self.state, self.hist,
-                            self.team_fpts.get(team), params or ProjectionParams(), rng=rng)
+                            self.team_fpts.get(team), params, rng=rng)
 
     def write(self, team: str, proj: pd.DataFrame) -> int:
         """Store a team's projection on nba_player; players not in proj (out) get None."""
@@ -102,8 +159,13 @@ class LiveSlate:
                 p.fpts_mean = float(r["fpts_mean"]); p.fpts_std = float(r["fpts_std"])
                 p.minutes_proj = float(r["minutes"]); p.fpts_updated_at = datetime.now(); n += 1
                 p.fpts_quantiles = r["quantiles"] if "quantiles" in r and isinstance(r["quantiles"], list) else None
+                p.minutes_role = r.get("role"); p.p_out = None if r.get("p_out") is None else float(r["p_out"])
+                p.rates = {k: float(v) for k, v in r["rates"].items()} if isinstance(r.get("rates"), dict) else None
+                p.minutes_p10 = None if pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"])
+                p.minutes_p90 = None if pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"])
             else:
                 p.fpts_mean = None; p.fpts_std = None; p.minutes_proj = 0.0; p.fpts_quantiles = None
+                p.minutes_role = None; p.p_out = None; p.rates = None; p.minutes_p10 = None; p.minutes_p90 = None
         return n
 
 

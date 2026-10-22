@@ -120,6 +120,80 @@ before lock. Candidate model change once a week of scorecards agrees: a
 salary-informed minutes prior for players whose history is on another team
 or whose play rate is stale, weighted down as this season's games arrive.
 
+## Game lines and the team minutes model (2026-10-21)
+
+Game lines (moneyline, spread, total; ~3 credits a fetch) are captured at the
+first tick of the day and with every props fetch: raw `odds/lines`, the
+`game_odds` table (per book), the archive capture, and
+`projection/lines.py` reduces them to a consensus per game (`GameLines`).
+
+`projection/team_minutes.py` draws a team's minutes jointly per world:
+margin ~ N(spread, 12.5), overtime 5.2%, each player available with his
+scratch probability (DK status, trailing play rate for the deep bench),
+then minutes = T x softmax(log allocation + beta[role] x (|margin| -
+E|margin|) + noise[role]). Fitted on 2025-26 (Oct-Jan, 10.8k player-games,
+`scripts/nba/fit_team_minutes.py` -> `data/nba/models/team_minutes.json`):
+noise (log scale) star 0.18, starter 0.21, rotation 0.44, deep 0.86;
+blowout slope per point of |margin| star -0.0046, starter -0.0022, rotation
++0.0038, deep +0.012. Walk-forward on January: 10-90 band covers 82/70/79/60%
+by role (the independent sampler 80/77/77/79% with the wrong shape: wide
+for stars, narrow for the bench); minutes correlation within a team
+star-rotation -0.16, star-deep -0.08.
+
+Wired behind config `projection.minutes_model` ("independent" is live;
+"team" draws minutes jointly in `project_team`, stores role / p_out / rates
+/ minutes band on `nba_player` and in the captures, and
+`generate_player_samples` then draws each game's margin once and both
+teams' minutes jointly for the lineup generator and the contest sim).
+Switch on only after the backtest (`backtest_projection.py --minutes-model
+both`) and the scorecard's band coverage agree. The fit is against the real
+allocator's minutes (`projection/walkforward.py`, the backtest's case
+builder, now a module); tau star 0.13 / starter 0.21 / rotation 0.37 / deep
+0.89. January fpts backtest, played players only: MAE 7.35 (team) vs 7.32
+(independent), bias +0.61 vs +0.56, 10-90 coverage 78.5% vs 80.6%; the
+marginals are at parity by construction (same mean), the structure (shared
+minutes, blowouts, scratches of Q/GTD players) is what the team model adds.
+Scratch probabilities come from DK status only; the trailing DNP rate is
+already in the allocation and must not be counted twice.
+
+Historical lines: `scripts/nba/fetch_historical_lines.py` pulls one
+odds-api historical snapshot per game day (30 credits each, 11 books) into
+`data/nba/input/historical_lines.csv`; `fit_team_minutes.py --lines` then
+evaluates with each game's spread known (margin-vs-spread sd, starters by
+|spread|, coverage). January 2026 fetched (15 game days, 108 games priced,
+450 credits): final margin sd around the spread 14.75 (now the sampler's
+`margin_sd`); starters' actual minutes fall from 30.9 at pick'em to 28.9-29.4
+at |spread| >= 7 and the draw moves 31.6 -> 30.3, so the blowout slope is
+calibrated; the level bias (+0.7 to +2 min for January starters) is the
+allocation's, not the draw's. Band coverage with the spread known: star 81%,
+starter 82%, rotation 79%, deep 58%.
+
+**Switched on 2026-10-21**: `config/nba.json` projection.minutes_model =
+"team". The capture tick, the desk, generate_lineups and sim all draw
+minutes jointly from here on; captures carry the band so the scorecard
+reads its coverage nightly. Revert by setting it back to "independent".
+
+## Standings and field calibration (2026-10-21)
+
+The generator was running at randomness 1.0: on the 10-21 slate the median
+generated lineup projected 45 points (14%) below the mean-optimal lineup and
+the chalk topped out at 18%. Now 0.25 with every lineup floored at 90% of
+the optimal (config generate.randomness / generate.min_fpts_frac, both on
+the desk's pipeline panel); every generate prints the pool report (gap to
+the optimal, share within 10%, top exposures).
+
+`ivan.sports.nba.standings` + `scripts/nba/standings.py status|scrape|derive`:
+per played slate the largest public classic contests plus ours are exported
+through the DraftKings Chrome profile (raw dk/standings), parsed and matched
+by name to the slate's capture and to our last projection before lock ->
+`data/nba/derived/contests/<id>/{lineups.parquet, players.csv, field.json}`.
+The nightly job derives new exports. `scripts/nba/calibrate_field.py
+--contest-id N` scores a grid of randomness x floor against the real field
+(ownership of the top 40, projection shortfall below the optimal) and names
+the best setting; on a synthetic field planted at 0.30 it ranked 0.30 first.
+The DK profile's session was expired on 2026-10-21 (403 headless): the first
+scrape must run without --headless and log in in the Chrome window.
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.
