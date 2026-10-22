@@ -1,0 +1,12 @@
+# Pull the NBA data feed from the producer (ivan.core.feed) and re-project with this machine's edits.
+# A *user* unit; installed by deploy/install_nba_timers.sh --pull. Needs IVAN_FEED_URL and IVAN_FEED_TOKEN in .env.
+[Unit]
+Description=Ivan NBA feed pull
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+EnvironmentFile=__ROOT__/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nba/feed.py pull
+Nice=10

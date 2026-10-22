@@ -8,9 +8,9 @@
     </span>
     <span class="spacer"></span>
     <button type="button" class="rot-apply">Apply</button>
-    <button type="button" hx-post="/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "last"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the team's most recent game, out players included">Last game</button>
-    <button type="button" hx-post="/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "propose"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the model's proposal from each player's stint history">Propose</button>
-    {% if rot.drawn %}<button type="button" hx-post="/team/{{ rot.team }}/rotation/clear" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML">Clear</button>{% endif %}
+    <button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "last"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the team's most recent game, out players included">Last game</button>
+    <button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "propose"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the model's proposal from each player's stint history">Propose</button>
+    {% if rot.drawn %}<button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/clear" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML">Clear</button>{% endif %}
   </div>
   <table class="rot-grid">
     <thead><tr><th class="rn">player</th><th class="rm">min</th>{% for m in range(48) %}<th class="rc {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}</tr></thead>

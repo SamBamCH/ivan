@@ -10,7 +10,7 @@ Type=simple
 WorkingDirectory=__ROOT__
 EnvironmentFile=__ROOT__/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/bin/bash -c '__ROOT__/venv/bin/python __ROOT__/scripts/feed_server.py --host "$(tailscale ip -4)" --port 8787'
+ExecStart=/bin/bash -c '__ROOT__/venv/bin/python __ROOT__/scripts/feed_server.py --host "$(tailscale ip -4)" --port 8790'
 Restart=always
 RestartSec=5
 Nice=10

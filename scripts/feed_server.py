@@ -4,7 +4,7 @@ scripts/feed_server.py
 
 Serve the data feed (ivan.core.feed bundles under data/feed) to other Ivans.
 
-    scripts/feed_server.py --host <tailscale ip> --port 8787
+    scripts/feed_server.py --host <tailscale ip> --port 8790
 
 Every request needs `Authorization: Bearer <token>` with the token from
 $IVAN_FEED_TOKEN (.env). Paths: /<sport>/manifest.json, /<sport>/live.sql.gz,
@@ -48,7 +48,7 @@ def get_file(sport: str, path: str, request: Request, authorization: str | None 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=8790)
     a = ap.parse_args()
     if not TOKEN:
         print("set IVAN_FEED_TOKEN in .env first"); return 1

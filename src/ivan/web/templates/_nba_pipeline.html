@@ -1,6 +1,6 @@
-<div id="pipeline" class="pipe" {% if active %}hx-get="/pipeline" hx-trigger="load delay:2s" hx-swap="outerHTML"{% endif %}>
+<div id="pipeline" class="pipe" {% if active %}hx-get="{{ root }}/pipeline" hx-trigger="load delay:2s" hx-swap="outerHTML"{% endif %}>
   <div class="pipe-row">
-    <form class="pipe-form" hx-post="/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML">
+    <form class="pipe-form" hx-post="{{ root }}/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML">
       <span class="brand-sm">Pipeline</span>
       <label>lineups <input name="lineups" value="{{ form.lineups }}" size="6"></label>
       <label>jobs <input name="jobs" value="{{ form.jobs }}" size="2"></label>
@@ -10,15 +10,15 @@
       <label>field cap <input name="field_cap" value="{{ form.field_cap }}" size="6"></label>
       <label>chooser <select name="method"><option value="greedy" {% if form.method == 'greedy' %}selected{% endif %}>greedy</option><option value="portfolio" {% if form.method == 'portfolio' %}selected{% endif %}>portfolio</option></select></label>
       <span class="spacer"></span>
-      <button type="button" hx-post="/pipeline/generate" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if active %}disabled{% endif %} title="publish the projections, then generate the lineup pool (clears the old one)">Publish + generate</button>
-      <button type="button" hx-post="/pipeline/sim" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if active or not entries.exists %}disabled{% endif %} title="simulate every contest in the entries file">Sim</button>
-      <button type="button" hx-post="/pipeline/choose" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if active or not entries.exists %}disabled{% endif %} title="choose lineups and write the upload CSV">Choose</button>
+      <button type="button" hx-post="{{ root }}/pipeline/generate" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if active %}disabled{% endif %} title="publish the projections, then generate the lineup pool (clears the old one)">Publish + generate</button>
+      <button type="button" hx-post="{{ root }}/pipeline/sim" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if active or not entries.exists %}disabled{% endif %} title="simulate every contest in the entries file">Sim</button>
+      <button type="button" hx-post="{{ root }}/pipeline/choose" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if active or not entries.exists %}disabled{% endif %} title="choose lineups and write the upload CSV">Choose</button>
       <button type="submit" class="primary" {% if active or not entries.exists %}disabled{% endif %} title="publish, generate, sim, choose">Run all</button>
     </form>
   </div>
   <div class="pipe-row muted">
     <span>entries: {% if entries.exists %}<b>{{ entries.path }}</b>{% if entries.entries is defined %} · {{ entries.entries }} entries in {{ entries.contests|length }} contest{{ 's' if entries.contests|length != 1 else '' }} ({% for n, k in entries.contests.items() %}{{ n|truncate(34, True, '') }} ×{{ k }}{% if not loop.last %}, {% endif %}{% endfor %}) · {{ entries.modified.strftime('%H:%M') }}{% elif entries.error %} · <span class="bad">{{ entries.error }}</span>{% endif %}{% else %}<span class="bad">none at {{ entries.path }}</span>{% endif %}</span>
-    <form class="inline" hx-post="/entries" hx-target="#pipeline" hx-swap="outerHTML" hx-encoding="multipart/form-data"><input type="file" name="file" accept=".csv" onchange="this.form.requestSubmit()"><span class="muted small">upload the DraftKings entries export</span></form>
+    <form class="inline" hx-post="{{ root }}/entries" hx-target="#pipeline" hx-swap="outerHTML" hx-encoding="multipart/form-data"><input type="file" name="file" accept=".csv" onchange="this.form.requestSubmit()"><span class="muted small">upload the DraftKings entries export</span></form>
     <span class="spacer"></span>
     <span>{{ lineups_in_db }} lineups · {{ sims_in_db }} sim rows in the database</span>
   </div>
@@ -26,7 +26,7 @@
   <div class="pipe-row">
     {% if current %}
       <span class="jobstat {{ current.status }}">{{ current.name }} · {{ current.status }}{% if current.duration %} · {{ '%.0f'|format(current.duration) }}s{% endif %}</span>
-      {% if current.is_active %}<button hx-post="/pipeline/cancel/{{ current.id }}" hx-target="#pipeline" hx-swap="outerHTML">cancel</button>{% endif %}
+      {% if current.is_active %}<button hx-post="{{ root }}/pipeline/cancel/{{ current.id }}" hx-target="#pipeline" hx-swap="outerHTML">cancel</button>{% endif %}
     {% endif %}
     {% if jobs %}<span class="muted small">recent: {% for j in jobs[:5] %}<span class="jobstat {{ j.status }}">{{ j.name }} {{ j.status }}{% if j.duration %} {{ '%.0f'|format(j.duration) }}s{% endif %}</span>{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}
   </div>
@@ -34,7 +34,7 @@
   {% endif %}
   {% if outputs %}
   <div class="pipe-row">
-    <span><b>latest picks for this slate</b> {{ outputs.when.strftime('%a %H:%M') }} · {{ outputs.rows }} entries{% if outputs.slate_only %} <span class="muted">(other slates' contests in the same run are not shown)</span>{% endif %} · <a href="/download/{{ outputs.classic }}">download the DraftKings upload CSV</a>{% if outputs.error %} · <span class="bad">{{ outputs.error }}</span>{% endif %}</span>
+    <span><b>latest picks for this slate</b> {{ outputs.when.strftime('%a %H:%M') }} · {{ outputs.rows }} entries{% if outputs.slate_only %} <span class="muted">(other slates' contests in the same run are not shown)</span>{% endif %} · <a href="{{ root }}/download/{{ outputs.classic }}">download the DraftKings upload CSV</a>{% if outputs.error %} · <span class="bad">{{ outputs.error }}</span>{% endif %}</span>
   </div>
   <div class="pipe-results">
     {% if outputs.contests %}<table class="mini"><tr><th>contest</th><th class="n">entries</th><th class="n">mean ROI</th><th class="n">cash</th><th class="n">top-by-quality ROI</th><th class="n">book p50</th><th class="n">P(loss)</th></tr>

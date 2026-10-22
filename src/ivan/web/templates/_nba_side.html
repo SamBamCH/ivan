@@ -7,5 +7,5 @@
 </h2>
 {% with card=c %}{% include "_nba_team.html" %}{% endwith %}
 <details class="rotbox" {% if c.rotation_drawn %}open{% endif %}><summary>rotation grid{% if c.rotation_drawn %} · drawn{% endif %}</summary>
-  <div hx-get="/team/{{ c.team }}/rotation" hx-trigger="toggle from:closest details once, revealed" hx-swap="innerHTML"><div class="muted small">loading…</div></div>
+  <div hx-get="{{ root }}/team/{{ c.team }}/rotation" hx-trigger="toggle from:closest details once, revealed" hx-swap="innerHTML"><div class="muted small">loading…</div></div>
 </details>

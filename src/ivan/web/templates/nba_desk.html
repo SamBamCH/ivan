@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ivan · NBA desk</title>
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<script src="/static/htmx.min.js"></script>
+<link rel="icon" type="image/svg+xml" href="{{ root }}/static/favicon.svg">
+<script src="{{ root }}/static/htmx.min.js"></script>
+<script>const ROOT = "{{ root }}";</script>
 <style>
   :root { --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2e2; --bg:#f7f7f5; --card:#fff; --accent:#1f5fbf; --ok:#1a7f37; --bad:#b42318; --warn:#9a6700; }
   * { box-sizing:border-box } body { margin:0; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
@@ -105,7 +106,7 @@
     </span>
   {% endif %}
   {% if header.slates|length > 1 %}
-  <form method="post" action="/slate">
+  <form method="post" action="{{ root }}/slate">
     <select name="draft_group" onchange="this.form.submit()">
       {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ s.lock[11:16] }} · {{ s.name|replace('NBA ', '')|truncate(28, True, '') }}</option>{% endfor %}
     </select>
@@ -115,9 +116,9 @@
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>
   <span class="spacer"></span>
-  <form method="post" action="/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
-  <form method="post" action="/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
-  <form method="post" action="/publish"><button class="primary" title="write projections + edits for the sim and the capture loop">Publish</button></form>
+  <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
+  <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
+  <form method="post" action="{{ root }}/publish"><button class="primary" title="write projections + edits for the sim and the capture loop">Publish</button></form>
   <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
 </div>
 <nav class="menu">
@@ -191,7 +192,7 @@
     rot.querySelectorAll("tbody tr").forEach(tr => { players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll("td.cell")).map(c => c.classList.contains("on") ? 1 : 0)); });
     const bad = Array.from(rot.querySelectorAll("tfoot td.cnt.bad")).length;
     if (bad && !confirm(bad + " minute(s) do not have exactly 5 on the floor. Apply anyway?")) return;
-    fetch("/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({players, grid})})
+    fetch(ROOT + "/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({players, grid})})
       .then(r => r.text()).then(html => { const card = document.getElementById("card-" + team); card.innerHTML = html; htmx.process(card); applyFilter(); });
   });
 </script>

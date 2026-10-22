@@ -9,7 +9,10 @@ roster with the model's minutes; type minutes to pin them and the team
 re-projects in place; scratch pins 0. Publish writes projections and the
 overrides file the capture loop and the sim read.
 
-Separate process from the NFL app: python scripts/nba/serve.py (port 8001).
+Separate process from the NFL app: python scripts/nba/serve.py (port 8001);
+also mounted at /nba inside the NFL app (ivan.web.app) so one server process
+serves both. Every link carries the mount prefix (`root`), and
+IVAN_DESK_PASSWORD puts a login page in front (ivan.web.auth).
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, st
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
+from ivan.web import auth
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, override_of, read_overrides_full, write_overrides
 from ivan.sports.nba.projection.history import STATS
@@ -46,6 +50,7 @@ ensure_schema(engine)
 app = FastAPI(title="Ivan · NBA desk", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
+auth.install(app, templates)                                  # a password when IVAN_DESK_PASSWORD is set; open otherwise
 STATE_FILE = NBA_DATA_DIR / "capture_state.json"
 LOCK = threading.Lock()
 runner = JobRunner(log_dir=NBA_DATA_DIR / "jobs", cwd=PROJECT_ROOT)
@@ -387,7 +392,7 @@ desk = Desk()
 
 def _render(request: Request, template: str, **ctx):
     flash = desk.flash[:]; desk.flash.clear()
-    return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, **ctx})
+    return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "root": auth.root_of(request), **ctx})
 
 
 def games_of(cards: list[dict], now: datetime) -> list[dict]:
@@ -511,7 +516,7 @@ def clear_team(request: Request, team: str):
 
 
 @app.post("/publish")
-def publish():
+def publish(request: Request):
     """Write the pins, project every team at full sims, store projections + a capture row set."""
     with LOCK:
         write_overrides(desk.overrides)
@@ -521,11 +526,11 @@ def publish():
         except IngestError as e:
             desk.flash.append(f"publish failed: {e}")
         desk.rebuild()
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
 
 
 @app.post("/refresh")
-def refresh(what: str = Form("dk")):
+def refresh(request: Request, what: str = Form("dk")):
     """dk: pool + statuses + Rotowire (free). props: also the player props (costs credits)."""
     with LOCK:
         dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
@@ -539,7 +544,7 @@ def refresh(what: str = Form("dk")):
             except IngestError as e:
                 desk.flash.append(f"refresh failed: {e}")
             desk.rebuild()
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
 
 
 # ---------------------------------------------------------------- pipeline: generate / sim / choose as jobs
@@ -696,7 +701,7 @@ def download(name: str):
 
 
 @app.post("/slate")
-def switch_slate(draft_group: int = Form(...)):
+def switch_slate(request: Request, draft_group: int = Form(...)):
     with LOCK:
         try:
             f = fetch_slate(desk.session, draft_group, update_odds=False, starters=True, log=desk.flash.append)
@@ -705,4 +710,4 @@ def switch_slate(draft_group: int = Form(...)):
         except IngestError as e:
             desk.flash.append(f"could not load slate {draft_group}: {e}")
         desk.rebuild()
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)

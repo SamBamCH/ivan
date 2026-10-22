@@ -108,3 +108,4 @@ websocket-client==1.8.0
 websockets==17.1
 wsproto==1.2.0
 zipp==3.23.0
+httpx==0.28.1   # starlette TestClient (tests only)

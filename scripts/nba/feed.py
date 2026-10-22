@@ -8,11 +8,13 @@ Producer (the machine that runs the capture loop):
     scripts/nba/feed.py publish [--which live|reference|both]     write data/feed/nba/*; the capture tick and the
                                                                    nightly job call this themselves
 Consumer (another machine):
-    scripts/nba/feed.py pull --url http://<feed host>:8787 [--token ...] [--which both] [--no-project]
+    scripts/nba/feed.py pull --url http://<feed host>:8790 [--token ...] [--which both] [--no-project]
         fetches whatever changed, replaces the feed's tables in this database (edits, rotations, lineups and sims
         here are untouched) and re-projects the slate with this machine's edits so the desk and the generator see
         its own projections. --url and --token default to $IVAN_FEED_URL / $IVAN_FEED_TOKEN (.env).
     scripts/nba/feed.py pull --loop 15                            keep pulling every 15 minutes
+    scripts/nba/feed.py apply DIR                                 seed this database from bundles copied by hand
+                                                                   (DIR holds live.sql.gz / reference.sql.gz / files/)
 """
 from __future__ import annotations
 
@@ -51,7 +53,17 @@ def main() -> int:
     q = sub.add_parser("pull"); q.add_argument("--url", default=None); q.add_argument("--token", default=None)
     q.add_argument("--which", choices=("live", "reference", "both"), default="both"); q.add_argument("--no-project", action="store_true")
     q.add_argument("--loop", type=int, default=None, help="minutes between pulls; omit for one pull")
+    r = sub.add_parser("apply"); r.add_argument("dir")
     a = ap.parse_args()
+    if a.cmd == "apply":
+        import shutil
+        d = Path(a.dir)
+        for part in ("live", "reference"):
+            if (d / f"{part}.sql.gz").exists():
+                feed.apply("nba", d / f"{part}.sql.gz", log=print)
+        if (d / "files").is_dir():
+            shutil.copytree(d / "files", PROJECT_ROOT, dirs_exist_ok=True); print("reference files copied")
+        return 0
     if a.cmd == "publish":
         m = feed.publish("nba", which=a.which, log=print)
         print(f"manifest: live {m.get('live', {}).get('stamp')} reference {m.get('reference', {}).get('stamp')} -> {feed.FEED_DIR / 'nba'}")

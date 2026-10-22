@@ -48,6 +48,11 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="Ivan", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+try:                                                          # the NBA desk at /nba, when its database and deps are present
+    from ivan.web.nba_desk import app as _nba_desk
+    app.mount("/nba", _nba_desk, name="nba")
+except Exception as _e:   # noqa: BLE001
+    print(f"nba desk not mounted: {type(_e).__name__}: {_e}")
 templates = Jinja2Templates(directory=HERE / "templates")
 
 

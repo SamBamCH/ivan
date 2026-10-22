@@ -291,11 +291,22 @@ lineups, sims, outputs untouched), pulls changed files, and re-projects the
 slate with its own edits. Working tables are never published. A pull of the
 whole feed takes ~1.3 s.
 
-Plan agreed with Sam: the server becomes the producer (capture timers,
-nightly, feed) and hosts the code as the git origin; both laptops are
-consumers that pull the feed and run the desk, generation and sim locally.
-The standings scrape (Chrome login) stays on a laptop; pushing its raw
-exports back to the server is the open piece.
+Two workspaces (decided 2026-10-22): Sam's laptop and the server, each a
+complete Ivan with its own database, edits, lineups and sims; nothing shared
+but the feed. The server is the producer (always on: capture timers,
+nightly, feed server) and hosts the brother's desk at
+http://ivan.prattflix.com/nba/ (the NBA desk is mounted inside the NFL web
+app, which already owns that name on the tailnet; `IVAN_DESK_PASSWORD` in
+the server's .env puts a login page in front of /nba only). The laptop pulls
+the feed (`deploy/install_nba_timers.sh --pull`: a 15-minute pull timer,
+capture + nightly timers off) and runs Sam's desk, generation and sim as
+before, with the props paid for once.
+
+Server setup: `deploy/push.sh`, then as the service user
+`deploy/setup_nba_server.sh [seed dir]` (schema, seed from copied bundles,
+timers, feed); lingering must be on for user timers. The standings scrape
+(Chrome login) still runs on a laptop; shipping its raw exports to the
+server is the open piece.
 
 ## Phase 1: capture from opening night (must be live Thursday)
 

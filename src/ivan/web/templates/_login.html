@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} · sign in</title>
+<link rel="icon" type="image/svg+xml" href="{{ root }}/static/favicon.svg">
+<style>
+  :root { color-scheme: light dark; --bg: #f6f6f4; --fg: #1b1b1b; --muted: #777; --line: #d8d8d4; --accent: #2d6a4f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161616; --fg: #ececec; --muted: #999; --line: #333; --accent: #52b788; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg); font: 15px/1.4 system-ui, sans-serif; }
+  form { width: min(320px, calc(100vw - 32px)); display: grid; gap: 10px; }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  input { font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--fg); }
+  button { font: inherit; padding: 9px 11px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  .err { color: #c0392b; min-height: 1.2em; font-size: 13px; }
+  .muted { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<form method="post" action="{{ root }}/login">
+  <h1>{{ title }}</h1>
+  <div class="muted">Password, please.</div>
+  <input type="password" name="pw" autofocus autocomplete="current-password" placeholder="password">
+  <button type="submit">Sign in</button>
+  <div class="err">{{ error }}</div>
+</form>
+</body>
+</html>
