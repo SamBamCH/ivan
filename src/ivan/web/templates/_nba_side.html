@@ -6,3 +6,6 @@
   <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
 </h2>
 {% with card=c %}{% include "_nba_team.html" %}{% endwith %}
+<details class="rotbox" {% if c.rotation_drawn %}open{% endif %}><summary>rotation grid{% if c.rotation_drawn %} · drawn{% endif %}</summary>
+  <div hx-get="/team/{{ c.team }}/rotation" hx-trigger="toggle from:closest details once, revealed" hx-swap="innerHTML"><div class="muted small">loading…</div></div>
+</details>

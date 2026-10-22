@@ -1,0 +1,24 @@
+<div class="rot" id="rot-{{ rot.team }}" data-team="{{ rot.team }}">
+  {% if not rot.rows %}<div class="muted small">no rotation: no players available</div>{% else %}
+  <div class="rot-bar">
+    <span class="muted small">{% if rot.drawn %}<b>drawn rotation</b> (applied as minute pins){% else %}model proposal from {{ rot.curve_games }} games of stints{% if not rot.has_history %} (no history on this team: salary priors){% endif %}{% endif %} · click or drag to paint · each minute needs 5</span>
+    <span class="spacer"></span>
+    <button type="button" class="rot-apply">Apply</button>
+    <button type="button" hx-post="/team/{{ rot.team }}/rotation/propose" hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML">Propose</button>
+    {% if rot.drawn %}<button type="button" hx-post="/team/{{ rot.team }}/rotation/clear" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML">Clear</button>{% endif %}
+  </div>
+  <table class="rot-grid">
+    <thead><tr><th class="rn">player</th><th class="rm">min</th>{% for m in range(48) %}<th class="rc {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for r in rot.rows %}
+      <tr data-key="{{ r.key }}">
+        <td class="rn" title="{{ r.pos }} · ${{ r.salary }}{% if r.hist is not none %} · history {{ '%.1f'|format(r.hist) }} min{% endif %}">{% if r.starter %}<b>{{ r.name }}</b>{% else %}{{ r.name }}{% endif %}</td>
+        <td class="rm">{{ r.minutes }}</td>
+        {% for on in r.cells %}<td class="rc cell {% if on %}on{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}"></td>{% endfor %}
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td class="rn muted small">on floor</td><td class="rm"></td>{% for c in rot.counts %}<td class="rc cnt {% if c != 5 %}bad{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}">{{ c }}</td>{% endfor %}</tr></tfoot>
+  </table>
+  {% endif %}
+</div>

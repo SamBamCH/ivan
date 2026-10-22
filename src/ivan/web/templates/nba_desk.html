@@ -36,6 +36,14 @@
   .jobstat { font-weight:600 } .jobstat.running, .jobstat.queued { color:var(--warn) } .jobstat.done { color:var(--ok) } .jobstat.failed, .jobstat.cancelled { color:var(--bad) }
   pre.log { background:#1b1b1b; color:#ddd; font:12px/1.35 ui-monospace,Menlo,Consolas,monospace; padding:8px 10px; border-radius:6px; max-height:230px; overflow:auto; margin:6px 0; white-space:pre-wrap }
   .pipe-results { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start } .pipe-results table.mini td, .pipe-results table.mini th { border-bottom:1px solid var(--line) }
+  .rotbox summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:8px } .rot { margin-top:6px }
+  .rot-bar { display:flex; gap:10px; align-items:center; margin-bottom:6px } .rot-bar .spacer { flex:1 }
+  .rot-bar button { font:inherit; font-size:12px; padding:3px 9px; border-radius:5px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer } .rot-bar button.rot-apply { background:var(--accent); color:#fff }
+  table.rot-grid { border-collapse:collapse; margin:0; width:auto; user-select:none } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
+  table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:150px } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
+  table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
+  table.rot-grid td.cell.on { background:var(--accent) } table.rot-grid td.cell:hover { outline:1px solid #333 } table.rot-grid .q { border-left:2px solid #bbb }
+  table.rot-grid td.cnt { font-size:9px; color:var(--ok) } table.rot-grid td.cnt.bad { color:#fff; background:var(--bad); font-weight:700 }
   .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
@@ -48,7 +56,9 @@
   .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(760px, 1fr)); gap:12px }
   .band { font-size:10px; color:var(--muted); text-align:right } .small { font-size:11px } .model { font-size:10px; color:var(--muted); text-align:right; margin-top:1px }
   td.warn { background:#fff7df } td.bad { background:#fee2e2 } td.mkt { color:var(--ok) } td.mkt input { color:var(--ok) }
-  tr.starters td { background:#eef4ff } tr.starters td.warn { background:#f6ecc9 } tr.starters td.bad { background:#f5d5d5 } tr.starters td:first-child { font-weight:600 }
+  tr.priced td { background:#e9f7ec } tr.priced td.warn { background:#f3efc4 } tr.priced td.bad { background:#f5d9d3 }
+  tr.unpriced td { color:#777 } tr.unpriced td input { color:#777 } tr.unpriced td.warn { background:#fff7df } tr.unpriced td.bad { background:#fee2e2 }
+  tr.starters td:first-child { font-weight:600; border-left:3px solid var(--accent) } tr.bench td:first-child, tr.out td:first-child { border-left:3px solid transparent }
   tr.divider td { background:#fff; border-top:3px solid #c9d7f2; border-bottom:0; padding:6px 6px 2px; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
   tr.divider.out td { border-top-color:#f0c4c4 } tr.divider.bench td { border-top-color:#ddd }
   td.dist { min-width:150px } .bar { position:relative; height:10px; background:#eee; border-radius:5px; margin:3px 0 2px }
@@ -77,7 +87,7 @@
   td input.min.pinned { border-color:var(--accent); background:#eef4ff; font-weight:600 }
   td.flags { white-space:normal; color:var(--muted); font-size:12px } td.flags b { color:var(--bad); font-weight:600 } td.flags i { color:var(--warn); font-style:normal; font-weight:600 }
   .src { font-size:10px; font-weight:700; padding:0 4px; border-radius:3px; background:#eee; color:#555 } .src.mkt { background:#dcfce7; color:var(--ok) }
-  .st { font-weight:700; color:var(--accent) } .status { font-size:11px; font-weight:700; color:var(--bad) }
+  .st { font-weight:700; color:var(--accent) } .status { font-size:11px; font-weight:700; color:var(--bad) } td.pos { font-size:11px; color:var(--muted); white-space:nowrap }
   .teamfoot { display:flex; gap:12px; align-items:center; margin-top:6px; font-size:12px; color:var(--muted) }
   .teamfoot button, .scratch { font:inherit } .teamfoot button { font-size:12px; padding:3px 8px; border-radius:5px; border:1px solid #cfcfcf; background:#fff; cursor:pointer }
   .scratch { font-size:11px; color:var(--bad); background:none; border:0; cursor:pointer; padding:0 4px }
@@ -139,7 +149,7 @@
       </div>
     </div>
   {% endfor %}
-  <p class="muted" style="font-size:12px;margin-top:14px">Type into min, the band's low–high, or fppm to override the model for that player (blank restores it); ✕ scratches; the team re-allocates around every edit. Publish saves the edits for the sim and the capture loop. Amber cell = worth a look, red = likely wrong; hover for why. Green fppm = priced by the props; hover a projection for the stat lines behind it. Italic history = last season's.</p>
+  <p class="muted" style="font-size:12px;margin-top:14px">Type into min, the band's low–high, or fppm to override the model for that player (blank restores it); ✕ scratches; the team re-allocates around every edit. Publish saves the edits for the sim and the capture loop. Green rows have book odds behind them (the props set their rates); grey rows are history-only and are the ones to question or remove. Amber cell = worth a look, red = likely wrong; hover for why. Hover a projection for the stat lines behind it. Italic history = last season's.</p>
 </main>
 <script>
   const sel = document.getElementById("minfpts");
@@ -152,6 +162,33 @@
   sel.addEventListener("change", applyFilter);
   document.body.addEventListener("htmx:afterSwap", applyFilter);
   applyFilter();
+
+  // rotation grids: paint with the mouse, keep the counts live, Apply posts the grid
+  let paint = null;
+  function rotRefresh(grid) {
+    const rows = grid.querySelectorAll("tbody tr"); const counts = new Array(48).fill(0);
+    rows.forEach(tr => { const cells = tr.querySelectorAll("td.cell"); let n = 0; cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; counts[i]++; } }); tr.querySelector("td.rm").textContent = n; });
+    grid.querySelectorAll("tfoot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
+  }
+  document.body.addEventListener("mousedown", e => {
+    const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
+    paint = !cell.classList.contains("on"); cell.classList.toggle("on", paint); rotRefresh(cell.closest("table.rot-grid")); e.preventDefault();
+  });
+  document.body.addEventListener("mouseover", e => {
+    if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
+    cell.classList.toggle("on", paint); rotRefresh(cell.closest("table.rot-grid"));
+  });
+  document.addEventListener("mouseup", () => { paint = null; });
+  document.body.addEventListener("click", e => {
+    const btn = e.target.closest("button.rot-apply"); if (!btn) return;
+    const rot = btn.closest(".rot"); const team = rot.dataset.team;
+    const players = [], grid = [];
+    rot.querySelectorAll("tbody tr").forEach(tr => { players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll("td.cell")).map(c => c.classList.contains("on") ? 1 : 0)); });
+    const bad = Array.from(rot.querySelectorAll("tfoot td.cnt.bad")).length;
+    if (bad && !confirm(bad + " minute(s) do not have exactly 5 on the floor. Apply anyway?")) return;
+    fetch("/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({players, grid})})
+      .then(r => r.text()).then(html => { const card = document.getElementById("card-" + team); card.innerHTML = html; htmx.process(card); applyFilter(); });
+  });
 </script>
 </body>
 </html>

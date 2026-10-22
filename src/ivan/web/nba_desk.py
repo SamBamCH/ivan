@@ -37,6 +37,8 @@ from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, override_of, read_overrides_full, write_overrides
 from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team
+from ivan.sports.nba.projection import rotation as ROT
+from ivan.sports.nba.projection.minutes import salary_prior_minutes
 
 HERE = Path(__file__).parent
 engine = init_db("nba")
@@ -135,6 +137,49 @@ class Desk:
         for r in rows:
             out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
         return out
+
+    def rotation(self, team: str) -> dict:
+        """The team's rotation grid: the drawn one when it exists, else the model's proposal from the stints."""
+        from ivan.sports.nba.projection.live import OUT_STATUSES
+        players = self.players(team)
+        names = {normalize_name(p.name): p for p in players}
+        avail = [n for n, p in names.items() if (p.status or "").upper() not in OUT_STATUSES and (override_of(self.overrides, n).get("minutes") is None or override_of(self.overrides, n).get("minutes") > 0)]
+        starters = self.slate.starters.get(team) or set()
+        curve = ROT.curves(self.session, team, n_games=10)
+        prior = {n: salary_prior_minutes(p.salary) for n, p in names.items()}
+        drawn = ROT.load_drawn(team)
+        proposal = ROT.propose(curve, avail, [n for n in avail if n in starters], salary_prior=prior) if avail else None
+        grid = drawn if drawn is not None else proposal
+        if grid is None:
+            return dict(team=team, rows=[], counts=[], drawn=False, has_history=len(curve) > 0)
+        # keep the drawn grid aligned with tonight's roster: new players appear with an empty row
+        for n in avail:
+            if n not in grid.index:
+                grid.loc[n] = False
+        grid = grid.loc[[n for n in grid.index if n in avail]]
+        grid = grid.loc[sorted(grid.index, key=lambda n: (-float(grid.loc[n].sum()), -(names[n].salary or 0)))]
+        rows = [dict(name=n, key=n, pos=names[n].position, salary=names[n].salary, starter=n in starters, minutes=int(grid.loc[n].sum()),
+                     hist=None if n not in curve.index else float(curve.loc[n, "minutes"]), cells=[bool(x) for x in grid.loc[n].values]) for n in grid.index]
+        return dict(team=team, rows=rows, counts=ROT.column_counts(grid), drawn=drawn is not None, has_history=len(curve) > 0,
+                    curve_games=int(curve.games.max()) if len(curve) else 0)
+
+    def apply_rotation(self, team: str, players: list[str], grid: list[list[int]], note: str = "") -> int:
+        """Save a drawn grid and pin every drawn player's minutes to his row (0 minutes = scratched)."""
+        import pandas as pd
+        g = pd.DataFrame(np.array(grid, dtype=bool), index=[normalize_name(n) for n in players], columns=list(range(ROT.MINUTES)))
+        ROT.save_drawn(team, g, note)
+        for n, m in ROT.minutes_of(g).items():
+            self.set_override(n, minutes=float(m))
+        self.reproject(team)
+        return len(g)
+
+    def clear_rotation(self, team: str) -> None:
+        g = ROT.load_drawn(team)
+        ROT.clear_drawn(team)
+        if g is not None:
+            for n in g.index:
+                self.set_override(n, minutes=None)
+        self.reproject(team)
 
     def pins(self) -> dict[str, float]:
         """player -> pinned minutes (the overrides' minutes column only)."""
@@ -280,8 +325,10 @@ class Desk:
         team_fpts = float(self.proj[team]["fpts_mean"].sum()) if len(self.proj[team]) else 0.0
         assigned = sum((r["minutes"] or 0) for r in avail)
         to_place = (241.0 - assigned) if any(r["pinned"] for r in rows) else 0.0
+        if abs(to_place) < 1.5:
+            to_place = 0.0
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
-                    assigned=assigned, to_place=to_place,
+                    assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
@@ -375,10 +422,51 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
     with LOCK:
         key = normalize_name(player)
         lo, hi = _num(low, "low"), _num(high, "high")
-        if (lo is None) != (hi is None) or (lo is not None and hi is not None and hi <= lo):
-            desk.flash.append("the band needs both a low and a high, low < high"); lo = hi = None
+        if (lo is None) != (hi is None):
+            # one side typed: the other side keeps its edit, else the model's current band
+            r = desk.proj[team].loc[key] if key in desk.proj.get(team, pd.DataFrame()).index else None
+            ov = desk.overrides.get(key, {})
+            if lo is None:
+                lo = ov.get("min_low") if ov.get("min_low") is not None else (None if r is None or pd.isna(r.get("minutes_p10", np.nan)) else round(float(r["minutes_p10"])))
+            if hi is None:
+                hi = ov.get("min_high") if ov.get("min_high") is not None else (None if r is None or pd.isna(r.get("minutes_p90", np.nan)) else round(float(r["minutes_p90"])))
+        if lo is not None and hi is not None and hi <= lo:
+            desk.flash.append(f"band {lo:g}–{hi:g} ignored: low must be below high"); lo = hi = None
         desk.set_override(key, minutes=_num(minutes, "minutes"), fppm=_num(fppm, "fppm"), min_low=lo, min_high=hi)
         desk.reproject(team)
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.get("/team/{team}/rotation", response_class=HTMLResponse)
+def rotation_view(request: Request, team: str):
+    with LOCK:
+        return _render(request, "_nba_rotation.html", rot=desk.rotation(team))
+
+
+@app.post("/team/{team}/rotation", response_class=HTMLResponse)
+async def rotation_apply(request: Request, team: str):
+    """Body: JSON {players: [...], grid: [[0/1 x 48], ...]} from the desk's grid; saves it and pins the minutes."""
+    body = await request.json()
+    with LOCK:
+        try:
+            desk.apply_rotation(team, body["players"], body["grid"], note=str(body.get("note", "")))
+            desk.flash.append(f"{team}: rotation applied, {len(body['players'])} players pinned to their drawn minutes")
+        except Exception as e:   # noqa: BLE001
+            desk.flash.append(f"{team}: rotation not applied: {type(e).__name__}: {e}")
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
+def rotation_propose(request: Request, team: str):
+    with LOCK:
+        ROT.clear_drawn(team)
+        return _render(request, "_nba_rotation.html", rot=desk.rotation(team))
+
+
+@app.post("/team/{team}/rotation/clear", response_class=HTMLResponse)
+def rotation_clear(request: Request, team: str):
+    with LOCK:
+        desk.clear_rotation(team)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 

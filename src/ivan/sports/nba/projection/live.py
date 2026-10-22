@@ -119,6 +119,8 @@ class LiveSlate:
             out = status in OUT_STATUSES or name in forced_out
             ov = override_of(overrides, name)
             pin = ov.get("minutes")
+            if pin is None and ov.get("min_low") is not None and ov.get("min_high") is not None:
+                pin = 0.5 * (float(ov["min_low"]) + float(ov["min_high"]))      # a band alone says where his minutes are: its middle
             if pin is not None and pin <= 0:
                 out = True
             starter = None if team_starters is None else (name in team_starters)

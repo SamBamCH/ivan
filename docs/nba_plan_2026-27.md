@@ -194,6 +194,30 @@ the best setting; on a synthetic field planted at 0.30 it ranked 0.30 first.
 The DK profile's session was expired on 2026-10-21 (403 headless): the first
 scrape must run without --headless and log in in the Chrome window.
 
+## Rotations from the play-by-play (2026-10-21/22)
+
+`ivan.sports.nba.pbp`: nba_api PlayByPlayV3 per game (raw nba_api/pbp),
+substitutions + box-score starters -> the `nba_stint` table (one row per
+stint: elapsed seconds in/out, minutes scaled to the box, margin at entry and
+exit, to-buzzer flag); the nightly job fetches the season's new games,
+`scripts/nba/pbp.py fetch` backfills (last season Oct-Jan done 2026-10-22),
+`pbp.py rotation --team` prints the trailing map (stints per game, longest
+stint, minutes in the last ten of close games, garbage share).
+
+`projection/rotation.py`: per-player on-court curves by minute from the
+stints, and `propose()` builds a full 48-minute grid with exactly five on
+the floor every minute (curve + minutes still owed, hysteresis so stints
+hold, starters forced at the tip, scratches never on). The desk shows the
+grid under each team table: paint by click/drag, live per-minute counts,
+Propose / Apply / Clear; Apply saves `data/nba/input/rotations/<team>.json`
+and pins every drawn player's minutes (0 = scratched), so the projection,
+the capture loop and the sim use the drawn rotation.
+
+Not yet: the sampler still draws totals (team_minutes.py) rather than the
+drawn stints; next is per-boundary jitter from the stint spreads, garbage
+time removing closers' last stint toward the players who take garbage
+minutes, and the scorecard's last-ten-minutes check.
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.

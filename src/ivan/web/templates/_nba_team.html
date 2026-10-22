@@ -1,6 +1,6 @@
 <table>
   <thead><tr>
-    <th>player</th><th class="n">sal</th><th>st</th>
+    <th>player</th><th>pos</th><th class="n">sal</th><th>st</th>
     <th class="n" title="projected minutes; type to pin the mean, 0 scratches">min</th>
     <th title="10-90 minutes band on a 0-48 scale, mean as the tick; type a low and high to set it">distribution</th>
     <th class="n" title="this season's minutes per game when played; italic = last season's">hist min</th>
@@ -14,9 +14,10 @@
   {% for r in card.rows %}
     {% set grp = 'starters' if (r.starter == 'S' and not r.out) else ('out' if r.out else 'bench') %}
     {% set prev = 'starters' if (loop.previtem is defined and loop.previtem.starter == 'S' and not loop.previtem.out) else ('out' if (loop.previtem is defined and loop.previtem.out) else ('bench' if loop.previtem is defined else none)) %}
-    {% if prev is not none and grp != prev %}<tr class="divider {{ grp }}"><td colspan="11">{{ grp }}</td></tr>{% endif %}
-    <tr class="{{ grp }} {% if r.out %}out{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
+    {% if prev is not none and grp != prev %}<tr class="divider {{ grp }}"><td colspan="12">{{ grp }}</td></tr>{% endif %}
+    <tr class="{{ grp }} {% if r.out %}out{% elif r.priced %}priced{% else %}unpriced{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
       <td class="{{ r.loud.name }}" title="{{ r.cells.name }}"><input type="hidden" name="player" value="{{ r.key }}">{{ r.name }}{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}{% if not r.out %} <button class="scratch" title="scratch (pin 0 minutes)" hx-post="/team/{{ card.team }}/pin" hx-vals='{"minutes": "0"}' hx-include="closest tr" hx-target="#card-{{ card.team }}" hx-swap="innerHTML">✕</button>{% endif %}</td>
+      <td class="pos">{{ r.pos }}</td>
       <td class="n">{{ r.salary }}</td>
       <td><span class="st">{{ r.starter }}</span></td>
       <td class="n {{ r.loud.min }}" title="{{ r.cells.min }}">

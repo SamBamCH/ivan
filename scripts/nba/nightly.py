@@ -15,6 +15,11 @@ from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.validation import run_pending_scorecards
 
 
+def season_year(season: str) -> int:
+    """'2026-27' -> 2026"""
+    return int(str(season)[:4])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--season", default=None, help="e.g. 2026-27 (default: current)")
@@ -32,6 +37,15 @@ def main() -> int:
             logging.info(f"scorecards written: {len(cards)}")
         except Exception as e:   # noqa: BLE001 - the box scores are the job; the scorecard must not fail it
             logging.warning(f"scorecard failed: {type(e).__name__}: {e}")
+        try:
+            from ivan.sports.nba import pbp as P
+            P.ensure_tables(engine)
+            ids = P.games_without_stints(session, since=__import__("datetime").date(season_year(season), 10, 1))[:40]
+            for gid in ids:
+                P.process_game(session, gid, log=logging.info); __import__("time").sleep(0.8)
+            logging.info(f"play-by-play stints: {len(ids)} games")
+        except Exception as e:   # noqa: BLE001
+            logging.warning(f"play-by-play failed: {type(e).__name__}: {e}")
         try:
             from ivan.sports.nba.standings import derive_pending
             derived = derive_pending(session, log=logging.info)
