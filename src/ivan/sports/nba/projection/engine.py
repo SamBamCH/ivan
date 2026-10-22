@@ -14,7 +14,7 @@ import pandas as pd
 
 from .fpts import simulate_fpts, summarize, minutes_sd
 from .history import HistoryState, STATS
-from .minutes import MinutesInputs, allocate_team_minutes, baseline_minutes
+from .minutes import MinutesInputs, allocate_team_minutes, baseline_minutes, salary_weight
 from .rates import shrunk_rates, fpts_per_minute, apply_usage_bump, USAGE_RECOVERY
 from .market import blend_rates
 from .team_minutes import load_params as load_team_params, role_of, sample_team_minutes, scratch_probability, tau_from_band
@@ -33,6 +33,9 @@ class RosterPlayer:
     rate_mult: float = 1.0                         # e.g. conditional "without X" usage
     status: str | None = None                      # DK status (Q, GTD, ...): the team model's scratch probability
     fpm_override: float | None = None              # hand-set fantasy points per minute (every stat rate scaled to match)
+    new_team: bool = False                         # his history is on another team
+    games_on_team: int = 0                         # games for this team this season
+    games_this_season: int = 0
     minutes_low: float | None = None               # hand-set 10-90 minutes band (team model: the player's own noise scale)
     minutes_high: float | None = None
 
@@ -53,6 +56,7 @@ class ProjectionParams:
     rebalance: bool = False              # True: a pin re-allocates the rest of the team to 241; False: the others keep the model's
                                          # minutes and the difference is left for a person to place (the desk shows it)
     rotation: dict | None = None         # minutes_model "rotation": {"grid": DataFrame, "spreads": {name: sd}, "curve": DataFrame|None}
+    salary_blend: bool = True            # blend the minutes baseline toward the salary curve (minutes.salary_weight)
     spread: float | None = None          # the team's own line for the team draw (negative = favoured); None = pick'em
     team_params: dict | None = None      # team_minutes.load_params() when None
 
@@ -66,7 +70,7 @@ class ProjectionParams:
             except Exception:   # noqa: BLE001 - no config file is a plain default
                 config = {}
         block = (config or {}).get("projection") or {}
-        kw = {k: block[k] for k in ("minutes_model", "n_sims", "market_weight", "recovery", "rebalance") if k in block}
+        kw = {k: block[k] for k in ("minutes_model", "n_sims", "market_weight", "recovery", "rebalance", "salary_blend") if k in block}
         kw.update(overrides)
         return cls(**kw)
 
@@ -107,6 +111,7 @@ def project_team(
             starter=p.starter,
             play_prob=1.0 if (s is None or not params.use_play_prob) else float(s["play_ewm"]),
             salary=p.salary, minutes_override=p.minutes_override,
+            salary_w=0.0 if not params.salary_blend else salary_weight(0 if s is None else int(s["games"]), p.new_team, p.games_on_team, p.games_this_season),
         )
         recs[p.name] = dict(inputs=mi, rates=rates, fpm=fpts_per_minute(rates),
                             priced=bool(p.market_rates),
@@ -149,14 +154,19 @@ def project_team(
         st = recs[name]["inputs"]
         mu = float(alloc.loc[name, "minutes"])
         roles[name] = role_of(float(recs[name]["baseline"]), p.starter)
-        p_out[name] = 0.0 if (alloc.loc[name, "pinned"] or p.starter) else scratch_probability(p.status, st.play_prob if params.use_play_prob else None, mu, team_params or {"scratch": {}})
+        p_out[name] = 0.0 if (alloc.loc[name, "pinned"] or p.starter) else scratch_probability(p.status, st.play_prob if params.use_play_prob else None, mu, team_params or {"scratch": {}},
+                                                                                                   salary=p.salary, starter=p.starter)
     draw = None
     if params.minutes_model == "rotation" and params.rotation is not None and simulate and params.n_sims > 0 and len(alloc):
-        from .rotation import sample_worlds
+        from .rotation import SPREAD_MULT, default_spread, sample_worlds
         rot = params.rotation; grid = rot["grid"]
         names = list(alloc.index)
         taus = {n: tau_from_band(by_name[n].minutes_low, by_name[n].minutes_high) for n in names}
         spreads = dict(rot.get("spreads") or {})
+        for n in names:                                                   # wider where the history is weaker
+            cls = "no_history" if recs[n]["games"] == 0 else ("new_team" if by_name[n].new_team else "same_team")
+            lvl = "star" if float(alloc.loc[n, "minutes"]) >= 28 else "starter" if float(alloc.loc[n, "minutes"]) >= 18 else "rotation" if float(alloc.loc[n, "minutes"]) >= 9 else "deep"
+            spreads[n] = spreads.get(n, default_spread(float(alloc.loc[n, "minutes"]))) * SPREAD_MULT.get(cls, 1.0) * SPREAD_MULT.get(lvl, 1.0)
         for n, t in taus.items():                                        # a hand band sets the player's own spread
             if t is not None:
                 spreads[n] = float(t) * float(alloc.loc[n, "minutes"]) / 1.2816 / np.sqrt(2.0)
@@ -169,7 +179,7 @@ def project_team(
                 M[:, j] = d["minutes"][:, col[n]]
                 # the allocation is the mean (it already averages over blowouts); the grid gives the shape and the
                 # world-to-world redistribution. A drawn grid is its own mean (the pins hold it).
-                mu = float(M[:, j].mean()); a_min = float(alloc.loc[n, "minutes"])
+                mu = float(M[:, j].mean()); a_min = float(alloc.loc[n, "minutes"]) * (1.0 - float(p_out.get(n, 0.0)))   # the mean includes the scratch worlds
                 if mu > 0:
                     M[:, j] *= a_min / mu
         class _D:  # the TeamDraw shape the loop below reads

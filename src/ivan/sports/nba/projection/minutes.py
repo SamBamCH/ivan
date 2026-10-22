@@ -23,6 +23,7 @@ Allocation  The team budget is TEAM_MINUTES (240 plus the expected overtime
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -46,17 +47,59 @@ class MinutesInputs:
     play_prob: float = 1.0      # share of recent dressed games he actually played
     salary: int | None = None
     minutes_override: float | None = None
+    salary_w: float = 0.0       # share of the baseline from the salary curve (salary_weight)
 
 
-def salary_prior_minutes(salary: int | None) -> float:
-    """Rough minutes prior for a player with no box score history."""
+SALARY_CURVE_JSON = None   # set below (data/nba/models/salary_minutes.json when fitted by scripts/nba/validate.py fit-salary)
+# minutes = a + b*k + c*max(k - knee, 0), k = (salary - 3000) / 1000; fitted on the 2026-10-20/21 slates (316 player-games,
+# residual sd 6.4): DK's price is a better minutes predictor than last season's minutes early in a season
+SALARY_CURVE = {"a": 10.3, "b": 6.31, "c": -5.34, "knee": 3.0, "floor": 4.0, "cap": 34.0}
+# how much of the minutes baseline comes from the salary curve rather than the player's history, by where his
+# history is; each weight decays as games arrive (halflife in games this season / on the new team)
+# replayed on the 2026-10-20/21 captures: blending toward the curve made the minutes error worse for same-team players
+# and left new-team players under-projected (the plateau pulls stars down), so only players with no history use it;
+# the weights are here to revisit once a few weeks of scorecards exist
+SALARY_BLEND = {"no_history": 1.0, "new_team": 0.0, "new_team_halflife": 3.0, "same_team": 0.0, "same_team_halflife": 6.0}
+
+
+def _load_salary_curve() -> dict:
+    try:
+        from ivan.sports.nba.paths import MODELS_DIR
+        pth = MODELS_DIR / "salary_minutes.json"
+        if pth.exists():
+            d = json.loads(pth.read_text())
+            return {**SALARY_CURVE, **{k: float(v) for k, v in d.items() if k in SALARY_CURVE}}
+    except Exception:   # noqa: BLE001
+        pass
+    return dict(SALARY_CURVE)
+
+
+def salary_prior_minutes(salary: int | None, curve: dict | None = None) -> float:
+    """Expected minutes from the DraftKings salary alone (the fitted curve; a plateau above $6k)."""
     if salary is None:
         return 6.0
-    return float(np.clip((salary - 3000) / 200.0, 4.0, 32.0))
+    c = curve or _CURVE
+    k = (float(salary) - 3000.0) / 1000.0
+    m = c["a"] + c["b"] * k + c["c"] * max(k - c["knee"], 0.0)
+    return float(np.clip(m, c["floor"], c["cap"]))
+
+
+def salary_weight(history_games: int, new_team: bool, games_on_team: int, games_this_season: int, blend: dict | None = None) -> float:
+    """Share of the baseline taken from the salary curve: 1 with no history, high on a new team, modest on the same team, all fading with games."""
+    b = blend or SALARY_BLEND
+    if history_games <= 0:
+        return b["no_history"]
+    if new_team:
+        return float(b["new_team"] * 0.5 ** (games_on_team / b["new_team_halflife"]))
+    return float(b["same_team"] * 0.5 ** (games_this_season / b["same_team_halflife"]))
+
+
+_CURVE = _load_salary_curve()
 
 
 def baseline_minutes(p: MinutesInputs, start_shift: float = START_SHIFT) -> float:
-    mu = salary_prior_minutes(p.salary) if p.min_ewm is None else p.min_ewm
+    prior = salary_prior_minutes(p.salary)
+    mu = prior if p.min_ewm is None else (1.0 - p.salary_w) * p.min_ewm + p.salary_w * prior
     if not p.starter:
         mu *= float(np.clip(p.play_prob, 0.0, 1.0))
     if p.starter is not None:

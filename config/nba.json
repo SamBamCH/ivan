@@ -33,6 +33,7 @@
   "projection": {
     "minutes_model": "rotation",
     "n_sims": 4000,
-    "rebalance": false
+    "rebalance": false,
+    "salary_blend": true
   }
 }

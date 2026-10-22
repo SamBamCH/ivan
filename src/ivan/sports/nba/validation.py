@@ -481,3 +481,78 @@ def format_review(card: dict) -> str:
     if outs:
         L.append("  out: " + ", ".join(outs))
     return "\n".join(L)
+
+
+# ----------------------------------------------------------------------------- replay a captured slate under today's model
+def replay_slate(session: Session, draft_group: int, params=None, log: Log = print) -> pd.DataFrame:
+    """
+    Re-project a slate from its last archive capture before lock with the model as
+    it is now (history as of the lock date, the capture's statuses and Rotowire
+    starters, no props), joined to the box scores: one row per player with the
+    allocation, the scratch probability, the expected minutes and the actuals.
+    What a tuning change would have projected for a slate already played.
+    """
+    from ivan.core import archive
+    from ivan.core.utils import normalize_name
+    from ivan.sports.nba.projection.engine import ProjectionParams, RosterPlayer, project_team
+    from ivan.sports.nba.projection.history import build_history, load_box_scores
+    from ivan.sports.nba.projection.live import OUT_STATUSES
+    from ivan.sports.nba.projection.team_minutes import load_params, scratch_probability
+    caps = [c for c in archive.slates(session, "nba", None, None) if str(c.slate_key) == str(draft_group)]
+    if not caps:
+        raise ValueError(f"no archive capture for draft group {draft_group}")
+    cap = caps[-1]
+    players = archive.load_blobs(session, cap.id).get("players", [])
+    day = cap.lock.date()
+    box = load_box_scores(session); hist = build_history(box)
+    state = hist.before(day); team_fpts = hist.team_before(day)
+    season_start = date(day.year if day.month >= 10 else day.year - 1, 10, 1)
+    this = box[(box.game_date >= season_start) & (box.game_date < day) & box.played]
+    games_season = this.groupby("player_name").size().to_dict(); games_team = this.groupby(["player_name", "team"]).size().to_dict()
+    params = params or ProjectionParams.from_config(n_sims=0)
+    tp = load_params()
+    act = actuals_for(session, day).set_index("player_name")
+    rows = []
+    for team in sorted({p["team"] for p in players if p.get("team")}):
+        roster = []
+        for p in players:
+            if p.get("team") != team:
+                continue
+            name = normalize_name(str(p.get("name") or "")); status = str(p.get("status") or "").upper()
+            st = state.loc[name] if name in state.index else None
+            starter = {"confirmed": True, "expected": True, "bench": False}.get(str(p.get("starter") or ""), None)
+            roster.append(RosterPlayer(name, status not in OUT_STATUSES, starter, p.get("salary"), status=status or None,
+                                       new_team=bool(st is not None and str(st["team"]) != str(team)),
+                                       games_on_team=int(games_team.get((name, team), 0)), games_this_season=int(games_season.get(name, 0))))
+        proj = project_team(roster, state, hist, team_fpts.get(team), params, simulate=False)
+        for p in roster:
+            if p.name not in proj.index:
+                continue
+            r = proj.loc[p.name]
+            mu = float(r["minutes"])
+            po = 0.0 if p.starter else scratch_probability(p.status, None, mu, tp, salary=p.salary, starter=p.starter)
+            a = act.loc[p.name] if p.name in act.index else None
+            rows.append(dict(team=team, player_name=p.name, salary=p.salary, starter=p.starter, status=p.status, new_team=p.new_team,
+                             history_class="no history" if r["games"] == 0 else ("new team" if p.new_team else "same team"),
+                             minutes_proj=mu, p_out=po, minutes_expected=mu * (1 - po), baseline=float(r["baseline"]),
+                             min_act=0.0 if a is None else float(a["min_act"] or 0.0), played=bool(a is not None and (a["min_act"] or 0) > 0),
+                             fpts_proj=float(r["fpts_mean"]), fpts_act=0.0 if a is None else float(a["fpts_act"] or 0.0)))
+    return pd.DataFrame(rows)
+
+
+def replay_summary(df: pd.DataFrame) -> str:
+    rot = df[df.minutes_proj >= ROTATION_MIN]
+    L = [f"  rotation players (proj >= {ROTATION_MIN:.0f}): n {len(rot)}, played {int(rot.played.sum())}"]
+    pl = rot[rot.played]
+    L.append(f"  played: minutes bias {(pl.minutes_proj - pl.min_act).mean():+.2f} MAE {(pl.minutes_proj - pl.min_act).abs().mean():.2f} | "
+             f"expected-minutes (x(1-p_out)) bias {(pl.minutes_expected - pl.min_act).mean():+.2f}")
+    allr = rot
+    L.append(f"  all rotation incl. DNP: expected-minutes bias {(allr.minutes_expected - allr.min_act).mean():+.2f} MAE {(allr.minutes_expected - allr.min_act).abs().mean():.2f} | "
+             f"predicted DNPs {allr.p_out.sum():.1f} vs actual {int((~allr.played).sum())}")
+    for cls, g in rot.groupby("history_class"):
+        gp = g[g.played]
+        L.append(f"    {cls:11s} n={len(g):3d} played bias {(gp.minutes_proj - gp.min_act).mean():+.2f} MAE {(gp.minutes_proj - gp.min_act).abs().mean():.2f} | DNP pred {g.p_out.sum():.1f} act {int((~g.played).sum())}")
+    for lvl, g in rot.groupby(pd.cut(rot.minutes_proj, [0, 18, 28, 60], labels=["<18", "18-28", "28+"]), observed=True):
+        gp = g[g.played]
+        L.append(f"    {str(lvl):11s} n={len(g):3d} played bias {(gp.minutes_proj - gp.min_act).mean():+.2f} MAE {(gp.minutes_proj - gp.min_act).abs().mean():.2f}")
+    return "\n".join(L)

@@ -5,7 +5,7 @@ projections written back. Shared by project.py and news.py.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -103,6 +103,11 @@ class LiveSlate:
             for r in session.query(NBAMarketRate).all():
                 self.market.setdefault(r.player_name, {})[r.stat] = float(r.rate)
         self.players = session.query(NBAPlayer).all()
+        # games this season per player and per (player, team): the salary blend fades as they arrive
+        season_start = date(horizon.year if horizon.month >= 10 else horizon.year - 1, 10, 1)
+        this = self.box[(self.box.game_date >= season_start) & self.box.played]
+        self.games_season = this.groupby("player_name").size().to_dict()
+        self.games_team = this.groupby(["player_name", "team"]).size().to_dict()
 
     def teams(self) -> list[str]:
         return sorted({p.team for p in self.players})
@@ -124,10 +129,13 @@ class LiveSlate:
             if pin is not None and pin <= 0:
                 out = True
             starter = None if team_starters is None else (name in team_starters)
+            st = self.state.loc[name] if name in self.state.index else None
             roster.append(RosterPlayer(name, not out, starter, p.salary, None if out else pin,
                                        market_rates=self.market.get(name),
                                        rate_mult=(rate_mults or {}).get(name, 1.0), status=status or None,
-                                       fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high")))
+                                       fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high"),
+                                       new_team=bool(st is not None and str(st["team"]) != str(p.team)),
+                                       games_on_team=int(self.games_team.get((name, p.team), 0)), games_this_season=int(self.games_season.get(name, 0))))
         return roster
 
     def rotation_for(self, team: str, overrides: dict, forced_out: set[str]) -> dict | None:

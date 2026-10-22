@@ -82,17 +82,30 @@ def cmd_review(session, a) -> int:
     return 0
 
 
+def cmd_replay(session, a) -> int:
+    from ivan.sports.nba.projection.engine import ProjectionParams
+    for dg in [int(x) for x in a.draft_group.split(",")]:
+        for label, blend in (("with the salary blend", True), ("history only", False)):
+            if a.no_compare and not blend:
+                continue
+            df = V.replay_slate(session, dg, params=ProjectionParams.from_config(n_sims=0, salary_blend=blend))
+            print(f"slate {dg} replayed {label}:")
+            print(V.replay_summary(df))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("scorecard"); s.add_argument("--draft-group", type=int, default=None); s.add_argument("--date", default=None)
     s.add_argument("--force", action="store_true"); s.add_argument("--top", type=int, default=V.TOP_N)
     sub.add_parser("history")
+    rp = sub.add_parser("replay"); rp.add_argument("--draft-group", required=True, help="one or more ids, comma-separated"); rp.add_argument("--no-compare", action="store_true")
     r = sub.add_parser("review"); r.add_argument("--team", default=None); r.add_argument("--all", action="store_true", help="every team, not only the flagged ones")
     r.add_argument("--min-score", type=int, default=4, help="print teams with at least this alert score (default 4)")
     a = ap.parse_args()
     engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
-    return {"scorecard": cmd_scorecard, "history": cmd_history, "review": cmd_review}[a.cmd](session, a)
+    return {"scorecard": cmd_scorecard, "history": cmd_history, "review": cmd_review, "replay": cmd_replay}[a.cmd](session, a)
 
 
 if __name__ == "__main__":

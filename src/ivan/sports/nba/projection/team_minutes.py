@@ -42,6 +42,9 @@ DEFAULTS = {
     "beta": {"star": -0.010, "starter": -0.006, "rotation": 0.006, "deep": 0.030},   # per point of |margin|
     "alpha": {"star": 0.0, "starter": 0.0, "rotation": 0.0, "deep": 0.0},            # fit report only: the scaled-baseline stand-in's bias by role; the sampler centres on mu
     "scratch": {"Q": 0.35, "GTD": 0.35, "D": 0.6, "P": 0.1},                        # P(out) by DK status
+    # a bench player with no status who is projected to play but does not (coach's decision): by salary, measured on the
+    # 2026-10-20/21 slates (109 such players: <=3.5k 38%, 3.5-4.5k 10%, 4.5-6k 9%, 6k+ none)
+    "scratch_bench": {"3500": 0.35, "4500": 0.10, "6000": 0.08, "else": 0.0},
 }
 
 
@@ -164,17 +167,25 @@ def expected_abs_margin(mean: float, sd: float) -> float:
     return sd * np.sqrt(2 / np.pi) * np.exp(-m ** 2 / (2 * sd ** 2)) + m * (1 - 2 * norm.cdf(-m / sd))
 
 
-def scratch_probability(status: Optional[str], play_ewm: Optional[float] = None, mu: float = 0.0, params: Optional[dict] = None) -> float:
+def scratch_probability(status: Optional[str], play_ewm: Optional[float] = None, mu: float = 0.0, params: Optional[dict] = None,
+                        salary: Optional[int] = None, starter: Optional[bool] = None) -> float:
     """
     P(does not play) beyond what the allocation already knows: the DK injury
-    status (Q, GTD, D, P). The deep bench's trailing DNP rate is not added here:
-    the allocation's baseline is already minutes x play rate, so a scratch
-    probability on top would count it twice and hand the double-counted
-    minutes to the teammates.
+    status (Q, GTD, D, P), else for a bench player without a status the
+    coach's-decision rate by salary (scratch_bench). The trailing DNP rate is
+    not added: the allocation's baseline is already minutes x play rate.
     """
     P = params or load_params()
     st = (status or "").upper()
-    return float(P["scratch"].get(st, 0.0))
+    if st in P.get("scratch", {}):
+        return float(P["scratch"][st])
+    if starter or salary is None or mu < 6:
+        return 0.0
+    sb = P.get("scratch_bench") or {}
+    for cut in sorted(int(k) for k in sb if k != "else"):
+        if int(salary) <= cut:
+            return float(sb[str(cut)])
+    return float(sb.get("else", 0.0))
 
 
 # ----------------------------------------------------------------------------- fitting

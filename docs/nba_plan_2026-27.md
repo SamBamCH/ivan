@@ -235,6 +235,34 @@ scaled to his allocation); boundary jitter x1.6 puts the 10-90 band at
 its own mean through the pins; nba_player carries rotation_cells and
 boundary_sd so the contest sampler draws the same worlds per game.
 
+## First tuning pass on two slates (2026-10-22)
+
+Scorecards for 10-20 (two slates) and 10-21 (four slates, 11 games) are in;
+`validate.py replay --draft-group N` re-projects a captured slate under the
+model as it stands (history as of lock, the capture's statuses and starters,
+no props) so a change can be judged on slates already played.
+
+Findings on 10-21 (179 rotation players): minutes bias +0.5, MAE 5.2 (January
+was 4.5: a new season); stars projected 28+ over by ~3 min; for new-team
+players last season's minutes had no predictive value (r = 0.08 with what
+they played) while salary had 0.55; 18% of bench players projected 10+ with
+no status did not play (38% of those priced <= $3.5k); fpts bias +2.5 was all
+rate and the books' implied totals had the same +2.8 bias, so the rate side
+is left alone; the 10-90 minutes band held 60% (new season, bands too
+narrow).
+
+Changes: the salary prior is the fitted curve (10.3 + 6.31k - 5.34 max(k-3,0),
+k = thousands above $3000, plateau ~32), used for players with no history
+only; blending it in for same-team or new-team players made the replay worse
+(opener MAE 2.80 -> 3.10 / 3.75), so those weights sit at 0 in
+`minutes.SALARY_BLEND` to revisit; bench players with no status carry a
+scratch probability by salary (`team_minutes.json` scratch_bench: 35% at
+<= $3.5k, 10% to $4.5k, 8% to $6k) and the rotation sampler's mean matching
+accounts for it; band spreads are wider for new-team (x1.3) and no-history
+(x1.5) players and narrower for stars (x0.85), wider for rotation (x1.15).
+The desk's edits remain the main instrument while minutes are this
+uncertain; standings still need the one-time Chrome login.
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.

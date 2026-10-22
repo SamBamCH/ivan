@@ -296,6 +296,8 @@ DEFAULT_BOUNDARY_SD = {"star": 1.6, "starter": 2.2, "rotation": 3.0, "deep": 4.5
 MARGIN_SD = 14.75               # final margin around the spread (team_minutes.json has the fitted value)
 P_OT = 0.052
 JITTER_SCALE = 1.6              # boundary jitter multiplier that puts the 10-90 band at ~80% coverage (January 2026 walk-forward)
+# spread multipliers: January coverage by level (star 88%, rotation 74%) and the weaker history classes seen on 2026-10-21
+SPREAD_MULT = {"star": 0.85, "starter": 1.0, "rotation": 1.15, "deep": 1.0, "same_team": 1.0, "new_team": 1.3, "no_history": 1.5}
 
 
 def boundary_spreads(session: Session, players: Iterable[str], before: Optional[date] = None, n_games: int = 12) -> Dict[str, float]:
