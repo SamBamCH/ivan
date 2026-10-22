@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""
+scripts/nba/feed.py
+
+The NBA data feed between two Ivans (ivan.core.feed).
+
+Producer (the machine that runs the capture loop):
+    scripts/nba/feed.py publish [--which live|reference|both]     write data/feed/nba/*; the capture tick and the
+                                                                   nightly job call this themselves
+Consumer (another machine):
+    scripts/nba/feed.py pull --url http://<feed host>:8787 [--token ...] [--which both] [--no-project]
+        fetches whatever changed, replaces the feed's tables in this database (edits, rotations, lineups and sims
+        here are untouched) and re-projects the slate with this machine's edits so the desk and the generator see
+        its own projections. --url and --token default to $IVAN_FEED_URL / $IVAN_FEED_TOKEN (.env).
+    scripts/nba/feed.py pull --loop 15                            keep pulling every 15 minutes
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import time
+from pathlib import Path
+
+from ivan.core import feed
+from ivan.core.utils import PROJECT_ROOT
+
+
+def do_pull(a) -> dict:
+    url = a.url or os.environ.get("IVAN_FEED_URL"); token = a.token or os.environ.get("IVAN_FEED_TOKEN")
+    if not url:
+        raise SystemExit("give --url or set IVAN_FEED_URL in .env")
+    changed = feed.pull(url, token, "nba", PROJECT_ROOT / "data" / "feed-state", which=a.which, log=print)
+    if changed and not a.no_project and "live" in changed:
+        from ivan.database.session import get_session, init_db
+        from ivan.sports.nba.ingest import ensure_schema, project_slate
+        engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+        try:
+            info = project_slate(session, n_sims=2000, write_capture=False, write_csv=False, log=print)
+            print(f"re-projected {info.players} players with this machine's edits")
+        except Exception as e:   # noqa: BLE001
+            print(f"re-projection skipped: {type(e).__name__}: {e}")
+    if not changed:
+        print("feed unchanged")
+    return changed
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("publish"); p.add_argument("--which", choices=("live", "reference", "both"), default="both")
+    q = sub.add_parser("pull"); q.add_argument("--url", default=None); q.add_argument("--token", default=None)
+    q.add_argument("--which", choices=("live", "reference", "both"), default="both"); q.add_argument("--no-project", action="store_true")
+    q.add_argument("--loop", type=int, default=None, help="minutes between pulls; omit for one pull")
+    a = ap.parse_args()
+    if a.cmd == "publish":
+        m = feed.publish("nba", which=a.which, log=print)
+        print(f"manifest: live {m.get('live', {}).get('stamp')} reference {m.get('reference', {}).get('stamp')} -> {feed.FEED_DIR / 'nba'}")
+        return 0
+    if a.loop:
+        while True:
+            try:
+                do_pull(a)
+            except Exception as e:   # noqa: BLE001
+                print(f"pull failed: {type(e).__name__}: {e}")
+            time.sleep(a.loop * 60)
+    do_pull(a)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

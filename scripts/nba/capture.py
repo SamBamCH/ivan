@@ -78,6 +78,7 @@ def main() -> int:
     ap.add_argument("--max-props-per-day", type=int, default=20, help="safety cap on props fetches per day (each costs ~12 credits per game)")
     ap.add_argument("--no-props", action="store_true")
     ap.add_argument("--no-contests", action="store_true", help="skip the contest + payout store")
+    ap.add_argument("--no-feed", action="store_true", help="skip publishing the live feed bundle")
     ap.add_argument("--sims", type=int, default=2000)
     ap.add_argument("--grace", type=int, default=5, help="minutes after lock during which a slate is still captured")
     ap.add_argument("--only", type=int, default=None, help="draft group id: capture this slate only")
@@ -172,6 +173,12 @@ def main() -> int:
         st["slates"].setdefault(str(s["id"]), {}).update(lock=str(full.lock), last_tick=str(now), name=s["name"])
         log.info(f"{s['id']} {s['name']}: lock {full.lock:%a %H:%M}, {len(full.players)} players captured")
     save_state(st)
+    if not args.no_feed:
+        try:
+            from ivan.core import feed
+            feed.publish("nba", which="live", log=log.info)
+        except Exception as e:   # noqa: BLE001 - the feed is a convenience for the other machine
+            log.warning(f"feed publish failed: {type(e).__name__}: {e}")
     return 0
 
 

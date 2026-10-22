@@ -273,6 +273,30 @@ Williams'), and a player whose first substitution of a period is an "in" is
 taken to have sat the period break (measured on 110 games: mean |raw - box|
 0.74 -> 0.36 min; the symmetric "out" inference hurt and is off).
 
+## Two Ivans: the data feed (2026-10-22)
+
+`ivan.core.feed`: the producer (the machine running the capture loop and
+paying for props) publishes gzipped SQL dumps of the shared tables under
+`data/feed/nba/`: `live.sql.gz` (pool, props, market rates, game lines,
+starters, contests, payouts; ~2 MB, every capture tick) and
+`reference.sql.gz` (box scores, stints, projection captures, capture
+metadata; ~9 MB, nightly) plus the model files, inputs, derived standings
+and scorecards, with `manifest.json` (stamps + digests).
+`scripts/feed_server.py` serves them with a bearer token
+(`IVAN_FEED_TOKEN`), bound to the Tailscale address by
+`deploy/ivan-feed.service` (`deploy/install_nba_timers.sh --feed`).
+A consumer runs `scripts/nba/feed.py pull --url ... [--loop 15]`: it
+replaces only the feed's tables in its own database (edits, rotations,
+lineups, sims, outputs untouched), pulls changed files, and re-projects the
+slate with its own edits. Working tables are never published. A pull of the
+whole feed takes ~1.3 s.
+
+Plan agreed with Sam: the server becomes the producer (capture timers,
+nightly, feed) and hosts the code as the git origin; both laptops are
+consumers that pull the feed and run the desk, generation and sim locally.
+The standings scrape (Chrome login) stays on a laptop; pushing its raw
+exports back to the server is the open piece.
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.

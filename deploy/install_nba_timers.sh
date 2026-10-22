@@ -12,6 +12,12 @@ for unit in ivan-nba-capture ivan-nba-nightly; do
 done
 systemctl --user daemon-reload
 systemctl --user enable --now ivan-nba-capture.timer ivan-nba-nightly.timer >/dev/null
+if [[ "${1:-}" == "--feed" ]]; then
+  sed "s|__ROOT__|$ROOT|g" "$ROOT/deploy/ivan-feed.service" > "$UNITS/ivan-feed.service"
+  systemctl --user daemon-reload
+  systemctl --user enable --now ivan-feed.service
+  systemctl --user --no-pager status ivan-feed.service | head -5
+fi
 [[ "${1:-}" == "--run-now" ]] && systemctl --user start ivan-nba-capture.service
 systemctl --user list-timers --no-pager ivan-nba-capture.timer ivan-nba-nightly.timer
 echo "logs: $ROOT/data/nba/logs/capture.log, $ROOT/data/nba/logs/nightly.log"

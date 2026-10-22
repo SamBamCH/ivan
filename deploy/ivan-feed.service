@@ -1,0 +1,19 @@
+# The data feed server (scripts/feed_server.py): bundles under data/feed for another Ivan to pull.
+# A *user* unit; installed by deploy/install_nba_timers.sh --feed. Binds the Tailscale address only.
+[Unit]
+Description=Ivan data feed
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__
+EnvironmentFile=__ROOT__/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -c '__ROOT__/venv/bin/python __ROOT__/scripts/feed_server.py --host "$(tailscale ip -4)" --port 8787'
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=default.target
