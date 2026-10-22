@@ -293,20 +293,22 @@ whole feed takes ~1.3 s.
 
 Two workspaces (decided 2026-10-22): Sam's laptop and the server, each a
 complete Ivan with its own database, edits, lineups and sims; nothing shared
-but the feed. The server is the producer (always on: capture timers,
-nightly, feed server) and hosts the brother's desk at
-http://ivan.prattflix.com/nba/ (the NBA desk is mounted inside the NFL web
-app, which already owns that name on the tailnet; `IVAN_DESK_PASSWORD` in
-the server's .env puts a login page in front of /nba only). The laptop pulls
-the feed (`deploy/install_nba_timers.sh --pull`: a 15-minute pull timer,
-capture + nightly timers off) and runs Sam's desk, generation and sim as
-before, with the props paid for once.
+but the feed. The laptop is the producer: its capture tick fetches DK, props
+and lines once, publishes the bundles and pushes them to the server with
+rsync over ssh (`IVAN_FEED_PUSH=ivan-server:/opt/ivan/app/data/feed` in the
+laptop's .env; the nightly pushes the reference bundle). The server is the
+consumer: a 5-minute pull timer applies whatever landed in its own
+`data/feed` (`IVAN_FEED_URL=file:///opt/ivan/app/data/feed`), and it hosts
+the brother's desk at http://ivan.prattflix.com/nba/ (the NBA desk is
+mounted inside the NFL web app, which already owns that name on the tailnet;
+`IVAN_DESK_PASSWORD` in the server's .env puts a login page in front of /nba
+only). When the laptop is asleep the server's slate goes stale; the feed
+server (`scripts/feed_server.py`, port 8790) remains for the other direction.
 
 Server setup: `deploy/push.sh`, then as the service user
-`deploy/setup_nba_server.sh [seed dir]` (schema, seed from copied bundles,
-timers, feed); lingering must be on for user timers. The standings scrape
-(Chrome login) still runs on a laptop; shipping its raw exports to the
-server is the open piece.
+`deploy/setup_nba_server.sh` (schema, apply the pushed bundles, pull timer,
+web restart); lingering must be on for user timers. The standings scrape
+stays on the laptop as well, so nothing else moves.
 
 ## Phase 1: capture from opening night (must be live Thursday)
 

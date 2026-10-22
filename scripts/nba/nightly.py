@@ -55,6 +55,7 @@ def main() -> int:
     try:
         from ivan.core import feed
         feed.publish("nba", which="both", log=logging.info)
+        feed.push("nba", log=logging.info)
     except Exception as e:   # noqa: BLE001
         logging.warning(f"feed publish failed: {type(e).__name__}: {e}")
     return 0

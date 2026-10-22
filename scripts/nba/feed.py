@@ -4,11 +4,16 @@ scripts/nba/feed.py
 
 The NBA data feed between two Ivans (ivan.core.feed).
 
-Producer (the machine that runs the capture loop):
+Producer (the machine that runs the capture loop and fetches from DK once):
     scripts/nba/feed.py publish [--which live|reference|both]     write data/feed/nba/*; the capture tick and the
                                                                    nightly job call this themselves
+    scripts/nba/feed.py push [DEST]                               rsync the bundles to the consumer's feed directory
+                                                                   (DEST or $IVAN_FEED_PUSH, e.g. ivan-server:/opt/ivan/app/data/feed);
+                                                                   the capture tick and the nightly job push too
 Consumer (another machine):
-    scripts/nba/feed.py pull --url http://<feed host>:8790 [--token ...] [--which both] [--no-project]
+    scripts/nba/feed.py pull [--url file:///opt/ivan/app/data/feed] [--which both] [--no-project]
+        a pushed-to machine pulls from its own disk (file:// URL, no token); a machine reaching a feed server
+        uses --url http://<feed host>:8790 --token ...; both
         fetches whatever changed, replaces the feed's tables in this database (edits, rotations, lineups and sims
         here are untouched) and re-projects the slate with this machine's edits so the desk and the generator see
         its own projections. --url and --token default to $IVAN_FEED_URL / $IVAN_FEED_TOKEN (.env).
@@ -54,7 +59,13 @@ def main() -> int:
     q.add_argument("--which", choices=("live", "reference", "both"), default="both"); q.add_argument("--no-project", action="store_true")
     q.add_argument("--loop", type=int, default=None, help="minutes between pulls; omit for one pull")
     r = sub.add_parser("apply"); r.add_argument("dir")
+    u = sub.add_parser("push"); u.add_argument("dest", nargs="?", default=None)
     a = ap.parse_args()
+    if a.cmd == "push":
+        ok = feed.push("nba", a.dest, log=print)
+        if not ok and not (a.dest or os.environ.get(feed.PUSH_ENV)):
+            print("give DEST or set IVAN_FEED_PUSH in .env")
+        return 0 if ok else 1
     if a.cmd == "apply":
         import shutil
         d = Path(a.dir)

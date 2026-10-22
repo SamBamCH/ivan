@@ -20,7 +20,9 @@ working tables (lineups, sims, reports) are never published.
 
 publish(sport, out_dir)         write the bundles + manifest.json under out_dir/<sport>
 apply(sport, bundle, db_path)   replace the bundle's tables in a database
-pull(url, token, sport, ...)    fetch what changed from a feed server and apply it
+pull(url, token, sport, ...)    fetch what changed from a feed server (http://host:8790) or from a
+                                directory the producer pushed to (file:///path/to/data/feed) and apply it
+push(sport, dest)               rsync the bundles to a consumer's feed directory over ssh
 """
 from __future__ import annotations
 
@@ -77,16 +79,17 @@ def dump_tables(db_path: Path, tables: List[str], out_gz: Path) -> int:
     return out_gz.stat().st_size
 
 
-def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log = print) -> dict:
+def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log = print, db_path: Optional[Path] = None) -> dict:
     """Write the sport's `which` bundle (live | reference | both) and refresh the manifest. Returns the manifest."""
     spec = TABLES[sport]
+    db_path = Path(db_path or PROJECT_ROOT / spec["db"])
     d = Path(out_dir) / sport; d.mkdir(parents=True, exist_ok=True)
     manifest = _read_manifest(d)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     parts = ["live", "reference"] if which == "both" else [which]
     for part in parts:
         gz = d / f"{part}.sql.gz"
-        n = dump_tables(PROJECT_ROOT / spec["db"], spec[part], gz)
+        n = dump_tables(db_path, spec[part], gz)
         manifest[part] = {"stamp": stamp, "sha256": _sha(gz), "bytes": n, "tables": spec[part]}
         log(f"feed {sport} {part}: {n / 1e6:.1f} MB")
         if part == "reference":
@@ -103,6 +106,39 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
     manifest["published_at"] = datetime.now().isoformat(timespec="seconds")
     (d / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return manifest
+
+
+PUSH_ENV = "IVAN_FEED_PUSH"      # e.g. ivan-server:/opt/ivan/app/data/feed  (rsync destination, the consumer's feed dir)
+
+
+def push(sport: str, dest: Optional[str] = None, out_dir: Path = FEED_DIR, log: Log = print, timeout: int = 120) -> bool:
+    """
+    Copy the published bundles to another machine with rsync (over ssh): the
+    consumer then pulls from its own disk (IVAN_FEED_URL=file:///.../data/feed).
+    The manifest goes last so a reader never sees a new manifest with an old
+    bundle. dest defaults to $IVAN_FEED_PUSH; nothing happens when it is unset.
+    """
+    dest = dest or os.environ.get(PUSH_ENV, "").strip()
+    if not dest:
+        return False
+    src = Path(out_dir) / sport
+    if not (src / "manifest.json").exists():
+        return False
+    target = dest.rstrip("/") + f"/{sport}/"
+    ssh = "ssh -o BatchMode=yes -o ConnectTimeout=10"
+    base = ["rsync", "-az", "--delete", "-e", ssh]
+    try:
+        host, _, remote_dir = target.partition(":")                      # rsync does not create parent directories
+        if remote_dir:
+            subprocess.run(ssh.split() + [host, f"mkdir -p '{remote_dir}'"], check=True, capture_output=True, timeout=timeout)
+        subprocess.run(base + ["--exclude", "manifest.json", f"{src}/", target], check=True, capture_output=True, timeout=timeout)
+        subprocess.run(base + [str(src / "manifest.json"), target], check=True, capture_output=True, timeout=timeout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        err = (getattr(e, "stderr", b"") or b"").decode(errors="replace").strip().splitlines()
+        log(f"feed {sport}: push to {dest} failed: {err[-1] if err else type(e).__name__}")
+        return False
+    log(f"feed {sport}: pushed to {dest}")
+    return True
 
 
 def _read_manifest(d: Path) -> dict:

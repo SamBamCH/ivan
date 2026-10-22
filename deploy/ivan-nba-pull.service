@@ -1,5 +1,5 @@
 # Pull the NBA data feed from the producer (ivan.core.feed) and re-project with this machine's edits.
-# A *user* unit; installed by deploy/install_nba_timers.sh --pull. Needs IVAN_FEED_URL and IVAN_FEED_TOKEN in .env.
+# A *user* unit; installed by deploy/install_nba_timers.sh --pull. Needs IVAN_FEED_URL in .env (file:///.../data/feed when the producer pushes here; http://host:8790 + IVAN_FEED_TOKEN for a feed server).
 [Unit]
 Description=Ivan NBA feed pull
 

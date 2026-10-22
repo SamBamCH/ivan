@@ -1,9 +1,9 @@
 [Unit]
-Description=Ivan NBA feed pull, every 15 minutes
+Description=Ivan NBA feed pull, every 5 minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=15min
+OnUnitActiveSec=5min
 AccuracySec=1min
 Persistent=true
 

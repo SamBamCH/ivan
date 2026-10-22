@@ -177,6 +177,7 @@ def main() -> int:
         try:
             from ivan.core import feed
             feed.publish("nba", which="live", log=log.info)
+            feed.push("nba", log=log.info)                  # to the server when IVAN_FEED_PUSH is set
         except Exception as e:   # noqa: BLE001 - the feed is a convenience for the other machine
             log.warning(f"feed publish failed: {type(e).__name__}: {e}")
     return 0
