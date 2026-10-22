@@ -44,6 +44,7 @@
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
   table.rot-grid td.cell.on { background:var(--accent) } table.rot-grid td.cell:hover { outline:1px solid #333 } table.rot-grid .q { border-left:2px solid #bbb }
   table.rot-grid td.cnt { font-size:9px; color:var(--ok) } table.rot-grid td.cnt.bad { color:#fff; background:var(--bad); font-weight:700 }
+  table.rot-grid tr.outrow td.rn { color:#aaa; text-decoration:line-through } table.rot-grid tr.outrow td.cell.on { background:#e8a0a0 } table.rot-grid tr.outrow td.cell { cursor:not-allowed }
   .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
@@ -170,13 +171,17 @@
     rows.forEach(tr => { const cells = tr.querySelectorAll("td.cell"); let n = 0; cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; counts[i]++; } }); tr.querySelector("td.rm").textContent = n; });
     grid.querySelectorAll("tfoot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
   }
+  function setCell(cell, on) {
+    if (cell.closest("tr").classList.contains("outrow") && on) return;     // an out player can only be painted off
+    cell.classList.toggle("on", on);
+  }
   document.body.addEventListener("mousedown", e => {
     const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
-    paint = !cell.classList.contains("on"); cell.classList.toggle("on", paint); rotRefresh(cell.closest("table.rot-grid")); e.preventDefault();
+    paint = !cell.classList.contains("on"); setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid")); e.preventDefault();
   });
   document.body.addEventListener("mouseover", e => {
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
-    cell.classList.toggle("on", paint); rotRefresh(cell.closest("table.rot-grid"));
+    setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
   });
   document.addEventListener("mouseup", () => { paint = null; });
   document.body.addEventListener("click", e => {

@@ -43,6 +43,8 @@ OT_PERIOD = 300.0
 SEGMENTS = 8                      # six-minute segments of regulation
 SEG_LEN = 2880.0 / SEGMENTS
 _CLOCK = re.compile(r"PT(\d+)M([\d.]+)S")
+SETTLE_IN = True           # a player whose first substitution of a period is an 'in' sat the break
+SETTLE_OUT = False         # (the 'out' inference was measured to hurt: 386 vs 64 mismatches on 110 games; off)
 
 
 class NBAStint(NBABase):
@@ -65,6 +67,7 @@ class NBAStint(NBABase):
     margin_out  = Column(Integer, nullable=True)
     to_buzzer   = Column(Integer, nullable=True)                    # 1 when the stint ended with the game
     starter     = Column(Integer, nullable=True)
+    raw_ratio   = Column(Float, nullable=True)                      # raw stint total / box minutes (far from 1 = a missed substitution)
 
 
 def ensure_tables(engine) -> None:
@@ -158,21 +161,52 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
     # PBP uses last names; map through the box: last name -> normalized full name within the team
     by_team_last: Dict[str, Dict[str, List[str]]] = {}
     for r in box.itertuples():
-        n = normalize_name(r.player_name)
-        by_team_last.setdefault(r.team_abbreviation, {}).setdefault(n.split()[-1], []).append(n)
-        by_team_last[r.team_abbreviation].setdefault(n.replace(" ", ""), []).append(n)
+        n = normalize_name(r.player_name); toks = n.split()
+        d = by_team_last.setdefault(r.team_abbreviation, {})
+        for key in {toks[-1], n.replace(" ", ""), "".join(toks[1:]) if len(toks) > 1 else toks[-1]}:   # 'alexander', 'shaigilgeousalexander', 'gilgeousalexander'
+            d.setdefault(key, []).append(n)
 
-    def resolve(team: str, label: str) -> Optional[str]:
+    on: Dict[str, set] = {}; entry: Dict[str, Tuple[float, int, int]] = {}
+
+    def resolve(team: str, label: str, initial: Optional[str] = None, prefer_off: bool = False, strict: bool = False) -> Optional[str]:
+        """A play-by-play label ('Towns', 'K. Towns', 'Jones') -> the box score's normalized name on that team.
+        Two players sharing a last name are told apart by the initial (the action's playerNameI) or, for a player
+        coming in, by who is off the floor."""
         lab = normalize_name(str(label or ""))
         if not lab:
             return None
-        cands = by_team_last.get(team, {}).get(lab.split()[-1], []) or by_team_last.get(team, {}).get(lab.replace(" ", ""), [])
+        d = by_team_last.get(team, {})
+        cands = d.get(lab.replace(" ", ""), []) or d.get(lab.split()[-1], [])     # a hyphenated surname first ('gilgeous alexander' -> 'gilgeousalexander')
+        cands = list(dict.fromkeys(cands))
         if len(cands) == 1:
             return cands[0]
-        full = [c for c in cands if c == lab or c.endswith(lab)]
-        return full[0] if len(full) == 1 else (cands[0] if cands else None)
+        if not cands:
+            return None
+        full = [c for c in cands if c == lab or c.endswith(" " + lab)]
+        if len(full) == 1:
+            return full[0]
+        toks = lab.split()
+        if len(toks) > 1:                                       # 'jal williams' (an abbreviated first name) -> jalen, not jaylin
+            by_first = [c for c in cands if c.split()[0].startswith(toks[0])]
+            if len(by_first) == 1:
+                return by_first[0]
+        ini = normalize_name(str(initial or "")).split()[0][:1] if initial else ""
+        if ini:
+            by_ini = [c for c in cands if c[:1] == ini]
+            if len(by_ini) == 1:
+                return by_ini[0]
+        if strict:
+            return None                                          # ambiguous: the caller would rather not guess
+        if prefer_off:
+            off = [c for c in cands if c not in on.get(team, set())]
+            if len(off) == 1:
+                return off[0]
+        else:
+            on_now = [c for c in cands if c in on.get(team, set())]
+            if len(on_now) == 1:
+                return on_now[0]
+        return cands[0]
 
-    on: Dict[str, set] = {}; entry: Dict[str, Tuple[float, int, int]] = {}
     rows = []
     starters = {t: {normalize_name(r.player_name) for r in box[box.team_abbreviation == t].itertuples() if str(r.position).upper() != "BENCH" and float(r.minutes or 0) > 0} for t in teams}
     for t in teams:
@@ -194,6 +228,28 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
             return
         entry[name] = (at, period, margin_for(team, mh)); on[team].add(name)
 
+    # the substitution log misses the period breaks: a player whose first sub event of a period is an "in" was off at the
+    # break, one whose first event is an "out" was on. Resolve them up front per period so the break can be settled at once.
+    first_event: Dict[Tuple[int, str], str] = {}
+    for r in pbp.itertuples():
+        if str(r.actionType).lower() != "substitution" or r.teamTricode not in on:
+            continue
+        sub_in, sub_out = _sub_names(r.description); period = int(r.period)
+        for lab, kind in ((sub_out, "out"), (sub_in, "in")):
+            nm = resolve(r.teamTricode, lab, initial=getattr(r, "playerNameI", None) if kind == "out" else None, strict=True)
+            if nm and (period, nm) not in first_event:
+                first_event[(period, nm)] = kind
+
+    def settle_break(period: int, mh: int):
+        start = period_start_elapsed(period)
+        for t in teams:
+            for nm in list(on[t]):
+                if SETTLE_IN and first_event.get((period, nm)) == "in":          # recorded coming in later: he sat the break
+                    close(nm, t, start, period, mh, False); on[t].discard(nm)
+            for (pp, nm), kind in first_event.items():
+                if SETTLE_OUT and pp == period and kind == "out" and nm not in entry and nm in {normalize_name(x) for x in box[box.team_abbreviation == t].player_name}:
+                    open_(nm, t, start, period, mh)              # recorded going out later without coming in: he started the period
+
     period_seen: Dict[str, set] = {}
     cur_period = 1
     for r in pbp.itertuples():
@@ -201,11 +257,13 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
         team = r.teamTricode if r.teamTricode in on else None
         if period != cur_period:
             cur_period = period; period_seen = {t: set() for t in teams}
+            settle_break(period, mh)
         if str(r.actionType).lower() == "substitution":
             if team is None:
                 continue
             sub_in, sub_out = _sub_names(r.description)
-            n_in, n_out = resolve(team, sub_in), resolve(team, sub_out)
+            n_out = resolve(team, sub_out, initial=getattr(r, "playerNameI", None))      # the action's player is the one going out
+            n_in = resolve(team, sub_in, prefer_off=True)
             if n_out and n_out in entry:
                 close(n_out, team, at, period, mh, False); on[team].discard(n_out)
             if n_in:
@@ -233,9 +291,10 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
     if df.empty:
         return df
     df["minutes"] = (df.end_sec - df.start_sec) / 60.0
-    # scale every player's stints to his box minutes
+    # scale every player's stints to his box minutes; a raw total far from the box means a substitution was missed
     box_min = {normalize_name(r.player_name): float(r.minutes or 0) for r in box.itertuples()}
     tot = df.groupby("player_name").minutes.transform("sum")
+    df["raw_ratio"] = tot / df.player_name.map(box_min).replace(0, np.nan)
     df["minutes"] = df.minutes * df.player_name.map(box_min).fillna(0) / tot.replace(0, np.nan)
     df["minutes"] = df.minutes.fillna(0.0)
     df = df.sort_values(["team", "player_name", "start_sec"]).reset_index(drop=True)

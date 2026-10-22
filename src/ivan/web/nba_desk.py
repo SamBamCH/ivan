@@ -138,35 +138,65 @@ class Desk:
             out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
         return out
 
-    def rotation(self, team: str) -> dict:
-        """The team's rotation grid: the drawn one when it exists, else the model's proposal from the stints."""
+    def rotation(self, team: str, source: str = "auto") -> dict:
+        """
+        The team's rotation grid. source: "auto" = the drawn grid when one exists, else the team's last game;
+        "last" = the last game; "propose" = the model's proposal from the players' stint curves.
+        Players who are out stay in a last-game grid with their minutes, marked so they can be reallocated.
+        """
         from ivan.sports.nba.projection.live import OUT_STATUSES
         players = self.players(team)
         names = {normalize_name(p.name): p for p in players}
-        avail = [n for n, p in names.items() if (p.status or "").upper() not in OUT_STATUSES and (override_of(self.overrides, n).get("minutes") is None or override_of(self.overrides, n).get("minutes") > 0)]
+        is_out = {n: (p.status or "").upper() in OUT_STATUSES or (override_of(self.overrides, n).get("minutes") is not None and override_of(self.overrides, n).get("minutes") <= 0)
+                  for n, p in names.items()}
+        avail = [n for n in names if not is_out[n]]
         starters = self.slate.starters.get(team) or set()
         curve = ROT.curves(self.session, players=list(names), n_games=10)
-        prior = {n: salary_prior_minutes(p.salary) for n, p in names.items()}
-        drawn = ROT.load_drawn(team)
-        proposal = ROT.propose(curve, avail, [n for n in avail if n in starters], salary_prior=prior) if avail else None
-        grid = drawn if drawn is not None else proposal
+        drawn = ROT.load_drawn(team) if source == "auto" else None
+        today = datetime.now().date(); season_start = date(today.year if today.month >= 10 else today.year - 1, 10, 1)
+        last = ROT.last_game_grid(self.session, team, since=season_start) if source in ("auto", "last") and drawn is None else None
+        kind = "drawn" if drawn is not None else ("last" if last is not None else "propose")
+        if kind == "drawn":
+            grid = drawn
+        elif kind == "last":
+            grid = last["grid"]
+            if source == "auto" and len(last["grid"]) and ROT.column_counts(last["grid"]).count(5) < 30:
+                kind = "propose"; last = None                    # a broken reconstruction: fall back to the proposal
+        if kind == "propose":
+            prior = {n: salary_prior_minutes(p.salary) for n, p in names.items()}
+            grid = ROT.propose(curve, avail, [n for n in avail if n in starters], salary_prior=prior) if (avail and not curve.empty) else None
+        if kind == "last" and last is not None:
+            pass
         if grid is None:
-            return dict(team=team, rows=[], counts=[], drawn=False, has_history=len(curve) > 0)
-        # keep the drawn grid aligned with tonight's roster: new players appear with an empty row
-        for n in avail:
+            return dict(team=team, rows=[], counts=[], drawn=False, kind="none", has_history=len(curve) > 0, to_reallocate=0, out_names=[])
+        grid = grid.copy()
+        gone = [n for n in grid.index if n not in names and kind == "last"]     # played last game, not on tonight's roster
+        for n in names:                                        # tonight's roster: everyone gets a row
             if n not in grid.index:
                 grid.loc[n] = False
-        grid = grid.loc[[n for n in grid.index if n in avail]]
-        grid = grid.loc[sorted(grid.index, key=lambda n: (-float(grid.loc[n].sum()), -(names[n].salary or 0)))]
-        rows = [dict(name=n, key=n, pos=names[n].position, salary=names[n].salary, starter=n in starters, minutes=int(grid.loc[n].sum()),
+        grid = grid.loc[[n for n in grid.index if n in names or n in gone]]
+        if kind != "last":                                     # only a last-game grid keeps out players' minutes on show
+            for n in grid.index:
+                if n in is_out and is_out[n]:
+                    grid.loc[n] = False
+        def unavailable(n):
+            return n in gone or is_out.get(n, False)
+        grid = grid.loc[sorted(grid.index, key=lambda n: (unavailable(n), -float(grid.loc[n].sum()), -((names[n].salary if n in names else 0) or 0)))]
+        rows = [dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, starter=n in starters,
+                     out=unavailable(n), gone=n in gone, minutes=int(grid.loc[n].sum()),
                      hist=None if n not in curve.index else float(curve.loc[n, "minutes"]), cells=[bool(x) for x in grid.loc[n].values]) for n in grid.index]
-        return dict(team=team, rows=rows, counts=ROT.column_counts(grid), drawn=drawn is not None, has_history=len(curve) > 0,
-                    curve_games=int(curve.games.max()) if len(curve) else 0)
+        out_rows = [r for r in rows if r["out"] and r["minutes"] > 0]
+        return dict(team=team, rows=rows, counts=ROT.column_counts(grid), drawn=kind == "drawn", kind=kind, has_history=len(curve) > 0,
+                    curve_games=int(curve.games.max()) if len(curve) else 0, last_game=None if last is None else last["game_date"],
+                    to_reallocate=int(sum(r["minutes"] for r in out_rows)), out_names=[r["name"] for r in out_rows])
 
     def apply_rotation(self, team: str, players: list[str], grid: list[list[int]], note: str = "") -> int:
-        """Save a drawn grid and pin every drawn player's minutes to his row (0 minutes = scratched)."""
+        """Save a drawn grid and pin every available drawn player's minutes to his row (0 minutes = scratched); out players' rows are dropped."""
         import pandas as pd
+        from ivan.sports.nba.projection.live import OUT_STATUSES
+        status = {normalize_name(p.name): (p.status or "").upper() for p in self.players(team)}
         g = pd.DataFrame(np.array(grid, dtype=bool), index=[normalize_name(n) for n in players], columns=list(range(ROT.MINUTES)))
+        g = g.loc[[n for n in g.index if status.get(n, "") not in OUT_STATUSES]]
         ROT.save_drawn(team, g, note)
         for n, m in ROT.minutes_of(g).items():
             self.set_override(n, minutes=float(m))
@@ -457,10 +487,10 @@ async def rotation_apply(request: Request, team: str):
 
 
 @app.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
-def rotation_propose(request: Request, team: str):
+def rotation_propose(request: Request, team: str, source: str = Form("propose")):
+    """Show the model's proposal (source=propose) or the last game (source=last) without applying it."""
     with LOCK:
-        ROT.clear_drawn(team)
-        return _render(request, "_nba_rotation.html", rot=desk.rotation(team))
+        return _render(request, "_nba_rotation.html", rot=desk.rotation(team, source=source if source in ("last", "propose") else "propose"))
 
 
 @app.post("/team/{team}/rotation/clear", response_class=HTMLResponse)

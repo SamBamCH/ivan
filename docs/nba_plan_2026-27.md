@@ -263,6 +263,16 @@ accounts for it; band spreads are wider for new-team (x1.3) and no-history
 The desk's edits remain the main instrument while minutes are this
 uncertain; standings still need the one-time Chrome login.
 
+Rotation grid default (2026-10-22, Sam): the team's last game this season as
+it was played (`rotation.last_game_grid`), with players now out or gone from
+the roster kept in it, struck through, their minutes shown as "to
+reallocate"; the history proposal is a second button and the fallback for a
+team without a game yet. Stint reconstruction fixes on the way: hyphenated
+and abbreviated names in the substitution log ('Gilgeous-Alexander', 'Jal.
+Williams'), and a player whose first substitution of a period is an "in" is
+taken to have sat the period break (measured on 110 games: mean |raw - box|
+0.74 -> 0.36 min; the symmetric "out" inference hurt and is off).
+
 ## Phase 1: capture from opening night (must be live Thursday)
 
 The data captured from the first game day is the asset; the UI can wait.

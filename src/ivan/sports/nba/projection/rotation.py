@@ -250,6 +250,34 @@ def column_counts(grid: pd.DataFrame) -> List[int]:
     return [int(x) for x in grid.sum(axis=0).values]
 
 
+# ----------------------------------------------------------------------------- the last game's rotation
+def last_game_grid(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None) -> Optional[dict]:
+    """
+    The team's most recent game as a grid (index player, columns 0..47; a minute is
+    on when the player was on the floor for at least half of it; overtime folded
+    into the last minute), with the game id and date. None when the team has no
+    stints (since `since`, when given: the desk asks for this season only).
+    """
+    q = text("select game_id, game_date from nba_stint where team = :t" + (" and game_date < :d" if before else "") + (" and game_date >= :s" if since else "")
+             + " order by game_date desc, game_id desc limit 1")
+    row = session.execute(q.bindparams(t=team, **({"d": before.isoformat()} if before else {}), **({"s": since.isoformat()} if since else {}))).first()
+    if row is None:
+        return None
+    gid, gdate = row
+    st = pd.read_sql(text("select player_name, start_sec, end_sec, minutes from nba_stint where game_id = :g and team = :t").bindparams(g=gid, t=team), session.get_bind())
+    names = list(dict.fromkeys(st.player_name))
+    grid = np.zeros((len(names), MINUTES), dtype=bool)
+    for i, nm in enumerate(names):
+        for a, b in zip(st[st.player_name == nm].start_sec, st[st.player_name == nm].end_sec):
+            b = min(float(b), 2880.0)
+            for m in range(int(a // 60), min(MINUTES, int(np.ceil(b / 60.0)))):
+                if min(b, (m + 1) * 60) - max(a, m * 60) >= 30:
+                    grid[i, m] = True
+    g = pd.DataFrame(grid, index=names, columns=list(range(MINUTES)))
+    g = g.loc[sorted(g.index, key=lambda n: -int(g.loc[n].sum()))]
+    return {"grid": g, "game_id": str(gid), "game_date": str(gdate)}
+
+
 # ----------------------------------------------------------------------------- drawn rotations
 def drawn_path(team: str) -> Path:
     return ROTATIONS_DIR / f"{team}.json"
