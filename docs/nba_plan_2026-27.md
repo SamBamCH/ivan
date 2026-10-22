@@ -301,8 +301,12 @@ consumer: a 5-minute pull timer applies whatever landed in its own
 `data/feed` (`IVAN_FEED_URL=file:///opt/ivan/app/data/feed`), and it hosts
 the brother's desk at http://ivan.prattflix.com/nba/ (the NBA desk is
 mounted inside the NFL web app, which already owns that name on the tailnet;
-`IVAN_DESK_PASSWORD` in the server's .env puts a login page in front of /nba
-only). When the laptop is asleep the server's slate goes stale; the feed
+`IVAN_DESK_PASSWORD_HASH` in the server's .env puts a login page in front of
+/nba only: `scripts/desk_password.py --set` stores a pbkdf2 hash, the cookie
+is signed with a random secret in `data/.desk_secret`, five misses lock an
+address with doubling waits and thirty misses in ten minutes lock the page;
+the app binds the tailnet address only, so only tailnet members can reach
+it at all). When the laptop is asleep the server's slate goes stale; the feed
 server (`scripts/feed_server.py`, port 8790) remains for the other direction.
 
 Server setup: `deploy/push.sh`, then as the service user

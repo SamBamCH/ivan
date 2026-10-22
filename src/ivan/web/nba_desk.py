@@ -17,6 +17,7 @@ IVAN_DESK_PASSWORD puts a login page in front (ivan.web.auth).
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from datetime import date, datetime
@@ -58,6 +59,7 @@ SCRIPTS = PROJECT_ROOT / "scripts" / "nba"
 PIPELINE_DEFAULTS = {"lineups": 25000, "jobs": 8, "sims": 1000, "field_cap": 10000, "method": "greedy", "min_fpts": "", "randomness": "0.25"}
 pipeline_form: dict = dict(PIPELINE_DEFAULTS)
 
+MAX_UPLOAD = 5 * 1024 * 1024   # the DK entries export is tens of KB
 ROTATION_MIN = 15.0        # a scratch/questionable above this baseline is news
 NEAR_TIP_MIN = 75          # minutes before tip when an unconfirmed lineup becomes a warning
 MINUTES_DEV = 8.0          # model minutes this far from history is a role change
@@ -533,8 +535,19 @@ def publish(request: Request):
 def refresh(request: Request, what: str = Form("dk")):
     """dk: pool + statuses + Rotowire (free). props: also the player props (costs credits)."""
     with LOCK:
+        feed_url = os.environ.get("IVAN_FEED_URL", "").strip()
         dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
-        if dg is None:
+        if feed_url:                                             # a consumer never fetches: it takes what the producer pushed
+            try:
+                from ivan.core import feed
+                changed = feed.pull(feed_url, os.environ.get("IVAN_FEED_TOKEN"), "nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
+                if changed:
+                    project_slate(desk.session, n_sims=1000, log=desk.flash.append)
+                else:
+                    desk.flash.append("feed unchanged since the last pull")
+            except Exception as e:   # noqa: BLE001
+                desk.flash.append(f"feed pull failed: {type(e).__name__}: {e}")
+        elif dg is None:
             desk.flash.append("no draft group in the pool; run ingest first")
         else:
             try:
@@ -543,7 +556,7 @@ def refresh(request: Request, what: str = Form("dk")):
                 project_slate(desk.session, n_sims=1000, log=desk.flash.append)
             except IngestError as e:
                 desk.flash.append(f"refresh failed: {e}")
-            desk.rebuild()
+        desk.rebuild()
     return RedirectResponse(auth.root_of(request) + "/", status_code=303)
 
 
@@ -684,7 +697,11 @@ def pipeline_cancel(request: Request, job_id: str):
 @app.post("/entries", response_class=HTMLResponse)
 async def entries_upload(request: Request, file: UploadFile = File(...)):
     """The DraftKings entries export, saved as the configured entries file."""
-    data = await file.read()
+    data = await file.read(MAX_UPLOAD + 1)
+    if len(data) > MAX_UPLOAD or not (file.filename or "").lower().endswith(".csv"):
+        with LOCK:
+            desk.flash.append("entries upload refused: a .csv under 5 MB, please")
+            return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
     with LOCK:
         p = _entries_path(); p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
