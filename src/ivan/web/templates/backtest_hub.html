@@ -102,12 +102,16 @@
 <form method="post" action="/backtest/{{ run.name }}/contests">
   <div class="card">
     <h2>Contests <span class="muted small">tick what to enter; entries default to the contest's limit (the pool's defaults are pre-ticked)</span></h2>
+    <p class="small muted" style="margin:0 0 6px">A slate's own box ticks or unticks all of its contests.
+      Keep only: <button type="button" class="small" data-only="showdown">showdowns</button> <button type="button" class="small" data-only="classic">classics</button>
+      · <button type="button" class="small" data-only="all">tick all</button> <button type="button" class="small" data-only="none">untick all</button></p>
     <table class="compact contests">
       <tr><th></th><th>Contest</th><th class="num">Fee</th><th class="num">Size</th><th class="num">Entries (max)</th><th>Payouts</th><th>Scraped</th><th class="num">Ours</th></tr>
       {% for s in slates %}
-      <tr class="slatehead"><td colspan="8">{{ s.lock }} · {{ s.mode }} · slate {{ s.slate_key }} <span class="muted small">largest {{ s.contests|length }} of {{ s.n_total }} contests · {{ s.status }}</span></td></tr>
+      <tr class="slatehead"><td><input type="checkbox" class="slate-all" data-slate="{{ s.slate_key }}" data-mode="{{ s.mode }}" title="tick or untick every contest of this slate"></td>
+        <td colspan="7">{{ s.lock }} · {{ s.mode }} · slate {{ s.slate_key }} <span class="muted small">largest {{ s.contests|length }} of {{ s.n_total }} contests · {{ s.status }}</span></td></tr>
       {% for c in s.contests %}
-      <tr><td><input type="checkbox" name="pick" value="{{ c.contest_id }}" {% if c.picked %}checked{% endif %}></td>
+      <tr><td><input type="checkbox" name="pick" value="{{ c.contest_id }}" data-slate="{{ s.slate_key }}" {% if c.picked %}checked{% endif %}></td>
         <td>{{ c.name }} <span class="muted small">{{ c.contest_id }}</span></td><td class="num">{{ c.fee }}</td><td class="num">{{ c.size }}</td>
         <td class="num"><input type="number" name="entries_{{ c.contest_id }}" value="{{ c.entries }}" min="1" max="{{ c.max_entries }}" style="width:64px" title="max {{ c.max_entries }}"></td>
         <td>{% if c.payouts %}yes{% else %}<span class="neg">no</span>{% endif %}</td><td>{% if c.scraped %}yes{% else %}<span class="neg">no</span>{% endif %}</td><td class="num">{{ c.ours }}</td></tr>
@@ -118,6 +122,27 @@
     <p class="muted small" style="margin:6px 0 0">Unscraped contests run but do not settle (no real field to place the entries in); contests without payouts cannot be simulated.</p>
     <div class="actions" style="margin-top:10px"><button class="small" {% if not slates %}disabled{% endif %}>Next: parameters →</button></div>
   </div>
+  <script>
+    // the slate boxes tick or untick a whole slate (and show a dash when a slate is partly ticked); "keep only" unticks the other mode's slates
+    (function () {
+      const form = document.currentScript.closest('form');
+      const picks = key => form.querySelectorAll('input[name=pick][data-slate="' + key + '"]');
+      const heads = form.querySelectorAll('input.slate-all');
+      const sync = h => { const ps = [...picks(h.dataset.slate)], n = ps.filter(p => p.checked).length;
+                          h.checked = n > 0 && n === ps.length; h.indeterminate = n > 0 && n < ps.length; };
+      heads.forEach(h => { sync(h); h.addEventListener('change', () => { picks(h.dataset.slate).forEach(p => p.checked = h.checked); h.indeterminate = false; }); });
+      form.querySelectorAll('input[name=pick]').forEach(p => p.addEventListener('change', () =>
+        sync(form.querySelector('input.slate-all[data-slate="' + p.dataset.slate + '"]'))));
+      form.querySelectorAll('button[data-only]').forEach(b => b.addEventListener('click', () => {
+        const want = b.dataset.only;
+        heads.forEach(h => {
+          if (want === 'all' || want === 'none') picks(h.dataset.slate).forEach(p => p.checked = want === 'all');
+          else if (h.dataset.mode !== want) picks(h.dataset.slate).forEach(p => p.checked = false);
+          sync(h);
+        });
+      }));
+    })();
+  </script>
 </form>
 {% endif %}
 

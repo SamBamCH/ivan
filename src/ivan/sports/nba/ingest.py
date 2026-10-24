@@ -27,14 +27,14 @@ from sqlalchemy.orm import Session
 from ivan.core import raw
 from ivan.core.archive import archive_slate, ensure_tables as ensure_archive_tables
 from ivan.core.config import require_env
-from ivan.core.utils import normalize_name
+from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import add_missing_columns
 from ivan.sports.common.draftkings import (get_players_for_slate, _derive_opponent_for_player,
                                            _parse_gametime_to_local, list_slates)
 from ivan.sports.common.odds import get_game_odds, get_odds, parse_game_odds, parse_odds
 from ivan.sports.nba.historical.data_fetch import fetch_rotowire_html, parse_rotowire, store_starting_lineups
 from ivan.sports.nba.models import (NBABase, NBAGameOdds, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
-from ivan.sports.nba.paths import OUTPUT_DIR
+from ivan.sports.nba.paths import INPUT_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
 from ivan.sports.nba.projection.market import NBA_MARKETS, market_means
@@ -211,6 +211,27 @@ def one_transaction(session: Session):
         raise
 
 
+def retire_edits(old_draft_group: int, log: Log = print) -> None:
+    """
+    Edits are per slate: when the pool moves to another slate the minute / rate / starter pins and the drawn rotation grids
+    are filed under data/nba/input/edits/<old draft group>/ and the live files start empty (a pin on a name would otherwise
+    follow him to every later slate; a drawn grid from one night stretched a player's draw the next, 2026-10-23).
+    """
+    import shutil
+    from ivan.sports.nba.projection.rotation import ROTATIONS_DIR
+    keep = INPUT_DIR / "edits" / str(old_draft_group)
+    moved = 0
+    if MINUTES_OVERRIDES_CSV.exists():
+        keep.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(MINUTES_OVERRIDES_CSV), str(keep / MINUTES_OVERRIDES_CSV.name)); moved += 1
+    if ROTATIONS_DIR.exists():
+        for f in ROTATIONS_DIR.glob("*.json"):
+            keep.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(keep / f.name)); moved += 1
+    if moved:
+        log(f"slate changed: {moved} edit file(s) of slate {old_draft_group} filed under {keep.relative_to(PROJECT_ROOT)}; the new slate starts clean")
+
+
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
                  log: Log = print) -> tuple:
     """
@@ -219,6 +240,9 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     (2026-10-23: a sim started during a rewrite found no point guard). Returns (StoreInfo, ProjectInfo).
     """
     fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
+    current = session.query(NBAPlayer.draft_group_id).first()
+    if current and current[0] and int(current[0]) != int(draft_group_id):
+        retire_edits(int(current[0]), log=log)                 # a new slate starts clean: pins and drawn rotations belong to the old one
     with one_transaction(session):
         info = store_slate(session, fetched, log=log)
         pinfo = project_slate(session, n_sims=n_sims, log=log)

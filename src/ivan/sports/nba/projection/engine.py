@@ -38,6 +38,8 @@ class RosterPlayer:
     games_this_season: int = 0
     minutes_low: float | None = None               # hand-set 10-90 minutes band (team model: the player's own noise scale)
     minutes_high: float | None = None
+    position: str | None = None                    # DK eligibility ("PF/C"): the minutes solve's position group
+    market_means: dict[str, float] | None = None   # stat -> the books' consensus mean: the solve's book-implied minutes anchor
 
 
 @dataclass
@@ -59,6 +61,7 @@ class ProjectionParams:
     salary_blend: bool = True            # blend the minutes baseline toward the salary curve (minutes.salary_weight)
     spread: float | None = None          # the team's own line for the team draw (negative = favoured); None = pick'em
     team_params: dict | None = None      # team_minutes.load_params() when None
+    group_targets: dict | None = None    # alloc "solve": position group -> (target minutes, sd) for this team (groups.group_targets)
 
     @classmethod
     def from_config(cls, config: dict | None = None, **overrides) -> "ProjectionParams":
@@ -70,7 +73,7 @@ class ProjectionParams:
             except Exception:   # noqa: BLE001 - no config file is a plain default
                 config = {}
         block = (config or {}).get("projection") or {}
-        kw = {k: block[k] for k in ("minutes_model", "n_sims", "market_weight", "recovery", "rebalance", "salary_blend") if k in block}
+        kw = {k: block[k] for k in ("minutes_model", "n_sims", "market_weight", "recovery", "rebalance", "salary_blend", "alloc") if k in block}
         kw.update(overrides)
         return cls(**kw)
 
@@ -93,6 +96,29 @@ def fit_draw_to_mean(draw: np.ndarray, a_min: float, sd: float, rng: np.random.G
     if mu >= GRID_SHAPE_MIN * a_min:
         return np.clip(draw * (a_min / mu), 0.0, MAX_MINUTES)
     return np.clip(rng.normal(a_min, max(sd, 1.0), n), 0.0, MAX_MINUTES)
+
+
+def solve_allocation(avail, recs, state, history, params):
+    """The solve's anchors from the roster: (alloc frame like allocate_team_minutes', {name: book minutes})."""
+    from .book_minutes import book_minutes
+    from .groups import group_of
+    from .solve import Anchor, BOOK_SD, DEEP_SD, EDIT_SD, HIST_SD, NOHIST_SD, solve
+    anchors, book = [], {}
+    for p in avail:
+        rec = recs[p.name]; base = float(rec["baseline"]); grp = group_of(p.position or "")
+        bm = book_minutes(p.market_means or {}, state.loc[p.name] if p.name in state.index else None, history.league_rates) if p.market_means else None
+        if p.minutes_override is not None:
+            anchors.append(Anchor(p.name, float(p.minutes_override), EDIT_SD, grp, source="edit"))
+        elif bm is not None and base >= 8:
+            anchors.append(Anchor(p.name, float(bm["minutes"]), BOOK_SD, grp, source="book")); book[p.name] = float(bm["minutes"])
+        else:
+            sd = NOHIST_SD if rec["games"] == 0 else (HIST_SD if base >= 12 else DEEP_SD)
+            anchors.append(Anchor(p.name, max(0.0, base), sd, grp, source="history" if base >= 8 else "deep"))
+    sol = solve(anchors, params.group_targets or {})
+    names = [p.name for p in avail]
+    return (pd.DataFrame({"baseline": [recs[n]["baseline"] for n in names], "minutes": [sol.minutes[n] for n in names],
+                          "pinned": [next(p for p in avail if p.name == n).minutes_override is not None for n in names]},
+                         index=pd.Index(names, name="player_name")), book)
 
 
 def project_team(
@@ -143,7 +169,13 @@ def project_team(
     avail = [p for p in roster if p.available]
     absent = [p for p in roster if not p.available]
     budget = None
-    if not params.rebalance and any(p.minutes_override is not None for p in avail):
+    if params.alloc == "solve":
+        # one solve per team: the books' implied minutes anchor priced players, history the rest, a hand pin is held almost
+        # exactly, the team sums to its budget within the position groups (projection/solve.py; docs/nba_minutes_model_plan.md)
+        alloc, book = solve_allocation(avail, recs, state, history, params)
+        for n, bm in book.items():
+            recs[n]["book_minutes"] = bm
+    elif not params.rebalance and any(p.minutes_override is not None for p in avail):
         # hand-set minutes do not move anyone else: the others keep the model's own allocation, every player is then
         # fixed, and the team total is whatever that adds to (the desk shows the minutes still to place)
         base = allocate_team_minutes([replace(recs[p.name]["inputs"], minutes_override=None) for p in avail],
@@ -153,9 +185,21 @@ def project_team(
                 recs[p.name]["inputs"] = replace(recs[p.name]["inputs"], minutes_override=float(base.loc[p.name, "minutes"]))
                 recs[p.name]["soft_pin"] = True
         budget = float(sum(recs[p.name]["inputs"].minutes_override for p in avail))
-    alloc = allocate_team_minutes([recs[p.name]["inputs"] for p in avail],
-                                  start_shift=params.start_shift, alloc=params.alloc,
-                                  cut_tau=params.cut_tau)
+    if params.alloc != "solve":
+        alloc = allocate_team_minutes([recs[p.name]["inputs"] for p in avail],
+                                      start_shift=params.start_shift, alloc=params.alloc,
+                                      cut_tau=params.cut_tau)
+    if params.alloc == "solve":
+        # a priced player's total is the books': his per-minute rate is the market mean over his solved minutes
+        for p in avail:
+            if p.market_means and recs[p.name]["priced"]:
+                mins = float(alloc.loc[p.name, "minutes"])
+                if mins > 0:
+                    r = dict(recs[p.name]["rates"])
+                    for st, mean in p.market_means.items():
+                        if st in r and mean is not None and not (isinstance(mean, float) and np.isnan(mean)):
+                            r[st] = float(mean) / mins
+                    recs[p.name]["rates"] = r; recs[p.name]["fpm"] = fpts_per_minute(r)
     if budget is not None:
         alloc["pinned"] = [not recs[n].get("soft_pin") for n in alloc.index]        # only the hand pins count as pins
     alloc["fpm"] = [recs[n]["fpm"] for n in alloc.index]

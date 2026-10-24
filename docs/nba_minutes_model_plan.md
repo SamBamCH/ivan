@@ -78,12 +78,26 @@ Backtest on this season's slates (props at lock) and last season's 11 days with 
 - fantasy points mean miss for priced and unpriced players.
 Against: the current model and book minutes alone. Ship only if it beats both; the desk switches after that.
 
+## Engine backtest (2026-10-24): headroom allocator vs the solve on the real code path
+
+project_team with actual availability, this season's 7 pre-lock captures (801 projected player-games) and last season's 11
+historical-props days (1,430):
+
+| | minutes MAE this / last | fpts MAE (played) this / last | priced minutes this / last | unpriced rotation minutes this / last |
+|---|---|---|---|---|
+| headroom (old) | 5.34 / 5.17 | 7.48 / 8.13 | 4.77 / 4.95 | 6.10 / 7.33 |
+| solve | 5.43 / 5.16 | 7.25 / 7.78 | 4.42 / 4.96 | 6.63 / 7.04 |
+
+Fantasy points improve on both windows (the thing that pays); minutes tie overall; priced players improve this season; this
+season's unpriced rotation is the one loss (early-season group targets on 3-6 games). Switched: config projection.alloc = solve.
+Both allocators over-project priced players' points this season (+2 to +3 bias): the books themselves ran high in week 1.
+
 ## Steps
 
 1. DONE 2026-10-23: substitution pairs measured (diffuse, not predictive) and position groups (a real bias, removed by a
    group tilt held out). Analysis script: the job tmp repl_test.py; pairs code kept in projection/replacements.py.
-2. Position budgets per team from stints.
-3. The solve (projection/solve.py) with anchors and constraints; unit tests on hand-built teams.
-4. Backtest harness for minutes + fpts on both windows; compare.
-5. Desk minutes editor on the solve.
+2. DONE: position budgets per team (projection/groups.py; noisy: sd floor 8, half-life 10 games).
+3. DONE: the solve (projection/solve.py) + engine.solve_allocation (alloc = "solve"); tests.
+4. DONE: backtest on both windows (above); live since 2026-10-24.
+5. DONE: the desk edits one number per player; the engine re-solves the team (balance / re-fill / keep-total removed).
 6. Foul trouble: pre-game range, then the in-game update.

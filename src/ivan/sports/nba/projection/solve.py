@@ -28,6 +28,9 @@ BUDGET = 241.0
 CAP = 42.0
 EDIT_SD = 0.05          # a hand-set number: held almost exactly
 BOOK_SD = 4.0           # the books' implied minutes miss by ~4 (2026-10-23)
+HIST_SD = 5.0           # history anchors: a rotation player (baseline >= 12 minutes)
+DEEP_SD = 6.0           # the end of the bench
+NOHIST_SD = 8.0         # no history at all (a rookie, a two-way call-up): the salary prior
 
 
 @dataclass

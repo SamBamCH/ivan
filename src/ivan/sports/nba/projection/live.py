@@ -99,9 +99,11 @@ class LiveSlate:
                 self.starters_confirmed[r.team] = bool(r.confirmed)
                 self.starters_fetched_at = r.fetched_at or self.starters_fetched_at
         self.market: dict[str, dict[str, float]] = {}
+        self.market_means: dict[str, dict[str, float]] = {}
         if use_market:
             for r in session.query(NBAMarketRate).all():
                 self.market.setdefault(r.player_name, {})[r.stat] = float(r.rate)
+                self.market_means.setdefault(r.player_name, {})[r.stat] = float(r.market_mean)
         self.players = session.query(NBAPlayer).all()
         # games this season per player and per (player, team): the salary blend fades as they arrive
         season_start = date(horizon.year if horizon.month >= 10 else horizon.year - 1, 10, 1)
@@ -133,7 +135,7 @@ class LiveSlate:
                 starter = bool(float(ov["starter"]) > 0)         # the desk's hand call beats Rotowire
             st = self.state.loc[name] if name in self.state.index else None
             roster.append(RosterPlayer(name, not out, starter, p.salary, None if out else pin,
-                                       market_rates=self.market.get(name),
+                                       market_rates=self.market.get(name), market_means=self.market_means.get(name), position=p.position,
                                        rate_mult=(rate_mults or {}).get(name, 1.0), status=status or None,
                                        fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high"),
                                        new_team=bool(st is not None and str(st["team"]) != str(p.team)),
@@ -163,6 +165,19 @@ class LiveSlate:
             grid = propose(curve, avail, starters, salary_prior=prior)
         return {"grid": grid, "spreads": boundary_spreads(self.session, avail), "curve": curve if not curve.empty else None, "drawn": drawn is not None}
 
+    def group_targets(self, team: str) -> dict:
+        """The team's trailing minutes by position group for the solve (groups.group_targets), from the box scores."""
+        from .groups import group_targets, position_map
+        if getattr(self, "_posmap", None) is None:
+            try:
+                self._posmap = position_map(self.session)
+            except Exception:   # noqa: BLE001
+                self._posmap = {}
+        try:
+            return group_targets(self.box, team, datetime.now().date(), self._posmap)
+        except Exception:   # noqa: BLE001 - no targets is a plain solve
+            return {}
+
     def spread(self, team: str) -> float | None:
         """The team's own consensus spread from game_odds (negative = favoured); None when unpriced."""
         if getattr(self, "_lines", None) is None:
@@ -179,6 +194,8 @@ class LiveSlate:
         params = params or ProjectionParams.from_config()
         if params.minutes_model in ("team", "rotation") and params.spread is None:
             params = replace(params, spread=self.spread(team))
+        if params.alloc == "solve" and params.group_targets is None:
+            params = replace(params, group_targets=self.group_targets(team))
         if params.minutes_model == "rotation" and params.rotation is None:
             params = replace(params, rotation=self.rotation_for(team, overrides, forced_out))
         if params.rotation is not None:

@@ -189,8 +189,6 @@ class Desk:
         self.session.expire_all()
         self.slate = LiveSlate(self.session, history=self.history())
         self.pool_stamp = self._stamp(); self.stale = False
-        self.balanced = set()                              # teams whose minutes were set from the books (the unpriced re-fill on every edit)
-        self.fills: dict = {}                              # team -> the unpriced players whose minutes are a re-fill, not a hand pin
         self.overrides = read_overrides_full()            # the file is the source of truth: every edit is written to it
         self.proj, self.hist_only = {}, {}
         self.season = self.season_averages(self.slate.box)
@@ -388,38 +386,6 @@ class Desk:
             return None
         return float(r.loc[name, "fpts_mean"])
 
-    def balance_to_books(self, team: str) -> str:
-        """
-        Priced players at the books' minutes with their totals held; the unpriced available players fill what is left of the
-        team's minutes in proportion to the model's minutes. Hand pins on unpriced players are kept as they are.
-        """
-        rows = [r for r in self.team_rows(team) if not r["out"]]
-        priced = [r for r in rows if r.get("book_min") is not None]
-        if not priced:
-            return "no priced players with book minutes on this team"
-        for r in priced:
-            total = self.priced_total(team, r["key"])
-            self.set_override(r["key"], minutes=float(r["book_min"]), fppm=None if not total else round(total / float(r["book_min"]), 4))
-        self.balanced.add(team)
-        n = self.refill(team, rows)
-        return f"{len(priced)} priced players set to the books' minutes; {n} unpriced players fill the rest"
-
-    def refill(self, team: str, rows: Optional[list] = None) -> int:
-        """The unpriced available players (those not pinned by hand) take what the pinned players leave of the team's minutes."""
-        self.reproject(team)
-        rows = rows or [r for r in self.team_rows(team) if not r["out"]]
-        fixed = [r for r in rows if r.get("book_min") is not None or (r["pinned"] and r["key"] not in self.fills.get(team, set()))]
-        free = [r for r in rows if r not in fixed]
-        left = TEAM_BUDGET - sum(float(override_of(self.overrides, r["key"]).get("minutes") or r["minutes"] or 0.0) for r in fixed)
-        base = {r["key"]: float(self.hist_only[team].loc[r["key"], "minutes"]) if r["key"] in self.hist_only[team].index else float(r["minutes"] or 0.0) for r in free}
-        tot = sum(base.values())
-        self.fills[team] = set()
-        for r in free:
-            m = max(0.0, left) * base[r["key"]] / tot if tot > 0 else 0.0
-            self.set_override(r["key"], minutes=round(m, 1)); self.fills[team].add(r["key"])
-        self.reproject(team)
-        return len(free)
-
     def pins(self) -> dict[str, float]:
         """player -> pinned minutes (the overrides' minutes column only)."""
         return {k: v["minutes"] for k, v in self.overrides.items() if v.get("minutes") is not None}
@@ -579,7 +545,7 @@ class Desk:
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
-                    team_fpts=team_fpts, trailing=self.slate.team_fpts.get(team), rows=rows, balanced=team in self.balanced,
+                    team_fpts=team_fpts, trailing=self.slate.team_fpts.get(team), rows=rows,
                     n_book=sum(1 for r in rows if r.get("book_min") is not None))
 
     def freshness(self, now: datetime) -> list:
@@ -788,46 +754,10 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
             desk.flash.append(f"band {lo:g}–{hi:g} ignored: low must be below high"); lo = hi = None
         new_min, new_fppm = _num(minutes, "minutes"), _num(fppm, "fppm")
         old = override_of(desk.overrides, key)
-        total = desk.priced_total(team, key)
-        if total and new_min and new_min > 0 and (new_fppm is None or new_fppm == old.get("fppm")):
-            new_fppm = round(total / new_min, 4)                  # a priced player's total is the books': minutes move, the total holds
-        elif total and new_fppm is not None and new_fppm != old.get("fppm"):
-            desk.flash.append(f"{key}: fppm overridden on a priced player; the books' rate no longer applies to him")
+        if desk.priced_total(team, key) and new_fppm is not None and new_fppm != old.get("fppm"):
+            desk.flash.append(f"{key}: fppm overridden on a priced player; the books' total no longer holds for him")
         desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi)
-        desk.fills.get(team, set()).discard(key)
-        if team in desk.balanced:
-            desk.refill(team)
-        else:
-            desk.reproject(team)
-        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
-
-
-@app.post("/balance_all")
-def balance_all(request: Request):
-    """Every team with priced players: priced players to the books' minutes (totals held), the unpriced fill the rest."""
-    if (b := _busy(request)) is not None:
-        return b
-    with LOCK:
-        done, short = [], []
-        for t in desk.slate.teams():
-            card = desk.team_card(t, datetime.now())
-            if card["locked"] or not card["n_book"]:
-                continue
-            desk.balance_to_books(t)
-            total = desk.team_card(t, datetime.now())["assigned"]
-            if abs(total - TEAM_BUDGET) > 2.0:                     # verify: a team that did not land on its minutes gets one more fill
-                desk.refill(t); total = desk.team_card(t, datetime.now())["assigned"]
-            (short if abs(total - TEAM_BUDGET) > 2.0 else done).append(f"{t} {total:.0f}")
-        desk.flash.append("balanced to the books: " + (", ".join(done) if done else "no team has priced players")
-                          + (f" · SHORT, check these teams: {', '.join(short)}" if short else ""))
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
-
-
-@app.post("/team/{team}/balance", response_class=HTMLResponse)
-def balance(request: Request, team: str):
-    """Priced players to the books' minutes (totals held), the unpriced fill the rest of the team's minutes."""
-    with LOCK:
-        desk.flash.append(desk.balance_to_books(team))
+        desk.reproject(team)                                  # the solve re-balances the team around the edit
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
@@ -890,7 +820,6 @@ def clear_team(request: Request, team: str):
         for p in desk.players(team):
             desk.overrides.pop(normalize_name(p.name), None)
         write_overrides(desk.overrides)
-        desk.balanced.discard(team); desk.fills.pop(team, None)
         desk.reproject(team)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 

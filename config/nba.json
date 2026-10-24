@@ -35,6 +35,8 @@
     "minutes_model": "rotation",
     "n_sims": 4000,
     "rebalance": false,
-    "salary_blend": true
+    "salary_blend": true,
+    "alloc": "solve",
+    "_alloc_note": "solve (2026-10-24): per-team quadratic solve on anchors (books' implied minutes for priced players, history for the rest, desk edits held) within position-group budgets; headroom = the old allocator"
   }
 }
