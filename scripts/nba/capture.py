@@ -37,7 +37,15 @@ from ivan.core.config import require_env
 from ivan.sports.nba.ingest import (IngestError, ODDS_SPORT, ensure_schema, fetch_game_lines, fetch_slate, project_slate,
                                     store_slate)
 from ivan.sports.nba.projection.market import NBA_MARKETS
-from ivan.sports.nba.paths import NBA_DATA_DIR, LOGS_DIR
+from ivan.sports.nba.paths import ACTIVE_SLATE_JSON, NBA_DATA_DIR, LOGS_DIR
+
+
+def chosen_slate() -> int | None:
+    """The draft group picked on the desk (ivan.web.nba_desk.switch_slate), or None."""
+    try:
+        return int(json.loads(ACTIVE_SLATE_JSON.read_text())["draft_group"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 STATE = NBA_DATA_DIR / "capture_state.json"
 DEFAULT_OFFSETS = (360, 180, 90, 45, 15)      # minutes before lock at which props are captured
@@ -158,6 +166,15 @@ def main() -> int:
             log.warning(f"game lines fetch failed: {type(e).__name__}: {e}")
     # Rotowire once per tick: ride it on the first slate processed; props rows go to every slate of the tick
     order = sorted(fetched, key=lambda sf: sf[1].lock, reverse=True)
+    # the slate stored last is the one nba_player (and the desk) holds after the tick: the one picked on the desk while it is
+    # still open, else the one that locks next
+    chosen = chosen_slate()
+    if chosen is not None and any(int(s["id"]) == chosen for s, _ in order):
+        order = [sf for sf in order if int(sf[0]["id"]) != chosen] + [sf for sf in order if int(sf[0]["id"]) == chosen]
+        log.info(f"ending the tick on the desk's slate {chosen}")
+    elif chosen is not None:
+        log.info(f"the desk's slate {chosen} has locked or left the lobby; back to the slate that locks next")
+        ACTIVE_SLATE_JSON.unlink(missing_ok=True)
     for i, (s, f) in enumerate(order):
         try:
             full = fetch_slate(session, s["id"], update_odds=False, starters=(i == 0), log=log.info)

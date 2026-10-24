@@ -1,0 +1,24 @@
+{# the part of the pipeline panel that changes while a job runs: it polls itself, the form above it is never re-rendered #}
+<div id="pipe-status" {% if active %}hx-get="{{ root }}/pipeline/status" hx-trigger="load delay:2s" hx-swap="outerHTML"{% endif %}>
+  {% if current or log %}
+  <div class="pipe-row">
+    {% if current %}
+      <span class="jobstat {{ current.status }}">{{ current.name }} · {{ current.status }}{% if current.duration %} · {{ '%.0f'|format(current.duration) }}s{% endif %}</span>
+      {% if current.is_active %}<button hx-post="{{ root }}/pipeline/cancel/{{ current.id }}" hx-target="#pipeline" hx-swap="outerHTML">cancel</button>{% endif %}
+    {% endif %}
+    {% if jobs %}<span class="muted small">recent: {% for j in jobs[:5] %}<span class="jobstat {{ j.status }}">{{ j.name }} {{ j.status }}{% if j.duration %} {{ '%.0f'|format(j.duration) }}s{% endif %}</span>{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}
+  </div>
+  {% if log %}<pre class="log">{{ log }}</pre>{% endif %}
+  {% endif %}
+  {% if outputs %}
+  <div class="pipe-row">
+    <span><b>latest picks for this slate</b> {{ outputs.when.strftime('%a %H:%M') }} · {{ outputs.rows }} entries{% if outputs.slate_only %} <span class="muted">(other slates' contests in the same run are not shown)</span>{% endif %} · <a href="{{ root }}/download/{{ outputs.classic }}">download the DraftKings upload CSV</a>{% if outputs.error %} · <span class="bad">{{ outputs.error }}</span>{% endif %}</span>
+  </div>
+  <div class="pipe-results">
+    {% if outputs.contests %}<table class="mini"><tr><th>contest</th><th class="n">entries</th><th class="n">mean ROI</th><th class="n">cash</th><th class="n">top-by-quality ROI</th><th class="n">book p50</th><th class="n">P(loss)</th></tr>
+      {% for c in outputs.contests %}<tr><td>{{ c.name|truncate(40, True, '') }}</td><td class="n">{{ c.chosen }}/{{ c.entries }}</td><td class="n">{{ '%+.0f%%'|format(100 * c.roi) if c.roi is not none else '' }}</td><td class="n">{{ '%.0f%%'|format(100 * c.cash) if c.cash is not none else '' }}</td><td class="n">{{ '%+.0f%%'|format(100 * c.top_roi) if c.top_roi is not none else '' }}</td><td class="n">{{ '%+.0f%%'|format(100 * c.book.p50) if c.book.p50 is defined else '' }}</td><td class="n">{{ '%.0f%%'|format(100 * c.book.p_loss) if c.book.p_loss is defined else '' }}</td></tr>{% endfor %}</table>{% endif %}
+    {% if outputs.exposures %}<table class="mini"><tr><th>exposure</th><th>team</th><th>pos</th><th class="n">sal</th><th class="n">proj</th><th class="n">%</th></tr>
+      {% for e in outputs.exposures %}<tr><td>{{ e.name }}</td><td>{{ e.team }}</td><td>{{ e.position }}</td><td class="n">{{ e.salary }}</td><td class="n">{{ '%.1f'|format(e.projection) if e.projection == e.projection else '' }}</td><td class="n">{{ '%.0f%%'|format(100 * e.exposure) }}</td></tr>{% endfor %}</table>{% endif %}
+  </div>
+  {% endif %}
+</div>

@@ -118,7 +118,8 @@ def _signal_group(proc: subprocess.Popen, sig) -> None:
 
 
 class JobRunner:
-    def __init__(self, log_dir: Path, cwd: Path, env: Optional[dict] = None, nice: int = 10):
+    def __init__(self, log_dir: Path, cwd: Path, env: Optional[dict] = None, nice: int = 10, max_seconds: Optional[float] = None):
+        self.max_seconds = max_seconds          # a job running longer is stopped (process group terminated); None = no limit
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.cwd = Path(cwd)
@@ -225,7 +226,16 @@ class JobRunner:
                                         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 self._procs[job.id] = proc
                 job.pid = proc.pid
-                job.returncode = proc.wait()
+                try:
+                    job.returncode = proc.wait(timeout=self.max_seconds)
+                except subprocess.TimeoutExpired:
+                    log.write(f"\n[runner] stopped: ran longer than the {self.max_seconds / 60:.0f}-minute limit\n")
+                    _signal_group(proc, signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        _signal_group(proc, signal.SIGKILL)
+                    job.returncode = proc.wait()
             except Exception as e:           # bad command, missing interpreter, ...
                 log.write(f"\n[runner] failed to start: {e}\n")
                 job.returncode = -1

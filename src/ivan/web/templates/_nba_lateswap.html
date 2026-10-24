@@ -1,0 +1,71 @@
+<div class="game">
+  <div class="ls-head">
+    <span class="brand-sm">Late swap</span>
+    <span class="muted">{{ lateswap.games_started }} of {{ lateswap.games_total }} games started{% if lateswap.next_tip %} · next tip {{ lateswap.next_tip.strftime('%H:%M') }}{% endif %} · {{ lateswap.open_players }} players still open</span>
+    <span class="spacer"></span>
+    <form class="pipe-form" style="width:auto" hx-post="{{ root }}/pipeline/lateswap" hx-target="#pipeline" hx-swap="outerHTML">
+      <label title="re-optimised lineups per entry">candidates <input name="ls_candidates" value="{{ form.ls_candidates }}" size="3"></label>
+      <label title="field entries completed and scored; bigger contests are sampled down to this">field cap <input name="ls_field_cap" value="{{ form.ls_field_cap }}" size="5"></label>
+      <label>sims <input name="ls_sims" value="{{ form.ls_sims }}" size="5"></label>
+      <label title="draftkings: download the live standings through the logged-in Chrome profile (the laptop); raw: the newest stored export per contest">field <select name="ls_source"><option value="draftkings" {% if form.ls_source == 'draftkings' %}selected{% endif %}>DraftKings live</option><option value="raw" {% if form.ls_source == 'raw' %}selected{% endif %}>stored export</option></select></label>
+      <label title="score started games from NBA's live box scores: the points each player has banked plus the rest of his game under the live score (in-game update, validated on held-out games)"><input type="checkbox" name="ls_live" {% if form.ls_live %}checked{% endif %}> live scoring</label>
+      <button type="submit" class="primary" {% if not lateswap.contests %}disabled{% endif %} title="download each contest's standings, complete the field, re-optimise the open slots of every entry, write the upload CSV">Run late swap</button>
+    </form>
+  </div>
+  {% if limited or consumer %}
+  <div class="pipe-row" style="margin:6px 0 10px">
+    <form class="inline" method="post" action="{{ root }}/lateswap/standings" enctype="multipart/form-data">
+      <b>1.</b> On DraftKings, open each contest after it locks and use its export to download the standings (a .zip is fine).
+      <b>2.</b> Upload them here:
+      <input type="file" name="files" accept=".zip,.csv" multiple>
+      {% if lateswap.contests %}<select name="contest_id" title="only needed when the file name has no contest id">{% for c in lateswap.contests %}<option value="{{ c.contest_id }}">{{ c.name|truncate(36, True, '') }}</option>{% endfor %}</select>{% endif %}
+      <button>Upload standings</button>
+      <b>3.</b> Upload your entries export in the pipeline panel above, then Run late swap.
+    </form>
+  </div>
+  {% elif not lateswap.has_display %}<p class="muted small">No display on this desk's session: Chrome runs headless, which only works while the saved DraftKings profile is logged in. Log in once from a terminal session (scripts/nba/standings.py) if the run reports a login.</p>{% endif %}
+  {% if lateswap.error %}<p class="bad">{{ lateswap.error }}</p>{% endif %}
+  {% if not lateswap.contests %}<p class="muted">No entries file at {{ lateswap.entries_path }}. Upload the DraftKings entries export in the pipeline panel.</p>{% endif %}
+
+  {% set rep = lateswap.report %}
+  {% if rep %}
+  <div class="ls-head" style="margin-top:10px">
+    <b>last run {{ rep.when_dt.strftime('%a %H:%M') if rep.when_dt else rep.when }}</b>
+    <span class="muted">{{ rep.games_started }}/{{ rep.games_total }} games started then · field: {{ rep.source }} · {{ 'live scoring' if rep.settings.live else 'pre-game scoring' }} · {{ rep.settings.candidates }} candidates, cap {{ rep.settings.field_cap }}, {{ rep.settings.sims }} sims · {{ rep.swapped }} entries swapped</span>
+    {% if rep.upload %}<a href="{{ root }}/download/{{ rep.upload }}"><b>download the upload CSV</b></a>{% endif %}
+    {% if rep.failed %}<span class="bad">failed: {% for f in rep.failed %}{{ f.contest_id }} ({{ f.error|truncate(60, True, '') }}){% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+  </div>
+  {% for c in rep.contests %}
+  <table class="mini" style="margin-bottom:12px">
+    <tr><th colspan="6" style="text-align:left;font-size:12px;text-transform:none;color:var(--ink)">{{ c.name }} <span class="muted">· {{ c.entries|length }} entries, {{ c.improved }} improve, {{ '%+.2f'|format(c.gain) }} $ expected · field {{ c.field.completed }}/{{ c.field.field_entries }} completed</span></th></tr>
+    <tr><th>entry</th><th>swap</th><th class="n">payout now</th><th class="n">payout best</th><th class="n">gain</th><th class="n">cash %</th></tr>
+    {% for e in c.entries %}
+    <tr>
+      <td>{{ e.entry_id }} <span class="muted small">{{ e.locked|length }} locked · {{ e.candidates }} cands</span></td>
+      <td>{% if e.improved %}{% for o, i in e.swaps %}<span class="ls-out">{{ e.names[o|string] }}</span> → <span class="ls-in">{{ e.names[i|string] }}</span>{% if not loop.last %} · {% endif %}{% endfor %}{% else %}<span class="muted">keep</span>{% endif %}</td>
+      <td class="n">${{ '%.2f'|format(e.original.exp_payout) }}</td>
+      <td class="n">${{ '%.2f'|format(e.best.exp_payout) }}</td>
+      <td class="n gain {% if e.delta > 0.005 %}pos{% else %}neg{% endif %}">{{ '%+.2f'|format(e.delta) }}</td>
+      <td class="n">{{ '%.0f'|format(100 * e.original.p_cash) }} → {{ '%.0f'|format(100 * e.best.p_cash) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endfor %}
+  {% endif %}
+
+  {% for c in lateswap.contests %}
+  <h2 style="font-size:14px;margin:12px 0 2px">{{ c.name }} <span class="muted" style="font-weight:400;font-size:12px">· {{ c.contest_id }} · {{ c.entries|length }} entries ·
+    {% if c.standings %}<span style="color:var(--ok)">standings from {{ c.standings.strftime('%a %H:%M') }}</span>{% else %}<span class="bad">no standings yet</span>{% endif %}</span></h2>
+  <table class="mini">
+    <tr><th>entry</th><th>lineup <span class="muted" style="text-transform:none">(grey = game started, red = not on the slate)</span></th><th class="n">locked</th><th class="n">proj</th></tr>
+    {% for e in c.entries %}
+    <tr>
+      <td>{{ e.entry_id }}</td>
+      <td>{% for s in e.slots %}<span class="ls-slot {% if s.locked %}locked{% elif not s.on_slate %}off{% endif %}" title="{{ s.slot }} · {{ s.team }}{% if s.tip %} · tips {{ s.tip.strftime('%H:%M') }}{% endif %}{% if s.fpts %} · {{ '%.1f'|format(s.fpts) }} proj{% endif %}"><span class="sl">{{ s.slot }}</span>{{ s.name }}</span>{% endfor %}</td>
+      <td class="n">{{ e.locked }}/8</td>
+      <td class="n">{{ '%.1f'|format(e.fpts) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endfor %}
+</div>

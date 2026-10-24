@@ -17,6 +17,7 @@ PROJECTIONS_CSV       = INPUT_DIR / "stok.csv"
 MINUTES_OVERRIDES_CSV = INPUT_DIR / "minutes_overrides.csv"
 CHOSEN_ENTRIES_CSV    = OUTPUT_DIR / "chosen_entries.csv"      # base name; lineup_export stamps the files
 LATESWAP_BEST_CSV     = OUTPUT_DIR / "lateswap_best.csv"
+ACTIVE_SLATE_JSON     = NBA_DATA_DIR / "active_slate.json"     # the slate picked on the desk: the capture tick ends on it while it is open
 FIELD_MODEL_PKL       = MODELS_DIR / "field_distribution_model.pkl"
 
 # Logged-in DK Chrome profile used only by the historical contest scraper.

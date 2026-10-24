@@ -16,6 +16,19 @@
   .bar .brand { font-weight:700; font-size:16px } .bar .muted { color:var(--muted); font-size:12px }
   .bar form { display:inline } .bar button { font:inherit; font-size:13px; padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
   .bar button.primary { background:var(--accent); color:#fff } .bar button:hover { filter:brightness(1.08) }
+  .bar .views a { font-size:12px; font-weight:600; color:var(--muted); text-decoration:none; padding:3px 9px; border-radius:10px } .bar .views a.on { background:#eef4ff; color:var(--accent) }
+  .pipe-sec .sec { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); width:62px }
+  .pipe-form input[type=checkbox] { margin:0 }
+  table.players td.flags { max-width:420px; white-space:normal }
+  .bar button.stale { border-color:var(--warn); color:var(--warn); background:#fffbeb }
+  td.stcell { cursor:pointer } td.stcell .st.pin { background:#eef4ff; border:1px solid var(--accent); border-radius:4px; padding:0 4px } td.stcell .st.off { color:#bbb }
+  .ls-slot { display:inline-block; font-size:12px; padding:1px 6px; border-radius:4px; background:#eef4ff; margin:1px 2px 1px 0; white-space:nowrap } .ls-slot.locked { background:#eee; color:#777 } .ls-slot.off { background:#fee2e2; color:var(--bad) }
+  .ls-slot .sl { font-size:9px; font-weight:700; color:var(--muted); margin-right:3px } .ls-out { color:var(--bad); text-decoration:line-through } .ls-in { color:var(--ok); font-weight:600 }
+  td.gain.pos { color:var(--ok); font-weight:600 } td.gain.neg { color:var(--muted) } .ls-head { display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px }
+  .bar .fresh { display:flex; gap:10px; font-size:12px; color:var(--muted) } .bar .fresh .f { font-variant-numeric:tabular-nums }
+  .bar .fresh .f small { font-size:10px; opacity:.8 } .bar .fresh .f.old { color:var(--warn); font-weight:600 }
+  td.bookmin button.bm { font:inherit; font-size:12px; color:var(--ok); background:none; border:1px dashed #b7dfc2; border-radius:4px; padding:0 5px; cursor:pointer } td.bookmin button.bm.on { background:#dcfce7; border-style:solid }
+  .teamfoot button.primary-sm { border-color:var(--ok); color:var(--ok) }
   .countdown { font-weight:700; font-variant-numeric:tabular-nums } .countdown.soon { color:var(--bad) }
   main { max-width:1700px; margin:0 auto; padding:28px 20px }
   .menu { max-width:1700px; margin:0 auto; padding:14px 20px 14px; display:flex; gap:26px; flex-wrap:nowrap; align-items:flex-start; overflow-x:auto; scrollbar-width:thin }
@@ -39,9 +52,10 @@
   .pipe-results { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start } .pipe-results table.mini td, .pipe-results table.mini th { border-bottom:1px solid var(--line) }
   .rotbox summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:8px } .rot { margin-top:6px }
   .rot-bar { display:flex; gap:10px; align-items:center; margin-bottom:6px } .rot-bar .spacer { flex:1 }
+  .rot-bar select.rot-game { font:inherit; font-size:12px; padding:2px 6px }
   .rot-bar button { font:inherit; font-size:12px; padding:3px 9px; border-radius:5px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer } .rot-bar button.rot-apply { background:var(--accent); color:#fff }
   table.rot-grid { border-collapse:collapse; margin:0; width:auto; user-select:none } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
-  table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:150px } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
+  table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:178px } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
   table.rot-grid td.cell.on { background:var(--accent) } table.rot-grid td.cell:hover { outline:1px solid #333 } table.rot-grid .q { border-left:2px solid #bbb }
   table.rot-grid td.cnt { font-size:9px; color:var(--ok) } table.rot-grid td.cnt.bad { color:#fff; background:var(--bad); font-weight:700 }
@@ -105,19 +119,27 @@
       {% if header.mins_to_lock is not none and header.mins_to_lock > 0 %}locks in {{ (header.mins_to_lock // 60)|int }}h {{ (header.mins_to_lock % 60)|int }}m{% else %}locked{% endif %}
     </span>
   {% endif %}
-  {% if header.slates|length > 1 %}
+  {% if header.stale %}<form method="post" action="{{ root }}/refresh" title="the pool, lineups or props changed on disk since this page was built; nothing moves until you load it"><input type="hidden" name="what" value="dk"><button class="stale">new data · Refresh to load</button></form>{% endif %}
+  {% if header.slates %}
   <form method="post" action="{{ root }}/slate">
     <select name="draft_group" onchange="this.form.submit()">
-      {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ s.lock[11:16] }} · {{ s.name|replace('NBA ', '')|truncate(28, True, '') }}</option>{% endfor %}
+      {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
     </select>
   </form>
   {% endif %}
   <label title="hide players projected below this many fantasy points">show ≥
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>
+  <span class="fresh">{% for f in header.fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{{ '%02d'|format((f.age % 60)|int) }}{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}</span>
+  <span class="views"><a href="{{ root }}/" class="{% if view != 'players' %}on{% endif %}">games</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a></span>
   <span class="spacer"></span>
+  {% if consumer %}
+  <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections pushed from the laptop">Refresh</button></form>
+  {% else %}
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
   <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
+  {% endif %}
+  <form method="post" action="{{ root }}/balance_all" onsubmit="return confirm('Set every priced player to the books\' minutes (totals held) and fill the rest of each team from the model?')"><button title="every team: priced players at the books' minutes, unpriced fill the rest of the 241">Balance all to books</button></form>
   <form method="post" action="{{ root }}/publish"><button class="primary" title="write projections + edits for the sim and the capture loop">Publish</button></form>
   <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
 </div>
@@ -138,7 +160,30 @@
 <main>
   {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
   {% include "_nba_pipeline.html" %}
-  {% for g in games %}
+  {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% endif %}
+  {% if view == 'players' %}
+  <div class="game">
+    <table class="players">
+      <thead><tr><th>player</th><th>team</th><th>opp</th><th>pos</th><th class="n">sal</th><th>st</th><th class="n">min</th><th class="n">hist min</th><th class="n">fppm</th><th class="n">proj</th><th class="n">value</th><th class="n" title="projected ownership: the field sampler's exposure (the sim's largest contest, else the generate step's generic field)">own</th><th>flags</th></tr></thead>
+      <tbody>
+      {% for r in players %}
+        <tr class="{% if r.out %}out{% elif r.priced %}priced{% else %}unpriced{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
+          <td><a href="{{ root }}/#card-{{ r.team }}" style="color:inherit;text-decoration:none">{{ r.name }}</a>{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}</td>
+          <td>{{ r.team }}</td><td class="muted">{{ r.opp }}</td><td class="pos">{{ r.pos }}</td><td class="n">{{ r.salary }}</td><td><span class="st">{{ r.starter }}</span></td>
+          <td class="n">{% if r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% if r.pinned %} <span class="pill">pin</span>{% endif %}{% endif %}</td>
+          <td class="n">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% endif %}</td>
+          <td class="n {% if r.priced %}mkt{% endif %}">{{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}</td>
+          <td class="n"><b>{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</b>{% if r.sd is not none %}<span class="muted small"> ±{{ '%.0f'|format(r.sd) }}</span>{% endif %}</td>
+          <td class="n">{{ '%.2f'|format(r.value) if r.value is not none else '' }}</td>
+          <td class="n"><b>{{ '%.1f%%'|format(r.own) if r.own is not none else '—' }}</b></td>
+          <td class="flags">{{ r.flags|join(' · ') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% for g in games if view not in ('players', 'lateswap') %}
     <div class="game {% if g.locked %}locked{% elif g.score >= 10 %}hot{% elif g.score >= 3 %}warm{% endif %}">
       <div class="gh">
         <span class="tip {% if g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% elif g.locked %} <span class="muted">started</span>{% endif %}</span>

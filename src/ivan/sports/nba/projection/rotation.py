@@ -251,16 +251,29 @@ def column_counts(grid: pd.DataFrame) -> List[int]:
 
 
 # ----------------------------------------------------------------------------- the last game's rotation
-def last_game_grid(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None) -> Optional[dict]:
+def team_games(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None, limit: int = 20) -> List[dict]:
+    """The team's games with stints, newest first: game_id, game_date, opp (the other team in the same game, when stored)."""
+    q = text("select s.game_id, s.game_date, (select min(o.team) from nba_stint o where o.game_id = s.game_id and o.team != s.team) as opp"
+             " from nba_stint s where s.team = :t" + (" and s.game_date < :d" if before else "") + (" and s.game_date >= :s" if since else "")
+             + " group by s.game_id, s.game_date order by s.game_date desc, s.game_id desc limit :n")
+    rows = session.execute(q.bindparams(t=team, n=int(limit), **({"d": before.isoformat()} if before else {}), **({"s": since.isoformat()} if since else {}))).all()
+    return [dict(game_id=str(g), game_date=str(d), opp=o or "") for g, d, o in rows]
+
+
+def last_game_grid(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None, game_id: Optional[str] = None) -> Optional[dict]:
     """
-    The team's most recent game as a grid (index player, columns 0..47; a minute is
-    on when the player was on the floor for at least half of it; overtime folded
-    into the last minute), with the game id and date. None when the team has no
-    stints (since `since`, when given: the desk asks for this season only).
+    The team's most recent game (or `game_id`) as a grid (index player, columns
+    0..47; a minute is on when the player was on the floor for at least half of
+    it; overtime folded into the last minute), with the game id and date. None
+    when the team has no stints (since `since`, when given: the desk asks for
+    this season only).
     """
-    q = text("select game_id, game_date from nba_stint where team = :t" + (" and game_date < :d" if before else "") + (" and game_date >= :s" if since else "")
-             + " order by game_date desc, game_id desc limit 1")
-    row = session.execute(q.bindparams(t=team, **({"d": before.isoformat()} if before else {}), **({"s": since.isoformat()} if since else {}))).first()
+    if game_id:
+        row = session.execute(text("select game_id, game_date from nba_stint where team = :t and game_id = :g limit 1").bindparams(t=team, g=str(game_id))).first()
+    else:
+        q = text("select game_id, game_date from nba_stint where team = :t" + (" and game_date < :d" if before else "") + (" and game_date >= :s" if since else "")
+                 + " order by game_date desc, game_id desc limit 1")
+        row = session.execute(q.bindparams(t=team, **({"d": before.isoformat()} if before else {}), **({"s": since.isoformat()} if since else {}))).first()
     if row is None:
         return None
     gid, gdate = row

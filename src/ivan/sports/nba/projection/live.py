@@ -21,11 +21,11 @@ from .engine import project_team, RosterPlayer, ProjectionParams
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 
 
-OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high")
+OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter")      # starter: 1 / 0 overrides the Rotowire lineup for the player
 
 
 def read_overrides_full(path: Path | None = None) -> dict[str, dict]:
-    """player -> {minutes, fppm, min_low, min_high} (any of them None): the hand overrides file (columns player, minutes[, fppm, min_low, min_high])."""
+    """player -> {minutes, fppm, min_low, min_high, starter} (any of them None): the hand overrides file (columns player, minutes[, fppm, min_low, min_high, starter])."""
     path = Path(path) if path else MINUTES_OVERRIDES_CSV
     if not path.exists():
         return {}
@@ -129,6 +129,8 @@ class LiveSlate:
             if pin is not None and pin <= 0:
                 out = True
             starter = None if team_starters is None else (name in team_starters)
+            if ov.get("starter") is not None:
+                starter = bool(float(ov["starter"]) > 0)         # the desk's hand call beats Rotowire
             st = self.state.loc[name] if name in self.state.index else None
             roster.append(RosterPlayer(name, not out, starter, p.salary, None if out else pin,
                                        market_rates=self.market.get(name),
@@ -156,7 +158,7 @@ class LiveSlate:
         else:
             if curve.empty:
                 return None
-            starters = [p.name for p in roster if p.available and p.starter]
+            starters = [p.name for p in roster if p.available and p.starter]                   # overrides already applied
             prior = {p.name: salary_prior_minutes(p.salary) for p in roster}
             grid = propose(curve, avail, starters, salary_prior=prior)
         return {"grid": grid, "spreads": boundary_spreads(self.session, avail), "curve": curve if not curve.empty else None, "drawn": drawn is not None}

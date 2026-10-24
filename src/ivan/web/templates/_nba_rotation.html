@@ -2,22 +2,25 @@
   {% if not rot.rows %}<div class="muted small">no rotation: no stints and no players available</div>{% else %}
   <div class="rot-bar">
     <span class="muted small">
-      {% if rot.kind == 'drawn' %}<b>drawn rotation</b> (applied as minute pins){% elif rot.kind == 'last' %}<b>last game</b> {{ rot.last_game }}{% else %}model proposal from {{ rot.curve_games }} games of stints (no game this season yet){% endif %}
+      {% if rot.kind == 'drawn' %}<b>drawn rotation</b> (applied as minute pins){% elif rot.kind == 'last' %}<b>game</b> {{ rot.last_game }}{% else %}model proposal from {{ rot.curve_games }} games of stints (no game this season yet){% endif %}
       · click or drag to paint · each minute needs 5
       {% if rot.to_reallocate %}· <b class="toplace">{{ rot.to_reallocate }} min from {{ rot.out_names|join(', ') }} to reallocate</b>{% endif %}
     </span>
     <span class="spacer"></span>
     <button type="button" class="rot-apply">Apply</button>
-    <button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "last"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the team's most recent game, out players included">Last game</button>
+    {% if rot.games %}<select name="game_id" class="rot-game" title="show one of this season's games, out players included" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "last"}' hx-trigger="change" hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML">
+      <option value="" {% if rot.kind != 'last' %}selected{% endif %}>game…</option>
+      {% for g in rot.games %}<option value="{{ g.game_id }}" {% if rot.kind == 'last' and g.game_id == rot.game_id %}selected{% endif %}>{{ g.game_date[5:] }}{% if g.opp %} vs {{ g.opp }}{% endif %}{% if loop.first %} (last){% endif %}</option>{% endfor %}
+    </select>{% endif %}
     <button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "propose"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the model's proposal from each player's stint history">Propose</button>
     {% if rot.drawn %}<button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/clear" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML">Clear</button>{% endif %}
   </div>
   <table class="rot-grid">
-    <thead><tr><th class="rn">player</th><th class="rm">min</th>{% for m in range(48) %}<th class="rc {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}</tr></thead>
+    <thead><tr><th class="rn">player · pos</th><th class="rm">min</th>{% for m in range(48) %}<th class="rc {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}</tr></thead>
     <tbody>
     {% for r in rot.rows %}
       <tr data-key="{{ r.key }}" class="{% if r.out %}outrow{% endif %}">
-        <td class="rn" title="{{ r.pos }} · ${{ r.salary }}{% if r.hist is not none %} · history {{ '%.1f'|format(r.hist) }} min{% endif %}{% if r.gone %} · not on tonight's roster: these minutes go to someone else{% elif r.out %} · OUT: these minutes go to someone else{% endif %}">{% if r.starter %}<b>{{ r.name }}</b>{% else %}{{ r.name }}{% endif %}{% if r.gone %} <span class="status">GONE</span>{% elif r.out %} <span class="status">OUT</span>{% endif %}</td>
+        <td class="rn" title="{{ r.pos }} · ${{ r.salary }}{% if r.hist is not none %} · history {{ '%.1f'|format(r.hist) }} min{% endif %}{% if r.gone %} · not on tonight's roster: these minutes go to someone else{% elif r.out %} · OUT: these minutes go to someone else{% endif %}">{% if r.starter %}<b>{{ r.name }}</b>{% else %}{{ r.name }}{% endif %}{% if r.pos %} <span class="rpos">{{ r.pos }}</span>{% endif %}{% if r.gone %} <span class="status">GONE</span>{% elif r.out %} <span class="status">OUT</span>{% endif %}</td>
         <td class="rm">{{ r.minutes }}</td>
         {% for on in r.cells %}<td class="rc cell {% if on %}on{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}"></td>{% endfor %}
       </tr>
