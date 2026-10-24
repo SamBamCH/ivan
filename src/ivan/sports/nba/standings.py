@@ -79,7 +79,13 @@ def parse_export(text: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         side = pd.DataFrame({"name": df[cols["player"]].str.strip(), "position": df[cols["rosterposition"]].str.strip() if "rosterposition" in cols else "",
                              "drafted_pct": pd.to_numeric(df[cols["%drafted"]].str.rstrip("%"), errors="coerce"),
                              "fpts": pd.to_numeric(df[cols["fpts"]], errors="coerce") if "fpts" in cols else np.nan})
-        side = side[side.name != ""].drop_duplicates("name")
+        side = side[side.name != ""]
+        # the export lists a player once per roster position he was played in (PG, G, UTIL ...): his ownership is the sum of
+        # those rows (2026-10-23: Schroder 30.90 + 14.01 + 3.60 = 48.5%, the share of lineups holding him). Keeping one row
+        # per name under-counted every multi-slot player and summed the column to ~465 instead of 800.
+        side = (side.groupby("name", sort=False)
+                .agg(position=("position", lambda x: "/".join(dict.fromkeys(str(v) for v in x if str(v)))), drafted_pct=("drafted_pct", "sum"), fpts=("fpts", "first"))
+                .reset_index())
     return ent.reset_index(drop=True), side.reset_index(drop=True)
 
 

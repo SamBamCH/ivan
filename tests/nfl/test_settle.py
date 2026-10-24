@@ -100,13 +100,14 @@ CLASSIC_CSV = """Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Rost
 2,2,b,0,100,QB Jameis Winston RB Jahmyr Gibbs DST Browns,,Jameis Winston,QB,24.59%,26.28
 3,3,c,0,50,QB Jameis Winston RB Jahmyr Gibbs DST Browns,,Browns,DST,9.10%,12.00
 ,,,,,,,Nobody Known,WR,1.00%,0.00
+,,,,,,,Jahmyr Gibbs,FLEX,3.10%,40.70
 """
 
 
 def test_classic_player_rows_from_the_export(session, monkeypatch):
     from ivan.sports.nfl.models import ShowdownPlayer
     t = S.classic_player_table(CLASSIC_CSV)
-    assert t.name.tolist() == ["Jahmyr Gibbs", "Jameis Winston", "Browns", "Nobody Known"] and t.ownership.tolist()[0] == 22.48
+    assert t.name.tolist() == ["Jahmyr Gibbs", "Jameis Winston", "Browns", "Nobody Known", "Jahmyr Gibbs"] and t.ownership.tolist()[0] == 22.48
     session.add(HistoricalContest(contest_id=9, draft_group_id=5, name="x", date=datetime(2026, 10, 11, 17), entry_fee=1.0, contest_type="Classic",
                                   total_entries=100, multi_entry=20))
     session.commit()
@@ -119,7 +120,7 @@ def test_classic_player_rows_from_the_export(session, monkeypatch):
     assert n == 4
     rows = session.query(ShowdownPlayer).filter_by(contest_id=9).order_by(ShowdownPlayer.player_id).all()
     assert [(r.player_id, r.roster_slot_id, r.ownership_actual, r.fpts_actual) for r in rows] == [
-        (1, 67, 22.48, 40.7), (2, 70, 22.48, 40.7), (3, 66, 24.59, 26.28), (4, 71, 9.1, 12.0)]
+        (1, 67, 22.48, 40.7), (2, 70, 3.1, 40.7), (3, 66, 24.59, 26.28), (4, 71, 9.1, 12.0)]       # each slot its own export row
     assert S.derive_classic_players(session, 9, cap, datetime(2026, 10, 11, 12), CLASSIC_CSV, echo=lambda *_: None) == 4   # replaces, no duplicates
 
 
@@ -150,3 +151,16 @@ def test_showdown_export_keeps_base_points(session):
     pts = {r.player_id: r.fpts_actual for r in session.query(ShowdownPlayer).filter_by(contest_id=9).all()}
     assert pts == {1: 24.0, 2: 24.0, 3: 24.04, 4: 24.04}
     assert S.repair_showdown_points(session, 9, cap, SHOWDOWN_CSV, echo=lambda *_: None) == 0      # already right
+
+
+def test_classic_flex_slot_without_an_export_row_is_zero(session):
+    from ivan.sports.nfl.models import ShowdownPlayer
+    csv = CLASSIC_CSV.replace(",,,,,,,Jahmyr Gibbs,FLEX,3.10%,40.70\n", "")
+    session.add(HistoricalContest(contest_id=10, draft_group_id=5, name="x", date=datetime(2026, 10, 11, 17), entry_fee=1.0, contest_type="Classic",
+                                  total_entries=100, multi_entry=20))
+    session.commit()
+    cap = [{"id": 1, "roster_slot_id": 67, "name": "jahmyr gibbs", "team": "DET", "position": "RB", "salary": 9000},
+           {"id": 2, "roster_slot_id": 70, "name": "jahmyr gibbs", "team": "DET", "position": "RB", "salary": 9000}]
+    S.derive_classic_players(session, 10, cap, datetime(2026, 10, 11, 12), csv, echo=lambda *_: None)
+    got = {r.roster_slot_id: r.ownership_actual for r in session.query(ShowdownPlayer).filter_by(contest_id=10)}
+    assert got == {67: 22.48, 70: 0.0}                      # never played at FLEX: 0, not a copy of the RB slot

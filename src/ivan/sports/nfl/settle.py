@@ -302,23 +302,36 @@ def derive_classic_players(session, contest_id: int, cap_players: Sequence[dict]
         proj[(str(r.normalized_name), int(r.roster_slot_id))] = (r.fpts_mean, r.ownership_proj)      # the latest snapshot of the day wins
         proj_any[str(r.normalized_name)] = (r.fpts_mean, r.ownership_proj)
     session.query(ShowdownPlayer).filter(ShowdownPlayer.contest_id == int(contest_id)).delete(synchronize_session=False)
-    rows, unmatched = [], []
-    seen_ids: set = set()
+    # the export lists a player once per roster position he was played in (his position and FLEX), each row that slot's share of
+    # the lineups: one capture row per slot gets its own row's share (0 when the export has none for that slot). Until
+    # 2026-10-23 the first row matched was copied onto both slots, so every FLEX row carried the position-slot ownership.
+    by_player: Dict[str, Dict[str, float]] = {}
+    points: Dict[str, float] = {}
+    shown: Dict[str, str] = {}
     for r in table.itertuples():
         key = normalize_name(str(r.name))
-        cands = [p for p in by_name.get(key, []) if str(p.get("position", "")).upper() == r.position] or by_name.get(key, [])
+        slot = "FLEX" if str(r.position).upper() == "FLEX" else "POS"
+        by_player.setdefault(key, {}); by_player[key][slot] = by_player[key].get(slot, 0.0) + float(r.ownership)
+        if pd.notna(r.points):
+            points[key] = float(r.points)
+        shown.setdefault(key, str(r.name))
+    rows, unmatched = [], []
+    seen_ids: set = set()
+    for key, shares in by_player.items():
+        cands = by_name.get(key, [])
         if not cands:
-            unmatched.append(str(r.name))
+            unmatched.append(shown[key])
             continue
         for p in cands:                                      # one row per roster slot the player had (position slot and FLEX)
-            if int(p["id"]) in seen_ids:                     # two export names that resolve to one capture row
+            if int(p["id"]) in seen_ids:
                 continue
             seen_ids.add(int(p["id"]))
+            own = shares.get("FLEX", 0.0) if int(p["roster_slot_id"]) == FLEX_SLOT else shares.get("POS", 0.0)
             fm, op = proj.get((key, int(p["roster_slot_id"])), proj_any.get(key, (None, None)))   # FLEX rows take the position slot's projection
             rows.append(ShowdownPlayer(contest_id=int(contest_id), player_id=int(p["id"]), roster_slot_id=int(p["roster_slot_id"]),
-                                       salary=int(p.get("salary") or 0), position=str(p.get("position") or r.position), team=str(p.get("team") or ""),
-                                       ownership_actual=float(r.ownership), ownership_proj=float(op) if op is not None else None,
-                                       fpts_proj=float(fm) if fm is not None else None, fpts_actual=float(r.points) if pd.notna(r.points) else None))
+                                       salary=int(p.get("salary") or 0), position=str(p.get("position") or ""), team=str(p.get("team") or ""),
+                                       ownership_actual=float(own), ownership_proj=float(op) if op is not None else None,
+                                       fpts_proj=float(fm) if fm is not None else None, fpts_actual=points.get(key)))
     session.add_all(rows)
     session.commit()
     if unmatched:
@@ -326,8 +339,8 @@ def derive_classic_players(session, contest_id: int, cap_players: Sequence[dict]
     return len(rows)
 
 
-def derive_classic_missing(session, since: datetime, until: datetime, echo=print) -> int:
-    """Player rows for every classic contest in the window that has a raw standings export but no player rows yet."""
+def derive_classic_missing(session, since: datetime, until: datetime, echo=print, force: bool = False) -> int:
+    """Player rows for every classic contest in the window that has a raw standings export but no player rows yet (all of them with force)."""
     from ivan.sports.nfl.models import ShowdownPlayer
     contests = _contest_rows(session, since, until)
     if contests.empty:
@@ -337,7 +350,7 @@ def derive_classic_missing(session, since: datetime, until: datetime, echo=print
     done = 0
     for r in contests[contests.contest_type == "Classic"].itertuples():
         cid = int(r.contest_id)
-        if cid in have or raw.latest(SPORT, "dk/standings", cid) is None:
+        if (cid in have and not force) or raw.latest(SPORT, "dk/standings", cid) is None:
             continue
         cap = caps.get(str(r.draft_group_id))
         if cap is None:
