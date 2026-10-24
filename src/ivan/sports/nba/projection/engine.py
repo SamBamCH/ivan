@@ -75,6 +75,26 @@ class ProjectionParams:
         return cls(**kw)
 
 
+MAX_MINUTES = 48.0          # a world's minutes for one player (overtime is added by the game draw downstream)
+GRID_SHAPE_MIN = 0.5        # the grid's own mean must be at least this share of the allocation for its shape to be used
+
+
+def fit_draw_to_mean(draw: np.ndarray, a_min: float, sd: float, rng: np.random.Generator) -> np.ndarray:
+    """
+    World-level minutes for one player: the grid's draw rescaled to the allocated mean when the grid describes him
+    (its mean is at least GRID_SHAPE_MIN of the allocation); otherwise an independent draw around the allocation.
+    Rescaling a grid that barely holds him (2026-10-23: a player pinned at 15 minutes but absent from a drawn grid
+    came out 0 to 61 minutes, 65% of worlds at zero, and the sim loved the tail) is never allowed.
+    """
+    draw = np.asarray(draw, dtype=float); n = draw.shape[0]
+    if a_min <= 0:
+        return np.zeros(n)
+    mu = float(draw.mean())
+    if mu >= GRID_SHAPE_MIN * a_min:
+        return np.clip(draw * (a_min / mu), 0.0, MAX_MINUTES)
+    return np.clip(rng.normal(a_min, max(sd, 1.0), n), 0.0, MAX_MINUTES)
+
+
 def project_team(
     roster: list[RosterPlayer],
     state: pd.DataFrame,              # HistoryState.before(date), indexed by player_name
@@ -175,13 +195,13 @@ def project_team(
         M = np.zeros((params.n_sims, len(names)))
         col = {nm: j for j, nm in enumerate(d["names"])}
         for j, n in enumerate(names):
+            a_min = float(alloc.loc[n, "minutes"]) * (1.0 - float(p_out.get(n, 0.0)))   # the mean includes the scratch worlds
             if n in col:
-                M[:, j] = d["minutes"][:, col[n]]
                 # the allocation is the mean (it already averages over blowouts); the grid gives the shape and the
                 # world-to-world redistribution. A drawn grid is its own mean (the pins hold it).
-                mu = float(M[:, j].mean()); a_min = float(alloc.loc[n, "minutes"]) * (1.0 - float(p_out.get(n, 0.0)))   # the mean includes the scratch worlds
-                if mu > 0:
-                    M[:, j] *= a_min / mu
+                M[:, j] = fit_draw_to_mean(d["minutes"][:, col[n]], a_min, minutes_sd(a_min, recs[n]["hist_sd"]), rng)
+            else:
+                M[:, j] = np.clip(rng.normal(a_min, minutes_sd(a_min, recs[n]["hist_sd"]), params.n_sims), 0.0, MAX_MINUTES) if a_min > 0 else 0.0
         class _D:  # the TeamDraw shape the loop below reads
             minutes = M
         draw = _D()

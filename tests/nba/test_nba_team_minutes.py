@@ -52,3 +52,17 @@ def test_lines_consensus_and_team_lookup():
     assert len(c) == 1 and c.iloc[0].spread_home == -5.0 and c.iloc[0].total == 239.0 and 0.6 < c.iloc[0].p_home < 0.65
     gl = GameLines(c)
     assert gl.team_spread("WAS") == -5.0 and gl.team_spread("MIL") == 5.0 and gl.team_total("MIL") == 239.0 and gl.team_spread("BOS") is None
+
+
+def test_a_pinned_player_the_grid_does_not_hold_gets_a_sane_draw():
+    """2026-10-23: Steven Adams, pinned at 15 minutes but at 0 in a drawn grid, was stretched to a 0-61 band."""
+    import numpy as np
+    from ivan.sports.nba.projection.engine import fit_draw_to_mean
+    rng = np.random.default_rng(0)
+    sparse = np.where(rng.random(4000) < 0.03, 6.0, 0.0)               # the grid gives him 6 minutes in 3% of worlds
+    m = fit_draw_to_mean(sparse, 15.0, 5.0, rng)
+    assert abs(m.mean() - 15) < 1.0 and np.quantile(m, 0.9) < 25 and m.max() <= 48
+    held = np.clip(rng.normal(30, 4, 4000), 0, 48)                      # a grid that does hold him keeps its shape
+    m2 = fit_draw_to_mean(held, 33.0, 5.0, rng)
+    assert abs(m2.mean() - 33) < 0.5 and m2.max() <= 48 and np.corrcoef(m2, held)[0, 1] > 0.99
+    assert (fit_draw_to_mean(held, 0.0, 5.0, rng) == 0).all()
