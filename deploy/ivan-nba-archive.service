@@ -1,0 +1,8 @@
+[Unit]
+Description=Ivan NBA archive at lock: record the projections and pool at each game's tip (no fetching, no pool writes)
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nba/archive_at_lock.py
+Nice=10

@@ -47,6 +47,25 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Ivan", docs_url=None, redoc_url=None, lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def _public_only_the_desk(request, call_next):
+    """
+    Requests from the internet arrive through the Cloudflare tunnel (deploy/cloudflared), which forwards /nba only. This is
+    the second lock on the same door: anything carrying Cloudflare's headers gets the NBA desk (behind its password) and
+    nothing else of this app, which has no login of its own; the bare hostname goes to the desk.
+    """
+    if request.headers.get("cf-ray") or request.headers.get("cf-connecting-ip"):
+        path = request.url.path
+        if path in ("", "/"):
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse("/nba/", status_code=302)
+        if not (path == "/nba" or path.startswith("/nba/")):
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("not found", status_code=404)
+    return await call_next(request)
+
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 try:                                                          # the NBA desk at /nba, when its database and deps are present
     from ivan.web.nba_desk import app as _nba_desk

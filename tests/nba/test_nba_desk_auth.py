@@ -86,3 +86,32 @@ def test_mounted_prefix_in_redirects_and_forms(monkeypatch):
     assert 'action="/nba/login"' in c.get("/nba/login").text
     r = c.post("/nba/login", data={"pw": "s3cret"}); assert r.headers["location"] == "/nba/"
     assert c.get("/nba/").text == "home"
+
+
+TUNNEL = {"cf-connecting-ip": "203.0.113.7", "cf-ray": "abc-ORD"}
+
+
+def test_tunnel_desk_without_a_password_refuses(monkeypatch):
+    c = TestClient(make(), client=("127.0.0.1", 50000))
+    assert c.get("/").status_code == 200                                   # local and no password: the laptop's open desk
+    assert c.get("/", headers=TUNNEL).status_code == 503                   # through the tunnel, no password: refuse
+    monkeypatch.setenv(auth.PUBLIC_ENV, "1")
+    assert c.get("/").status_code == 503                                   # marked public: refuse even locally
+
+
+def test_tunnel_lockout_is_per_visitor_and_cookie_is_secure(monkeypatch):
+    monkeypatch.setenv(auth.ENV, "right")
+    c = TestClient(make(), client=("127.0.0.1", 50000))
+    for _ in range(auth.PER_IP_FREE):
+        c.post("/login", data={"pw": "wrong"}, headers={**TUNNEL, "cf-connecting-ip": "198.51.100.1"})
+    assert c.post("/login", data={"pw": "right"}, headers={**TUNNEL, "cf-connecting-ip": "198.51.100.1"}).status_code == 429
+    ok = c.post("/login", data={"pw": "right"}, headers=TUNNEL, follow_redirects=False)     # another visitor is not locked out
+    assert ok.status_code == 303 and "secure" in ok.headers["set-cookie"].lower()
+
+
+def test_forged_cloudflare_header_from_a_tailnet_peer_is_ignored(monkeypatch):
+    monkeypatch.setenv(auth.ENV, "right")
+    c = TestClient(make(), client=("100.64.0.9", 50000))                  # a tailnet member, not this machine
+    for _ in range(auth.PER_IP_FREE):
+        c.post("/login", data={"pw": "wrong"}, headers={"cf-connecting-ip": f"10.0.0.{_}"})
+    assert c.post("/login", data={"pw": "right"}, headers={"cf-connecting-ip": "10.0.0.99"}).status_code == 429   # its own address counted

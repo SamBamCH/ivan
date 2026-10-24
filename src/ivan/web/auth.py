@@ -16,8 +16,9 @@ only ever compared, never stored, logged, echoed or passed anywhere.
 Guessing is throttled per client address (five misses, then a lockout that
 doubles each miss, up to an hour) and globally (thirty misses in ten
 minutes lock the page for ten minutes); every miss is logged with the
-address. The app binds the tailnet address only, so a guesser has to be a
-tailnet member to begin with.
+address. Behind the Cloudflare tunnel (deploy/cloudflared) the address is Cloudflare's
+CF-Connecting-IP, trusted only on connections from this machine (via_tunnel); a desk
+reached through the tunnel, or with IVAN_DESK_PUBLIC=1, refuses to serve without a password.
 """
 from __future__ import annotations
 
@@ -44,6 +45,7 @@ COOKIE = "ivan_desk"
 DAYS = 30
 ENV = "IVAN_DESK_PASSWORD"
 ENV_HASH = "IVAN_DESK_PASSWORD_HASH"
+PUBLIC_ENV = "IVAN_DESK_PUBLIC"     # 1 on a desk reachable from the internet: no password configured -> refuse to serve
 SECRET_FILE = PROJECT_ROOT / "data" / ".desk_secret"
 MAX_LEN = 128                     # bytes of password accepted
 PBKDF2_ITERS = 600_000
@@ -162,13 +164,34 @@ def root_of(request: Request) -> str:
     return request.scope.get("root_path", "") or ""
 
 
+LOCAL = {"127.0.0.1", "::1"}
+
+
+def via_tunnel(request: Request) -> bool:
+    """
+    The request came through the Cloudflare tunnel: cloudflared runs on this machine, so the connection's peer is this
+    machine (loopback or the address the app is bound to) and Cloudflare's headers are present. Anyone else's
+    CF-Connecting-IP is ignored: a tailnet member cannot pose as the tunnel.
+    """
+    peer = request.client.host if request.client else ""
+    own = (request.scope.get("server") or ("",))[0]
+    return bool(request.headers.get("cf-connecting-ip")) and (peer in LOCAL or (own and peer == own))
+
+
 def _ip(request: Request) -> str:
-    return request.client.host if request.client else "?"       # the app faces clients directly: no forwarded headers are trusted
+    """The client's address: Cloudflare's CF-Connecting-IP behind the tunnel (every tunnel request's peer is cloudflared itself,
+    so without it one guesser would lock everyone out), else the connection's peer; no other forwarded header is trusted."""
+    if via_tunnel(request):
+        return request.headers.get("cf-connecting-ip", "?").strip()[:64]
+    return request.client.host if request.client else "?"
 
 
 class _Gate(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if not configured():
+            if via_tunnel(request) or os.environ.get(PUBLIC_ENV, "").strip() in ("1", "true", "yes"):
+                return Response("this desk is public and has no password configured (IVAN_DESK_PASSWORD_HASH); refusing to serve",
+                                status_code=503, media_type="text/plain")
             return await call_next(request)
         root = root_of(request)
         path = request.url.path
@@ -181,6 +204,8 @@ class _Gate(BaseHTTPMiddleware):
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
+        if via_tunnel(request):
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         if path == f"{root}/login":
             resp.headers["Cache-Control"] = "no-store"
         return resp
@@ -210,7 +235,8 @@ def install(app: FastAPI, templates) -> None:
         throttle.hit(ip)
         log.info(f"desk login from {ip}")
         r = RedirectResponse(f"{root_of(request)}/", status_code=303)
-        r.set_cookie(COOKIE, token(), max_age=DAYS * 86400, httponly=True, samesite="lax", path=f"{root_of(request)}/")
+        r.set_cookie(COOKIE, token(), max_age=DAYS * 86400, httponly=True, samesite="lax", path=f"{root_of(request)}/",
+                     secure=via_tunnel(request))                  # over the tunnel the browser is on https: never send it in the clear
         return r
 
     @app.get("/logout")

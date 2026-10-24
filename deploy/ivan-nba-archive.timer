@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Ivan NBA archive-at-lock check every 5 minutes, 09:00-23:59 local
+
+[Timer]
+OnCalendar=*-*-* 09..23:00/5:00
+Persistent=false
+RandomizedDelaySec=10
+Unit=ivan-nba-archive.service
+
+[Install]
+WantedBy=timers.target
