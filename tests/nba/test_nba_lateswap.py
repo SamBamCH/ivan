@@ -58,3 +58,9 @@ def test_payout_rank_against_the_field():
     beaten = np.array([np.searchsorted(F[i], s[i], side="left") for i in range(4)])
     rank = 3 - beaten + 1
     assert (rank == 2).all() and pay[rank].mean() == 5.0
+
+
+def test_entry_cells_after_lock():
+    assert LS._pid("Keyonte George (44630968) (LOCKED)") == 44630968 and LS._is_locked_cell("Keyonte George (44630968) (LOCKED)")
+    assert LS._pid("Ty Jerome (44630945)") == 44630945 and not LS._is_locked_cell("Ty Jerome (44630945)")
+    assert LS._pid("Steven Adams (LOCKED)") is None and LS._cell_name("Steven Adams (LOCKED)") == "Steven Adams"

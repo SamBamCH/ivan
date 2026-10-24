@@ -95,18 +95,27 @@ def name_map(session: Session) -> Dict[str, int]:
 def our_entries(session: Session, entries_csv) -> Dict[int, List[OriginalEntry]]:
     """The entries export (lineup_export.read_entries: DK's instruction block cut off) -> OriginalEntry per contest; ids from 'Name (id)'."""
     df = read_entries(entries_csv)
+    names_to_id = name_map(session)
     out: Dict[int, List[OriginalEntry]] = {}
     for _, r in df.iterrows():
-        slots, names = {}, {}
+        slots, names, dk_locked = {}, {}, set()
         for slot in POSITION_ORDER:
             m = str(r[slot]).strip()
             if "(" not in m:
                 break
-            slots[slot] = int(m[m.rfind("(") + 1:m.rfind(")")]); names[slot] = m[:m.rfind("(")].strip()
+            pid = _pid(m); nm = _cell_name(m)
+            if pid is None:                                        # no id in the cell: resolve by name
+                pid = _resolve(names_to_id, nm)
+                if pid is None:
+                    break
+            if _is_locked_cell(m):                                 # DraftKings' own word after lock: "Name (id) (LOCKED)"
+                dk_locked.add(pid)
+            slots[slot] = pid; names[slot] = nm
         if len(slots) != 8:
-            continue                                               # a reservation without a lineup
-        out.setdefault(int(r["Contest ID"]), []).append(OriginalEntry(entry_id=str(r["Entry ID"]).strip(), contest_id=int(r["Contest ID"]),
-                                                                    lineup_id=-1, slots=slots, player_names_by_slot=names))
+            continue                                               # a reservation without a lineup, or a name not on the slate
+        e = OriginalEntry(entry_id=str(r["Entry ID"]).strip(), contest_id=int(r["Contest ID"]), lineup_id=-1, slots=slots, player_names_by_slot=names)
+        e.locked_player_ids = set(dk_locked)                       # DraftKings' own word; the tip-time check adds to it
+        out.setdefault(int(r["Contest ID"]), []).append(e)
     return out
 
 
@@ -254,7 +263,7 @@ def candidates(entry: OriginalEntry, fps: Dict[int, FieldPlayer], worlds: np.nda
     """The original lineup first, then up to n distinct re-optimised ones (locked players held in their slots)."""
     rng = rng or np.random.default_rng()
     orig = entry.player_ids()
-    locked = {pid: slot for slot, pid in entry.slots.items() if pid in fps and is_locked(fps[pid], now)}
+    locked = {pid: slot for slot, pid in entry.slots.items() if pid in set(entry.locked_player_ids) or (pid in fps and is_locked(fps[pid], now))}
     entry.locked_player_ids = set(locked)
     out, seen = [orig], {tuple(sorted(orig))}
     if len(locked) == 8:
@@ -457,9 +466,12 @@ def write_outputs(session: Session, report: dict, entries_csv, out_dir: Path = O
         ids = e["best"]["ids"]
         # keep the locked players in the slots DraftKings has them in; slot the rest around them
         slots = {}
+        names_to_id = name_map(session)
         for slot in POSITION_ORDER:
             m = str(row[slot])
-            pid = int(m[m.rfind("(") + 1:m.rfind(")")]) if "(" in m else None
+            pid = _pid(m)
+            if pid is None and "(" in m:
+                pid = _resolve(names_to_id, _cell_name(m))
             if pid in e["locked"]:
                 slots[slot] = pid
         free = [fps[p] for p in ids if p not in slots.values() and p in fps]
@@ -475,9 +487,11 @@ def write_outputs(session: Session, report: dict, entries_csv, out_dir: Path = O
         if len(locked_slots) != len(e["locked"]) or sorted(slots.values()) != sorted(ids):
             log(f"entry {row['Entry ID']}: the swap would move or drop a locked player; left as is"); continue
         for slot in POSITION_ORDER:
+            if slot in locked_slots:
+                continue                                           # a locked slot keeps DraftKings' own cell ("Name (LOCKED)" after lock)
             p = meta[slots[slot]]
             df.at[i, slot] = f"{p.name} ({p.id})"
-        if any(str(df.at[i, sl]) != before[sl] and _pid(before[sl]) != _pid(str(df.at[i, sl])) for sl in locked_slots):
+        if any(str(df.at[i, sl]) != before[sl] for sl in locked_slots):
             for sl in POSITION_ORDER:                              # belt and braces: never upload a changed locked slot
                 df.at[i, sl] = before[sl]
             log(f"entry {row['Entry ID']}: a locked slot changed; restored"); continue
@@ -494,8 +508,21 @@ def write_outputs(session: Session, report: dict, entries_csv, out_dir: Path = O
     return {"upload": str(csv_path), "report": str(js)}
 
 
+_ID_RX = __import__("re").compile(r"\((\d{5,})\)")
+
+
 def _pid(cell: str) -> Optional[int]:
-    return int(cell[cell.rfind("(") + 1:cell.rfind(")")]) if "(" in cell else None
+    """The id in 'Name (44631171)' or 'Name (44631171) (LOCKED)' (DraftKings' export after lock); None without one."""
+    m = _ID_RX.search(str(cell))
+    return int(m.group(1)) if m else None
+
+
+def _is_locked_cell(cell: str) -> bool:
+    return "(LOCKED)" in str(cell).upper()
+
+
+def _cell_name(cell: str) -> str:
+    c = str(cell); return (c[:c.find("(")] if "(" in c else c).strip()
 
 
 def _slot(players: List[FieldPlayer], slots: List[str]) -> List[FieldPlayer]:

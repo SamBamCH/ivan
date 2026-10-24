@@ -965,6 +965,7 @@ def _lateswap_ctx(now: datetime) -> dict:
                open_players=sum(1 for p in byid.values() if p.gametime and p.gametime > now), contests=[], report=LS.latest_report(),
                has_display=bool(os.environ.get("DISPLAY")), entries_path=_entries_info().get("path"))
     p = _entries_path()
+    names_to_id = LS.name_map(desk.session)
     if p.exists():
         try:
             df = read_entries(p)
@@ -976,11 +977,13 @@ def _lateswap_ctx(now: datetime) -> dict:
                 for _, r in g.iterrows():
                     slots = []
                     for slot in POSITION_ORDER:
-                        m = str(r[slot]); pid = int(m[m.rfind("(") + 1:m.rfind(")")]) if "(" in m else None
+                        m = str(r[slot]); pid = LS._pid(m)
+                        if pid is None and "(" in m:
+                            pid = LS._resolve(names_to_id, LS._cell_name(m))
                         pl = byid.get(pid)
-                        slots.append(dict(slot=slot, pid=pid, name=pl.name if pl else m.split(" (")[0], team=pl.team if pl else "",
-                                          locked=bool(pl and pl.gametime and pl.gametime <= now), fpts=proj.get(normalize_name(pl.name)) if pl else None,
-                                          tip=pl.gametime if pl else None, on_slate=pl is not None))
+                        slots.append(dict(slot=slot, pid=pid, name=pl.name if pl else LS._cell_name(m), team=pl.team if pl else "",
+                                          locked=bool(LS._is_locked_cell(m) or (pl and pl.gametime and pl.gametime <= now)),
+                                          fpts=proj.get(normalize_name(pl.name)) if pl else None, tip=pl.gametime if pl else None, on_slate=pl is not None))
                     rows.append(dict(entry_id=r["Entry ID"], slots=slots, locked=sum(1 for x in slots if x["locked"]),
                                      fpts=sum((x["fpts"] or 0) for x in slots)))
                 from ivan.core import raw as _raw
