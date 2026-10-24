@@ -16,6 +16,11 @@ projection_weighted  every lineup with probability proportional to its
 Both return counts_by_lineup (lineup id -> copies) and a meta dict for the
 sim report. expand_sampled_field turns the counts into the arrays the
 simulator scores. Draws are seeded from IVAN_SEED (ivan.core.seed).
+
+field_ownership / write_ownership: the sampled field's exposure per player,
+in percent, stored as nba_player.ownership (the desk's own column). The
+generate step writes it for a generic field; the sim overwrites it with the
+largest contest's field.
 """
 from __future__ import annotations
 
@@ -31,7 +36,8 @@ from ivan.sports.nba.models import Lineup, NBAPlayer
 from ivan.sports.nba.paths import FIELD_MODEL_PKL
 from ivan.sports.nba.utils import _cfg
 
-SAMPLERS = ("projection_model", "projection_weighted")
+SAMPLERS = ("projection_model", "projection_weighted", "two_group")      # two_group: simulate_contest.simulate_vs_field
+FLOOR_FRAC = 0.7       # the sampler's floor is at most this share of the pool's best lineup (see sample_field_projection_model)
 
 
 def lineup_projections(session: Session) -> Tuple[List[int], np.ndarray, Dict[int, List[int]]]:
@@ -46,8 +52,13 @@ def lineup_projections(session: Session) -> Tuple[List[int], np.ndarray, Dict[in
     return ids, np.asarray(sums, dtype=np.float64), pids_by_lid
 
 
-def sample_field_projection_model(session: Session, field_size: int, contest_params: dict,
-                                  model_path: str | Path = FIELD_MODEL_PKL, rng: Optional[np.random.Generator] = None) -> Tuple[Dict[int, int], dict]:
+def bin_sample(sums: np.ndarray, field_size: int, contest_params: dict, model_path: str | Path = FIELD_MODEL_PKL,
+               rng: Optional[np.random.Generator] = None) -> Tuple[Dict[int, int], dict]:
+    """
+    The projection-model draw on any pool: sums is each pool lineup's projection (in the units the field reads);
+    returns (pool index -> copies, meta). The contest's fee, size and max entries predict the 20-bin distribution
+    over projection normalised from the floor to the pool's best; each entry draws a bin, then a pool lineup in it.
+    """
     rng = rng or np.random.default_rng()
     with open(model_path, "rb") as f:
         model = pickle.load(f)
@@ -56,17 +67,16 @@ def sample_field_projection_model(session: Session, field_size: int, contest_par
     X = np.array([[float(contest_params.get("entry_fee", 4.0)), int(contest_params.get("total_entries", 20000)),
                    int(contest_params.get("multi_entry", 150))]])
     proj_dist = np.asarray(proj_model.predict(scaler.transform(X))[0], dtype=np.float64)
-
-    ids, sums, _ = lineup_projections(session)
-    if not ids:
-        raise ValueError("no lineups in the database; run the generate step first")
-    keep = sums >= projection_min
-    if not keep.any():
+    sums = np.asarray(sums, dtype=np.float64)
+    # the pickled floor (200) is absolute, fitted on last season's full slates where it sat near 70% of the optimal lineup;
+    # on a two-game slate the optimal itself is below 200, so the floor follows the pool
+    projection_min = min(projection_min, FLOOR_FRAC * float(sums.max()))
+    keep_idx = np.flatnonzero(sums >= projection_min)
+    if not len(keep_idx):
         raise ValueError(f"no lineups with projection >= {projection_min:.0f}")
-    ids = [i for i, k in zip(ids, keep) if k]
-    sums = sums[keep]
-    max_proj = sums.max()
-    norm = (sums - projection_min) / (max_proj - projection_min) if max_proj > projection_min else np.zeros_like(sums)
+    ks = sums[keep_idx]
+    max_proj = ks.max()
+    norm = (ks - projection_min) / (max_proj - projection_min) if max_proj > projection_min else np.zeros_like(ks)
     norm = np.clip(norm, 0, 1 - 1e-8)
     n_bins = len(proj_dist)
     bin_idx = np.clip(np.floor(norm * (len(bin_edges) - 1)).astype(int), 0, len(bin_edges) - 2)
@@ -78,15 +88,24 @@ def sample_field_projection_model(session: Session, field_size: int, contest_par
     for b, n in zip(*np.unique(drawn_bins, return_counts=True)):
         members = by_bin.get(int(b))
         if members is None or len(members) == 0:
-            picks = rng.choice(len(ids), size=int(n), replace=True)
-            fallback += int(n)
+            picks = rng.integers(0, len(keep_idx), size=int(n)); fallback += int(n)
         else:
             picks = members[rng.integers(0, len(members), size=int(n))]
         for i in picks:
-            counts[ids[int(i)]] = counts.get(ids[int(i)], 0) + 1
-    meta = {"sampler": "projection_model", "model": str(model_path), "projection_min": projection_min,
-            "candidates": int(len(ids)), "dropped_below_min": int((~keep).sum()), "bin_probs": probs.tolist(),
-            "entries_outside_populated_bins": fallback, "unique": len(counts), "sampled": int(sum(counts.values()))}
+            j = int(keep_idx[int(i)]); counts[j] = counts.get(j, 0) + 1
+    meta = {"projection_min": projection_min, "candidates": int(len(sums)), "above_floor": int(len(keep_idx)),
+            "unique": len(counts), "sampled": int(field_size), "fallback": fallback}
+    return counts, meta
+
+
+def sample_field_projection_model(session: Session, field_size: int, contest_params: dict,
+                                  model_path: str | Path = FIELD_MODEL_PKL, rng: Optional[np.random.Generator] = None) -> Tuple[Dict[int, int], dict]:
+    ids, sums, _ = lineup_projections(session)
+    if not ids:
+        raise ValueError("no lineups in the database; run the generate step first")
+    by_pos, meta = bin_sample(sums, field_size, contest_params, model_path, rng)
+    counts = {ids[j]: n for j, n in by_pos.items()}
+    meta = {"sampler": "projection_model", "model": str(model_path), **meta}
     return counts, meta
 
 
@@ -142,3 +161,38 @@ def expand_sampled_field(session: Session, counts_by_lineup: Dict[int, int]):
         for pos in range(int(starts[u]), int(ends[u])):
             lineup_ix[pos] = idxs
     return u_lids, pid_lists_by_lid, lineup_ix, unique_pids, pid_to_idx, starts, ends
+
+
+DEFAULT_CONTEST = {"entry_fee": 20.0, "total_entries": 20000, "multi_entry": 150}
+
+
+def field_ownership(session: Session, config: dict, field_size: int, contest_params: Optional[dict] = None,
+                    rng: Optional[np.random.Generator] = None) -> Dict[int, float]:
+    """player id -> share of the sampled field's entries holding him, in percent."""
+    if str(_cfg(config, "field.sampler", "projection_model")) == "two_group":
+        from collections import Counter
+        from ivan.sports.nba.simulate_contest import slate_field
+        field = slate_field(session, int(field_size))
+        held = Counter(p for lu in field for p in lu)
+        return {int(pid): 100.0 * c / max(1, len(field)) for pid, c in held.items()}
+    counts, _ = sample_field(session, int(field_size), config, contest_params or DEFAULT_CONTEST, rng=rng)
+    _, pids_by_lid = None, {}
+    ids = [int(l) for l, c in counts.items() if c > 0]
+    for i in range(0, len(ids), 900):
+        for lid, raw in session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.id.in_(ids[i:i + 900])).all():
+            pids_by_lid[int(lid)] = coerce_player_ids(raw)
+    total = float(sum(counts.values())) or 1.0
+    own: Dict[int, float] = {}
+    for lid, n in counts.items():
+        for pid in pids_by_lid.get(int(lid), []):
+            own[int(pid)] = own.get(int(pid), 0.0) + n
+    return {pid: 100.0 * v / total for pid, v in own.items()}
+
+
+def write_ownership(session: Session, own: Dict[int, float]) -> int:
+    """Store the field's exposure as every slate player's ownership (0 for players the field never holds). Returns players written."""
+    n = 0
+    for p in session.query(NBAPlayer).all():
+        p.ownership = float(own.get(int(p.id), 0.0)); n += 1
+    session.commit()
+    return n

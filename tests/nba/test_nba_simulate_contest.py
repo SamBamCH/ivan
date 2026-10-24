@@ -47,3 +47,15 @@ def test_report_and_summary_build():
                              sims_off=0, n_sims=n_sims, missing=[], seed=None, seconds=0.5)
     assert report["field"]["unique"] == 3 and report["payouts"]["paid_places"] == 2 and all(c["ok"] for c in report["checks"])
     assert "T (#1)" in SC.format_summary(report)
+
+
+def test_pay_against_the_field_with_copies():
+    import numpy as np
+    from ivan.sports.nba.simulate_contest import pay_against
+    field = np.array([100.0, 200.0, 300.0])                 # 3 field entries; with us, 4 places
+    pay = np.array([0.0, 10.0, 5.0, 0.0, 0.0]); csum = np.cumsum(pay)
+    p, r = pay_against(field, np.array([350.0, 250.0, 50.0]), np.array([0, 0, 0]), csum)
+    assert list(r) == [1, 2, 4] and list(p) == [10.0, 5.0, 0.0]
+    # our lineup is in the field twice (the 300 entry and one more copy): we tie for first with them and split 1st + 2nd + 3rd
+    field2 = np.array([100.0, 300.0, 300.0]); p, r = pay_against(field2, np.array([300.0]), np.array([2]), csum)
+    assert r[0] == 1 and abs(p[0] - 15.0 / 3) < 1e-9

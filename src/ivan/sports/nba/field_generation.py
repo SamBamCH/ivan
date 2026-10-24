@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import random
+import numpy as np
+import time
 from datetime import datetime
 from multiprocessing import Process, Queue
 from pathlib import Path
@@ -37,6 +39,9 @@ from ivan.sports.nba.utils import _cfg, _coerce_positions
 
 Log = Callable[[str], None]
 BATCH_COMMIT_SIZE = 100
+STALL_WINDOW = 300         # solves; a worker stops when fewer than STALL_MIN_NEW of the last STALL_WINDOW solves were new lineups
+STALL_MIN_NEW = 6          # (2%): on a two-game slate 25,000 lineups do not exist and the dedupe would otherwise spin for hours
+PROGRESS_EVERY = 30.0      # seconds between progress lines when the bars are off (the desk reads the log)
 DEFAULTS = {"n_samples": 5000, "randomness": 0.25, "jitter": 0.05, "min_fpts": None, "min_fpts_frac": 0.9, "player_min_fpts": None}
 # randomness scales each sampled world's spread around the mean projection: at 1.0 the lineup that is optimal in a
 # random world sits a median 45 points (14%) below the mean-optimal lineup (2026-10-21 slate); at 0.25 it sits ~20
@@ -104,23 +109,30 @@ def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optiona
         max_team = _cfg(config, "max_salary_per_team", 25000)
         generated: List[List[int]] = []; seen = set(); pending: List[List[int]] = []
         cursor = worker_id * 1000; attempts = 0; max_attempts = num_lineups * 10
+        window: List[int] = []                                 # 1 per attempt that found a new lineup, 0 otherwise, last STALL_WINDOW
+        stalled = ""
         while len(generated) < num_lineups and attempts < max_attempts:
             attempts += 1
             k = cursor % n_samples; cursor += 1
             scores = {pid: float(vec[k]) * (1.0 + random.uniform(-jitter, jitter)) for pid, vec in samples.items()}
             ids = generate_single_classic_lineup(players=players, base_scores=scores, config=config, min_fpts=s["min_fpts"],
                                                  max_salary_per_team=max_team)
-            if not ids:
-                continue
-            key = tuple(sorted(ids))
-            if key in seen:
+            key = tuple(sorted(ids)) if ids else None
+            new_one = key is not None and key not in seen
+            window.append(1 if new_one else 0)
+            if len(window) > STALL_WINDOW:
+                window.pop(0)
+            if len(window) == STALL_WINDOW and sum(window) < STALL_MIN_NEW:
+                stalled = f"stalled: {sum(window)} new lineups in the last {STALL_WINDOW} solves, the slate cannot fill the request"
+                break
+            if not new_one:
                 continue
             seen.add(key); generated.append(ids); pending.append(ids)
             q.put(("advance", worker_id, 1, ""))
             if len(pending) >= BATCH_COMMIT_SIZE:
                 _store(session, pending); pending = []
         _store(session, pending)
-        q.put(("done", worker_id, len(generated), f"created={len(generated)} attempts={attempts}"))
+        q.put(("done", worker_id, len(generated), f"created={len(generated)} attempts={attempts}" + (f"; {stalled}" if stalled else "")))
     except Exception as e:   # noqa: BLE001 - the parent must hear from every worker
         q.put(("done", worker_id, 0, f"error: {type(e).__name__}: {e}"))
     finally:
@@ -145,29 +157,39 @@ def run_workers(quota: List[int], config_path: str, min_fpts: Optional[float], l
         p.start()
     created, done = 0, 0
     bars = _ProgressBars() if progress else None
+    advanced = 0; total = sum(int(n) for n in quota); last_line = time.time(); stalled = 0
     while done < len(procs):
         try:
             kind, proc_no, val, note = q.get(timeout=0.25)
         except Empty:
-            continue
+            kind = None
         if kind == "start":
             if bars:
                 bars.start(proc_no, int(val), note)
             else:
                 log(f"[generate][{proc_no}] starting: {val} lineups ({note})")
         elif kind == "advance":
+            advanced += int(val)
             if bars:
                 bars.advance(proc_no, int(val))
         elif kind == "done":
             created += int(val); done += 1
+            if "stalled" in note:
+                stalled += 1
             if bars:
                 bars.done(proc_no, note)
             else:
                 log(f"[generate][{proc_no}] finished ({note})")
             if note.startswith("error") and bars:
                 log(f"[generate][{proc_no}] {note}")
+        if not bars and time.time() - last_line >= PROGRESS_EVERY:
+            log(f"[generate] {advanced:,} / {total:,} lineups so far, {done}/{len(procs)} workers finished")
+            last_line = time.time()
     if bars:
         bars.stop()
+    if stalled:
+        log(f"[generate] STOPPED EARLY: {stalled} of {len(procs)} workers ran out of new lineups; {created:,} of {total:,} made. "
+            f"The slate is too small for that many unique lineups: ask for fewer, or raise randomness / lower min fpts to widen the pool.")
     for p in procs:
         p.join(timeout=5)
         if p.is_alive():
@@ -249,6 +271,21 @@ def pool_report(session: Session, config: dict, log: Log = print) -> dict:
     return rep
 
 
+def write_field_ownership(session: Session, config: dict, log: Log = print) -> dict:
+    """Sample a generic field from the pool (field.cap entries) and store its exposure as every player's ownership."""
+    from ivan.sports.nba.sample_field import DEFAULT_CONTEST, field_ownership, write_ownership
+    try:
+        own = field_ownership(session, config, int(_cfg(config, "field.cap", 10000)), DEFAULT_CONTEST, rng=np.random.default_rng(seed_for("ownership")))
+    except Exception as e:   # noqa: BLE001 - ownership is a by-product; the pool is the step
+        log(f"ownership not written: {type(e).__name__}: {e}")
+        return {}
+    n = write_ownership(session, own)
+    names = {int(i): nm for i, nm in session.query(NBAPlayer.id, NBAPlayer.name).all()}
+    top = sorted(own.items(), key=lambda kv: -kv[1])[:6]
+    log(f"ownership from the sampled field written for {n} players; top " + ", ".join(f"{names.get(pid, pid).split()[-1]} {x:.0f}%" for pid, x in top))
+    return {int(pid): round(float(x), 2) for pid, x in own.items()}
+
+
 def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log = print, progress: bool = True,
                    min_fpts: Optional[float] = None, session: Optional[Session] = None, randomness: Optional[float] = None) -> dict:
     """The whole generate step: workers, dedupe, the pool report. `session` (opened from the environment when None) is used for the dedupe. Returns counts."""
@@ -263,7 +300,8 @@ def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log 
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         rep = pool_report(session, config, log)
-        return {"requested": int(n_lineups), "created": int(created), "removed": int(removed), "unique": int(kept), "pool": rep}
+        own = write_field_ownership(session, config, log)
+        return {"requested": int(n_lineups), "created": int(created), "removed": int(removed), "unique": int(kept), "pool": rep, "ownership": own}
     finally:
         if own:
             session.close()

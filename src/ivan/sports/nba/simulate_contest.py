@@ -188,8 +188,9 @@ def _simulate_chunk(start: int, end: int, lineup_ix: List[List[int]], P_chunk: n
 
 # ----------------------------------------------------------------------------- one contest
 def simulate_one_contest(session: Session, contest_id: int, contest_name: str, config_path: str, field_cap: int = 10000,
-                         num_sims: int = 1000, artifact_dir: str | Path | None = None, log: Log = print) -> dict:
-    """Sample the field, score it, store the results, the artifact and the report. Returns the report."""
+                         num_sims: int = 1000, artifact_dir: str | Path | None = None, log: Log = print, own_out: Optional[dict] = None) -> dict:
+    """Sample the field, score it, store the results, the artifact and the report. Returns the report.
+    `own_out`, when a dict, receives the field's exposure per player id in percent (and "total_entries")."""
     t0 = time.time()
     cfg = json.load(open(config_path, encoding="utf-8"))
     contest = C.ensure_contest(session, int(contest_id), log=log)
@@ -251,6 +252,8 @@ def simulate_one_contest(session: Session, contest_id: int, contest_name: str, c
     for u, lid in enumerate(u_lids):
         for pid in pid_lists_by_lid.get(lid, []):
             exposure[pid] = exposure.get(pid, 0) + int(dupes[u])
+    if own_out is not None:
+        own_out.update({int(pid): 100.0 * n / max(1, M) for pid, n in exposure.items()}); own_out["total_entries"] = field_sz
     contest_info = {"id": int(contest_id), "name": contest_name, "entry_fee": entry_fee, "total_entries": field_sz, "field_cap": int(field_cap or 0),
                     "multi_entry": contest_params["multi_entry"], "start": contest.date, "candidates": n_candidates}
     if artifact_dir is not None:
@@ -380,16 +383,184 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
     art = Path(artifact_dir) if artifact_dir is not None else None
     log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}" + (f"; run artifacts -> {art}" if art else ""))
     out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}}
+    biggest: dict = {}
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         log(f"--- {i}/{len(contests)} ---")
         try:
-            report = simulate_one_contest(session, int(cid), name, str(config_path), field_cap=field_cap, num_sims=n_sims, artifact_dir=art, log=log)
+            own: dict = {}
+            cfg = json.load(open(config_path, encoding="utf-8"))
+            if str(_cfg(cfg, "field.sampler", "projection_model")) == "two_group":
+                report = simulate_vs_field(session, int(cid), name, field_cap=field_cap, num_sims=n_sims, log=log, own_out=own)
+            else:
+                report = simulate_one_contest(session, int(cid), name, str(config_path), field_cap=field_cap, num_sims=n_sims, artifact_dir=art, log=log, own_out=own)
             out["reports"][int(cid)] = report; out["simulated"] += 1
-            log(format_summary(report))
+            if own.get("total_entries", 0) >= biggest.get("total_entries", 0):
+                biggest = own
+            if report.get("simulation", {}).get("score") is not None:
+                log(format_summary(report))
         except Exception as e:   # noqa: BLE001 - one contest failing must not lose the others
             import traceback
             session.rollback()
             out["failed"].append({"contest_id": int(cid), "name": name, "error": f"{type(e).__name__}: {e}"})
             log(f"FAILED contest {cid} ('{name}'): {e}\n{traceback.format_exc()}")
+    if biggest:
+        from ivan.sports.nba.sample_field import write_ownership
+        n = write_ownership(session, {k: v for k, v in biggest.items() if k != "total_entries"})
+        log(f"ownership written for {n} players from the largest contest's field ({biggest['total_entries']:,} entries)")
     log(f"Done: {out['simulated']} contest(s) simulated" + (f", {len(out['failed'])} failed" if out["failed"] else ""))
     return out
+
+
+# ----------------------------------------------------------------------------- the two-group field (field.sampler = two_group)
+# The field is its own set of lineups, generated from the fitted two-group model (field_model.simulate_field with
+# data/nba/models/field_two_group.json) on the slate's projection: a quarter of the entrants take the optimal lineup on
+# one of a few providers' projections through a little personal noise, the rest build loosely. It never touches the
+# candidate table. Every candidate is then scored against it in every world: its rank is one more than the field
+# entries that outscore it, and it splits the payout with any exact copies of itself in the field.
+FIELD_PARAMS_JSON = Path(__file__).resolve().parents[4] / "data" / "nba" / "models" / "field_two_group.json"
+FIELD_CACHE_DIR = DIAG_DIR.parent / "derived" / "field_cache"
+KEEP_RESULTS = 6000          # candidates whose per-world results are stored (the best by mean ROI): what the chooser reads
+CAND_CHUNK = 4000
+FIELD_CACHE_KEEP = 40      # cached fields kept (newest first)
+
+
+FIELD_PARAMS_DEFAULT = {"model": "two_group", "sigma_provider": 0.06, "sigma_personal": 0.05, "optimizer_share": 0.25, "sigma_casual": 0.45,
+                        "providers": 3, "fitted_at": "2026-10-23"}      # the 2026-10-23 fit, for a machine without the model file
+
+
+def field_params(path: Path = FIELD_PARAMS_JSON) -> dict:
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return dict(FIELD_PARAMS_DEFAULT)
+
+
+def slate_field(session: Session, size: int, params: Optional[dict] = None, log: Log = print) -> List[tuple]:
+    """The slate's two-group field at `size` entries (sorted id tuples, copies kept), generated once per slate and projection and cached."""
+    from ivan.sports.nba import field_model as FM
+    from ivan.sports.nba.field_generation import player_pool
+    params = params or field_params()
+    players = [p for p in player_pool(session, 5.0)]
+    Q = {p.id: float(p.fpts_mean or 0.0) for p in players}
+    stamp = max((r for (r,) in session.query(NBAPlayer.fpts_updated_at).all() if r), default=None)
+    dg = next((g for (g,) in session.query(NBAPlayer.draft_group_id).limit(1).all()), 0)
+    key = f"{dg}_{str(stamp).replace(' ', 'T').replace(':', '')}_{params['optimizer_share']}_{params['sigma_provider']}_{params['sigma_personal']}"
+    path = FIELD_CACHE_DIR / f"{key}.json"
+    if path.exists():
+        cached = [tuple(x) for x in json.loads(path.read_text())]
+        if len(cached) >= size:
+            return cached[:size]
+    seed = seed_for(f"field/{dg}") or 0
+    t0 = time.time()
+    from ivan.sports.nba import field_model as _fm
+    old = _fm.SIGMA_CASUAL; _fm.SIGMA_CASUAL = float(params.get("sigma_casual", old))
+    try:
+        field = FM.simulate_field(players, Q, int(size), float(params["sigma_provider"]), float(params["sigma_personal"]),
+                                  float(params["optimizer_share"]), seed=int(seed), providers=int(params.get("providers", 3)))
+    finally:
+        _fm.SIGMA_CASUAL = old
+    rng = np.random.default_rng(int(seed) + 1); rng.shuffle(field)                    # a contest's subsample is a random draw
+    FIELD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([list(x) for x in field]))
+    for old_file in sorted(FIELD_CACHE_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)[:-FIELD_CACHE_KEEP]:
+        old_file.unlink(missing_ok=True)                                            # every projection update writes one
+    log(f"two-group field: {len(field):,} lineups generated in {time.time() - t0:.0f}s (cached {path.name})")
+    return field
+
+
+def pay_against(field_sorted: np.ndarray, scores: np.ndarray, copies: np.ndarray, csum: np.ndarray):
+    """
+    One world: (payout, rank) for each candidate score against the field's scores (ascending). The candidate ranks one
+    below the field entries that outscore it; it shares the places with the field entries tied with it (at least its own
+    exact copies), so it gets the mean payout of those places. csum[k] is the total payout of ranks 1..k.
+    """
+    n = len(field_sorted)
+    right = np.searchsorted(field_sorted, scores, side="right"); left = np.searchsorted(field_sorted, scores, side="left")
+    higher = n - right
+    tie = np.maximum(right - left, copies) + 1
+    top = np.minimum(higher + tie, n + 1)
+    return (csum[top] - csum[higher]) / tie, higher + 1
+
+
+def simulate_vs_field(session: Session, contest_id: int, contest_name: str, field_cap: int = 10000, num_sims: int = 1000,
+                      log: Log = print, own_out: Optional[dict] = None) -> dict:
+    """Score every candidate lineup against the two-group field; store per-world results for the best KEEP_RESULTS. Returns a report."""
+    from collections import Counter
+    from ivan.core.utils import coerce_player_ids
+    t0 = time.time()
+    contest = C.ensure_contest(session, int(contest_id), log=log)
+    if contest is None:
+        raise ValueError(f"contest {contest_id} is not in the database and DraftKings has nothing for it")
+    if not payout_tiers(session, contest_id):
+        C.fetch_payouts(session, [int(contest_id)], log=log)
+    tiers = payout_tiers(session, contest_id)
+    if not tiers:
+        raise ValueError(f"no payouts for contest {contest_id}")
+    field_sz = int(contest.total_entries); entry_fee = float(contest.entry_fee)
+    n = max(1, min(int(field_cap or 10000), field_sz) - 1)                         # the field around one of our entries
+    field = slate_field(session, n, log=log)[:n]
+    n = len(field)
+    cands = [(int(lid), coerce_player_ids(raw)) for lid, raw in session.query(Lineup.id, Lineup.player_ids_list).all()]
+    if not cands:
+        raise ValueError("no lineups in the database; run the generate step first")
+    copies = Counter(field)
+    pids = sorted({p for lu in field for p in lu} | {p for _, ids in cands for p in ids})
+    col = {pid: i for i, pid in enumerate(pids)}
+    seed = seed_for(f"sim/{contest_id}")
+    P, ns, raw_samples, missing = player_samples_matrix(session, col, num_sims, seed=seed)
+    if ns == 0:
+        raise ValueError("the player sampler returned nothing; project the slate first")
+    F = np.sort(P[:, np.array([[col[p] for p in lu] for lu in field])].sum(axis=2), axis=1)       # worlds x field, ascending
+    scaled = scale_payouts(tiers, n + 1, field_sz, entry_fee)
+    pay = np.zeros(n + 2)
+    for r, a in scaled.items():
+        if 1 <= r <= n + 1:
+            pay[r] = float(a)
+    csum = np.cumsum(pay)                                                           # csum[k] = pay for ranks 1..k
+    tie_extra = np.array([copies.get(tuple(sorted(ids)), 0) for _, ids in cands])
+
+    def score(idx):
+        ix = np.array([[col[p] for p in cands[i][1]] for i in idx]); s = P[:, ix].sum(axis=2)        # worlds x chunk
+        payout = np.zeros_like(s, dtype=np.float64); rank = np.zeros(s.shape, dtype=np.int32)
+        extra = tie_extra[idx]
+        for w in range(ns):
+            payout[w], rank[w] = pay_against(F[w], s[w], extra, csum)
+        return s, payout, rank
+
+    means = np.zeros(len(cands)); cashes = np.zeros(len(cands))
+    for a in range(0, len(cands), CAND_CHUNK):
+        idx = np.arange(a, min(a + CAND_CHUNK, len(cands)))
+        _, payout, _ = score(idx)
+        means[idx] = (payout.mean(axis=0) - entry_fee) / entry_fee; cashes[idx] = (payout > 0).mean(axis=0)
+    keep = np.argsort(-means)[:KEEP_RESULTS]
+    session.query(LineupSimulationResult).filter(LineupSimulationResult.contest_id == int(contest_id)).delete(synchronize_session=False)
+    session.commit()
+    for a in range(0, len(keep), CAND_CHUNK):
+        idx = keep[a:a + CAND_CHUNK]
+        s, payout, rank = score(idx)
+        roi = (payout - entry_fee) / entry_fee
+        for j, i in enumerate(idx):
+            session.add(LineupSimulationResult(lineup_id=int(cands[i][0]), contest_id=int(contest_id), contest_name=contest_name,
+                                               fpts=s[:, j].astype(float).tolist(), payout=payout[:, j].tolist(), roi=roi[:, j].tolist(), rank=rank[:, j].tolist()))
+        session.commit()
+    exposure = Counter(p for lu in field for p in lu)
+    if own_out is not None:
+        own_out.update({int(pid): 100.0 * c / n for pid, c in exposure.items()}); own_out["total_entries"] = field_sz
+    players = player_meta(session, list(exposure)[:2000])
+    label = lambda pid: f"{players.get(pid, {}).get('name', pid)} ({players.get(pid, {}).get('team', '?')})"   # noqa: E731
+    fs = np.array([sum(float(players.get(p, {}).get('fpts_mean') or 0.0) for p in lu) for lu in field])
+    report = {"version": REPORT_VERSION, "created_at": datetime.now().isoformat(timespec="seconds"), "seed": seed, "seconds": round(time.time() - t0, 1),
+              "contest": {"id": int(contest_id), "name": contest_name, "entry_fee": entry_fee, "total_entries": field_sz, "field_cap": int(field_cap or 0),
+                          "multi_entry": int(contest.multi_entry or 150), "start": contest.date, "candidates": len(cands)},
+              "field": {"sampler": {"sampler": "two_group", **{k: v for k, v in field_params().items() if k != "notes"}}, "sampled": int(n),
+                        "unique": len(copies), "dup_share": _f(sum(c for c in copies.values() if c > 1) / n), "max_copies": int(max(copies.values())),
+                        "median_projection": _f(np.median(fs)), "players_without_projection": missing,
+                        "top_exposure": [{"player": label(pid), "pct": _f(100.0 * c / n)} for pid, c in exposure.most_common(15)]},
+              "simulation": {"n_sims": int(ns), "kept": int(len(keep)), "avg_roi": {f"p{p}": _f(np.percentile(means, p)) for p in (10, 50, 90, 99)},
+                             "best_roi": _f(means[keep[0]]) if len(keep) else None, "best_cash": _f(cashes[keep[0]]) if len(keep) else None,
+                             "candidates_in_field": int((tie_extra > 0).sum())},
+              "checks": [{"name": "every field player projected", "ok": not missing, "detail": f"{len(missing)} missing"}]}
+    save_report(session, report)
+    log(f"{contest_name}: field {n:,} ({len(copies):,} unique, {report['field']['dup_share']:.0%} in duplicated lineups), "
+        f"{len(cands):,} candidates scored, best mean ROI {report['simulation']['best_roi']:+.1%} in {report['seconds']:.0f}s")
+    return report

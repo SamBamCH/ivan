@@ -280,8 +280,33 @@ def market_fpts_by_player(session: Session) -> dict[str, float]:
     return out
 
 
+OWNERSHIP_FIELD = 3000      # entries in the two-group field projected ownership is read from on every projection update
+
+
+def refresh_ownership(session: Session, log: Log = print) -> dict:
+    """
+    Projected ownership for the slate as it now projects: the two-group field (simulate_contest.slate_field, cached per
+    projection) at OWNERSHIP_FIELD entries, its exposure written to nba_player.ownership. store_slate rebuilds the player
+    rows on every pool refresh, so without this the column is empty until the next generate or sim. Never fails a projection.
+    """
+    try:
+        from collections import Counter
+        from ivan.sports.nba.simulate_contest import slate_field
+        field = slate_field(session, OWNERSHIP_FIELD, log=log)
+        held = Counter(p for lu in field for p in lu)
+        own = {int(pid): 100.0 * c / max(1, len(field)) for pid, c in held.items()}
+        for p in session.query(NBAPlayer).all():
+            p.ownership = float(own.get(int(p.id), 0.0))
+        session.commit()
+        return own
+    except Exception as e:   # noqa: BLE001 - ownership is a by-product of the projection
+        session.rollback()
+        log(f"ownership not refreshed: {type(e).__name__}: {e}")
+        return {}
+
+
 def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool = True, write_csv: bool = True,
-                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None) -> ProjectInfo:
+                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = True) -> ProjectInfo:
     info = ProjectInfo()
     slate = LiveSlate(session)
     if not slate.players:
@@ -323,6 +348,8 @@ def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool =
                              **history_context(slate, normalize_name(p.name))))
     dg = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
     lock = min((p.gametime for p in slate.players if p.gametime), default=None)
+    if write_ownership:
+        refresh_ownership(session, log=log)
     if write_capture:
         for r in rows:
             session.add(NBAProjectionCapture(captured_at=now, draft_group_id=dg, lock=lock, source=source, **r))
