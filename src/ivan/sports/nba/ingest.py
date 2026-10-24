@@ -14,6 +14,7 @@ Nothing here prompts; scripts/nba/ingest.py and capture.py pass the draft group.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -191,6 +192,39 @@ class StoreInfo:
     capture_id: Optional[int] = None
 
 
+@contextmanager
+def one_transaction(session: Session):
+    """
+    Everything inside commits once, at the end: the pool is replaced, projected and its public side refreshed before any
+    other connection sees a row of it (SQLite WAL readers keep the old pool until the commit). The functions inside call
+    session.commit() as they always did; here that becomes a flush. On an error everything rolls back and the old pool stays.
+    """
+    real_commit = session.commit
+    session.commit = session.flush            # type: ignore[method-assign]
+    try:
+        yield
+        session.commit = real_commit          # type: ignore[method-assign]
+        real_commit()
+    except BaseException:
+        session.commit = real_commit          # type: ignore[method-assign]
+        session.rollback()
+        raise
+
+
+def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
+                 log: Log = print) -> tuple:
+    """
+    The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
+    and refresh its public side in ONE transaction. Nothing downstream can see a half-written or unprojected pool
+    (2026-10-23: a sim started during a rewrite found no point guard). Returns (StoreInfo, ProjectInfo).
+    """
+    fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
+    with one_transaction(session):
+        info = store_slate(session, fetched, log=log)
+        pinfo = project_slate(session, n_sims=n_sims, log=log)
+    return info, pinfo
+
+
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
     info = StoreInfo()
     # the pool: replace in full (one slate at a time in nba_player)
@@ -213,7 +247,7 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
     if fetched.game_lines is not None and len(fetched.game_lines):
         info.game_lines = store_game_lines(session, fetched.game_lines, fetched_at=fetched.fetched_at)
     # market rates for this pool from whatever props are stored (fresh or an earlier fetch today)
-    odds_df = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.get_bind())
+    odds_df = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.connection())
     if len(odds_df):
         pool = {r["name"] for r in fetched.players}
         odds_df = odds_df[odds_df.player.isin(pool)]
@@ -222,6 +256,7 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
             slate = LiveSlate(session, use_market=False)
             basis = basis_minutes_for_market(slate, read_overrides_full(), set())
             info.market_rates = store_market_rates(session, means, basis)
+    refresh_ownership(session, log=log)                     # the public projection, the field and ownership: the pool or props changed
     # archive capture: players carry their starter flag so a replay can restore it
     starters = {}
     for r in session.query(StartingLineups).all():
@@ -280,33 +315,19 @@ def market_fpts_by_player(session: Session) -> dict[str, float]:
     return out
 
 
-OWNERSHIP_FIELD = 3000      # entries in the two-group field projected ownership is read from on every projection update
-
-
 def refresh_ownership(session: Session, log: Log = print) -> dict:
-    """
-    Projected ownership for the slate as it now projects: the two-group field (simulate_contest.slate_field, cached per
-    projection) at OWNERSHIP_FIELD entries, its exposure written to nba_player.ownership. store_slate rebuilds the player
-    rows on every pool refresh, so without this the column is empty until the next generate or sim. Never fails a projection.
-    """
+    """The public projection, the field and ownership from the pool and props as stored (public_field.refresh_public).
+    Runs with every pool refresh (store_slate); Publish never touches it, so our edits cannot move ownership."""
     try:
-        from collections import Counter
-        from ivan.sports.nba.simulate_contest import slate_field
-        field = slate_field(session, OWNERSHIP_FIELD, log=log)
-        held = Counter(p for lu in field for p in lu)
-        own = {int(pid): 100.0 * c / max(1, len(field)) for pid, c in held.items()}
-        for p in session.query(NBAPlayer).all():
-            p.ownership = float(own.get(int(p.id), 0.0))
-        session.commit()
-        return own
-    except Exception as e:   # noqa: BLE001 - ownership is a by-product of the projection
-        session.rollback()
-        log(f"ownership not refreshed: {type(e).__name__}: {e}")
-        return {}
+        from ivan.sports.nba.public_field import refresh_public
+        slate = LiveSlate(session, use_market=False)
+        return refresh_public(session, slate.hist, log=log)
+    except Exception as e:   # noqa: BLE001 - never fails a pool refresh
+        session.rollback(); log(f"public refresh failed: {type(e).__name__}: {e}"); return {}
 
 
 def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool = True, write_csv: bool = True,
-                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = True) -> ProjectInfo:
+                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = False) -> ProjectInfo:
     info = ProjectInfo()
     slate = LiveSlate(session)
     if not slate.players:

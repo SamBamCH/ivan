@@ -84,8 +84,10 @@ class NBAPlayer(NBABase):
     fpts_mean       = Column(Float,     nullable=True)
     fpts_std        = Column(Float,     nullable=True)
     fpts_updated_at = Column(DateTime,  nullable=True)
-    # Projected ownership percentage (0-100)
+    # Projected ownership percentage (0-100): the public field's exposure (public_field.py)
     ownership       = Column(Float,     nullable=True, default=0.0)
+    pub_fpts        = Column(Float,     nullable=True)      # the public's projection (Stokastic replica from the props); the field is built on it, never on ours
+    pub_updated_at  = Column(DateTime,  nullable=True)
     # Minutes behind fpts_mean (minutes-anchored projection); None for CSV projections
     minutes_proj    = Column(Float,     nullable=True)
     # Marginal distribution as 101 quantiles (JSON list); the correlated sampler

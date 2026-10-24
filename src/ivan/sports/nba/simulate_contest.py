@@ -417,55 +417,9 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
 # one of a few providers' projections through a little personal noise, the rest build loosely. It never touches the
 # candidate table. Every candidate is then scored against it in every world: its rank is one more than the field
 # entries that outscore it, and it splits the payout with any exact copies of itself in the field.
-FIELD_PARAMS_JSON = Path(__file__).resolve().parents[4] / "data" / "nba" / "models" / "field_two_group.json"
-FIELD_CACHE_DIR = DIAG_DIR.parent / "derived" / "field_cache"
+from ivan.sports.nba.public_field import field_params, slate_field          # the field lives on the public projection (public_field.py)
 KEEP_RESULTS = 6000          # candidates whose per-world results are stored (the best by mean ROI): what the chooser reads
 CAND_CHUNK = 4000
-FIELD_CACHE_KEEP = 40      # cached fields kept (newest first)
-
-
-FIELD_PARAMS_DEFAULT = {"model": "two_group", "sigma_provider": 0.06, "sigma_personal": 0.05, "optimizer_share": 0.25, "sigma_casual": 0.45,
-                        "providers": 3, "fitted_at": "2026-10-23"}      # the 2026-10-23 fit, for a machine without the model file
-
-
-def field_params(path: Path = FIELD_PARAMS_JSON) -> dict:
-    try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return dict(FIELD_PARAMS_DEFAULT)
-
-
-def slate_field(session: Session, size: int, params: Optional[dict] = None, log: Log = print) -> List[tuple]:
-    """The slate's two-group field at `size` entries (sorted id tuples, copies kept), generated once per slate and projection and cached."""
-    from ivan.sports.nba import field_model as FM
-    from ivan.sports.nba.field_generation import player_pool
-    params = params or field_params()
-    players = [p for p in player_pool(session, 5.0)]
-    Q = {p.id: float(p.fpts_mean or 0.0) for p in players}
-    stamp = max((r for (r,) in session.query(NBAPlayer.fpts_updated_at).all() if r), default=None)
-    dg = next((g for (g,) in session.query(NBAPlayer.draft_group_id).limit(1).all()), 0)
-    key = f"{dg}_{str(stamp).replace(' ', 'T').replace(':', '')}_{params['optimizer_share']}_{params['sigma_provider']}_{params['sigma_personal']}"
-    path = FIELD_CACHE_DIR / f"{key}.json"
-    if path.exists():
-        cached = [tuple(x) for x in json.loads(path.read_text())]
-        if len(cached) >= size:
-            return cached[:size]
-    seed = seed_for(f"field/{dg}") or 0
-    t0 = time.time()
-    from ivan.sports.nba import field_model as _fm
-    old = _fm.SIGMA_CASUAL; _fm.SIGMA_CASUAL = float(params.get("sigma_casual", old))
-    try:
-        field = FM.simulate_field(players, Q, int(size), float(params["sigma_provider"]), float(params["sigma_personal"]),
-                                  float(params["optimizer_share"]), seed=int(seed), providers=int(params.get("providers", 3)))
-    finally:
-        _fm.SIGMA_CASUAL = old
-    rng = np.random.default_rng(int(seed) + 1); rng.shuffle(field)                    # a contest's subsample is a random draw
-    FIELD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([list(x) for x in field]))
-    for old_file in sorted(FIELD_CACHE_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)[:-FIELD_CACHE_KEEP]:
-        old_file.unlink(missing_ok=True)                                            # every projection update writes one
-    log(f"two-group field: {len(field):,} lineups generated in {time.time() - t0:.0f}s (cached {path.name})")
-    return field
 
 
 def pay_against(field_sorted: np.ndarray, scores: np.ndarray, copies: np.ndarray, csum: np.ndarray):

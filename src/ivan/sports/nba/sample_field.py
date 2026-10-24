@@ -170,11 +170,8 @@ def field_ownership(session: Session, config: dict, field_size: int, contest_par
                     rng: Optional[np.random.Generator] = None) -> Dict[int, float]:
     """player id -> share of the sampled field's entries holding him, in percent."""
     if str(_cfg(config, "field.sampler", "projection_model")) == "two_group":
-        from collections import Counter
-        from ivan.sports.nba.simulate_contest import slate_field
-        field = slate_field(session, int(field_size))
-        held = Counter(p for lu in field for p in lu)
-        return {int(pid): 100.0 * c / max(1, len(field)) for pid, c in held.items()}
+        from ivan.sports.nba.public_field import field_ownership as _public_own
+        return _public_own(session, int(field_size))
     counts, _ = sample_field(session, int(field_size), config, contest_params or DEFAULT_CONTEST, rng=rng)
     _, pids_by_lid = None, {}
     ids = [int(l) for l, c in counts.items() if c > 0]

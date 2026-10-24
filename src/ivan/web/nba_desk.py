@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -37,7 +38,7 @@ from ivan.core import feed
 from ivan.core.config import config_path
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, store_slate, IngestError
+from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
@@ -144,7 +145,29 @@ class Desk:
         self.proj: dict[str, pd.DataFrame] = {}
         self.hist_only: dict[str, pd.DataFrame] = {}
         self.flash: list[str] = []
+        self.busy: Optional[str] = None                     # "loading slate 155581" while a background refresh runs; the board polls
+        self._lobby: tuple = (0.0, {})
         self.rebuild()
+
+    def lobby_slates(self) -> dict:
+        """Today's classic slates in the DraftKings lobby (cached two minutes), labelled with DK's start string; the loaded
+        slate is always present. Falls back to the slates the capture state knows when the lobby is unreachable."""
+        now = time.time()
+        if now - self._lobby[0] < 120:
+            return self._lobby[1]
+        out = {}
+        try:
+            from ivan.sports.nba.ingest import classic_slates
+            today = datetime.now().strftime("%a")
+            for sl in classic_slates():
+                start = str(sl.get("start") or "")
+                if start and not start.startswith(today):
+                    continue
+                out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None)
+        except Exception as e:   # noqa: BLE001 - the lobby is a convenience
+            self.flash.append(f"could not list the lobby's slates ({type(e).__name__}); showing the known ones")
+        self._lobby = (now, out)
+        return out
 
     def _stamp(self):
         """(latest projection time, player count, draft group, hash of the player ids) of the pool on disk. A column query:
@@ -597,18 +620,21 @@ class Desk:
             except Exception:
                 st = {}
         odds_t = self.session.execute(__import__("sqlalchemy").text("select max(last_update) from odds")).scalar()
-        slates = {}
+        slates = dict(self.lobby_slates())
         for k, v in (st.get("slates") or {}).items():
+            if k in slates:
+                continue
             try:
                 t = datetime.fromisoformat(str(v.get("lock")))
             except (TypeError, ValueError):
                 continue
             slates[k] = dict(v, lock_dt=t, label=f"{t:%a %m-%d %H:%M} · " + str(v.get("name", "")).replace("NBA ", "")[:28])
-        days = sorted({v["lock_dt"].date() for v in slates.values()})
-        if days:                                                  # today's slates only (the next day's when today has none), plus the loaded one
-            ahead = [d for d in days if d >= now.date()]
+        days = sorted({v["lock_dt"].date() for v in slates.values() if v.get("lock_dt") is not None})
+        if days:                                                  # dated slates: today's only (the next day's when today has none); the lobby's
+            ahead = [d for d in days if d >= now.date()]          # (already today's, undated) and the loaded slate always stay
             day = now.date() if now.date() in days else (ahead[0] if ahead else days[-1])
-            slates = dict(sorted(((k, v) for k, v in slates.items() if v["lock_dt"].date() == day or k == str(dg)), key=lambda kv: kv[1]["lock_dt"]))
+            slates = {k: v for k, v in slates.items() if v.get("lock_dt") is None or v["lock_dt"].date() == day or k == str(dg)}
+        slates = dict(sorted(slates.items(), key=lambda kv: (kv[1].get("lock_dt") is None, kv[1].get("lock_dt") or now, kv[1]["label"])))
         return dict(draft_group=dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None,
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
@@ -631,6 +657,14 @@ def _pool_vanished_handler():
 
 
 _pool_vanished_handler()
+
+
+def _busy(request: Request):
+    """A refresh is replacing the pool: no edits or jobs until it is done (the board shows the state)."""
+    if desk.busy:
+        desk.flash.append(f"wait: {desk.busy}")
+        return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    return None
 
 
 def _render(request: Request, template: str, **ctx):
@@ -664,8 +698,19 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
 def index(request: Request, open: Optional[str] = None, view: str = "games"):
     """view=games: the team cards paired into games; view=players: every player in one table, highest ownership first."""
     with LOCK:
-        desk.maybe_reload()
+        if not desk.busy:
+            desk.maybe_reload()
         now = datetime.now()
+        return _render(request, "nba_desk.html", header=desk.header(now), open_team=open, view=view, busy=desk.busy)
+
+
+@app.get("/board", response_class=HTMLResponse)
+def board(request: Request, view: str = "games"):
+    """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
+    with LOCK:
+        now = datetime.now()
+        if desk.busy:
+            return _render(request, "_nba_board.html", busy=desk.busy, view=view, games=[], menu=[], players=[], lateswap=None)
         for t in desk.slate.teams():
             desk.slate.spread(t)                            # loads the lines once
         cards = [desk.team_card(t, now) for t in desk.slate.teams()]
@@ -681,8 +726,28 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
-        return _render(request, "nba_desk.html", header=desk.header(now), games=games, menu=menu, open_team=open, view=view, players=players,
-                       lateswap=lateswap, **_pipeline_ctx())
+        return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, **_pipeline_ctx())
+
+
+def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
+    """Fetch, store, project and refresh the public side in a background thread with its own session (one transaction);
+    the board shows `what` until it is done, then the desk rebuilds from the new pool."""
+    def run():
+        log = []
+        sess = get_session(engine)
+        try:
+            refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
+            msg = f"{what}: done"
+        except IngestError as e:
+            msg = f"{what} failed: {e}"
+        except Exception as e:   # noqa: BLE001 - the transaction rolled back: the old pool stands
+            msg = f"{what} failed, the previous pool is unchanged: {type(e).__name__}: {e}"
+        finally:
+            sess.close()
+        with LOCK:
+            desk.rebuild(); desk.busy = None; desk.flash.append(msg)
+    desk.busy = what
+    threading.Thread(target=run, name="ivan-refresh", daemon=True).start()
 
 
 @app.get("/team/{team}", response_class=HTMLResponse)
@@ -706,6 +771,8 @@ def _num(raw: str, label: str) -> Optional[float]:
 @app.post("/team/{team}/pin", response_class=HTMLResponse)
 def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form("")):
     """One row's hand values: blank clears that field. Minutes 0 scratches."""
+    if (b := _busy(request)) is not None:
+        return b
     with LOCK:
         key = normalize_name(player)
         lo, hi = _num(low, "low"), _num(high, "high")
@@ -738,6 +805,8 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
 @app.post("/balance_all")
 def balance_all(request: Request):
     """Every team with priced players: priced players to the books' minutes (totals held), the unpriced fill the rest."""
+    if (b := _busy(request)) is not None:
+        return b
     with LOCK:
         done, short = [], []
         for t in desk.slate.teams():
@@ -766,6 +835,8 @@ def balance(request: Request, team: str):
 def starter_toggle(request: Request, team: str, player: str = Form(...)):
     """Click the st cell: a bench player becomes a starter, a starter goes to the bench; a second click on a hand call clears it
     back to Rotowire's lineup. Saved with the other edits; the team re-projects (the start shift and the rotation proposal move)."""
+    if (b := _busy(request)) is not None:
+        return b
     with LOCK:
         key = normalize_name(player)
         base = desk.slate.starters.get(team)
@@ -827,6 +898,8 @@ def clear_team(request: Request, team: str):
 @app.post("/publish")
 def publish(request: Request):
     """Write the pins, project every team at full sims, store projections + a capture row set."""
+    if (b := _busy(request)) is not None:
+        return b
     with LOCK:
         write_overrides(desk.overrides)
         try:
@@ -869,14 +942,14 @@ def refresh(request: Request, what: str = Form("dk")):
             except Exception as e:   # noqa: BLE001
                 desk.flash.append(f"feed pull failed: {type(e).__name__}: {e}")
         elif dg is None:
-            desk.flash.append("no draft group in the pool; run ingest first")
+            desk.flash.append("no draft group in the pool; pick a slate first")
+        elif runner.active():
+            desk.flash.append("a job is running; it reads the pool, so refresh after it finishes (or cancel it)")
+        elif desk.busy:
+            desk.flash.append(f"already {desk.busy}")
         else:
-            try:
-                f = fetch_slate(desk.session, dg, update_odds=(what == "props"), starters=True, log=desk.flash.append)
-                store_slate(desk.session, f, log=desk.flash.append)
-                project_slate(desk.session, n_sims=1000, log=desk.flash.append)
-            except IngestError as e:
-                desk.flash.append(f"refresh failed: {e}")
+            _start_refresh("refreshing the pool" + (" and the props" if what == "props" else ""), dg, update_odds=(what == "props"))
+            return RedirectResponse(auth.root_of(request) + "/", status_code=303)
         desk.rebuild()
     return RedirectResponse(auth.root_of(request) + "/", status_code=303)
 
@@ -1091,6 +1164,8 @@ def pipeline(request: Request):
 async def pipeline_run(request: Request, step: str):
     """generate | sim | choose | all. Generate (and all) publish the desk's projections first, so the pool is what you see."""
     form = await request.form()
+    if (b := _busy(request)) is not None:
+        return b
     with LOCK:
         pipeline_form.update({k: str(form.get(k, "")) for k in PIPELINE_DEFAULTS})
         notes = clamp_form(pipeline_form)
@@ -1211,11 +1286,10 @@ def switch_slate(request: Request, draft_group: int = Form(...)):
             ACTIVE_SLATE_JSON.write_text(json.dumps({"draft_group": int(draft_group), "chosen_at": datetime.now().isoformat(timespec="seconds")}))
         except OSError as e:
             desk.flash.append(f"could not save the slate choice ({e}); the capture tick may switch back")
-        try:
-            f = fetch_slate(desk.session, draft_group, update_odds=False, starters=True, log=desk.flash.append)
-            store_slate(desk.session, f, log=desk.flash.append)
-            project_slate(desk.session, n_sims=1000, log=desk.flash.append)
-        except IngestError as e:
-            desk.flash.append(f"could not load slate {draft_group}: {e}")
-        desk.rebuild()
+        if runner.active():
+            desk.flash.append("a job is running on the current slate; switch after it finishes (or cancel it)")
+        elif desk.busy:
+            desk.flash.append(f"already {desk.busy}")
+        else:
+            _start_refresh(f"loading slate {draft_group}", int(draft_group), update_odds=False)
     return RedirectResponse(auth.root_of(request) + "/", status_code=303)
