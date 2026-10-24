@@ -91,6 +91,9 @@ historical-props days (1,430):
 Fantasy points improve on both windows (the thing that pays); minutes tie overall; priced players improve this season; this
 season's unpriced rotation is the one loss (early-season group targets on 3-6 games). Switched: config projection.alloc = solve.
 Both allocators over-project priced players' points this season (+2 to +3 bias): the books themselves ran high in week 1.
+Anchor widths (book 3-4 / history 5-8 / deep 6-12) move the result by 0.1-0.2 minutes either way: kept at 4 / 5 / 6 / 8.
+Group budgets: on this season's 3-6 games of history they cost 0.1-0.2 minutes (5.43 vs 5.33 without), on last season's full
+history they gained it back on the unpriced rotation (7.04 vs 7.42), so they act only once a team has 8 games.
 
 ## Steps
 

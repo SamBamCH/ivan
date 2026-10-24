@@ -7,7 +7,7 @@ position_map(session)  player -> DK positions, from every pool this season holds
                        last season's projection snapshots, so past box-score rows can be grouped
 group_targets(box, team, before, posmap)
                        the team's trailing minutes per group (half-life GROUP_HALFLIFE games) and a spread: a soft target
-                       for the solve. Measured 2026-10-23 over 1,236 team-games: a trailing average misses the next game's
+                       for the solve, once the team has GROUP_MIN_GAMES games. Measured 2026-10-23 over 1,236 team-games: a trailing average misses the next game's
                        group minutes by 8 / 11 / 13 (big / guard / wing) against 13.5 / 15 / 19 for the league mean, and
                        group totals swing 10-16 minutes game to game, so the spread floor is GROUP_SD_FLOOR.
 """
@@ -24,6 +24,8 @@ from ivan.core.utils import normalize_name
 
 GROUP_HALFLIFE = 10.0
 GROUP_SD_FLOOR = 8.0
+GROUP_MIN_GAMES = 8        # a team's group budgets act only with this much history: on 3-6 games (2026-10-24 backtest, this
+                           # season) they cost 0.1-0.2 minutes of accuracy; on last season's full history they gained it back
 GROUPS = ("big", "guard", "wing")
 
 
@@ -55,13 +57,13 @@ def position_map(session) -> Dict[str, str]:
 
 
 def group_targets(box: pd.DataFrame, team: str, before: date, posmap: Dict[str, str], halflife: float = GROUP_HALFLIFE) -> Dict[str, tuple]:
-    """group -> (target minutes, sd) for `team` from its games before `before`; {} with fewer than three games."""
+    """group -> (target minutes, sd) for `team` from its games before `before`; {} with fewer than GROUP_MIN_GAMES games."""
     g = box[(box.team == team) & (box.game_date < before)]
     if g.empty:
         return {}
     g = g.assign(grp=g.player_name.map(lambda n: group_of(posmap.get(n, ""))))
     per = g.groupby(["game_date", "grp"]).minutes.sum().unstack(fill_value=0.0).sort_index()
-    if len(per) < 3:
+    if len(per) < GROUP_MIN_GAMES:
         return {}
     out = {}
     for k in GROUPS:
