@@ -45,3 +45,34 @@ def test_stints_follow_substitutions_and_scale_to_the_box():
     assert df[df.player_name == "a one"].margin_out.tolist() == [2, 10]        # home margin +2 at his exit, +10 at the buzzer
     assert df[df.player_name == "c one"].margin_out.tolist() == [-10]           # away perspective
     assert df.groupby("player_name").minutes.sum().round(6).eq(box.set_index("player_name").minutes).all()
+
+
+def test_sub_out_of_a_player_who_started_the_period_at_the_break_keeps_five_on_the_floor():
+    # OKC 2026-10-20: b one came in at the Q2 break with no SUB event and was later subbed OUT; a one (the most recent
+    # entrant before the break, idle in Q2) sat the break. The old code ignored the out, and the sub-in made six on the floor.
+    rows = [
+        (1, 1, "PT12M00.00S", "", "", "period", "start", "", "0", "0"),
+        (2, 1, "PT06M00.00S", "AAA", "A Two", "Substitution", "", "SUB: A One FOR A Two", "", ""),      # a one in at 360 (a two out)
+        (3, 1, "PT00M00.00S", "", "", "period", "end", "", "", ""),
+        (4, 2, "PT12M00.00S", "", "", "period", "start", "", "", ""),
+        (5, 2, "PT05M00.00S", "AAA", "B One", "Substitution", "", "SUB: A Two FOR B One", "", ""),      # b one out at 1140 without ever coming in
+        (6, 3, "PT12M00.00S", "", "", "period", "start", "", "", ""),
+        (7, 4, "PT00M00.00S", "", "", "game", "end", "", "30", "20"),
+    ]
+    box = pd.DataFrame([dict(player_name=f"a {i}", team_abbreviation="AAA", minutes=m, position="G", game_date="2026-01-01")
+                        for i, m in zip(("one", "two", "three", "four", "five"), (36, 42, 48, 48, 48))]
+                       + [dict(player_name="a six", team_abbreviation="AAA", minutes=48, position="G", game_date="2026-01-01"),
+                          dict(player_name="b one", team_abbreviation="AAA", minutes=7, position="BENCH", game_date="2026-01-01")]
+                       + [dict(player_name=f"c {i}", team_abbreviation="BBB", minutes=48, position="G", game_date="2026-01-01") for i in ("one", "two", "three", "four", "five")])
+    box.loc[box.player_name == "a six", "player_name"] = "b two"           # starters a two..a five + b two; a one comes in at 360
+    box.loc[box.player_name == "a one", "position"] = "BENCH"
+    df = P.stints_from_pbp(_pbp(rows), box, "g1")
+    aaa = df[df.team == "AAA"]
+    b1 = aaa[aaa.player_name == "b one"]
+    assert len(b1) == 1 and b1.start_sec.iloc[0] == 720 and b1.end_sec.iloc[0] == 1140      # opened at the period start, closed by the sub
+    a1 = aaa[aaa.player_name == "a one"]
+    assert a1.end_sec.max() == 720                                                            # the idle break-crosser sat at the break
+    cnt = np.zeros(2880)
+    for a, b in zip(aaa.start_sec, aaa.end_sec):
+        cnt[int(a):int(min(b, 2880))] += 1
+    assert (cnt == 5).all()

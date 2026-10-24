@@ -258,12 +258,26 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
         if period != cur_period:
             cur_period = period; period_seen = {t: set() for t in teams}
             settle_break(period, mh)
+        def open_at_break(name: str):
+            """A player on the floor without a substitution event: he came in at the period break. Open him at the period
+            start and, when that makes six, close whoever sat the break: a player who crossed the break (entered before the
+            period started) and has done nothing this period; the most recent entrant comes off first."""
+            start = period_start_elapsed(period)
+            open_(name, team, start, period, mh)
+            if len(on[team]) > 5:
+                idle = [n for n in on[team] if n != name and n in entry and entry[n][0] < start and n not in period_seen.get(team, set())]
+                if idle:
+                    victim = max(idle, key=lambda n: entry[n][0])
+                    close(victim, team, start, period, mh, False); on[team].discard(victim)
+
         if str(r.actionType).lower() == "substitution":
             if team is None:
                 continue
             sub_in, sub_out = _sub_names(r.description)
             n_out = resolve(team, sub_out, initial=getattr(r, "playerNameI", None))      # the action's player is the one going out
             n_in = resolve(team, sub_in, prefer_off=True)
+            if n_out and n_out not in entry and period > 1:
+                open_at_break(n_out)                             # going out without ever coming in: he started the period
             if n_out and n_out in entry:
                 close(n_out, team, at, period, mh, False); on[team].discard(n_out)
             if n_in:
@@ -272,14 +286,7 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
         # any other action by a player not on the floor: he came in at the period break without a substitution event
         name = resolve(team, r.playerName) if team and r.playerName else None
         if name and name not in entry and period > 1:
-            start = period_start_elapsed(period)
-            open_(name, team, start, period, mh)
-            if len(on[team]) > 5:
-                # someone without an action this period and no substitution so far must have sat at the break
-                idle = [n for n in on[team] if n != name and n not in period_seen.get(team, set())]
-                if idle:
-                    victim = max(idle, key=lambda n: entry[n][0] if n in entry else 0)
-                    close(victim, team, start, period, mh, False); on[team].discard(victim)
+            open_at_break(name)
         if name and team:
             period_seen.setdefault(team, set()).add(name)
     final_mh = int(pbp.margin_home.iloc[-1])
