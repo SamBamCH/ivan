@@ -12,6 +12,13 @@ stints_from_pbp   the substitution log + the box-score starters -> one row per
                   boundary without a substitution event is inferred from who
                   acts first).
 store_stints      the nba_stint table, replaced per game
+stints_from_pbp(..., subs_out=[])
+                  also collects the explicit substitution pairs the feed records ("SUB: Eason FOR Smith Jr."):
+                  (team, out, in, elapsed, period), resolved with the floor state. store_subs -> nba_sub.
+fouls_from_pbp    the foul events -> one row per personal foul: who, when (elapsed
+                  seconds, period), his personal-foul count after it, the kind
+                  (shooting, loose ball, offensive...). Technicals are kept with
+                  personal = 0 and no count. The nba_foul table, replaced per game.
 rotation_map      a team's trailing rotation as a grid: minutes per player per
                   game segment (eight 6-minute segments; overtime folded into
                   the last), weighted by recency, plus stint statistics
@@ -70,8 +77,40 @@ class NBAStint(NBABase):
     raw_ratio   = Column(Float, nullable=True)                      # raw stint total / box minutes (far from 1 = a missed substitution)
 
 
+class NBAFoul(NBABase):
+    """One foul called on one player in one game."""
+    __tablename__ = "nba_foul"
+    __table_args__ = (UniqueConstraint("game_id", "player_name", "elapsed", "kind", name="uq_nba_foul"),)
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    game_id     = Column(String, nullable=False, index=True)
+    game_date   = Column(Date, nullable=True, index=True)
+    team        = Column(String, nullable=False, index=True)
+    player_name = Column(String, nullable=False, index=True)       # normalized
+    period      = Column(Integer, nullable=False)
+    elapsed     = Column(Float, nullable=False)                     # elapsed game seconds
+    foul_no     = Column(Integer, nullable=True)                    # his personal-foul count after this one (None for a technical)
+    kind        = Column(String, nullable=True)                     # the play-by-play subType: Shooting, Personal, Loose Ball, Offensive, Technical...
+    personal    = Column(Integer, nullable=False, default=1)        # 1 = counts toward six
+
+
+class NBASub(NBABase):
+    """One recorded substitution: player_in came on for player_out at `elapsed` game seconds."""
+    __tablename__ = "nba_sub"
+    __table_args__ = (UniqueConstraint("game_id", "team", "player_out", "player_in", "elapsed", name="uq_nba_sub"),)
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    game_id     = Column(String, nullable=False, index=True)
+    game_date   = Column(Date, nullable=True, index=True)
+    team        = Column(String, nullable=False, index=True)
+    player_out  = Column(String, nullable=False, index=True)       # normalized
+    player_in   = Column(String, nullable=False, index=True)
+    period      = Column(Integer, nullable=False)
+    elapsed     = Column(Float, nullable=False)
+
+
 def ensure_tables(engine) -> None:
-    NBABase.metadata.create_all(engine, tables=[NBAStint.__table__])
+    NBABase.metadata.create_all(engine, tables=[NBAStint.__table__, NBAFoul.__table__, NBASub.__table__])
 
 
 # ----------------------------------------------------------------------------- fetch
@@ -127,10 +166,109 @@ def _sub_names(desc: str) -> Tuple[Optional[str], Optional[str]]:
     return (m.group(1), m.group(2)) if m else (None, None)
 
 
-def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.DataFrame:
+SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _strip_suffix(tokens: List[str]) -> List[str]:
+    """['paul', 'reed', 'jr'] -> ['paul', 'reed']: the feed writes 'Reed' for Paul Reed Jr. and 'Holland II' for Ron Holland."""
+    core = [t for t in tokens if t not in SUFFIXES]
+    return core or tokens
+
+
+def _last_name_map(box: pd.DataFrame) -> Dict[str, Dict[str, List[str]]]:
+    """
+    team -> {key: [normalized full names]} with every spelling the feed uses for a player: the surname with and without
+    his suffix ('reed', 'reedjr'), the full name squeezed ('paulreedjr', 'paulreed'), the name after the first token
+    ('gilgeousalexander' for Shai Gilgeous-Alexander).
+    """
+    out: Dict[str, Dict[str, List[str]]] = {}
+    for r in box.itertuples():
+        n = normalize_name(r.player_name); toks = n.split(); core = _strip_suffix(toks)
+        d = out.setdefault(r.team_abbreviation, {})
+        keys = {toks[-1], core[-1], n.replace(" ", ""), "".join(core), "".join(toks[1:]) if len(toks) > 1 else toks[-1], "".join(core[1:]) if len(core) > 1 else core[-1]}
+        for key in keys:
+            d.setdefault(key, []).append(n)
+    return out
+
+
+def _label_tokens(label: str) -> List[str]:
+    """A feed label without its suffix tokens: 'Holland II' -> ['holland'], 'Jal. Williams' -> ['jal', 'williams']."""
+    return _strip_suffix(normalize_name(str(label or "")).split())
+
+
+def _resolve_label(d: Dict[str, List[str]], label: str, initial: Optional[str] = None) -> Optional[str]:
+    """A play-by-play label ('Smith Jr.', 'J. Smith Jr.') -> one normalized name from a team's last-name map, or None when ambiguous."""
+    toks = _label_tokens(label)
+    if not toks:
+        return None
+    lab = " ".join(toks)
+    cands = d.get("".join(toks), []) or d.get(toks[-1], [])
+    cands = list(dict.fromkeys(cands))
+    if len(cands) == 1:
+        return cands[0]
+    if not cands:
+        return None
+    full = [c for c in cands if c == lab or c.endswith(" " + lab) or " ".join(_strip_suffix(c.split())) == lab]
+    if len(full) == 1:
+        return full[0]
+    if len(toks) > 1:                                        # 'jal williams' (an abbreviated first name) -> jalen, not jaylin
+        by_first = [c for c in cands if c.split()[0].startswith(toks[0])]
+        if len(by_first) == 1:
+            return by_first[0]
+    ini = normalize_name(str(initial or "")).split()[0][:1] if initial else ""
+    if ini:
+        by_ini = [c for c in cands if c[:1] == ini]
+        if len(by_ini) == 1:
+            return by_ini[0]
+    return None
+
+
+_PF_NO = re.compile(r"\(P(\d+)[.)]")
+
+
+def fouls_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.DataFrame:
+    """
+    One row per foul event with a player on one of the box's teams: player_name, team, period, elapsed, kind (subType),
+    personal (0 for a technical), foul_no (the personal count after this foul: the (Pn) tag when the feed carries it,
+    else the running count). Rows are ordered by time.
+    """
+    if pbp is None or pbp.empty or box.empty:
+        return pd.DataFrame(columns=["game_id", "team", "player_name", "period", "elapsed", "kind", "personal", "foul_no"])
+    f = pbp[pbp.actionType.astype(str).str.lower() == "foul"].copy()
+    if f.empty:
+        return pd.DataFrame(columns=["game_id", "team", "player_name", "period", "elapsed", "kind", "personal", "foul_no"])
+    names = _last_name_map(box)
+    f["elapsed"] = [elapsed_at(int(p), c) for p, c in zip(f.period, f.clock)]
+    f = f.sort_values(["period", "elapsed", "actionNumber"])
+    rows = []; count: Dict[str, int] = {}
+    for r in f.itertuples():
+        team = str(r.teamTricode or "")
+        if team not in names:
+            continue
+        kind = str(getattr(r, "subType", "") or "").strip()
+        desc = str(getattr(r, "description", "") or "")
+        technical = kind.lower().startswith("technical") or "T.FOUL" in desc.upper().replace(" ", "")
+        label = str(getattr(r, "playerName", "") or "") or desc.split(" ")[0]
+        nm = _resolve_label(names[team], label, initial=getattr(r, "playerNameI", None))
+        if nm is None:
+            continue
+        no = None
+        if not technical:
+            m = _PF_NO.search(desc)
+            no = int(m.group(1)) if m else count.get(nm, 0) + 1
+            count[nm] = no
+        rows.append(dict(game_id=str(game_id), team=team, player_name=nm, period=int(r.period), elapsed=float(r.elapsed),
+                         kind=kind or None, personal=0 if technical else 1, foul_no=no))
+    df = pd.DataFrame(rows, columns=["game_id", "team", "player_name", "period", "elapsed", "kind", "personal", "foul_no"])
+    df["foul_no"] = df.foul_no.astype(object).where(df.foul_no.notna(), None)      # a technical has no count: None, not NaN
+    return df
+
+
+def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str, subs_out: Optional[list] = None) -> pd.DataFrame:
     """
     box: this game's nba_stats rows (player_name normalized, team_abbreviation, minutes, position).
-    Returns one row per stint with the NBAStint columns (minus id).
+    Returns one row per stint with the NBAStint columns (minus id). With `subs_out` (a list), every resolved substitution
+    pair is appended to it as dict(team, player_out, player_in, period, elapsed).
     """
     if pbp.empty or box.empty:
         return pd.DataFrame()
@@ -159,33 +297,30 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
     pbp["margin_home"] = (sh - sa).astype(int)
 
     # PBP uses last names; map through the box: last name -> normalized full name within the team
-    by_team_last: Dict[str, Dict[str, List[str]]] = {}
-    for r in box.itertuples():
-        n = normalize_name(r.player_name); toks = n.split()
-        d = by_team_last.setdefault(r.team_abbreviation, {})
-        for key in {toks[-1], n.replace(" ", ""), "".join(toks[1:]) if len(toks) > 1 else toks[-1]}:   # 'alexander', 'shaigilgeousalexander', 'gilgeousalexander'
-            d.setdefault(key, []).append(n)
+    by_team_last = _last_name_map(box)
 
     on: Dict[str, set] = {}; entry: Dict[str, Tuple[float, int, int]] = {}
 
-    def resolve(team: str, label: str, initial: Optional[str] = None, prefer_off: bool = False, strict: bool = False) -> Optional[str]:
+    def resolve(team: str, label: str, initial: Optional[str] = None, prefer_off: bool = False, strict: bool = False,
+                description: Optional[str] = None) -> Optional[str]:
         """A play-by-play label ('Towns', 'K. Towns', 'Jones') -> the box score's normalized name on that team.
-        Two players sharing a last name are told apart by the initial (the action's playerNameI) or, for a player
-        coming in, by who is off the floor."""
-        lab = normalize_name(str(label or ""))
-        if not lab:
+        Two players sharing a last name are told apart by the initial (the action's playerNameI), by the abbreviated
+        first name the feed puts in the description when the initial is shared ('Jal. Williams' / 'Jay. Williams'),
+        or, for a player coming in, by who is off the floor. With `strict` a tie is never guessed."""
+        toks = _label_tokens(label)
+        if not toks:
             return None
+        lab = " ".join(toks)
         d = by_team_last.get(team, {})
-        cands = d.get(lab.replace(" ", ""), []) or d.get(lab.split()[-1], [])     # a hyphenated surname first ('gilgeous alexander' -> 'gilgeousalexander')
+        cands = d.get("".join(toks), []) or d.get(toks[-1], [])     # a hyphenated surname first ('gilgeous alexander' -> 'gilgeousalexander')
         cands = list(dict.fromkeys(cands))
         if len(cands) == 1:
             return cands[0]
         if not cands:
             return None
-        full = [c for c in cands if c == lab or c.endswith(" " + lab)]
+        full = [c for c in cands if c == lab or c.endswith(" " + lab) or " ".join(_strip_suffix(c.split())) == lab]
         if len(full) == 1:
             return full[0]
-        toks = lab.split()
         if len(toks) > 1:                                       # 'jal williams' (an abbreviated first name) -> jalen, not jaylin
             by_first = [c for c in cands if c.split()[0].startswith(toks[0])]
             if len(by_first) == 1:
@@ -195,6 +330,13 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
             by_ini = [c for c in cands if c[:1] == ini]
             if len(by_ini) == 1:
                 return by_ini[0]
+            if len(by_ini) > 1:
+                cands = by_ini
+        if description:                                          # 'MISS Jal. Williams 25' 3PT' names him by his first three letters
+            desc = normalize_name(str(description))
+            by_desc = [c for c in cands if f"{c.split()[0][:3]} {_strip_suffix(c.split())[-1]}" in desc]
+            if len(by_desc) == 1:
+                return by_desc[0]
         if strict:
             return None                                          # ambiguous: the caller would rather not guess
         if prefer_off:
@@ -274,8 +416,10 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
             if team is None:
                 continue
             sub_in, sub_out = _sub_names(r.description)
-            n_out = resolve(team, sub_out, initial=getattr(r, "playerNameI", None))      # the action's player is the one going out
-            n_in = resolve(team, sub_in, prefer_off=True)
+            n_out = resolve(team, sub_out, initial=getattr(r, "playerNameI", None), description=r.description)      # the action's player is the one going out
+            n_in = resolve(team, sub_in, prefer_off=True, description=r.description)
+            if subs_out is not None and n_out and n_in:
+                subs_out.append(dict(team=team, player_out=n_out, player_in=n_in, period=period, elapsed=at))
             if n_out and n_out not in entry and period > 1:
                 open_at_break(n_out)                             # going out without ever coming in: he started the period
             if n_out and n_out in entry:
@@ -284,9 +428,11 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Da
                 open_(n_in, team, at, period, mh)
             continue
         # any other action by a player not on the floor: he came in at the period break without a substitution event
-        name = resolve(team, r.playerName) if team and r.playerName else None
-        if name and name not in entry and period > 1:
-            open_at_break(name)
+        # (a shared surname that the initial and the description cannot settle is not guessed: a guess opened phantom stints)
+        name = resolve(team, r.playerName, initial=getattr(r, "playerNameI", None), strict=True, description=r.description) if team and r.playerName else None
+        if name and name not in entry and period > 1 and name not in period_seen.get(team, set()) and not any(
+                row["player_name"] == name and row["period_in"] == period for row in rows):
+            open_at_break(name)                                  # only a player who has not been on at all this period
         if name and team:
             period_seen.setdefault(team, set()).add(name)
     final_mh = int(pbp.margin_home.iloc[-1])
@@ -320,6 +466,122 @@ def store_stints(session: Session, game_id: str, game_date, df: pd.DataFrame) ->
     return len(recs)
 
 
+def store_fouls(session: Session, game_id: str, game_date, df: pd.DataFrame) -> int:
+    session.query(NBAFoul).filter(NBAFoul.game_id == str(game_id)).delete(synchronize_session=False)
+    if df is None or df.empty:
+        session.commit(); return 0
+    recs = df.drop_duplicates(["player_name", "elapsed", "kind"]).to_dict("records")
+    for r in recs:
+        r["game_date"] = game_date
+        r["foul_no"] = None if r.get("foul_no") is None or (isinstance(r["foul_no"], float) and np.isnan(r["foul_no"])) else int(r["foul_no"])
+    session.bulk_insert_mappings(NBAFoul, recs); session.commit()
+    return len(recs)
+
+
+def store_subs(session: Session, game_id: str, game_date, subs: list) -> int:
+    session.query(NBASub).filter(NBASub.game_id == str(game_id)).delete(synchronize_session=False)
+    if not subs:
+        session.commit(); return 0
+    seen = set(); recs = []
+    for r in subs:
+        key = (r["team"], r["player_out"], r["player_in"], round(float(r["elapsed"]), 1))
+        if key in seen:
+            continue
+        seen.add(key); recs.append(dict(game_id=str(game_id), game_date=game_date, **r))
+    session.bulk_insert_mappings(NBASub, recs); session.commit()
+    return len(recs)
+
+
+def game_subs(session: Session, game_id: str, team: Optional[str] = None) -> pd.DataFrame:
+    """One game's recorded substitutions (one team when given): team, player_out, player_in, period, elapsed, ordered by time."""
+    q = "select team, player_out, player_in, period, elapsed from nba_sub where game_id = :g" + (" and team = :t" if team else "") + " order by elapsed"
+    return pd.read_sql(text(q).bindparams(g=str(game_id), **({"t": team} if team else {})), session.get_bind())
+
+
+def sub_shares(session: Session, team: Optional[str] = None, players: Optional[List[str]] = None, before: Optional[date] = None,
+               n_games: int = 15, halflife: float = 6.0) -> Dict[str, Dict[str, float]]:
+    """
+    out player -> {in player: share of his recorded single-swap exits that player covered}, recency weighted over the last
+    n_games (by team, or by the given players' own games on any team). The coach's habit of who comes in for whom.
+    """
+    if players is not None:
+        names = [str(n) for n in players]
+        if not names:
+            return {}
+        marks = ", ".join(f":n{i}" for i in range(len(names)))
+        params = {f"n{i}": n for i, n in enumerate(names)}
+        q = (f"select s.game_id, s.game_date, s.team, s.player_out, s.player_in, (select count(*) from nba_sub o where o.game_id = s.game_id and o.team = s.team and o.elapsed = s.elapsed) n "
+             f"from nba_sub s where s.player_out in ({marks})" + (" and s.game_date < :d" if before else ""))
+    else:
+        params = {"t": team}
+        q = ("select s.game_id, s.game_date, s.team, s.player_out, s.player_in, (select count(*) from nba_sub o where o.game_id = s.game_id and o.team = s.team and o.elapsed = s.elapsed) n "
+             "from nba_sub s where s.team = :t" + (" and s.game_date < :d" if before else ""))
+    if before:
+        params["d"] = before.isoformat()
+    df = pd.read_sql(text(q + " order by s.game_date, s.game_id").bindparams(**params), session.get_bind())
+    if df.empty:
+        return {}
+    # single swaps only: when several players change at once the feed's pairing is the scorer's typing order, not the
+    # roles (2026-10-24: 40% same position group at multi-swaps against 61% at single swaps)
+    df = df[df.n == 1]
+    if df.empty:
+        return {}
+    out: Dict[str, Dict[str, float]] = {}
+    for name, g in df.groupby("player_out"):
+        games = list(dict.fromkeys(g.game_id))[-n_games:]
+        g = g[g.game_id.isin(games)]
+        w = {gid: 0.5 ** ((len(games) - 1 - i) / halflife) for i, gid in enumerate(games)}
+        tot: Dict[str, float] = {}
+        for gid, inn in zip(g.game_id, g.player_in):
+            tot[inn] = tot.get(inn, 0.0) + w[gid]
+        z = sum(tot.values())
+        if z > 0:
+            out[str(name)] = {k: v / z for k, v in sorted(tot.items(), key=lambda kv: -kv[1])}
+    return out
+
+
+def games_without_subs(session: Session) -> List[str]:
+    have = {g for (g,) in session.execute(text("select distinct game_id from nba_sub")).all()}
+    return sorted(g for (g,) in session.execute(text("select distinct game_id from nba_stint")).all() if g not in have)
+
+
+def process_subs(session: Session, game_id: str, log: Log = print) -> int:
+    """Substitution pairs only, from the stored raw play-by-play (the backfill)."""
+    pbp = load_raw(game_id)
+    if pbp is None:
+        pbp = fetch_game(game_id)
+    box = box_for_game(session, game_id)
+    subs: list = []
+    stints_from_pbp(pbp, box, game_id, subs_out=subs)
+    gd = pd.to_datetime(box.game_date.iloc[0]).date() if len(box) else None
+    n = store_subs(session, game_id, gd, subs)
+    log(f"{game_id} {gd}: {n} substitutions")
+    return n
+
+
+def game_fouls(session: Session, game_id: str, team: Optional[str] = None) -> pd.DataFrame:
+    """The personal fouls of one game (one team when given): player_name, period, elapsed, minute (0-47, overtime folded into 47), foul_no, kind."""
+    q = "select player_name, team, period, elapsed, foul_no, kind, personal from nba_foul where game_id = :g" + (" and team = :t" if team else "") + " order by elapsed"
+    df = pd.read_sql(text(q).bindparams(g=str(game_id), **({"t": team} if team else {})), session.get_bind())
+    if df.empty:
+        return df
+    df["minute"] = np.minimum((df.elapsed // 60).astype(int), 47)
+    return df
+
+
+def fouls_per_game(session: Session, since: Optional[date] = None) -> Dict[Tuple[str, str], int]:
+    """(game_id, player_name) -> personal fouls, for the box-score views."""
+    q = "select game_id, player_name, sum(personal) n from nba_foul" + (" where game_date >= :d" if since else "") + " group by game_id, player_name"
+    rows = session.execute(text(q).bindparams(**({"d": since.isoformat()} if since else {}))).all()
+    return {(str(g), str(n)): int(c or 0) for g, n, c in rows}
+
+
+def games_without_fouls(session: Session) -> List[str]:
+    """Games with stints whose fouls were never parsed (the raw play-by-play is on disk: no fetch needed)."""
+    have = {g for (g,) in session.execute(text("select distinct game_id from nba_foul")).all()}
+    return sorted(g for (g,) in session.execute(text("select distinct game_id from nba_stint")).all() if g not in have)
+
+
 def box_for_game(session: Session, game_id: str) -> pd.DataFrame:
     return pd.read_sql(text("select player_name, team_abbreviation, minutes, position, game_date from nba_stats where game_id = :g").bindparams(g=str(game_id)), session.get_bind())
 
@@ -329,10 +591,25 @@ def process_game(session: Session, game_id: str, log: Log = print, refetch: bool
     if pbp is None:
         pbp = fetch_game(game_id)
     box = box_for_game(session, game_id)
-    df = stints_from_pbp(pbp, box, game_id)
+    subs: list = []
+    df = stints_from_pbp(pbp, box, game_id, subs_out=subs)
     gd = pd.to_datetime(box.game_date.iloc[0]).date() if len(box) else None
     n = store_stints(session, game_id, gd, df)
-    log(f"{game_id} {gd}: {n} stints, {df.player_name.nunique() if len(df) else 0} players")
+    nf = store_fouls(session, game_id, gd, fouls_from_pbp(pbp, box, game_id))
+    ns = store_subs(session, game_id, gd, subs)
+    log(f"{game_id} {gd}: {n} stints, {df.player_name.nunique() if len(df) else 0} players, {nf} fouls, {ns} substitutions")
+    return n
+
+
+def process_fouls(session: Session, game_id: str, log: Log = print) -> int:
+    """Fouls only, from the stored raw play-by-play (the backfill for games whose stints predate the foul table)."""
+    pbp = load_raw(game_id)
+    if pbp is None:
+        pbp = fetch_game(game_id)
+    box = box_for_game(session, game_id)
+    gd = pd.to_datetime(box.game_date.iloc[0]).date() if len(box) else None
+    n = store_fouls(session, game_id, gd, fouls_from_pbp(pbp, box, game_id))
+    log(f"{game_id} {gd}: {n} fouls")
     return n
 
 

@@ -44,6 +44,16 @@ def main() -> int:
             for gid in ids:
                 P.process_game(session, gid, log=logging.info); __import__("time").sleep(0.8)
             logging.info(f"play-by-play stints: {len(ids)} games")
+            missing = P.games_without_fouls(session)
+            for gid in missing[:200]:
+                P.process_fouls(session, gid, log=lambda m: None)             # from the stored raw play-by-play: no fetch
+            if missing:
+                logging.info(f"fouls parsed for {min(len(missing), 200)} games")
+            missing_subs = P.games_without_subs(session)
+            for gid in missing_subs[:200]:
+                P.process_subs(session, gid, log=lambda m: None)
+            if missing_subs:
+                logging.info(f"substitutions parsed for {min(len(missing_subs), 200)} games")
         except Exception as e:   # noqa: BLE001
             logging.warning(f"play-by-play failed: {type(e).__name__}: {e}")
         try:

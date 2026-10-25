@@ -76,3 +76,39 @@ def test_sub_out_of_a_player_who_started_the_period_at_the_break_keeps_five_on_t
     for a, b in zip(aaa.start_sec, aaa.end_sec):
         cnt[int(a):int(min(b, 2880))] += 1
     assert (cnt == 5).all()
+
+
+def test_fouls_are_resolved_counted_and_technicals_kept_apart():
+    rows = [
+        (1, 1, "PT12M00.00S", "", "", "period", "start", "", "0", "0"),
+        (2, 1, "PT10M00.00S", "AAA", "One", "Foul", "Shooting", "One S.FOUL (P1.T1) (R.Ref)", "", ""),
+        (3, 1, "PT08M00.00S", "AAA", "One", "Foul", "Offensive", "One OFF.Foul (P2) (R.Ref)", "", ""),
+        (4, 2, "PT06M00.00S", "AAA", "One", "Foul", "Technical", "One T.FOUL (Def. 3 Sec) (R.Ref)", "", ""),
+        (5, 2, "PT05M00.00S", "AAA", "One", "Foul", "Personal", "One P.FOUL (P3.PN) (R.Ref)", "", ""),
+        (6, 2, "PT04M00.00S", "BBB", "Smith Jr.", "Foul", "Loose Ball", "Smith Jr. L.B.FOUL (P1.T2) (R.Ref)", "", ""),
+        (7, 2, "PT03M00.00S", "BBB", "Smith Jr.", "Foul", "Personal", "Smith Jr. P.FOUL (R.Ref)", "", ""),          # no (Pn) tag: the running count
+        (8, 4, "PT00M00.00S", "", "", "game", "end", "", "30", "20"),
+    ]
+    box = pd.DataFrame([dict(player_name="A One", team_abbreviation="AAA", minutes=30, position="G", game_date="2026-01-01"),
+                        dict(player_name="Jabari Smith Jr.", team_abbreviation="BBB", minutes=30, position="F", game_date="2026-01-01")])
+    f = P.fouls_from_pbp(_pbp(rows), box, "g1")
+    one = f[f.player_name == "a one"]
+    assert one.foul_no.tolist() == [1, 2, None, 3] and one.personal.tolist() == [1, 1, 0, 1]
+    assert one.elapsed.tolist() == [120.0, 240.0, 1080.0, 1140.0] and one.period.tolist() == [1, 1, 2, 2]
+    smith = f[f.player_name == "jabari smith jr"]
+    assert smith.foul_no.tolist() == [1, 2] and smith.kind.tolist() == ["Loose Ball", "Personal"]
+
+
+def test_substitution_pairs_are_collected_with_the_stints():
+    rows = [
+        (1, 1, "PT12M00.00S", "", "", "period", "start", "", "0", "0"),
+        (2, 1, "PT06M00.00S", "AAA", "A One", "Substitution", "", "SUB: B One FOR A One", "", ""),
+        (3, 1, "PT03M00.00S", "AAA", "A Two", "Substitution", "", "SUB: A One FOR A Two", "", ""),
+        (4, 4, "PT00M00.00S", "", "", "game", "end", "", "30", "20"),
+    ]
+    box = pd.DataFrame([dict(player_name=f"a {i}", team_abbreviation="AAA", minutes=m, position="G" if k < 5 else "BENCH", game_date="2026-01-01")
+                        for k, (i, m) in enumerate(zip(("one", "two", "three", "four", "five", "six"), (45, 39, 48, 48, 48, 12)))])
+    box.loc[box.player_name == "a six", "player_name"] = "b one"
+    subs = []
+    P.stints_from_pbp(_pbp(rows), box, "g1", subs_out=subs)
+    assert [(s["player_out"], s["player_in"], s["elapsed"]) for s in subs] == [("a one", "b one", 360.0), ("a two", "a one", 540.0)]
