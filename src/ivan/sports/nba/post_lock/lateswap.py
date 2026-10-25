@@ -449,6 +449,53 @@ def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = No
     return out
 
 
+# ----------------------------------------------------------------------------- exposure
+def exposure(report: dict, meta: Optional[Dict[int, object]] = None) -> List[dict]:
+    """Per player, how many of our entries hold him before the swap (the original lineups) and after it (an improved
+    entry's best lineup, every other entry's original). Across every contest in the report; sorted by entries after, then
+    before, then name. `meta` (id -> player with .name/.team) names the rows; without it the names come from the report."""
+    before: Dict[int, int] = {}; after: Dict[int, int] = {}; names: Dict[int, str] = {}
+    n_entries = 0
+    for c in report.get("contests", []):
+        for e in c["entries"]:
+            n_entries += 1
+            final = e["best"]["ids"] if e["improved"] else e["original"]["ids"]
+            for pid in e["original"]["ids"]:
+                before[pid] = before.get(pid, 0) + 1
+            for pid in final:
+                after[pid] = after.get(pid, 0) + 1
+            for k, v in (e.get("names") or {}).items():
+                names[int(k)] = v
+    rows = []
+    for pid in set(before) | set(after):
+        m = (meta or {}).get(pid)
+        name = getattr(m, "name", None) or names.get(pid) or str(pid)
+        team = getattr(m, "team", None) or ""
+        b, a = before.get(pid, 0), after.get(pid, 0)
+        rows.append(dict(id=int(pid), name=name, team=team, before=b, after=a, delta=a - b,
+                         before_pct=round(100.0 * b / n_entries, 1) if n_entries else 0.0,
+                         after_pct=round(100.0 * a / n_entries, 1) if n_entries else 0.0))
+    rows.sort(key=lambda r: (-r["after"], -r["before"], r["name"]))
+    return rows
+
+
+def format_exposure(rows: Sequence[dict], n_entries: Optional[int] = None, changed_only: bool = False) -> str:
+    """A fixed-width table of exposure(): player, team, entries before and after (count and share), change."""
+    rows = [r for r in rows if r["delta"] != 0] if changed_only else list(rows)
+    if not rows:
+        return "exposure: no entries" if n_entries == 0 else "exposure: unchanged"
+    w = max(len(r["name"]) for r in rows)
+    head = f"{'player':<{w}}  team  {'before':>12}  {'after':>12}  {'change':>6}"
+    lines = [head, "-" * len(head)]
+    for r in rows:
+        b = f"{r['before']:>3} ({r['before_pct']:5.1f}%)"; a = f"{r['after']:>3} ({r['after_pct']:5.1f}%)"
+        d = f"{r['delta']:+d}" if r["delta"] else "·"
+        lines.append(f"{r['name']:<{w}}  {r['team']:<4}  {b:>12}  {a:>12}  {d:>6}")
+    if n_entries is not None:
+        lines.append(f"({n_entries} entries; shares are the fraction of entries holding the player)")
+    return "\n".join(lines)
+
+
 # ----------------------------------------------------------------------------- outputs
 def write_outputs(session: Session, report: dict, entries_csv, out_dir: Path = OUTPUT_DIR, stamp: Optional[str] = None, log: Log = print) -> Dict[str, str]:
     """The upload CSV (the entries export with every improved entry's new lineup, slot order by eligibility) and the json report."""
@@ -502,6 +549,8 @@ def write_outputs(session: Session, report: dict, entries_csv, out_dir: Path = O
         for e in c["entries"]:
             e["names"] = {str(pid): meta[pid].name for pid in set(e["original"]["ids"]) | set(e["best"]["ids"]) if pid in meta}
     report["swapped"] = swapped; report["upload"] = csv_path.name; report["stamp"] = stamp
+    report["n_entries"] = sum(len(c["entries"]) for c in report["contests"])
+    report["exposure"] = exposure(report, meta)
     js = out_dir / f"lateswap.{stamp}.json"
     js.write_text(json.dumps(report, default=str))
     log(f"wrote {swapped} swapped entries -> {csv_path} and the report -> {js}")

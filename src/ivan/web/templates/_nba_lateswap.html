@@ -35,6 +35,22 @@
     {% if rep.upload %}<a href="{{ root }}/download/{{ rep.upload }}"><b>download the upload CSV</b></a>{% endif %}
     {% if rep.failed %}<span class="bad">failed: {% for f in rep.failed %}{{ f.contest_id }} ({{ f.error|truncate(60, True, '') }}){% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
   </div>
+  {% if rep.exposure %}
+  <details class="ls-expo" style="margin:6px 0 10px">
+    <summary class="muted small" style="cursor:pointer">exposure before → after the swap · {{ rep.exposure|selectattr('delta', 'ne', 0)|list|length }} players change · {{ rep.n_entries }} entries</summary>
+    <table class="mini" style="margin-top:4px">
+      <tr><th>player</th><th>team</th><th class="n">before</th><th class="n">after</th><th class="n">change</th></tr>
+      {% for x in rep.exposure %}
+      <tr{% if x.delta == 0 %} class="muted"{% endif %}>
+        <td>{{ x.name }}</td><td>{{ x.team }}</td>
+        <td class="n">{{ x.before }} <span class="muted small">{{ '%.0f'|format(x.before_pct) }}%</span></td>
+        <td class="n">{{ x.after }} <span class="muted small">{{ '%.0f'|format(x.after_pct) }}%</span></td>
+        <td class="n gain {% if x.delta > 0 %}pos{% elif x.delta < 0 %}neg{% endif %}">{% if x.delta %}{{ '%+d'|format(x.delta) }}{% else %}·{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% endif %}
   {% for c in rep.contests %}
   <table class="mini" style="margin-bottom:12px">
     <tr><th colspan="6" style="text-align:left;font-size:12px;text-transform:none;color:var(--ink)">{{ c.name }} <span class="muted">· {{ c.entries|length }} entries, {{ c.improved }} improve, {{ '%+.2f'|format(c.gain) }} $ expected · field {{ c.field.completed }}/{{ c.field.field_entries }} completed</span></th></tr>

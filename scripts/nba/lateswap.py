@@ -5,9 +5,9 @@ scripts/nba/lateswap.py
 Late swap our entries after lock: for every contest in the entries file, download
 the live standings (the field's locked players), complete the field's open slots,
 re-optimise our entries' open slots in sampled worlds and keep the candidate with
-the best expected payout. Writes data/nba/output/lateswap.<stamp>.csv (the entries
-export with the swapped lineups, ready to upload) and lateswap.<stamp>.json (the
-desk's report). Logic: ivan.sports.nba.post_lock.lateswap.
+the best expected payout. Prints each player's exposure (entries holding him) before
+and after the swap. Writes data/nba/output/lateswap.<stamp>.csv (the entries export
+with the swapped lineups, ready to upload) and lateswap.<stamp>.json (the desk's report). Logic: ivan.sports.nba.post_lock.lateswap.
 
     scripts/nba/lateswap.py                          # DraftKings export through the logged-in Chrome profile
     scripts/nba/lateswap.py --source raw             # the newest stored export per contest (no Chrome)
@@ -36,6 +36,7 @@ def main() -> int:
     ap.add_argument("--contest", type=int, action="append", default=None, help="only this contest id (repeatable)")
     ap.add_argument("--live", action="store_true", help="score started games from the live box scores (banked points + the rest of the game)")
     ap.add_argument("--now", default=None, help="pretend it is this time (ISO), for a dry run before lock")
+    ap.add_argument("--changed-only", action="store_true", help="the exposure table lists only players whose entry count changed")
     a = ap.parse_args()
     engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
     entries = a.entries
@@ -65,6 +66,9 @@ def main() -> int:
         print(f"{c['name']}: {n_imp}/{len(c['entries'])} entries improve, +${gain:.2f} expected in total", flush=True)
     if report["failed"]:
         print("failed: " + ", ".join(f"{f['contest_id']} ({f['error']})" for f in report["failed"]), flush=True)
+    if report["contests"]:
+        print("\nexposure before -> after the swap" + (" (changed players only)" if a.changed_only else ""), flush=True)
+        print(LS.format_exposure(report["exposure"], report["n_entries"], changed_only=a.changed_only), flush=True)
     print(f"upload: {paths['upload']}", flush=True)
     return 0 if report["contests"] else 1
 
