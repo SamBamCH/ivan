@@ -62,3 +62,41 @@ def test_drawn_grid_round_trip(tmp_path, monkeypatch):
     back = R.load_drawn("XYZ")
     assert back.equals(grid) and R.drawn_minutes("XYZ") == {"a b": 24.0, "c d": 24.0} and R.stints_of(back)["c d"] == [(24, 48)]
     assert R.clear_drawn("XYZ") and R.load_drawn("XYZ") is None
+
+
+def test_spots_follow_the_substitution_chain():
+    names = ["pg", "sg", "sf", "pf", "c", "pg2", "c2"]
+    grid = pd.DataFrame(False, index=names, columns=list(range(48)))
+    for n in ["pg", "sg", "sf", "pf", "c"]:
+        grid.loc[n, list(range(0, 10))] = True
+    grid.loc["pg", list(range(16, 48))] = True; grid.loc["pg2", list(range(10, 16))] = True     # pg2 takes the point guard spot, pg comes back
+    grid.loc["c", list(range(20, 48))] = True; grid.loc["c2", list(range(10, 20))] = True
+    for n in ["sg", "sf", "pf"]:
+        grid.loc[n, list(range(10, 48))] = True
+    groups = {"pg": "guard", "pg2": "guard", "sg": "guard", "sf": "wing", "pf": "wing", "c": "big", "c2": "big"}
+    pos = {"pg": "PG", "sg": "SG", "sf": "SF", "pf": "PF", "c": "C", "pg2": "PG", "c2": "C"}
+    S, owners = R.spots_of(grid, starters=["c", "pf", "sf", "sg", "pg"], groups=groups, positions=pos)
+    assert owners == ["pg", "sg", "sf", "pf", "c"]
+    assert S.loc["pg", 0] == 0 and S.loc["c", 0] == 4
+    assert S.loc["pg2", 12] == 0 and S.loc["c2", 12] == 4                        # two swaps in minute 10: the guard takes the guard's spot, the big the big's
+    assert S.loc["pg", 20] == 0 and S.loc["c", 30] == 4 and S.loc["pg2", 20] == -1
+
+
+def test_recorded_pairs_and_habits_drive_the_spot_chain():
+    names = ["pg", "sg", "sf", "pf", "c", "b1", "b2"]
+    grid = pd.DataFrame(False, index=names, columns=list(range(48)))
+    for n in ["pg", "sg", "sf", "pf", "c"]:
+        grid.loc[n, list(range(0, 10))] = True
+    # at minute 10 two swaps at once: b1 and b2 come on for pg and sf; both bench players are wings by position
+    grid.loc["b1", list(range(10, 48))] = True; grid.loc["b2", list(range(10, 48))] = True
+    for n in ["sg", "pf", "c"]:
+        grid.loc[n, list(range(10, 48))] = True
+    groups = {"pg": "guard", "sg": "guard", "sf": "wing", "pf": "wing", "c": "big", "b1": "wing", "b2": "wing"}
+    pos = {"pg": "PG", "sg": "SG", "sf": "SF", "pf": "PF", "c": "C", "b1": "SF", "b2": "SF"}
+    # position alone cannot tell b1 from b2; the recorded pairs say b2 came in for the point guard
+    pairs = [dict(player_out="pg", player_in="b2", elapsed=595.0), dict(player_out="sf", player_in="b1", elapsed=595.0)]
+    S, _ = R.spots_of(grid, starters=["pg", "sg", "sf", "pf", "c"], groups=groups, positions=pos, pairs=pairs)
+    assert S.loc["b2", 12] == 0 and S.loc["b1", 12] == 2
+    # no pairs, but the coach's habit: b2 usually comes in for the point guard
+    S2, _ = R.spots_of(grid, starters=["pg", "sg", "sf", "pf", "c"], groups=groups, positions=pos, shares={"pg": {"b2": 0.8, "b1": 0.2}, "sf": {"b1": 0.9}})
+    assert S2.loc["b2", 12] == 0 and S2.loc["b1", 12] == 2

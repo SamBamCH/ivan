@@ -189,6 +189,44 @@ def project_team(
         alloc = allocate_team_minutes([recs[p.name]["inputs"] for p in avail],
                                       start_shift=params.start_shift, alloc=params.alloc,
                                       cut_tau=params.cut_tau)
+    zero_minutes: list[str] = []
+    if params.minutes_model == "rotation" and params.rotation is not None and params.rotation.get("skeleton"):
+        # the grid IS the projection: the coach's slots (the roster's stint curves) filled with tonight's players at the
+        # solve's minutes, locked rows held (projection/skeleton.py). Each player's minutes are his row; a player the
+        # schedule leaves off the floor has none and leaves the projection (the desk adds him back by painting a row).
+        from .skeleton import apply_depth, build_grid, choose_rotation, minutes_of
+        from .groups import group_of
+        rot = params.rotation
+        names = list(alloc.index)
+        locks = rot.get("locks")
+        targets = {n: float(alloc.loc[n, "minutes"]) for n in names}
+        if rot.get("depth"):
+            # the coach plays about `depth` players: the deep bench's small expected minutes (honest on average, not on a
+            # night) fold into the rotation. Locked rows, hand pins and named starters always stay. The kept players are
+            # re-solved through their anchors (books, history, position budgets), so the freed minutes land where the
+            # anchors are loosest rather than pro rata on the stars.
+            keep = [p.name for p in avail if p.minutes_override is not None or p.starter] + ([n for n in locks.index] if locks is not None else [])
+            chosen = choose_rotation(targets, int(rot["depth"]), keep)
+            if params.alloc == "solve" and len(chosen) < len(names):
+                kept_alloc, _ = solve_allocation([p for p in avail if p.name in chosen], recs, state, history, params)
+                targets = {n: (float(kept_alloc.loc[n, "minutes"]) if n in kept_alloc.index else 0.0) for n in names}
+            else:
+                targets = apply_depth(targets, int(rot["depth"]), keep)
+            for n in names:
+                alloc.loc[n, "minutes"] = targets[n]
+        grid = build_grid(rot.get("curve"), targets, names,
+                          starters=[p.name for p in avail if p.starter], groups={p.name: group_of(p.position or "") for p in roster},
+                          locks=locks, vacated=rot.get("vacated"), shares=rot.get("shares"))
+        rot["grid"] = grid; rot["targets"] = dict(targets)
+        gm = minutes_of(grid)
+        alloc["target"] = alloc["minutes"]
+        alloc["minutes"] = [gm.get(n, 0.0) for n in alloc.index]
+        if locks is not None and len(locks):
+            alloc["pinned"] = [bool(alloc.loc[n, "pinned"]) or n in locks.index for n in alloc.index]
+        zero_minutes = [n for n in alloc.index if alloc.loc[n, "minutes"] <= 0]
+        alloc = alloc[alloc["minutes"] > 0]
+        avail = [p for p in avail if p.name in alloc.index]
+        rot["zero_minutes"] = zero_minutes
     if params.alloc == "solve":
         # a priced player's total is the books': his per-minute rate is the market mean over his solved minutes
         for p in avail:

@@ -143,27 +143,41 @@ class LiveSlate:
         return roster
 
     def rotation_for(self, team: str, overrides: dict, forced_out: set[str]) -> dict | None:
-        """The team's drawn grid, else the proposal from the players' stints; None when there are no stints at all."""
-        from .rotation import boundary_spreads, curves, load_drawn, propose
-        from .minutes import salary_prior_minutes
+        """
+        The skeleton's inputs for project_team: every roster player's stint curve (absent players' curves are the
+        vacated slots), the desk's locked rows, the boundary spreads. The grid itself is built inside project_team from
+        the solve's minutes and comes back in this dict under "grid". None when nobody is available.
+        """
+        from .rotation import boundary_spreads, curves, load_locks
+        from ivan.sports.nba.pbp import sub_shares
         roster = self.roster(team, overrides, forced_out)
         avail = [p.name for p in roster if p.available]
         if not avail:
             return None
-        curve = curves(self.session, players=avail, n_games=10)
-        drawn = load_drawn(team)
-        if drawn is not None:
-            grid = drawn.reindex([n for n in drawn.index if n in avail]).fillna(False)
-            for n in avail:
-                if n not in grid.index:
-                    grid.loc[n] = False
-        else:
-            if curve.empty:
-                return None
-            starters = [p.name for p in roster if p.available and p.starter]                   # overrides already applied
-            prior = {p.name: salary_prior_minutes(p.salary) for p in roster}
-            grid = propose(curve, avail, starters, salary_prior=prior)
-        return {"grid": grid, "spreads": boundary_spreads(self.session, avail), "curve": curve if not curve.empty else None, "drawn": drawn is not None}
+        names = [p.name for p in roster]
+        curve = curves(self.session, players=names, n_games=10)
+        locks = load_locks(team)
+        if locks is not None:
+            locks = locks.loc[[n for n in locks.index if n in avail]]
+            if not len(locks):
+                locks = None
+        try:
+            shares = sub_shares(self.session, players=names)          # the coach's habit: who comes in for whom (recorded SUB events)
+        except Exception:   # noqa: BLE001 - no substitution table yet
+            shares = {}
+        from .groups import rotation_depth
+        try:
+            from ivan.core.config import load_config
+            block = (load_config("nba") or {}).get("projection") or {}
+        except Exception:   # noqa: BLE001
+            block = {}
+        depth = None
+        if block.get("depth_cut", True):
+            depth = rotation_depth(self.box, team) + int(block.get("depth_extra", 0))
+        return {"skeleton": True, "curve": curve if not curve.empty else None, "locks": locks,
+                "vacated": [p.name for p in roster if not p.available and (curve.empty or p.name in curve.index)],
+                "spreads": boundary_spreads(self.session, avail), "drawn": locks is not None, "shares": shares,
+                "depth": depth}
 
     def group_targets(self, team: str) -> dict:
         """The team's trailing minutes by position group for the solve (groups.group_targets), from the box scores."""

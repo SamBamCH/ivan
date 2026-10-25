@@ -250,6 +250,100 @@ def column_counts(grid: pd.DataFrame) -> List[int]:
     return [int(x) for x in grid.sum(axis=0).values]
 
 
+# ----------------------------------------------------------------------------- the five spots
+SPOT_ORDER = {"PG": 0, "SG": 1, "G": 1, "SF": 2, "F": 2, "SF/PF": 2, "PF": 3, "C": 4, "PF/C": 4, "F/C": 4}
+
+
+def _spot_rank(position: Optional[str], group: Optional[str]) -> float:
+    """Starters sort into the five spots guard -> wing -> big, by their DK positions (PG first, C last)."""
+    pos = [x.strip().upper() for x in str(position or "").split("/") if x.strip()]
+    ranks = [SPOT_ORDER[x] for x in pos if x in SPOT_ORDER]
+    if ranks:
+        return float(np.mean(ranks))
+    return {"guard": 0.5, "wing": 2.0, "big": 4.0}.get(group or "", 2.0)
+
+
+def spots_of(grid: pd.DataFrame, starters: Optional[Iterable[str]] = None, groups: Optional[Dict[str, str]] = None,
+             positions: Optional[Dict[str, str]] = None, pairs: Optional[Iterable[dict]] = None,
+             shares: Optional[Dict[str, Dict[str, float]]] = None) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Which of the five lineup spots each player fills in each minute: the five on the floor at the tip own spots 0-4
+    (guards first, bigs last), and when a player goes off, the player who comes on in his place inherits his spot.
+    Who came on for whom is, in order of trust:
+      1. the recorded substitution when one player came in for one (`pairs`: dicts with player_out, player_in, elapsed),
+      2. a returning player's own spot when it is freed in the same minute,
+      3. the likest player going off: the same position group first, within it the coach's habit (`shares`: out -> {in:
+         share of his single-swap exits}, pbp.sub_shares), then the nearest position order.
+    Returns (spots: index as grid, columns 0..47, -1 off the floor / unassigned, and the spot owners' names in order).
+    A minute with more than five on holds the extras at -1; a spot nobody fills stays free for the next player in.
+    """
+    groups = groups or {}; positions = positions or {}; shares = shares or {}
+    names = list(grid.index); G = grid[list(range(MINUTES))].values.astype(bool)
+    idx = {n: i for i, n in enumerate(names)}
+    S = np.full(G.shape, -1, dtype=int)
+    tip = [n for n in names if G[names.index(n), 0]]
+    st = [n for n in (starters or []) if n in tip] or tip
+    st = sorted(st, key=lambda n: (_spot_rank(positions.get(n), groups.get(n)), n))[:ON_COURT]
+    for k, n in enumerate(st):
+        S[names.index(n), 0] = k
+    free = [k for k in range(ON_COURT) if k not in set(range(len(st)))]
+    rank = {n: _spot_rank(positions.get(n), groups.get(n)) for n in names}
+    last_spot = {names.index(n): k for k, n in enumerate(st)}        # the spot each player held last (a returning player reclaims his when it is free)
+    # recorded pairs count only when one player came in for one: at a multi-swap the feed pairs them in the scorer's
+    # typing order (40% same position group against 61% at single swaps, 2026-10-24), so those moments are re-paired below
+    by_moment: Dict[float, List[dict]] = {}
+    for pr in pairs or []:
+        try:
+            by_moment.setdefault(round(float(pr["elapsed"]), 1), []).append(pr)
+        except (KeyError, TypeError, ValueError):
+            continue
+    by_minute: Dict[int, List[Tuple[str, str]]] = {}
+    for t, prs in by_moment.items():
+        if len(prs) != 1:
+            continue
+        m0 = int(t // 60)
+        for mm in (m0, m0 + 1):                                       # the grid's cells turn at the minute of the sub or the next
+            by_minute.setdefault(mm, []).append((str(prs[0]["player_out"]), str(prs[0]["player_in"])))
+    for m in range(1, MINUTES):
+        S[:, m] = np.where(G[:, m] & G[:, m - 1], S[:, m - 1], -1)
+        outs = [i for i in range(len(names)) if G[i, m - 1] and not G[i, m] and S[i, m - 1] >= 0]
+        ins = [i for i in range(len(names)) if G[i, m] and not G[i, m - 1]]
+        free_spots = [S[i, m - 1] for i in outs] + free
+        free = []
+        # 1. the recorded pairs at this minute
+        for o_name, i_name in by_minute.get(m, []):
+            o, i = idx.get(o_name), idx.get(i_name)
+            if o is None or i is None or o not in outs or i not in ins:
+                continue
+            sp = S[o, m - 1]
+            if sp in free_spots:
+                S[i, m] = sp; last_spot[i] = sp; free_spots.remove(sp); outs.remove(o); ins.remove(i)
+        # 2-4. the rest: own spot first, then the coach's habit, then the likest player going off
+        def habit(i, sp):
+            o = next((x for x in outs if S[x, m - 1] == sp), None)
+            return float(shares.get(names[o], {}).get(names[i], 0.0)) if o is not None else 0.0
+        ins_sorted = sorted(ins, key=lambda i: (0 if last_spot.get(i, -1) in free_spots else 1, rank[names[i]]))
+        for i in ins_sorted:
+            if not free_spots:
+                break
+            if last_spot.get(i, -1) in free_spots:
+                best = last_spot[i]
+            else:
+                best = None; best_key = None
+                for sp in free_spots:
+                    owner = next((o for o in outs if S[o, m - 1] == sp), None)
+                    h = habit(i, sp)
+                    if owner is not None:      # the same line first; within it the coach's habit, then the nearest position
+                        key = (0 if groups.get(names[owner], "wing") == groups.get(names[i], "wing") else 1, -h, abs(rank[names[owner]] - rank[names[i]]))
+                    else:
+                        key = (2, 0.0, 0.0)
+                    if best_key is None or key < best_key:
+                        best, best_key = sp, key
+            S[i, m] = best; last_spot[i] = best; free_spots.remove(best)
+        free = free_spots                                   # a spot nobody took stays free for the next entrant
+    return pd.DataFrame(S, index=grid.index, columns=list(range(MINUTES))), st
+
+
 # ----------------------------------------------------------------------------- the last game's rotation
 def team_games(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None, limit: int = 20) -> List[dict]:
     """The team's games with stints, newest first: game_id, game_date, opp (the other team in the same game, when stored)."""
@@ -263,8 +357,9 @@ def team_games(session: Session, team: str, before: Optional[date] = None, since
 def last_game_grid(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None, game_id: Optional[str] = None) -> Optional[dict]:
     """
     The team's most recent game (or `game_id`) as a grid (index player, columns
-    0..47; a minute is on when the player was on the floor for at least half of
-    it; overtime folded into the last minute), with the game id and date. None
+    0..47; each stint runs from its start rounded to the nearest minute to its
+    end rounded the same way; overtime folded into the last minute), with the
+    game id and date. None
     when the team has no stints (since `since`, when given: the desk asks for
     this season only).
     """
@@ -280,35 +375,55 @@ def last_game_grid(session: Session, team: str, before: Optional[date] = None, s
     st = pd.read_sql(text("select player_name, start_sec, end_sec, minutes from nba_stint where game_id = :g and team = :t").bindparams(g=gid, t=team), session.get_bind())
     names = list(dict.fromkeys(st.player_name))
     grid = np.zeros((len(names), MINUTES), dtype=bool)
+    # every boundary is cut at its nearest minute, so one substitution time moves the player going off and the player
+    # coming on in the same column (the older "on if 30 seconds of the minute" rule put both on at an exact half minute
+    # and let a swap straddle two columns: 102 columns without five on the floor over 50 team-games, 2026-10-24)
     for i, nm in enumerate(names):
         for a, b in zip(st[st.player_name == nm].start_sec, st[st.player_name == nm].end_sec):
-            b = min(float(b), 2880.0)
-            for m in range(int(a // 60), min(MINUTES, int(np.ceil(b / 60.0)))):
-                if min(b, (m + 1) * 60) - max(a, m * 60) >= 30:
-                    grid[i, m] = True
+            a_m = int(np.floor(float(a) / 60.0 + 0.5)); b_m = int(np.floor(min(float(b), 2880.0) / 60.0 + 0.5))
+            for m in range(max(0, a_m), min(MINUTES, b_m)):          # a stint that rounds to nothing shows nothing (a forced cell made six on the floor)
+                grid[i, m] = True
     g = pd.DataFrame(grid, index=names, columns=list(range(MINUTES)))
     g = g.loc[sorted(g.index, key=lambda n: -int(g.loc[n].sum()))]
     return {"grid": g, "game_id": str(gid), "game_date": str(gdate)}
 
 
-# ----------------------------------------------------------------------------- drawn rotations
+# ----------------------------------------------------------------------------- drawn rotations (the desk's locked rows)
 def drawn_path(team: str) -> Path:
     return ROTATIONS_DIR / f"{team}.json"
 
 
-def save_drawn(team: str, grid: pd.DataFrame, note: str = "") -> Path:
+def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[Iterable[str]] = None) -> Path:
+    """
+    The team's painted rotation. `locked` names the rows the desk holds exactly (the skeleton fills the others around
+    them, projection/skeleton.py); None locks every row (the older meaning of a drawn grid).
+    """
     p = drawn_path(team); p.parent.mkdir(parents=True, exist_ok=True)
+    names = [str(n) for n in grid.index]
     p.write_text(json.dumps({"team": team, "saved_at": datetime.now().isoformat(timespec="seconds"), "note": note,
-                             "players": [str(n) for n in grid.index], "grid": [[int(x) for x in row] for row in grid.values]}, indent=0))
+                             "players": names, "grid": [[int(x) for x in row] for row in grid[list(range(MINUTES))].values],
+                             "locked": names if locked is None else [str(n) for n in locked if str(n) in names]}, indent=0))
     return p
 
 
 def load_drawn(team: str) -> Optional[pd.DataFrame]:
+    """The whole saved grid (locked rows and the fill that was saved with them); .attrs["locked"] names the locked rows."""
     p = drawn_path(team)
     if not p.exists():
         return None
     d = json.loads(p.read_text())
-    return pd.DataFrame(np.array(d["grid"], dtype=bool), index=d["players"], columns=list(range(MINUTES)))
+    g = pd.DataFrame(np.array(d["grid"], dtype=bool).reshape(len(d["players"]), MINUTES), index=d["players"], columns=list(range(MINUTES)))
+    g.attrs["locked"] = list(d.get("locked", d["players"]))
+    return g
+
+
+def load_locks(team: str) -> Optional[pd.DataFrame]:
+    """Only the locked rows of the saved grid (what the skeleton must hold); None when nothing is locked."""
+    g = load_drawn(team)
+    if g is None:
+        return None
+    locked = [n for n in g.attrs.get("locked", list(g.index)) if n in g.index]
+    return g.loc[locked] if locked else None
 
 
 def clear_drawn(team: str) -> bool:

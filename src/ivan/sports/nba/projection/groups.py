@@ -73,3 +73,28 @@ def group_targets(box: pd.DataFrame, team: str, before: date, posmap: Dict[str, 
         sd = float(np.std(x[-15:])) if len(x) >= 5 else 12.0
         out[k] = (float((w * x).sum() / w.sum()), max(GROUP_SD_FLOOR, sd))
     return out
+
+
+DEPTH_MIN_MINUTES = 5.0    # a player with this many minutes counts toward the depth (the 5-minute garbage-time man does not)
+DEPTH_GAMES = 10
+DEPTH_HALFLIFE = 4.0
+DEPTH_FLOOR, DEPTH_CEIL = 8, 12
+
+
+def rotation_depth(box: pd.DataFrame, team: str, before: Optional[date] = None, default: int = 10) -> int:
+    """
+    How many players the coach uses: the recency-weighted mean count of players with DEPTH_MIN_MINUTES+ minutes over the
+    team's last DEPTH_GAMES games (league 2025-26: mean 10.0, p10 9, p90 12), rounded, within DEPTH_FLOOR..DEPTH_CEIL.
+    `default` when the team has no games yet.
+    """
+    g = box[(box.team == team) & box.played]
+    if before is not None:
+        g = g[g.game_date < before]
+    if g.empty:
+        return default
+    per_game = g[g.minutes >= DEPTH_MIN_MINUTES].groupby(["game_date", "game_id"]).size().sort_index()
+    if per_game.empty:
+        return default
+    per_game = per_game.iloc[-DEPTH_GAMES:]
+    w = np.array([0.5 ** ((len(per_game) - 1 - i) / DEPTH_HALFLIFE) for i in range(len(per_game))])
+    return int(np.clip(round(float((per_game.values * w).sum() / w.sum())), DEPTH_FLOOR, DEPTH_CEIL))
