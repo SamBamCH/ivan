@@ -23,6 +23,7 @@ Retrain with: python scripts/nfl/train_showdown_model_simplified.py
 
 from __future__ import annotations
 import pickle
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from collections import Counter
@@ -52,6 +53,7 @@ def sample_field(
     entry_fee: Optional[float] = None,
     num_games: Optional[int] = None,
     ownership_gini: Optional[float] = None,
+    slate: "SlateField | None" = None,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Unified field sampler entry point.
@@ -67,6 +69,8 @@ def sample_field(
         entry_fee: Entry fee in dollars (for learned classic sampler)
         num_games: Number of games on slate (for learned classic sampler)
         ownership_gini: Ownership concentration (for learned classic sampler)
+        slate: the slate's pool, ownership and derived features (SlateField.build), built once and
+            shared by every contest of a run; without it the sampler rebuilds them for this call
 
     Returns:
         counts_by_lineup: {lineup_id: count}
@@ -80,6 +84,7 @@ def sample_field(
             field_size=field_size,
             config=config,
             contest_id=contest_id,
+            slate=slate,
         )
 
     return sample_classic_field_learned(
@@ -92,6 +97,7 @@ def sample_field(
         num_games=num_games,
         ownership_gini=ownership_gini,
         allow_duplicates=use_classic_dupes,
+        slate=slate,
     )
 
 # CONSTANTS
@@ -130,9 +136,21 @@ def _dupe_features(session: Session, L, pid_to_col: Dict[int, int], player_owner
     return out
 
 
-def build_lineup_matrix(session: Session):
+def lineup_rows(session: Session) -> list:
     """
-    Build sparse lineup matrix and metadata.
+    Every candidate lineup as (id, player ids), ordered by content. generate's
+    workers commit in parallel, so ids interleave differently run to run; the
+    seeded sampler indexes this list, so ordering by content keeps a seed
+    reproducible.
+    """
+    rows = session.query(Lineup.id, Lineup.player_ids_list).all()
+    return sorted(rows, key=lambda r: (tuple(sorted(_coerce_player_ids(r[1]))), int(r[0])))
+
+
+def build_lineup_matrix(session: Session, rows: Optional[list] = None):
+    """
+    Build sparse lineup matrix and metadata. `rows` is lineup_rows(session),
+    fetched once by the caller when it has them already.
     
     Returns:
         L: csr_matrix [n_lineups x n_players] - binary lineup membership
@@ -142,13 +160,10 @@ def build_lineup_matrix(session: Session):
         cpt_col_by_row: array [n_lineups] -> captain column index (or -1)
         flex_cols_by_row: list of lists - FLEX column indices per lineup
     """
-    rows = session.query(Lineup.id, Lineup.player_ids_list).all()
+    rows = lineup_rows(session) if rows is None else rows
     if not rows:
         raise RuntimeError("No lineups found in database.")
-    # generate's workers commit in parallel, so ids interleave differently run to run; the seeded sampler below
-    # indexes this list, so order it by content to keep a seed reproducible
-    rows = sorted(rows, key=lambda r: (tuple(sorted(_coerce_player_ids(r[1]))), int(r[0])))
-    
+
     lineup_ids, parsed, all_pids = [], [], set()
     for lid, player_ids_json in rows:
         pids = _coerce_player_ids(player_ids_json)
@@ -207,6 +222,83 @@ def build_lineup_matrix(session: Session):
                 flex_cols_by_row[row_idx].append(col)
 
     return L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row
+
+# ==============================================================================
+# THE SLATE'S POOL, ONCE
+# ==============================================================================
+
+@dataclass
+class SlateField:
+    """
+    What the field sampler needs that depends only on the slate, not the
+    contest: the candidate pool as a lineup matrix with each lineup's players,
+    salary and captain, the players' projected ownership, and (built on first
+    use, then kept) the ownership heuristic, the dupe model's lineup features,
+    the projection vector and the showdown sampler's diversity matrix. Build
+    one per slate (SlateField.build) and pass it to sample_field for every
+    contest; the contest-specific part of a sample (expected copies at the
+    contest's size, the raking, the draw) still runs per call.
+    """
+    L: sp.csr_matrix
+    lineup_ids: np.ndarray
+    spends: np.ndarray
+    pid_to_col: Dict[int, int]
+    cpt_col_by_row: np.ndarray
+    flex_cols_by_row: List[List[int]]
+    pid_lists: Dict[int, List[int]]                 # lineup id -> its player ids
+    ownership: np.ndarray                           # projected ownership % per column, 0 where missing
+    _memo: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def build(cls, session: Session) -> "SlateField":
+        rows = lineup_rows(session)
+        L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row = build_lineup_matrix(session, rows=rows)
+        pid_lists = {int(lid): _coerce_player_ids(j) for lid, j in rows}
+        return cls(L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row, pid_lists,
+                   get_player_ownership(session, pid_to_col))
+
+    @property
+    def n_lineups(self) -> int:
+        return int(self.L.shape[0])
+
+    @property
+    def has_ownership(self) -> bool:
+        return bool(self.ownership.size) and float(np.nanmax(self.ownership)) > 0 and not np.isnan(self.ownership).any()
+
+    def showdown_ownership(self, session: Session) -> np.ndarray:
+        """Projected ownership, or the salary/projection heuristic the showdown sampler falls back on without it."""
+        if self.has_ownership:
+            return self.ownership
+        if "heuristic" not in self._memo:
+            print("  WARNING: no projected ownership on this slate; using a salary/projection heuristic for the field")
+            # flex concentration 2, salary weight 0.3, captain concentration 4 for realistic captain chalk
+            self._memo["heuristic"] = get_player_ownership_heuristic(session, self.pid_to_col, alpha=2.0, salary_weight=0.3,
+                                                                     captain_concentration=4.0)
+        return self._memo["heuristic"]
+
+    def dupe_features(self, session: Session, player_ownership: np.ndarray, captain: bool) -> dict:
+        """The dupe model's per-lineup features (_dupe_features); captain=True adds the captain's log ownership."""
+        key = ("dupe_features", bool(captain))
+        if key not in self._memo:
+            self._memo[key] = _dupe_features(session, self.L, self.pid_to_col, player_ownership,
+                                             self.cpt_col_by_row if captain else None)
+        return self._memo[key]
+
+    def projection(self, session: Session) -> np.ndarray:
+        """Each column's mean sampled score (build_player_samples), the classic sampler's projection weight."""
+        if "projection" not in self._memo:
+            P = build_player_samples(session, self.pid_to_col)
+            self._memo["projection"] = np.asarray(P.mean(axis=0), dtype=np.float64)
+        return self._memo["projection"]
+
+    def diversity(self, session: Session, n_sims: int, seed) -> Tuple[np.ndarray, Dict]:
+        """The showdown sampler's pairwise lineup distances (compute_lineup_diversity_matrix)."""
+        key = ("diversity", int(n_sims), seed)
+        if key not in self._memo:
+            self._memo[key] = compute_lineup_diversity_matrix(session=session, L=self.L, lineup_ids=self.lineup_ids,
+                                                               pid_to_col=self.pid_to_col, n_sims=n_sims, seed=seed)
+        return self._memo[key]
+
 
 # ==============================================================================
 # PLAYER SAMPLES
@@ -571,6 +663,7 @@ def sample_showdown_field_unified(
     total_entries: int,
     ownership_calibration: Optional[dict] = None,
     dupe_clip_floor: float = 1.0,
+    slate: Optional[SlateField] = None,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Unified sampler combining diversity and duplication in one gate.
@@ -598,14 +691,17 @@ def sample_showdown_field_unified(
     # ========================================================================
     # Step 1: Compute diversity matrix (Euclidean distances)
     # ========================================================================
-    dist_mat, diversity_meta = compute_lineup_diversity_matrix(
-        session=session,
-        L=L,
-        lineup_ids=lineup_ids,
-        pid_to_col=pid_to_col,
-        n_sims=32,  # Fast: only 32 sims for diversity
-        seed=seed_for("field/diversity", 42),
-    )
+    if slate is not None:                                   # computed once per slate, kept on the context
+        dist_mat, diversity_meta = slate.diversity(session, n_sims=32, seed=seed_for("field/diversity", 42))
+    else:
+        dist_mat, diversity_meta = compute_lineup_diversity_matrix(
+            session=session,
+            L=L,
+            lineup_ids=lineup_ids,
+            pid_to_col=pid_to_col,
+            n_sims=32,  # Fast: only 32 sims for diversity
+            seed=seed_for("field/diversity", 42),
+        )
 
     if dist_mat.size == 0 or 'error' in diversity_meta:
         print("  WARNING: Diversity computation failed, using uniform diversity")
@@ -725,10 +821,13 @@ def sample_showdown_field_learned(
     config: dict,
     contest_id: Optional[int] = None,
     model_dir: str | Path | None = None,
+    slate: Optional[SlateField] = None,
 ) -> Tuple[Dict[int, int], Dict]:
     """
     Sample a showdown field: every candidate's expected copies from the product
     dupe model (ivan.sports.nfl.dupe_model), then the diversity-gated sampler.
+    `slate` (SlateField.build) carries the pool and its slate-level features
+    across the contests of a run; without it they are rebuilt here.
 
     Returns:
         counts_by_lineup: {lineup_id: duplicate_count}
@@ -748,36 +847,18 @@ def sample_showdown_field_learned(
     else:
         total_entries = field_size
     
-    # Build lineup matrix
-    L, lineup_ids, spends, pid_to_col, cpt_col_by_row, flex_cols_by_row = build_lineup_matrix(session)
+    if slate is None:
+        slate = SlateField.build(session)
+    L, lineup_ids, spends, pid_to_col, cpt_col_by_row = slate.L, slate.lineup_ids, slate.spends, slate.pid_to_col, slate.cpt_col_by_row
     n_lineups = L.shape[0]
 
     if n_lineups == 0:
         print("  WARNING: No lineups found in database")
         return {}, {'error': 'no_lineups'}
 
-    # FIXED: Try to use actual ownership first, fall back to heuristic if not available
-    # The model was trained on actual DK ownership, so using heuristic causes distribution mismatch
-    player_ownership = get_player_ownership(session, pid_to_col)
-
-    # Check if we have valid ownership data
-    has_ownership = (player_ownership.max() > 0) and not np.isnan(player_ownership).any()
-
-    if not has_ownership:
-        print("  WARNING: no projected ownership on this slate; using a salary/projection heuristic for the field")
-
-        # FIXED: Increased captain_concentration from 2 to 4 for realistic chalk
-        alpha = 2.0  # Flex concentration
-        salary_weight = 0.3  # Reduced salary impact
-        captain_concentration = 4.0  # FIXED: Back to 4 for realistic captain chalk
-
-        player_ownership = get_player_ownership_heuristic(
-            session,
-            pid_to_col,
-            alpha=alpha,
-            salary_weight=salary_weight,
-            captain_concentration=captain_concentration,
-        )
+    # the dupe model was trained on actual DK ownership, so projected ownership comes first and the heuristic is the fallback
+    has_ownership = slate.has_ownership
+    player_ownership = slate.showdown_ownership(session)
     ownership_info = {
         'source': 'projected' if has_ownership else 'heuristic',
         'min': float(player_ownership.min()), 'max': float(player_ownership.max()),
@@ -797,7 +878,7 @@ def sample_showdown_field_learned(
         from ivan.sports.nfl import dupe_model as DMv2
         dm = DMv2.load()
         slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
-        feats = _dupe_features(session, L, pid_to_col, player_ownership, cpt_col_by_row)
+        feats = slate.dupe_features(session, player_ownership, captain=True)
         predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float), **feats)
         dupe_clip_floor = 1e-6
         dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
@@ -821,6 +902,7 @@ def sample_showdown_field_learned(
         player_ownership=player_ownership,
         total_entries=total_entries,
         ownership_calibration=(config or {}).get("field", {}).get("ownership_calibration"),
+        slate=slate,
     )
     
     # Add metadata
@@ -850,9 +932,11 @@ def sample_classic_field_learned(
     ownership_gini: Optional[float] = None,
     model_dir: str | Path | None = None,
     allow_duplicates: bool = True,
+    slate: Optional[SlateField] = None,
 ) -> Tuple[Dict[int, int], Dict]:
     """
-    Model-based classic field sampler.
+    Model-based classic field sampler. `slate` (SlateField.build) carries the
+    pool, ownership and projections across the contests of a run.
 
     Strategy:
     1. Load trained Random Forest regressors (projection & ownership distributions)
@@ -898,8 +982,9 @@ def sample_classic_field_learned(
         print("  Run: python -m ivan.sports.nfl.build_models")
         return {}, {'error': 'models_not_found'}
 
-    # Build lineup matrix
-    L, lineup_ids, spends, pid_to_col, _, _ = build_lineup_matrix(session)
+    if slate is None:
+        slate = SlateField.build(session)
+    L, lineup_ids, spends, pid_to_col = slate.L, slate.lineup_ids, slate.spends, slate.pid_to_col
     n_lineups, n_players = L.shape
 
     if n_lineups == 0:
@@ -928,13 +1013,11 @@ def sample_classic_field_learned(
             num_games = len(teams) / 2
 
     # Get player projections for weighting
-    P = build_player_samples(session, pid_to_col)
-    per_player_mean = np.asarray(P.mean(axis=0), dtype=np.float64)
+    per_player_mean = slate.projection(session)
     lineup_proj_raw = np.asarray(L @ per_player_mean, dtype=np.float64)
 
     # Get player ownership for weighting
-    pid_to_col_inv = {v: k for k, v in pid_to_col.items()}
-    player_ownership = get_player_ownership(session, pid_to_col)
+    player_ownership = slate.ownership
     lineup_own_raw = np.asarray(L @ player_ownership, dtype=np.float64)
 
     # Prepare feature vector for model
@@ -998,7 +1081,7 @@ def sample_classic_field_learned(
         slo = np.asarray(L @ np.log(np.maximum(np.nan_to_num(player_ownership, nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0), dtype=np.float64)
         n_real = float(total_entries or field_size)
         salary_left = DMv2.SALARY_CAP - np.asarray(spends, dtype=float)
-        feats = _dupe_features(session, L, pid_to_col, player_ownership, None)
+        feats = slate.dupe_features(session, player_ownership, captain=False)
         predicted_copies_classic = dm.copies(n_real, False, slo, salary_left=salary_left, **feats)
         weights = weights * dm.weights(False, slo, salary_left=salary_left, **feats)
         print(f"  dupes (classic): {dm.params['classic']}; candidates' expected copies at {int(n_real)} entries: "

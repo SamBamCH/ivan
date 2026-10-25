@@ -6,7 +6,11 @@ Two methods, picked by config `sim.method` (default "montecarlo"):
 
 montecarlo  the sampled field of `field_cap` entries, one correlated draw per
             simulation for every player, ranks and payouts counted, the payout
-            table scaled to the sampled field (simulate_one_contest_mc).
+            table scaled to the sampled field (simulate_one_contest_mc). The
+            run's loop (simulate_entries) builds the slate once (SlateContext:
+            the sampler's pool and features, and one draw shared by every
+            contest, so simulation i is the same world in each contest) and
+            samples each contest's field from it.
 conditioned the evaluation below, in the lab until its count model handles a
             field whose lineups are deterministic given the world:
 
@@ -49,7 +53,7 @@ from ivan.sports.nfl.conditioned import (Ladder, LineupPool, WorldModel, build_l
 from ivan.sports.nfl.correlated_samples import generate_correlated_samples_gaussian
 from ivan.sports.nfl.models import ContestPayout, HistoricalContest, Lineup, LineupSimulationResult, NFLBase
 from ivan.sports.nfl.paths import DIAG_DIR
-from ivan.sports.nfl.sample_field import sample_field
+from ivan.sports.nfl.sample_field import SlateField, sample_field
 
 MAX_WORKERS = 8
 MAX_CHUNKS = 12
@@ -73,12 +77,13 @@ sanitize_contest_name = sim_report.sanitize_contest_name
 
 
 # ------------------------------------------------------------------------- field
-def _expand_sampled_field(session: Session, counts_by_lineup: Dict[int, int]):
+def _expand_sampled_field(session: Session, counts_by_lineup: Dict[int, int], pid_lists: Dict[int, List[int]] | None = None):
     """
     Lay the sampled field out as M entries (one per copy of a lineup).
     Returns (u_lids, pid_lists_by_lid, lineup_ix, unique_pids, pid_to_idx, starts, ends):
     entries [starts[u], ends[u]) are the copies of u_lids[u]; lineup_ix[m] holds
-    the player column indexes of entry m.
+    the player column indexes of entry m. `pid_lists` (the slate's lineup id ->
+    player ids, SlateField.pid_lists) saves the query for the lineups it holds.
     """
     u_lids = sorted(lid for lid, c in counts_by_lineup.items() if c > 0)
     cnts = np.array([int(counts_by_lineup[lid]) for lid in u_lids], dtype=np.int64)
@@ -86,9 +91,10 @@ def _expand_sampled_field(session: Session, counts_by_lineup: Dict[int, int]):
     ends = starts + cnts
     M = int(cnts.sum())
 
-    pid_lists_by_lid: Dict[int, List[int]] = {}
-    for i in range(0, len(u_lids), 900):                       # SQLite variable limit
-        for lid, j in session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.id.in_(u_lids[i:i + 900])).all():
+    pid_lists_by_lid: Dict[int, List[int]] = {int(lid): list(pid_lists[lid]) for lid in u_lids if lid in pid_lists} if pid_lists else {}
+    todo = [lid for lid in u_lids if lid not in pid_lists_by_lid]
+    for i in range(0, len(todo), 900):                       # SQLite variable limit
+        for lid, j in session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.id.in_(todo[i:i + 900])).all():
             pid_lists_by_lid[int(lid)] = _coerce_player_ids(j)
 
     unique_pids = sorted({p for lid in u_lids for p in pid_lists_by_lid.get(lid, [])})
@@ -117,14 +123,18 @@ def _scale_payouts(tiers: List[dict], num_field_lineups: int, original_field_siz
 
 # ------------------------------------------------------------------------- samples
 def _player_samples_matrix(session: Session, pid_to_idx: Dict[int, int], n_samples: int,
-                           model_dir: str | Path | None = None, seed: int | None = None):
+                           model_dir: str | Path | None = None, seed: int | None = None, draw: "SlateDraw | None" = None):
     """
     Scores P[num_sims, num_players] aligned to pid_to_idx from one correlated
-    draw per simulation. Also returns the raw per-player samples, the sampler's
+    draw per simulation: the slate's shared `draw` when it has enough samples,
+    else a fresh one. Also returns the raw per-player samples, the sampler's
     diagnostics and the field players that had no samples (zero columns).
     """
-    raw, diag = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples, seed=seed,
-                                                     return_diagnostics=True)
+    if draw is not None and draw.n_samples >= n_samples:
+        raw, diag = draw.raw, draw.diag
+    else:
+        raw, diag = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples, seed=seed,
+                                                         return_diagnostics=True)
     P = np.zeros((n_samples, len(pid_to_idx)), dtype=np.float32)
     missing = []
     for pid, col in pid_to_idx.items():
@@ -152,6 +162,49 @@ def _player_samples(session: Session, pids, n_samples: int, model_dir: str | Pat
                                                      return_diagnostics=True)
     missing = [pid for pid in pids if not isinstance(raw.get(pid), np.ndarray) or raw[pid].size == 0]
     return raw, diag, missing
+
+
+# ------------------------------------------------------------------------- the slate, once
+@dataclass
+class SlateDraw:
+    """
+    One correlated draw of every player's score per simulation, shared by all
+    the contests of a slate: simulation i is the same world in every contest,
+    so the contests' results can be read together, and the draw is paid for
+    once instead of once per contest.
+    """
+    raw: Dict[int, np.ndarray]
+    diag: dict
+    n_samples: int
+    seed: int | None
+
+    @classmethod
+    def draw(cls, session: Session, n_samples: int, seed: int | None = None, model_dir: str | Path | None = None) -> "SlateDraw":
+        raw, diag = generate_correlated_samples_gaussian(session, model_dir=model_dir, n_samples=n_samples, seed=seed,
+                                                         return_diagnostics=True)
+        return cls(raw=raw, diag=diag, n_samples=int(n_samples), seed=seed)
+
+
+@dataclass
+class SlateContext:
+    """
+    The slate-level state of a simulation run, built once (SlateContext.build)
+    and handed to every contest: the field sampler's pool and features
+    (SlateField) and, for the Monte Carlo method, the shared draw. Each contest
+    still samples its own field (its size and fee set the copies) and ranks it.
+    """
+    field: SlateField
+    draw: SlateDraw | None = None
+
+    @classmethod
+    def build(cls, session: Session, n_sims: int | None = None, seed: int | None = None, log=print) -> "SlateContext":
+        t0 = time.time()
+        field = SlateField.build(session)
+        draw = SlateDraw.draw(session, n_sims, seed=seed) if n_sims else None
+        log(f"slate: {field.n_lineups:,} candidate lineups" + (f", one correlated draw of {n_sims} sims shared by every contest"
+                                                             + (f" (seed {seed})" if seed is not None else "") if draw else "")
+            + f" ({time.time() - t0:.1f}s)")
+        return cls(field=field, draw=draw)
 
 
 # ------------------------------------------------------------------------- the slate's worlds
@@ -192,6 +245,7 @@ def simulate_one_contest_conditioned(
     use_classic_dupes: bool = False,
     artifact_dir: str | Path | None = None,
     worlds: SlateWorlds | None = None,
+    slate: SlateContext | None = None,
 ) -> dict:
     """
     Evaluate a contest end to end and persist the per-lineup results and the
@@ -231,7 +285,8 @@ def simulate_one_contest_conditioned(
 
     # 1) the field: every candidate's expected copies from the sampler's weights (the sampled counts only feed the report)
     counts_by_lineup, meta = sample_field(session, field_size=min(F, 10_000), config=cfg, mode=mode, contest_id=contest_id,
-                                          use_classic_dupes=use_classic_dupes, total_entries=F, entry_fee=entry_fee)
+                                          use_classic_dupes=use_classic_dupes, total_entries=F, entry_fee=entry_fee,
+                                          slate=slate.field if slate is not None else None)
     sampler_arrays = meta.pop("_arrays", None) or {}
     if "lineup_id" not in sampler_arrays or "combined_weights" not in sampler_arrays:
         raise RuntimeError(f"field sampler returned no lineup weights for contest {contest_id} ({meta.get('error', 'no lineups?')})")
@@ -396,6 +451,7 @@ def simulate_one_contest_mc(
     num_sims: int = 1000,
     use_classic_dupes: bool = False,
     artifact_dir: str | Path | None = None,
+    slate: SlateContext | None = None,
 ) -> dict:
     """
     The Monte Carlo contest simulation (the live default): the sampled field of
@@ -404,7 +460,9 @@ def simulate_one_contest_mc(
     per-lineup results and the run's report, returns the report. With
     `artifact_dir` the run's assumptions are also written there for the
     validation layer (ivan.sports.nfl.run_artifacts); a failure to write
-    them never sinks the simulation.
+    them never sinks the simulation. `slate` (SlateContext.build) carries the
+    pool's features and the slate's shared draw across contests; without it
+    the pool is rebuilt and a draw seeded by the contest id is made here.
     """
     t0 = time.time()
     cfg = json.load(open(config_path, encoding="utf-8"))
@@ -427,14 +485,16 @@ def simulate_one_contest_mc(
     # 1) the opposing field, with the contest's real size and fee driving the duplication model
     counts_by_lineup, meta = sample_field(session, field_size=capped, config=cfg, mode=mode,
                                           contest_id=contest_id, use_classic_dupes=use_classic_dupes,
-                                          total_entries=field_sz, entry_fee=entry_fee)
+                                          total_entries=field_sz, entry_fee=entry_fee,
+                                          slate=slate.field if slate is not None else None)
     M = sum(counts_by_lineup.values())
     if M == 0:
         raise RuntimeError(f"field sampler returned no entries for contest {contest_id} ({meta.get('error', 'no lineups?')})")
     if M != capped:
         raise RuntimeError(f"field sampler returned {M} entries, expected {capped}")
     sampler_arrays = meta.pop("_arrays", None)
-    u_lids, pid_lists_by_lid, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(session, counts_by_lineup)
+    u_lids, pid_lists_by_lid, lineup_ix, unique_pids, pid_to_idx, starts, ends = _expand_sampled_field(
+        session, counts_by_lineup, pid_lists=slate.field.pid_lists if slate is not None else None)
     players = sim_report.player_meta(session, unique_pids)
 
     # 2) payouts scaled from the real field to the simulated one
@@ -444,9 +504,12 @@ def simulate_one_contest_mc(
     pool_in_field = float(sum(a for r, a in scaled.items() if 1 <= r <= M))
     paid_places = max((r for r, a in scaled.items() if 1 <= r <= M and a > 0), default=0)
 
-    # 3) one correlated draw per simulation
-    sim_seed = seed_for(f"sim/{contest_id}")
-    P, raw, diag, missing = _player_samples_matrix(session, pid_to_idx, num_sims, seed=sim_seed)
+    # 3) one correlated draw per simulation: the slate's shared draw, or this contest's own
+    draw = slate.draw if slate is not None else None
+    shared = draw is not None and draw.n_samples >= num_sims
+    sim_seed = draw.seed if shared else seed_for(f"sim/{contest_id}")
+    report["contest"]["draw"] = "slate" if shared else "contest"
+    P, raw, diag, missing = _player_samples_matrix(session, pid_to_idx, num_sims, seed=sim_seed, draw=draw)
     players.update(sim_report.player_meta(session, [p for g in diag["games"] for p in g["player_ids"]]
                                           + [d["id"] for d in diag["independent"]]))
     report["field"] = sim_report.field_section(counts_by_lineup, pid_lists_by_lid, players, meta, n_candidates)
@@ -538,19 +601,19 @@ def sim_method(cfg: dict) -> str:
 
 def simulate_one_contest(session: Session, contest_id: int, contest_name: str, config_path: str, field_cap: int = 10000,
                          num_sims: int = 1000, use_classic_dupes: bool = False, artifact_dir: str | Path | None = None,
-                         worlds: "SlateWorlds | None" = None) -> dict:
-    """One contest by the configured method (sim_method)."""
+                         worlds: "SlateWorlds | None" = None, slate: "SlateContext | None" = None) -> dict:
+    """One contest by the configured method (sim_method); `slate` is the run's shared state (SlateContext.build)."""
     cfg = json.load(open(config_path, encoding="utf-8"))
     if sim_method(cfg) == "conditioned":
         return simulate_one_contest_conditioned(session, contest_id, contest_name, config_path, field_cap, num_sims,
-                                                use_classic_dupes, artifact_dir, worlds)
+                                                use_classic_dupes, artifact_dir, worlds, slate=slate)
     return simulate_one_contest_mc(session, contest_id, contest_name, config_path, field_cap or 10000, num_sims,
-                                   use_classic_dupes, artifact_dir)
+                                   use_classic_dupes, artifact_dir, slate=slate)
 
 
 # ----------------------------------------------------------------------------- the field alone
 def sample_contest_field(session: Session, contest_id: int, contest_name: str, config_path: str, field_cap: int,
-                         artifact_dir: str | Path) -> dict:
+                         artifact_dir: str | Path, slate: SlateField | None = None) -> dict:
     """
     The simulator's first step on its own: sample the contest's field from the
     generated pool and write it as a field artifact (run_artifacts.build_field_artifact),
@@ -567,12 +630,13 @@ def sample_contest_field(session: Session, contest_id: int, contest_name: str, c
     entry_fee = float(contest.entry_fee)
     n_candidates = session.query(Lineup).count()
     counts_by_lineup, meta = sample_field(session, field_size=capped, config=cfg, mode=mode, contest_id=contest_id,
-                                          total_entries=field_sz, entry_fee=entry_fee)
+                                          total_entries=field_sz, entry_fee=entry_fee, slate=slate)
     M = sum(counts_by_lineup.values())
     if M == 0:
         raise RuntimeError(f"field sampler returned no entries for contest {contest_id} ({meta.get('error', 'no lineups?')})")
     sampler_arrays = meta.pop("_arrays", None)
-    u_lids, pid_lists_by_lid, _, unique_pids, _, starts, ends = _expand_sampled_field(session, counts_by_lineup)
+    u_lids, pid_lists_by_lid, _, unique_pids, _, starts, ends = _expand_sampled_field(
+        session, counts_by_lineup, pid_lists=slate.pid_lists if slate is not None else None)
     players = sim_report.player_meta(session, unique_pids)
     tiers = _payout_tiers(session, contest_id)
     scaled = _scale_payouts(tiers, M, field_sz)
@@ -596,9 +660,10 @@ def sample_entries_fields(session, entries_csv, config_path, field_cap: int, art
     contests = contests_in_entries(entries_csv)
     log(f"Sampling the field of {len(contests)} contest(s): cap {field_cap:,}; artifacts -> {artifact_dir}")
     out = {"contests": int(len(contests)), "sampled": 0, "failed": []}
+    slate = SlateField.build(session)
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         try:
-            r = sample_contest_field(session, int(cid), name, str(config_path), field_cap, artifact_dir)
+            r = sample_contest_field(session, int(cid), name, str(config_path), field_cap, artifact_dir, slate=slate)
             out["sampled"] += 1
             log(f"--- {i}/{len(contests)} {name}: {r['sampled']:,} entries, {r['unique']:,} unique lineups, {r['paid_places']} paid, {r['seconds']}s")
         except Exception as e:   # noqa: BLE001
@@ -639,12 +704,13 @@ def simulate_entries(session, entries_csv, config_path, n_sims: int, field_cap: 
     except Exception as e:   # noqa: BLE001
         log(f"WARNING: could not add missing columns: {e}")
     worlds = SlateWorlds.build(session, n_worlds=n_sims, log=log) if method == "conditioned" else None
+    slate = SlateContext.build(session, n_sims=n_sims if method == "montecarlo" else None, seed=seed_for("sim/slate"), log=log)
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         log(f"--- {i}/{len(contests)} ---")
         try:
             report = simulate_one_contest(session=session, contest_id=int(cid), contest_name=name, config_path=str(config_path),
                                           field_cap=field_cap, num_sims=n_sims, use_classic_dupes=use_classic_dupes, artifact_dir=art,
-                                          worlds=worlds)
+                                          worlds=worlds, slate=slate)
             out["reports"][int(cid)] = report
             out["simulated"] += 1
             log(sim_report.format_summary(report))
