@@ -39,6 +39,11 @@ from ivan.database.session import read_sql
 from ivan.sports.nfl.paths import MODELS_DIR
 
 FILE = "ownership_model.pkl"
+SHOWDOWN_SLOTS = (511, 512)        # the model and the calibration run on showdown slates only (ownership.apply_learned_ownership and
+                                   # calibrate_ownership leave classic alone), so they train on showdown rows only. The classic rows
+                                   # in showdown_player are per-slot shares of a per-player projection (a different quantity) and
+                                   # they share slot_flex=0 with the captain rows: trained with them, the captain fit was biased
+                                   # +0.5..+0.9 pts and its held-out MAE 1.58 vs 1.17 without them (2026-10-24, 57 contests)
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
 SLOT_TOTAL = {511: 100.0, 512: 500.0}
 FEATURES = ["slot_flex", "salary_k", "fpts_proj", "value", "own_sampler", "salary_rank", "proj_rank", "own_rank", "team_share", "n_players",
@@ -47,11 +52,12 @@ FEATURES = ["slot_flex", "salary_k", "fpts_proj", "value", "own_sampler", "salar
 
 # --------------------------------------------------------------------------- frames
 def training_frame(session, cutoff: Optional[str] = None) -> pd.DataFrame:
-    """One row per (contest, player, slot) with the pre-lock features and the actual ownership."""
+    """One row per (showdown contest, player, slot) with the pre-lock features and the actual ownership (SHOWDOWN_SLOTS only)."""
     q = """SELECT p.contest_id, h.date, h.total_entries, h.entry_fee, p.player_id, p.roster_slot_id AS slot, p.salary, p.position, p.team,
                   p.ownership_proj AS own_sampler, p.fpts_proj, p.ownership_actual
            FROM showdown_player p JOIN historical_contest_information h ON h.contest_id = p.contest_id
-           WHERE p.ownership_proj IS NOT NULL AND p.fpts_proj IS NOT NULL AND p.ownership_actual IS NOT NULL"""
+           WHERE p.ownership_proj IS NOT NULL AND p.fpts_proj IS NOT NULL AND p.ownership_actual IS NOT NULL
+             AND p.roster_slot_id IN (511, 512)"""
     if cutoff:
         q += " AND h.date < :c"
     stmt = text(q)
@@ -220,13 +226,13 @@ def fit_calibration(session, cutoff: Optional[str] = None, min_n: int = 30) -> d
     """
     Per roster slot (511 captain, 512 flex) and position, a line from what we projected
     to what the field actually did (actual ~ a + b * projected), from the scraped showdown
-    contests (before `cutoff` when given). The public rosters DST and K by their projected
+    contests (SHOWDOWN_SLOTS rows only; before `cutoff` when given). The public rosters DST and K by their projected
     points rather than by value, so their line runs on fpts_proj instead (DST flex: corr
     0.89 vs 0.74). ownership.calibrate_ownership applies the result after the sampler.
     """
     q = """SELECT p.contest_id, p.position, p.roster_slot_id AS slot, p.ownership_proj, p.ownership_actual, p.fpts_proj
            FROM showdown_player p JOIN historical_contest_information h ON h.contest_id = p.contest_id
-           WHERE p.ownership_proj IS NOT NULL AND p.ownership_actual IS NOT NULL"""
+           WHERE p.ownership_proj IS NOT NULL AND p.ownership_actual IS NOT NULL AND p.roster_slot_id IN (511, 512)"""
     if cutoff:
         q += " AND h.date < :c"
     stmt = text(q)

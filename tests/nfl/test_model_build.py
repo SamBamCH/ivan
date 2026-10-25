@@ -50,3 +50,30 @@ def test_build_runs_every_step_and_records_failures(tmp_path, monkeypatch):
     calls.clear()
     m = model_build.build(session=None, out_dir=base, only=["sd", "ownership_model"], log=lambda s: None)
     assert [c[0] for c in calls] == ["sd", "om"] and m["failed"] == [] and calls[0][2] is None
+
+
+def test_ownership_training_rows_are_showdown_only(tmp_path):
+    """The learned ownership model and its calibration run on showdown slates only, so classic rows (per-slot shares,
+    slot_flex=0 like a captain) stay out of their training frames."""
+    from datetime import datetime
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from ivan.sports.nfl import ownership_model as OM
+    from ivan.sports.nfl.models import HistoricalContest, NFLBase, ShowdownPlayer
+    engine = create_engine(f"sqlite:///{tmp_path / 't.sqlite'}", future=True)
+    NFLBase.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    s.add(HistoricalContest(contest_id=1, draft_group_id=10, name="sd", date=datetime(2026, 10, 11), entry_fee=3.0, contest_type="Showdown Captain Mode", total_entries=1000, multi_entry=1))
+    s.add(HistoricalContest(contest_id=2, draft_group_id=11, name="cl", date=datetime(2026, 10, 11), entry_fee=3.0, contest_type="Classic", total_entries=1000, multi_entry=1))
+    pid = 0
+    for cid, slots in ((1, (511, 512)), (2, (66, 70))):
+        for slot in slots:
+            for k in range(3):
+                pid += 1
+                s.add(ShowdownPlayer(contest_id=cid, player_id=pid, roster_slot_id=slot, salary=5000 + 500 * k, position="WR", team="A" if k else "B",
+                                     ownership_actual=10.0 + k, ownership_proj=9.0 + k, fpts_proj=12.0 + k))
+    s.commit()
+    df = OM.training_frame(s)
+    assert sorted(df.contest_id.unique()) == [1] and sorted(df.slot.unique()) == [511, 512] and len(df) == 6
+    cal = OM.fit_calibration(s, min_n=1)
+    assert set(cal["maps"]) == {"511:WR", "512:WR"} and cal["contests"] == 1 and cal["rows"] == 6
