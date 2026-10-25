@@ -28,7 +28,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -39,7 +39,7 @@ from ivan.core.config import config_path
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
-from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAMarketRate, NBAPlayer
+from ivan.sports.nba.models import Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
 from ivan.web import auth
@@ -48,9 +48,12 @@ from ivan.sports.nba.projection.live import LiveSlate, OVERRIDE_KEYS, override_o
 from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team
 from ivan.sports.nba.projection import rotation as ROT
-from ivan.sports.nba.projection.minutes import salary_prior_minutes
+from ivan.sports.nba.projection.groups import group_of as SK_group
 from ivan.sports.nba.projection.book_minutes import book_minutes
 TEAM_BUDGET = 241.0
+FOUL_SHORT_PF = 4          # a game with this many fouls...
+FOUL_SHORT_SHARE = 0.8     # ...and minutes under this share of the player's recent average is marked foul-shortened
+ADD_BACK_MINUTES = 6.0     # a player the rotation left off, added back by hand, starts at his history or this many minutes
 
 HERE = Path(__file__).parent
 load_dotenv(PROJECT_ROOT / ".env")                                  # IVAN_FEED_URL (consumer) / IVAN_FEED_PUSH (producer)
@@ -135,6 +138,12 @@ def utc_to_local(stamp) -> datetime:
     return t.tz_convert(datetime.now().astimezone().tzinfo).tz_localize(None).to_pydatetime()
 
 
+def short_name(name: str) -> str:
+    """'jaren jackson jr' -> 'jackson': the surname, for a lane segment's label."""
+    toks = [t for t in str(name or "").split() if t not in ("jr", "sr", "ii", "iii", "iv")]
+    return toks[-1] if toks else str(name or "")
+
+
 class Desk:
     """Session + LiveSlate + per-team projections, rebuilt when the pool changes under us."""
     def __init__(self):
@@ -143,11 +152,16 @@ class Desk:
         self.pool_stamp = None
         self.overrides: dict[str, float] = {}
         self.proj: dict[str, pd.DataFrame] = {}
+        self.rot: dict[str, dict] = {}
         self.hist_only: dict[str, pd.DataFrame] = {}
         self.flash: list[str] = []
         self.busy: Optional[str] = None                     # "loading slate 155581" while a background refresh runs; the board polls
         self._lobby: tuple = (0.0, {})
         self.rebuild()
+        try:
+            backfill_lineup_slates(self.session, log=self.flash.append)
+        except Exception:   # noqa: BLE001 - the export does it again on demand
+            self.session.rollback()
 
     def lobby_slates(self) -> dict:
         """Today's classic slates in the DraftKings lobby (cached two minutes), labelled with DK's start string; the loaded
@@ -190,9 +204,14 @@ class Desk:
         self.slate = LiveSlate(self.session, history=self.history())
         self.pool_stamp = self._stamp(); self.stale = False
         self.overrides = read_overrides_full()            # the file is the source of truth: every edit is written to it
-        self.proj, self.hist_only = {}, {}
+        self.proj, self.hist_only, self.rot = {}, {}, {}
         self.season = self.season_averages(self.slate.box)
-        self.recent = self.recent_games(self.slate.box)
+        from ivan.sports.nba import pbp as PBP
+        try:
+            self.fouls = PBP.fouls_per_game(self.session)
+        except Exception:   # noqa: BLE001 - no foul table yet
+            self.fouls = {}
+        self.recent = self.recent_games(self.slate.box, fouls=self.fouls)
         self.market_rows = {}
         for r in self.session.query(NBAMarketRate).all():
             self.market_rows.setdefault(r.player_name, {})[r.stat] = dict(mean=float(r.market_mean), line=r.line, books=r.books, rate=float(r.rate), basis=float(r.basis_minutes),
@@ -241,14 +260,22 @@ class Desk:
         return out
 
     @staticmethod
-    def recent_games(box: pd.DataFrame, n: int = 10) -> dict:
-        """player -> his last n games played, newest first: (date, team, minutes, fppm)."""
-        out = {}
+    def recent_games(box: pd.DataFrame, n: int = 10, fouls: Optional[dict] = None) -> dict:
+        """player -> his last n games played, newest first: (date, team, minutes, fppm, pf, foul_short). foul_short marks a
+        game with FOUL_SHORT_PF fouls or more and minutes under FOUL_SHORT_SHARE of his average over these games: the
+        minutes were probably cut by fouls, not by the coach's plan."""
+        out = {}; fouls = fouls or {}
         sub = box[box.played].sort_values(["game_date", "game_id"])
         for name, g in sub.groupby("player_name"):
             tail = g.tail(n)
-            out[name] = [dict(date=str(r.game_date), team=r.team, minutes=float(r.minutes), fpts=float(r.dk_fpts),
-                              fpm=float(r.dk_fpts) / float(r.minutes) if r.minutes > 0 else None) for r in tail.itertuples()][::-1]
+            avg = float(tail.minutes.mean()) if len(tail) else 0.0
+            rows = []
+            for r in tail.itertuples():
+                pf = fouls.get((str(r.game_id), name))
+                rows.append(dict(date=str(r.game_date), team=r.team, minutes=float(r.minutes), fpts=float(r.dk_fpts),
+                                 fpm=float(r.dk_fpts) / float(r.minutes) if r.minutes > 0 else None, pf=pf,
+                                 foul_short=bool(pf is not None and pf >= FOUL_SHORT_PF and avg > 0 and float(r.minutes) < FOUL_SHORT_SHARE * avg)))
+            out[name] = rows[::-1]
         return out
 
     def maybe_reload(self):
@@ -269,6 +296,7 @@ class Desk:
     def reproject(self, team: str, n_sims: int = 600):
         rng = np.random.default_rng(0)
         self.proj[team] = self.slate.project(team, self.overrides, set(), ProjectionParams.from_config(n_sims=n_sims), rng=rng)
+        self.rot[team] = dict(getattr(self.slate, "_last_rotation", {}).get(team) or {})      # the grid behind this projection
         self.hist_only[team] = self.slate.project(team, self.overrides, set(),
                                                   ProjectionParams.from_config(n_sims=0, market_weight=0.0), rng=rng)
 
@@ -290,79 +318,264 @@ class Desk:
 
     def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
         """
-        The team's rotation grid. source: "auto" = the drawn grid when one exists, else the team's last game;
-        "last" = the last game, or the game `game_id` from the dropdown; "propose" = the model's proposal from the players' stint curves.
-        Players who are out stay in a last-game grid with their minutes, marked so they can be reallocated.
+        The team's rotation grid for the card.
+          source "auto"    the projection's grid: the coach's slots filled at the solve's minutes, the desk's locked rows held
+                           (ivan.sports.nba.projection.skeleton). Out players show their usual stretches faintly (the vacated
+                           slots), players the schedule left off the floor are listed under the grid with an add button.
+          source "propose" the same grid with every lock lifted (a preview, nothing saved)
+          source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute
         """
+        from ivan.sports.nba import pbp as PBP
         from ivan.sports.nba.projection.live import OUT_STATUSES
+        from ivan.sports.nba.projection import skeleton as SK
         players = self.players(team)
         names = {normalize_name(p.name): p for p in players}
         is_out = {n: (p.status or "").upper() in OUT_STATUSES or (override_of(self.overrides, n).get("minutes") is not None and override_of(self.overrides, n).get("minutes") <= 0)
                   for n, p in names.items()}
-        avail = [n for n in names if not is_out[n]]
+        dropped = {n for n, p in names.items() if (p.status or "").upper() not in OUT_STATUSES and override_of(self.overrides, n).get("minutes") is not None
+                   and override_of(self.overrides, n).get("minutes") <= 0}
         starters = self.starters_of(team) or set()
-        curve = ROT.curves(self.session, players=list(names), n_games=10)
-        drawn = ROT.load_drawn(team) if source == "auto" else None
         today = datetime.now().date(); season_start = date(today.year if today.month >= 10 else today.year - 1, 10, 1)
         games = ROT.team_games(self.session, team, since=season_start)
-        last = ROT.last_game_grid(self.session, team, since=season_start, game_id=game_id if source == "last" else None) if source in ("auto", "last") and drawn is None else None
-        kind = "drawn" if drawn is not None else ("last" if last is not None else "propose")
-        if kind == "drawn":
-            grid = drawn
-        elif kind == "last":
-            grid = last["grid"]
-            if source == "auto" and len(last["grid"]) and ROT.column_counts(last["grid"]).count(5) < 30:
-                kind = "propose"; last = None                    # a broken reconstruction: fall back to the proposal
-        if kind == "propose":
-            prior = {n: salary_prior_minutes(p.salary) for n, p in names.items()}
-            grid = ROT.propose(curve, avail, [n for n in avail if n in starters], salary_prior=prior) if (avail and not curve.empty) else None
-        if kind == "last" and last is not None:
-            pass
-        if grid is None:
-            return dict(team=team, rows=[], counts=[], drawn=False, kind="none", has_history=len(curve) > 0, to_reallocate=0, out_names=[], games=games, game_id=None)
-        grid = grid.copy()
-        gone = [n for n in grid.index if n not in names and kind == "last"]     # played last game, not on tonight's roster
-        for n in names:                                        # tonight's roster: everyone gets a row
-            if n not in grid.index:
-                grid.loc[n] = False
-        grid = grid.loc[[n for n in grid.index if n in names or n in gone]]
-        if kind != "last":                                     # only a last-game grid keeps out players' minutes on show
-            for n in grid.index:
-                if n in is_out and is_out[n]:
-                    grid.loc[n] = False
-        def unavailable(n):
-            return n in gone or is_out.get(n, False)
-        # starters on top (minutes descending), then the rest of the available roster, then anyone out or gone
-        grid = grid.loc[sorted(grid.index, key=lambda n: (unavailable(n), n not in starters, -float(grid.loc[n].sum()), -((names[n].salary if n in names else 0) or 0)))]
-        rows = [dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, starter=n in starters,
-                     out=unavailable(n), gone=n in gone, minutes=int(grid.loc[n].sum()),
-                     hist=None if n not in curve.index else float(curve.loc[n, "minutes"]), cells=[bool(x) for x in grid.loc[n].values]) for n in grid.index]
-        out_rows = [r for r in rows if r["out"] and r["minutes"] > 0]
-        return dict(team=team, rows=rows, counts=ROT.column_counts(grid), drawn=kind == "drawn", kind=kind, has_history=len(curve) > 0,
-                    curve_games=int(curve.games.max()) if len(curve) else 0, last_game=None if last is None else last["game_date"],
-                    games=games, game_id=None if last is None else last["game_id"],
-                    to_reallocate=int(sum(r["minutes"] for r in out_rows)), out_names=[r["name"] for r in out_rows])
+        rot = self.rot.get(team) or {}
+        curve = rot.get("curve")
+        proj = self.proj.get(team)
+        targets = rot.get("targets") or {}
+        base = dict(team=team, games=games, kind="none", drawn=False, locked=[], rows=[], counts=[], benched=[], game_id=None, last_game=None,
+                    has_history=curve is not None and len(curve) > 0, curve_games=int(curve.games.max()) if curve is not None and len(curve) else 0,
+                    fouls=False, owners=[])
 
-    def apply_rotation(self, team: str, players: list[str], grid: list[list[int]], note: str = "") -> int:
-        """Save a drawn grid and pin every available drawn player's minutes to his row (0 minutes = scratched); out players' rows are dropped."""
-        import pandas as pd
+        if source == "last":
+            last = ROT.last_game_grid(self.session, team, since=season_start, game_id=game_id)
+            if last is None:
+                return base
+            grid = last["grid"]
+            fouls: dict = {}
+            try:
+                f = PBP.game_fouls(self.session, last["game_id"], team)
+                for r in f[f.personal == 1].itertuples():
+                    fouls.setdefault(str(r.player_name), []).append((int(r.minute), None if r.foul_no is None or pd.isna(r.foul_no) else int(r.foul_no)))
+            except Exception:   # noqa: BLE001
+                pass
+            rows = []
+            try:
+                pairs = PBP.game_subs(self.session, last["game_id"], team).to_dict("records")
+            except Exception:   # noqa: BLE001
+                pairs = []
+            # hover text on the cells where a player came on or went off: the recorded substitution, the game clock, how many changed at once
+            def clock(t):
+                per = min(4, int(t // 720) + 1) if t < 2880 else 4 + int((t - 2880) // 300) + 1
+                left = (per * 720 - t) if t < 2880 else (2880 + (per - 4) * 300 - t)
+                return f"{'Q' + str(per) if per <= 4 else 'OT' + str(per - 4)} {int(left // 60)}:{int(left % 60):02d}"
+            at_once: dict = {}
+            for pr in pairs:
+                at_once[round(float(pr["elapsed"]), 1)] = at_once.get(round(float(pr["elapsed"]), 1), 0) + 1
+            tips: dict = {}
+            for pr in pairs:
+                t = float(pr["elapsed"]); m = int(np.floor(t / 60.0 + 0.5)); k = at_once[round(t, 1)]
+                note = "" if k == 1 else f" · {k} changed at once, the feed's pairing is its typing order"
+                if 1 <= m <= 47:
+                    tips.setdefault(pr["player_in"], {})[m] = f"in at {clock(t)} for {pr['player_out']}{note}"
+                    tips.setdefault(pr["player_out"], {})[m - 1] = f"out at {clock(t)}, {pr['player_in']} in{note}"
+            spots, owners = ROT.spots_of(grid, starters=None, groups={n: SK_group(names[n].position) for n in names}, positions={n: names[n].position for n in names},
+                                         pairs=pairs)
+            for n in grid.index:
+                cells = [bool(x) for x in grid.loc[n].values]
+                marks: list = [None] * 48
+                for m, no in fouls.get(n, []):
+                    marks[m] = no if no is not None else "T"
+                hist = None if curve is None or n not in curve.index else float(curve.loc[n, "minutes"])
+                mins = int(grid.loc[n].sum()); pf = len(fouls.get(n, []))
+                cell_tips = [None] * 48
+                for m, txt in tips.get(n, {}).items():
+                    cell_tips[m] = txt
+                for m, no in fouls.get(n, []):
+                    cell_tips[m] = (f"foul {no}" if no is not None else "technical") + (f" · {cell_tips[m]}" if cell_tips[m] else "")
+                rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None,
+                                 starter=bool(cells[0]), out=bool(is_out.get(n, False)), gone=n not in names, vacated=False, locked=False, minutes=mins, target=None,
+                                 hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips,
+                                 group=SK_group(names[n].position) if n in names else "wing", rank=ROT._spot_rank(names[n].position if n in names else None, None),
+                                 foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
+            return {**base, "kind": "last", "rows": rows, "counts": ROT.column_counts(grid), "game_id": last["game_id"], "last_game": last["game_date"], "fouls": True,
+                    "owners": owners}
+
+        grid = rot.get("grid")
+        if grid is None or proj is None:
+            return base
+        locked = list(grid.attrs.get("locked", []))
+        if source == "propose":
+            avail = [n for n in grid.index]
+            groups = {n: SK_group(names[n].position) for n in names}
+            grid = SK.build_grid(curve, targets, avail, starters=[n for n in avail if n in starters], groups=groups, locks=None, vacated=rot.get("vacated"),
+                                 shares=rot.get("shares"))
+            locked = []
+        inherited: dict = {}
+        for owner, heirs in (grid.attrs.get("inherited") or {}).items():
+            for h, share in heirs.items():
+                if share >= 0.2:
+                    inherited.setdefault(h, []).append(f"{owner.replace(' (old slot)', '')} {share:.0%}")
+        rows = []
+        shares = rot.get("shares") or {}
+        spots, owners = ROT.spots_of(grid, starters=starters, groups={n: SK_group(names[n].position) for n in names}, positions={n: names[n].position for n in names},
+                                     shares=shares)
+        for n in grid.index:
+            hist = None if curve is None or n not in curve.index else float(curve.loc[n, "minutes"])
+            mins = int(grid.loc[n].sum())
+            if mins <= 0 and n not in locked:
+                continue
+            rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None,
+                             starter=n in starters, out=False, gone=False, vacated=False, locked=n in locked, minutes=mins,
+                             target=None if n not in targets else round(float(targets[n]), 1),
+                             hist=hist, cells=[bool(x) for x in grid.loc[n].values], marks=None, pf=None, foul_short=False,
+                             spots=[int(x) for x in spots.loc[n].values], group=SK_group(names[n].position) if n in names else "wing",
+                             rank=ROT._spot_rank(names[n].position if n in names else None, None),
+                             heir_of=", ".join(inherited.get(n, []))))
+        # the vacated slots: out players with a curve, their usual stretches shown faintly; a player dropped by hand is marked so he can be restored
+        for n in names:
+            if is_out.get(n) and curve is not None and n in curve.index and float(curve.loc[n, "minutes"]) >= 3:
+                cells = [bool(float(curve.loc[n, m]) >= 0.5) for m in range(48)]
+                rows.append(dict(name=n, key=n, pos=names[n].position, salary=names[n].salary, starter=n in starters, out=True, gone=False, vacated=True,
+                                 locked=False, minutes=int(round(float(curve.loc[n, "minutes"]))), target=None, hist=float(curve.loc[n, "minutes"]),
+                                 cells=cells, marks=None, pf=None, foul_short=False, heir_of="", spots=[-1] * 48, dropped=n in dropped,
+                                 group=SK_group(names[n].position), rank=ROT._spot_rank(names[n].position, None)))
+        # one order for every panel (tonight, the unlocked preview, the game below): the saved projection's minutes,
+        # starters not promoted, vacated slots last; so the rows line up whatever is shown
+        rows = self.order_rows(rows, owners)
+        self.mark_starter_rule(rows)
+        lanes = self.lanes_of(rows, owners)
+        # off the floor tonight: available players the schedule gave no minutes (added back by hand)
+        benched = []
+        for n, p in names.items():
+            if any(r["key"] == n for r in rows) or (is_out.get(n) and n not in dropped):
+                continue
+            hist = None if curve is None or n not in curve.index else float(curve.loc[n, "minutes"])
+            benched.append(dict(name=n, key=n, pos=p.position, salary=p.salary, hist=hist, status=(p.status or "").upper(), dropped=n in dropped,
+                                add_minutes=round(max(ADD_BACK_MINUTES, hist or 0.0))))
+        benched.sort(key=lambda r: -(r["salary"] or 0))
+        avail_keys = {r["key"] for r in rows}
+        shares_json = json.dumps({o: {i: round(v, 3) for i, v in hv.items() if i in avail_keys} for o, hv in shares.items() if o in avail_keys})
+        return {**base, "kind": "model" if source != "propose" else "propose", "rows": rows, "counts": ROT.column_counts(grid), "drawn": bool(locked),
+                "locked": locked, "benched": benched, "owners": owners, "lanes": lanes, "shares_json": shares_json}
+
+    @staticmethod
+    def mark_starter_rule(rows: list[dict]) -> list[dict]:
+        """sep=True on the last row of the leading block of starters: the dark line under the starters. A starter listed lower
+        (a game's starter who is out tonight, or one the model plays less than a bench player) stays bold below the line."""
+        last = None
+        for i, r in enumerate(rows):
+            if r.get("starter") and not r.get("vacated"):
+                last = i
+            else:
+                break
+        if last is None:
+            last = max((i for i, r in enumerate(rows) if r.get("starter") and not r.get("vacated")), default=None)
+        for i, r in enumerate(rows):
+            r["sep"] = (i == last)
+        return rows
+
+    def row_order(self, team: str) -> dict[str, int]:
+        """player -> rank from the saved projection's grid: minutes descending, salary as the tie-break; starters are not promoted."""
+        rot = self.rot.get(team) or {}
+        grid = rot.get("grid")
+        if grid is None:
+            return {}
+        sal = {normalize_name(p.name): (p.salary or 0) for p in self.players(team)}
+        mins = {str(n): int(grid.loc[n].sum()) for n in grid.index}
+        names = sorted(mins, key=lambda n: (-mins[n], -sal.get(n, 0), n))
+        return {n: i for i, n in enumerate(names)}
+
+    def game_grid(self, team: str, game_id: Optional[str] = None) -> dict:
+        """A played game's grid for the comparison under tonight's: rows in the same order as tonight's panel, then the rest by minutes."""
+        rot = self.rotation(team, source="last", game_id=game_id)
+        # the game's starters first (struck through when out tonight: those are the minutes to give away), then the bench
+        rot["rows"] = self.mark_starter_rule(self.order_rows(rot.get("rows") or [], rot.get("owners") or []))
+        rot["lanes"] = self.lanes_of(rot["rows"], rot.get("owners") or [])
+        return rot
+
+    @staticmethod
+    def order_rows(rows: list[dict], owners: list[str]) -> list[dict]:
+        """
+        Starters in spot order 1-5 (guards to bigs, the lanes' order). The bench in spot order too when every bench player
+        fills one spot all game; when any of them fills several, the bench is by minutes instead. Vacated slots last.
+        """
+        spot_of_owner = {o: k for k, o in enumerate(owners)}
+        def spots_filled(r):
+            return sorted({sp for sp, on in zip(r.get("spots") or [], r.get("cells") or []) if on and sp >= 0})
+        starters = [r for r in rows if r.get("starter") and not r.get("vacated")]
+        bench = [r for r in rows if not r.get("starter") and not r.get("vacated")]
+        vacated = [r for r in rows if r.get("vacated")]
+        starters.sort(key=lambda r: (spot_of_owner.get(r["key"], (spots_filled(r) or [9])[0]), -r["minutes"]))
+        single = all(len(spots_filled(r)) <= 1 for r in bench)
+        if single:
+            bench.sort(key=lambda r: ((spots_filled(r) or [9])[0], -r["minutes"], -(r.get("salary") or 0)))
+        else:
+            bench.sort(key=lambda r: (-r["minutes"], -(r.get("salary") or 0)))
+        vacated.sort(key=lambda r: -r["minutes"])
+        return starters + bench + vacated
+
+    @staticmethod
+    def lanes_of(rows: list[dict], owners: list[str]) -> list[dict]:
+        """
+        The five spots traced minute by minute: for each spot, the stretches (start, length, player) of who held it, so a line
+        (the centre's, say) reads as one band with the holder's name on each stretch; a minute nobody holds is a gap.
+        """
+        lanes = []
+        for k, owner in enumerate(owners):
+            holder = [None] * 48
+            for r in rows:
+                if r.get("vacated"):
+                    continue
+                for m, sp in enumerate(r.get("spots") or []):
+                    if sp == k and r["cells"][m]:
+                        holder[m] = r["key"]
+            segs = []; start = 0
+            for m in range(1, 49):
+                if m == 48 or holder[m] != holder[start]:
+                    name = holder[start]
+                    segs.append(dict(start=start, length=m - start, key=name, short=short_name(name) if name else ""))
+                    start = m
+            lanes.append(dict(spot=k, owner=owner, segments=segs))
+        return lanes
+
+    def apply_rotation(self, team: str, players: list[str], grid: list[list[int]], locked: Optional[list[str]] = None, note: str = "") -> int:
+        """
+        Save the painted grid: the locked rows are held exactly by the skeleton and their row totals become the players'
+        minutes (a row painted empty scratches him); a row that was locked and is now unlocked loses its minutes pin; the
+        unlocked rows are re-filled around the locks by the next projection. Out players' rows are dropped.
+        """
         from ivan.sports.nba.projection.live import OUT_STATUSES
         status = {normalize_name(p.name): (p.status or "").upper() for p in self.players(team)}
-        g = pd.DataFrame(np.array(grid, dtype=bool), index=[normalize_name(n) for n in players], columns=list(range(ROT.MINUTES)))
+        g = pd.DataFrame(np.array(grid, dtype=bool).reshape(len(players), ROT.MINUTES), index=[normalize_name(n) for n in players], columns=list(range(ROT.MINUTES)))
         g = g.loc[[n for n in g.index if status.get(n, "") not in OUT_STATUSES]]
-        ROT.save_drawn(team, g, note)
-        for n, m in ROT.minutes_of(g).items():
-            self.set_override(n, minutes=float(m))
+        lock_names = [normalize_name(n) for n in (locked if locked is not None else list(g.index))]
+        lock_names = [n for n in lock_names if n in g.index]
+        before = ROT.load_drawn(team)
+        was_locked = set(before.attrs.get("locked", list(before.index))) if before is not None else set()
+        ROT.save_drawn(team, g, note, locked=lock_names)
+        for n in was_locked - set(lock_names):
+            self.set_override(n, minutes=None)
+        for n in lock_names:
+            self.set_override(n, minutes=float(g.loc[n].sum()))
         self.reproject(team)
-        return len(g)
+        return len(lock_names)
 
     def clear_rotation(self, team: str) -> None:
         g = ROT.load_drawn(team)
         ROT.clear_drawn(team)
         if g is not None:
-            for n in g.index:
+            for n in g.attrs.get("locked", list(g.index)):
                 self.set_override(n, minutes=None)
         self.reproject(team)
+
+    def add_back(self, team: str, player: str) -> float:
+        """A player the rotation left off the floor, back in by hand: a minutes pin at his history (at least ADD_BACK_MINUTES)."""
+        n = normalize_name(player)
+        curve = (self.rot.get(team) or {}).get("curve")
+        hist = float(curve.loc[n, "minutes"]) if curve is not None and n in curve.index else 0.0
+        mins = float(max(ADD_BACK_MINUTES, round(hist)))
+        self.set_override(n, minutes=mins)
+        self.reproject(team)
+        return mins
 
     def starters_of(self, team: str) -> Optional[set]:
         """Rotowire's lineup with the hand starter overrides applied; None when there is no lineup and no override."""
@@ -423,10 +636,13 @@ class Desk:
             h = hist.loc[name] if name in hist.index else None
             status = (p.status or "").upper()
             out = r is None
+            nomin = out and name in ((self.rot.get(team) or {}).get("zero_minutes") or [])
             starter = None if starters is None else (name in starters)
             flags = []
             hist_min = float(s["min_ewm"]) * float(s.get("play_ewm", 1.0)) if s is not None else None
-            if out and status != "OUT":
+            if nomin:
+                flags.append("no minutes in the rotation")
+            elif out and status != "OUT":
                 flags.append("scratched")
             if status == "OUT" and hist_min and hist_min >= ROTATION_MIN:
                 flags.append(f"out, frees {hist_min:.0f} min")
@@ -474,7 +690,7 @@ class Desk:
             stats = [] if r is None else [dict(stat=st, proj=float(r[f"proj_{st}"]), line=mk.get(st, {}).get("line"), mean=mk.get(st, {}).get("mean"),
                                               books=mk.get(st, {}).get("books"), odds=mk.get(st, {}).get("odds"), priced=st in mk) for st in STATS]
             bm = book_minutes({st: v.get("mean") for st, v in self.market_rows.get(name, {}).items()}, s, self.slate.hist.league_rates) if not out else None
-            rows.append(dict(id=p.id, name=p.name, key=name, salary=p.salary, pos=p.position, status=status if status != "NONE" else "",
+            rows.append(dict(id=p.id, name=p.name, key=name, salary=p.salary, pos=p.position, status=status if status != "NONE" else "", nomin=nomin,
                              book_min=None if bm is None else round(bm["minutes"], 1), book_src=None if bm is None else bm["source"],
                              book_by=None if bm is None else bm["by_stat"],
                              starter=("S" if starter else ("" if starter is not None else "?")),
@@ -511,6 +727,9 @@ class Desk:
             for f in r["flags"]:
                 if f.startswith("out, frees") or f == "scratched":
                     alerts.append(("bad", f"{r['name']}: {f}"))
+                elif f == "no minutes in the rotation":
+                    if (r["hist_min"] or 0) >= ROTATION_MIN:
+                        alerts.append(("warn", f"{r['name']}: {f} ({r['hist_min']:.0f} min history)"))
                 elif f in ("new starter", "benched") or f.startswith("market"):
                     alerts.append(("warn", f"{r['name']}: {f}"))
                 elif f == "questionable":
@@ -541,7 +760,8 @@ class Desk:
         if abs(to_place) < 1.5:
             to_place = 0.0
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
-                    assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(),
+                    assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team),
+                    last_game=self.game_grid(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
@@ -789,12 +1009,12 @@ def rotation_view(request: Request, team: str):
 
 @app.post("/team/{team}/rotation", response_class=HTMLResponse)
 async def rotation_apply(request: Request, team: str):
-    """Body: JSON {players: [...], grid: [[0/1 x 48], ...]} from the desk's grid; saves it and pins the minutes."""
+    """Body: JSON {players: [...], grid: [[0/1 x 48], ...], locked: [...]} from the desk's grid; the locked rows are held, the rest re-filled."""
     body = await request.json()
     with LOCK:
         try:
-            desk.apply_rotation(team, body["players"], body["grid"], note=str(body.get("note", "")))
-            desk.flash.append(f"{team}: rotation applied, {len(body['players'])} players pinned to their drawn minutes")
+            n = desk.apply_rotation(team, body["players"], body["grid"], locked=body.get("locked"), note=str(body.get("note", "")))
+            desk.flash.append(f"{team}: rotation applied, {n} row(s) locked; the rest filled around them")
         except Exception as e:   # noqa: BLE001
             desk.flash.append(f"{team}: rotation not applied: {type(e).__name__}: {e}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
@@ -802,9 +1022,39 @@ async def rotation_apply(request: Request, team: str):
 
 @app.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
 def rotation_propose(request: Request, team: str, source: str = Form("propose"), game_id: str = Form("")):
-    """Show the model's proposal (source=propose) or the last game (source=last) without applying it."""
+    """source=propose: tonight's grid with every lock lifted (the top panel, nothing saved); source=last: a played game for the panel under it."""
     with LOCK:
-        return _render(request, "_nba_rotation.html", rot=desk.rotation(team, source=source if source in ("last", "propose") else "propose", game_id=game_id.strip() or None))
+        if source == "last":
+            return _render(request, "_nba_rotation.html", rot=desk.game_grid(team, game_id=game_id.strip() or None))
+        return _render(request, "_nba_rotation.html", rot=desk.rotation(team, source="propose"))
+
+
+@app.post("/team/{team}/rotation/add", response_class=HTMLResponse)
+def rotation_add(request: Request, team: str, player: str = Form(...)):
+    """A player the rotation left off the floor, back in: a minutes pin at his history; the grid schedules him."""
+    with LOCK:
+        mins = desk.add_back(team, player)
+        desk.flash.append(f"{team}: {player} added back at {mins:.0f} minutes (type another number to change it)")
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.post("/team/{team}/rotation/drop", response_class=HTMLResponse)
+def rotation_drop(request: Request, team: str, player: str = Form(...)):
+    """No minutes tonight: the player leaves the grid and the pool (a minutes pin of 0; the + beside his name brings him back)."""
+    with LOCK:
+        desk.set_override(normalize_name(player), minutes=0.0)
+        desk.reproject(team)
+        desk.flash.append(f"{team}: {player} dropped from the grid (no minutes tonight)")
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.post("/team/{team}/rotation/restore", response_class=HTMLResponse)
+def rotation_restore(request: Request, team: str, player: str = Form(...)):
+    """Lift a hand drop: the minutes pin goes and the model fills him again."""
+    with LOCK:
+        desk.set_override(normalize_name(player), minutes=None)
+        desk.reproject(team)
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
 @app.post("/team/{team}/rotation/clear", response_class=HTMLResponse)
@@ -998,6 +1248,8 @@ def _lateswap_ctx(now: datetime) -> dict:
             for e in c["entries"]:
                 e["delta"] = e["best"]["exp_payout"] - e["original"]["exp_payout"]
             c["gain"] = sum(e["delta"] for e in c["entries"]); c["improved"] = sum(1 for e in c["entries"] if e["improved"])
+        if "exposure" not in rep:                                  # reports written before the exposure table
+            rep["n_entries"] = sum(len(c["entries"]) for c in rep["contests"]); rep["exposure"] = LS.exposure(rep, byid)
         try:
             rep["when_dt"] = datetime.fromisoformat(rep["when"])
         except (KeyError, ValueError):
@@ -1009,9 +1261,14 @@ def _pipeline_ctx() -> dict:
     jobs = runner.all()[:8]
     cur = runner.current() or next((j for j in jobs if j.status == "queued"), None)
     log = runner.read_log(cur, tail_lines=14) if cur else (runner.read_log(jobs[0], tail_lines=14) if jobs else "")
+    try:
+        slates = lineup_slates(desk.session)
+    except Exception:   # noqa: BLE001 - a desk without the lineup tables yet
+        slates = []
+    current = next((p.draft_group_id for p in (desk.slate.players if desk.slate else []) if p.draft_group_id), None)
     return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=_entries_info(),
                 outputs=_latest_outputs(), lineups_in_db=desk.session.query(Lineup).count(),
-                sims_in_db=desk.session.query(LineupSimulationResult).count())
+                sims_in_db=desk.session.query(LineupSimulationResult).count(), lineup_slates=slates, current_draft_group=current)
 
 
 def _field(raw, label: str, kind=float):
@@ -1196,6 +1453,166 @@ async def standings_upload(request: Request, files: list[UploadFile] = File(...)
         for e in errors:
             desk.flash.append("standings upload: " + e)
     return RedirectResponse(auth.root_of(request) + "/?view=lateswap", status_code=303)
+
+
+# ---------------------------------------------------------------- exports (the brother's spreadsheet: plain CSVs of what the desk holds now)
+EXPORT_SLOTS = ("PG", "SG", "SF", "PF", "C", "G", "F", "UTIL")
+
+
+def _csv_line(values) -> str:
+    import csv, io
+    buf = io.StringIO(); csv.writer(buf, lineterminator="\n").writerow(values); return buf.getvalue()
+
+
+@app.get("/export/projections.csv")
+def export_projections():
+    """Every player in the current pool with our projection (after the desk's edits) and the public one, one row each."""
+    with LOCK:
+        desk.maybe_reload()
+        rows = [list(("name", "dk_id", "team", "opponent", "position", "salary", "status", "starter", "minutes", "solve_minutes", "minutes_p10", "minutes_p90",
+                      "fpts", "fpts_sd", "fppm", "public_fpts", "ownership", "pinned", "locked", "in_pool"))]
+        for team in desk.slate.teams():
+            proj = desk.proj.get(team); rot = desk.rot.get(team) or {}
+            starters = desk.starters_of(team) or set(); locked = set((rot.get("grid").attrs.get("locked", []) if rot.get("grid") is not None else []))
+            for p in desk.players(team):
+                n = normalize_name(p.name)
+                r = proj.loc[n] if proj is not None and n in proj.index else None
+                ov = override_of(desk.overrides, n)
+                def f(x, nd=1):
+                    return "" if x is None or (isinstance(x, float) and np.isnan(x)) else round(float(x), nd)
+                rows.append([p.name, p.id, p.team, p.opponent or "", p.position or "", p.salary or "", (p.status or ""), int(n in starters),
+                             f(None if r is None else r["minutes"]), f((rot.get("targets") or {}).get(n)),
+                             f(None if r is None else r.get("minutes_p10")), f(None if r is None else r.get("minutes_p90")),
+                             f(None if r is None else r["fpts_mean"], 2), f(None if r is None else r["fpts_std"], 2), f(None if r is None else r["fpm"], 3),
+                             f(getattr(p, "pub_fpts", None), 2), f(p.ownership, 3) if p.ownership not in (None, 0) else "",
+                             int(ov.get("minutes") is not None), int(n in locked), int(r is not None and float(r["minutes"]) > 0)])
+        stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    body = "".join(_csv_line(r) for r in rows)
+    return StreamingResponse(iter([body]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="nba_projections_{stamp}.csv"'})
+
+
+def lineup_slates(session) -> list[dict]:
+    """The slates with generated lineups, newest first: draft group, count, the pool snapshot's lock when known."""
+    rows = session.execute(__import__("sqlalchemy").text("select draft_group_id, count(*) from lineup group by draft_group_id")).all()
+    locks = {int(r[0]): r[1] for r in session.execute(__import__("sqlalchemy").text("select draft_group_id, min(lock) from lineup_pool group by draft_group_id")).all()}
+    out = [dict(draft_group=None if dg is None else int(dg), n=int(n), lock=locks.get(int(dg)) if dg is not None else None) for dg, n in rows]
+    return sorted(out, key=lambda r: (r["draft_group"] is None, -(r["draft_group"] or 0)))
+
+
+def backfill_lineup_slates(session, log=lambda m: None) -> int:
+    """
+    Lineups generated before the slate was stamped: give each the newest slate whose pool held all its players, from the
+    pool snapshots, the live pool, or the projection captures (the server has those for every slate it published).
+    """
+    from ivan.core.utils import coerce_player_ids
+    from ivan.sports.nba.models import NBAProjectionCapture
+    null_rows = session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.draft_group_id.is_(None)).all()
+    if not null_rows:
+        return 0
+    pools: dict[int, set] = {}
+    for dg, pid in session.query(LineupPool.draft_group_id, LineupPool.player_id).all():
+        pools.setdefault(int(dg), set()).add(int(pid))
+    for p in session.query(NBAPlayer.draft_group_id, NBAPlayer.id).all():
+        if p[0] is not None:
+            pools.setdefault(int(p[0]), set()).add(int(p[1]))
+    for dg, pid in session.query(NBAProjectionCapture.draft_group_id, NBAProjectionCapture.player_id).filter(
+            NBAProjectionCapture.draft_group_id.isnot(None), NBAProjectionCapture.player_id.isnot(None)).distinct().all():
+        pools.setdefault(int(dg), set()).add(int(pid))
+    order = sorted(pools, reverse=True)
+    n = 0
+    for lid, pids in null_rows:
+        try:
+            ids = {int(x) for x in coerce_player_ids(pids)}
+        except (ValueError, TypeError):
+            continue
+        dg = next((d for d in order if ids <= pools[d]), None)
+        if dg is not None:
+            session.query(Lineup).filter(Lineup.id == lid).update({"draft_group_id": dg}, synchronize_session=False); n += 1
+    session.commit()
+    if n:
+        log(f"{n} older lineups given their slate")
+    return n
+
+
+def lineup_names(session, draft_group: int) -> dict[int, dict]:
+    """player id -> {name, position} for a slate: the pool snapshot, then the live pool, then the projection captures (names only)."""
+    from ivan.sports.nba.models import NBAProjectionCapture
+    out: dict[int, dict] = {}
+    for r in session.query(LineupPool).filter(LineupPool.draft_group_id == draft_group).all():
+        out[int(r.player_id)] = dict(name=r.name, position=r.position)
+    for p in session.query(NBAPlayer).filter(NBAPlayer.draft_group_id == draft_group).all():
+        out.setdefault(int(p.id), dict(name=p.name, position=p.position))
+    for pid, name in session.query(NBAProjectionCapture.player_id, NBAProjectionCapture.player_name).filter(
+            NBAProjectionCapture.draft_group_id == draft_group, NBAProjectionCapture.player_id.isnot(None)).distinct().all():
+        out.setdefault(int(pid), dict(name=name, position=None))
+    # positions for players without a snapshot: the archived pool of that slate (the laptop keeps the blobs), then the same
+    # name's position in any pool we know (a player's DK positions do not change between slates)
+    missing = [pid for pid, v in out.items() if not v.get("position")]
+    if missing:
+        try:
+            from ivan.core import archive
+            caps = [c for c in archive.captures(session, "nba") if str(c.slate_key) == str(draft_group)]
+            if caps:
+                for r in archive.load_blobs(session, max(caps, key=lambda c: c.captured_at).id).get("players", []):
+                    if r.get("id") is not None and r.get("position"):
+                        out.setdefault(int(r["id"]), dict(name=r.get("name"), position=None))
+                        out[int(r["id"])]["position"] = out[int(r["id"])]["position"] or r["position"]
+        except Exception:   # noqa: BLE001 - no archive here
+            pass
+        by_name: dict[str, str] = {}
+        for name, pos in session.query(LineupPool.name, LineupPool.position).all():
+            if pos:
+                by_name.setdefault(normalize_name(name), pos)
+        for name, pos in session.query(NBAPlayer.name, NBAPlayer.position).all():
+            if pos:
+                by_name.setdefault(normalize_name(name), pos)
+        for pid, v in out.items():
+            if not v.get("position") and v.get("name"):
+                v["position"] = by_name.get(normalize_name(v["name"]))
+    return out
+
+
+@app.get("/export/lineups.csv")
+def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
+    """
+    The generated lineups of one slate, one row each, the eight players in DraftKings roster order (PG SG SF PF C G F
+    UTIL) and nothing else: names, or DraftKings ids with ?ids=1. The slate is ?draft_group=, else the loaded slate when
+    it has lineups, else the newest slate with lineups. Names and positions come from the pool snapshot written at
+    generation, so the laptop moving the live pool to another slate cannot empty this.
+    """
+    from types import SimpleNamespace
+    from ivan.sports.nba.lineup_export import assign_player_order_classic
+    from ivan.core.utils import coerce_player_ids
+    with LOCK:
+        desk.maybe_reload()
+        backfill_lineup_slates(desk.session)
+        slates = lineup_slates(desk.session)
+        current = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
+        have = [r["draft_group"] for r in slates if r["draft_group"] is not None]
+        dg = draft_group if draft_group is not None else (current if current in have else (have[0] if have else None))
+        if dg is None:
+            body = _csv_line(["no generated lineups in the pool table: run generate first"])
+            return StreamingResponse(iter([body]), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="nba_lineups_none.csv"'})
+        lookup = lineup_names(desk.session, int(dg))
+        lineups = desk.session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.draft_group_id == int(dg)).all()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M")
+
+    def gen():
+        yield _csv_line(EXPORT_SLOTS)
+        for lid, pids in lineups:
+            try:
+                pl = [int(x) for x in coerce_player_ids(pids)]
+            except (ValueError, TypeError):
+                continue
+            objs = [SimpleNamespace(id=x, name=lookup.get(x, {}).get("name") or str(x), position=lookup.get(x, {}).get("position")) for x in pl]
+            ordered = objs
+            if len(objs) == len(EXPORT_SLOTS) and all(o.position for o in objs):
+                try:
+                    ordered = assign_player_order_classic(objs, prefer_late_in_flex=False)
+                except ValueError:
+                    ordered = objs                       # an odd eligibility: the stored order
+            yield _csv_line([o.id if ids else o.name for o in ordered])
+    return StreamingResponse(gen(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="nba_lineups_{dg}_{stamp}{"_ids" if ids else ""}.csv"'})
 
 
 @app.get("/download/{name}")

@@ -176,12 +176,33 @@ class NBAMarketRate(NBABase):
     fetched_at      = Column(DateTime, nullable=True)
 
 
+class LineupPool(NBABase):
+    """
+    The player pool a slate's lineups were generated from: id, name, team, position, salary per player, written once per
+    generate run. Lineups are exported from this, so a slate switch (the laptop's feed replacing nba_player under the
+    server) never makes them unreadable (2026-10-24).
+    """
+    __tablename__ = "lineup_pool"
+    __table_args__ = (UniqueConstraint("draft_group_id", "player_id", name="uq_lineup_pool"),)
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    draft_group_id  = Column(Integer, nullable=False, index=True)
+    player_id       = Column(Integer, nullable=False)
+    name            = Column(String,  nullable=False)
+    team            = Column(String,  nullable=True)
+    position        = Column(String,  nullable=True)
+    salary          = Column(Integer, nullable=True)
+    lock            = Column(DateTime, nullable=True)
+    written_at      = Column(DateTime, nullable=False, default=datetime.now)
+
+
 class Lineup(NBABase):
     __tablename__ = "lineup"
 
     id               = Column(Integer, primary_key=True, autoincrement=True)
     player_ids_list  = Column(JSON,    nullable=False)
     created_at       = Column(DateTime, server_default=func.now(), nullable=False)
+    draft_group_id   = Column(Integer, nullable=True, index=True)      # the slate it was generated for (older rows: inferred, see nba_desk.backfill_lineup_slates)
 
     simulation_results = relationship(
         "LineupSimulationResult",

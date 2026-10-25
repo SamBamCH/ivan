@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from ivan.core.seed import seed_for
 from ivan.core.utils import coerce_player_ids
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.models import Lineup, NBAPlayer
+from ivan.sports.nba.models import Lineup, LineupPool, NBAPlayer
 from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.pre_lock.player import generate_player_samples
 from ivan.sports.nba.utils import _cfg, _coerce_positions
@@ -97,6 +97,7 @@ def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optiona
         random.seed(seed)
     q.put(("start", worker_id, num_lineups, f"samples={s['n_samples']}"))
     try:
+        dg = pool_draft_group(session)
         players = player_pool(session, s["player_min_fpts"])
         if not players:
             q.put(("done", worker_id, 0, "no players")); return
@@ -130,8 +131,8 @@ def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optiona
             seen.add(key); generated.append(ids); pending.append(ids)
             q.put(("advance", worker_id, 1, ""))
             if len(pending) >= BATCH_COMMIT_SIZE:
-                _store(session, pending); pending = []
-        _store(session, pending)
+                _store(session, pending, dg); pending = []
+        _store(session, pending, dg)
         q.put(("done", worker_id, len(generated), f"created={len(generated)} attempts={attempts}" + (f"; {stalled}" if stalled else "")))
     except Exception as e:   # noqa: BLE001 - the parent must hear from every worker
         q.put(("done", worker_id, 0, f"error: {type(e).__name__}: {e}"))
@@ -139,13 +140,32 @@ def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optiona
         session.close()
 
 
-def _store(session: Session, lineups: List[List[int]]) -> None:
+def _store(session: Session, lineups: List[List[int]], draft_group_id: Optional[int] = None) -> None:
     if not lineups:
         return
     now = datetime.utcnow()
     for ids in lineups:
-        session.add(Lineup(player_ids_list=list(ids), created_at=now))
+        session.add(Lineup(player_ids_list=list(ids), created_at=now, draft_group_id=draft_group_id))
     session.commit()
+
+
+def pool_draft_group(session: Session) -> Optional[int]:
+    row = session.query(NBAPlayer.draft_group_id).filter(NBAPlayer.draft_group_id.isnot(None)).first()
+    return None if row is None else int(row[0])
+
+
+def snapshot_pool(session: Session) -> Optional[int]:
+    """Write (replace) the lineup_pool rows for the current pool's slate: what the exports read names and positions from."""
+    dg = pool_draft_group(session)
+    if dg is None:
+        return None
+    players = session.query(NBAPlayer).filter(NBAPlayer.draft_group_id == dg).all()
+    lock = min((p.gametime for p in players if p.gametime), default=None)
+    session.query(LineupPool).filter(LineupPool.draft_group_id == dg).delete(synchronize_session=False)
+    session.bulk_insert_mappings(LineupPool, [dict(draft_group_id=dg, player_id=int(p.id), name=p.name, team=p.team, position=p.position,
+                                                   salary=p.salary, lock=lock, written_at=datetime.now()) for p in players])
+    session.commit()
+    return dg
 
 
 def run_workers(quota: List[int], config_path: str, min_fpts: Optional[float], log: Log = print, progress: bool = True,
@@ -292,6 +312,8 @@ def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log 
     own = session is None
     session = session or get_session(init_db("nba"))
     try:
+        dg = snapshot_pool(session)                      # the exports read names and positions from this, not from the live pool
+        log(f"pool snapshot for slate {dg}: {session.query(LineupPool).filter(LineupPool.draft_group_id == dg).count()} players" if dg else "no draft group on the pool")
         created = run_workers(quotas(n_lineups, jobs), str(config_path), min_fpts, log, progress, randomness)
         log(f"generated {created:,} lineups across {max(1, int(jobs))} workers")
         session.expire_all()

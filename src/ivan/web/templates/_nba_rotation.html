@@ -1,32 +1,49 @@
-<div class="rot" id="rot-{{ rot.team }}" data-team="{{ rot.team }}">
-  {% if not rot.rows %}<div class="muted small">no rotation: no stints and no players available</div>{% else %}
+<div class="rot {% if rot.kind == 'last' %}rot-game{% else %}rot-tonight{% endif %}" id="rot-{{ rot.team }}{% if rot.kind == 'last' %}-game{% endif %}" data-team="{{ rot.team }}">
   <div class="rot-bar">
     <span class="muted small">
-      {% if rot.kind == 'drawn' %}<b>drawn rotation</b> (applied as minute pins){% elif rot.kind == 'last' %}<b>game</b> {{ rot.last_game }}{% else %}model proposal from {{ rot.curve_games }} games of stints (no game this season yet){% endif %}
-      · click or drag to paint · each minute needs 5
-      {% if rot.to_reallocate %}· <b class="toplace">{{ rot.to_reallocate }} min from {{ rot.out_names|join(', ') }} to reallocate</b>{% endif %}
+      {% if rot.kind == 'model' %}<b>tonight</b>{% if rot.drawn %} · <b class="lk">{{ rot.locked|length }} locked</b>{% endif %} · the coach's slots from {{ rot.curve_games }} games, filled at the books' minutes · paint a row to lock it, Apply re-fills the rest
+      {% elif rot.kind == 'propose' %}<b>tonight, unlocked preview</b> · every lock lifted (not saved)
+      {% elif rot.kind == 'last' %}<b>as played</b>{% if rot.last_game %} {{ rot.last_game }}{% endif %} · a digit is that player's n-th foul in that minute · rows in tonight's order
+      {% else %}<b>as played</b> · no game with stints this season{% endif %}
     </span>
     <span class="spacer"></span>
-    <button type="button" class="rot-apply">Apply</button>
-    {% if rot.games %}<select name="game_id" class="rot-game" title="show one of this season's games, out players included" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "last"}' hx-trigger="change" hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML">
-      <option value="" {% if rot.kind != 'last' %}selected{% endif %}>game…</option>
-      {% for g in rot.games %}<option value="{{ g.game_id }}" {% if rot.kind == 'last' and g.game_id == rot.game_id %}selected{% endif %}>{{ g.game_date[5:] }}{% if g.opp %} vs {{ g.opp }}{% endif %}{% if loop.first %} (last){% endif %}</option>{% endfor %}
-    </select>{% endif %}
-    <button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "propose"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="the model's proposal from each player's stint history">Propose</button>
-    {% if rot.drawn %}<button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/clear" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML">Clear</button>{% endif %}
+    {% if rot.kind == 'last' or rot.kind == 'none' %}
+      {% if rot.games %}<select name="game_id" class="rot-game-pick" title="another of this season's games" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "last"}' hx-trigger="change" hx-target="#rot-{{ rot.team }}-game" hx-swap="outerHTML">
+        {% for g in rot.games %}<option value="{{ g.game_id }}" {% if g.game_id == rot.game_id %}selected{% endif %}>{{ g.game_date[5:] }}{% if g.opp %} vs {{ g.opp }}{% endif %}{% if loop.first %} (last){% endif %}</option>{% endfor %}
+      </select>{% endif %}
+    {% else %}
+      <button type="button" class="rot-apply" title="save the locked rows; the other rows are re-filled around them">Apply</button>
+      {% if rot.kind == 'propose' %}<button type="button" hx-get="{{ root }}/team/{{ rot.team }}/rotation" hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="back to the saved locks">Locked</button>
+      {% elif rot.drawn %}<button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/propose" hx-vals='{"source": "propose"}' hx-target="#rot-{{ rot.team }}" hx-swap="outerHTML" title="what the model fills with every lock lifted (nothing saved)">Unlocked</button>{% endif %}
+      {% if rot.drawn %}<button type="button" hx-post="{{ root }}/team/{{ rot.team }}/rotation/clear" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML" title="lift every lock and the minutes pins they set">Clear locks</button>{% endif %}
+    {% endif %}
   </div>
-  <table class="rot-grid">
-    <thead><tr><th class="rn">player · pos</th><th class="rm">min</th>{% for m in range(48) %}<th class="rc {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}</tr></thead>
-    <tbody>
+  {% if not rot.rows %}<div class="muted small rot-empty">{% if rot.kind == 'last' or rot.kind == 'none' %}no played game with stints yet{% elif not rot.has_history %}no stints for these players{% else %}nobody available{% endif %}</div>{% else %}
+  {% if rot.owners %}<div class="spots muted small">spots: {% for o in rot.owners %}<span class="spot-chip"><i class="sw s{{ loop.index0 }}"></i>{{ loop.index }} {{ o }}</span>{% endfor %}</div>{% endif %}
+  <table class="rot-grid {% if rot.kind == 'last' %}hist{% endif %}" {% if rot.shares_json %}data-shares='{{ rot.shares_json }}'{% endif %}>
+    <thead><tr><th class="rl" title="locked rows are held exactly; click to unlock"></th><th class="rn">player · pos</th><th class="rm" title="the solve's minutes: the books' implied minutes, history and the position budgets">{% if rot.kind != 'last' %}tgt{% endif %}</th><th class="rm" title="{% if rot.kind == 'last' %}minutes played{% else %}minutes on the grid: the projection{% endif %}">min</th><th class="rm" title="personal fouls">{% if rot.kind == 'last' %}pf{% endif %}</th>{% for m in range(48) %}<th class="rc {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}</tr></thead>
+    <tbody class="rows">
     {% for r in rot.rows %}
-      <tr data-key="{{ r.key }}" class="{% if r.out %}outrow{% endif %}">
-        <td class="rn" title="{{ r.pos }} · ${{ r.salary }}{% if r.hist is not none %} · history {{ '%.1f'|format(r.hist) }} min{% endif %}{% if r.gone %} · not on tonight's roster: these minutes go to someone else{% elif r.out %} · OUT: these minutes go to someone else{% endif %}">{% if r.starter %}<b>{{ r.name }}</b>{% else %}{{ r.name }}{% endif %}{% if r.pos %} <span class="rpos">{{ r.pos }}</span>{% endif %}{% if r.gone %} <span class="status">GONE</span>{% elif r.out %} <span class="status">OUT</span>{% endif %}</td>
-        <td class="rm">{{ r.minutes }}</td>
-        {% for on in r.cells %}<td class="rc cell {% if on %}on{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}"></td>{% endfor %}
+      <tr data-key="{{ r.key }}" data-group="{{ r.group }}" data-rank="{{ r.rank }}" class="{% if rot.kind == 'last' and (r.out or r.gone) %}tout{% elif r.vacated or r.out or r.gone %}outrow{% endif %} {% if r.vacated %}vacated{% endif %} {% if r.locked %}locked{% endif %} {% if r.sep %}sep{% endif %}">
+        <td class="rl">{% if rot.kind != 'last' and not r.vacated %}<span class="lock" title="{% if r.locked %}locked: held exactly; click to unlock{% else %}filled by the model; paint to lock{% endif %}">{% if r.locked %}&#128274;{% else %}&#8226;{% endif %}</span>{% endif %}</td>
+        <td class="rn" title="{{ r.pos }} · ${{ r.salary }}{% if r.hist is not none %} · usual {{ '%.1f'|format(r.hist) }} min{% endif %}{% if r.target is not none %} · solve {{ r.target }} min{% endif %}{% if r.heir_of %} · inherits {{ r.heir_of }}{% endif %}{% if r.gone %} · not on tonight's roster{% elif r.vacated %} · OUT: his usual stretches, filled by others tonight{% elif rot.kind == 'last' and r.out %} · played this game, OUT tonight{% endif %}{% if r.foul_short %} · minutes cut short by fouls{% endif %}">{% if r.starter %}<b>{{ r.name }}</b>{% else %}{{ r.name }}{% endif %}{% if r.salary %} <span class="rsal">{{ (r.salary / 1000)|round(1) }}k</span>{% endif %}{% if r.pos %} <span class="rpos">{{ r.pos }}</span>{% endif %}{% if r.gone %} <span class="status">GONE</span>{% elif r.dropped %} <span class="status drop">DROPPED</span> <form class="inline" hx-post="{{ root }}/team/{{ rot.team }}/rotation/restore" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML"><input type="hidden" name="player" value="{{ r.key }}"><button type="submit" class="add" title="bring him back: the model fills him again">+</button></form>{% elif r.vacated or (rot.kind == 'last' and r.out) %} <span class="status">OUT</span>{% endif %}{% if r.heir_of %} <span class="heir" title="inherits {{ r.heir_of }}">&larr;</span>{% endif %}{% if rot.kind != 'last' and not r.vacated %} <form class="inline drop" hx-post="{{ root }}/team/{{ rot.team }}/rotation/drop" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML" hx-confirm="No minutes tonight for {{ r.name }}? He leaves the grid and the pool (the + beside his name brings him back)."><input type="hidden" name="player" value="{{ r.key }}"><button type="submit" class="x" title="no minutes tonight: drop him from the grid and the pool">&times;</button></form>{% endif %}</td>
+        <td class="rm tgt">{% if r.target is not none %}{{ r.target }}{% endif %}</td>
+        <td class="rm {% if r.foul_short %}fshort{% endif %}">{{ r.minutes }}</td>
+        <td class="rm pf {% if r.pf and r.pf >= 4 %}hi{% endif %}">{% if r.pf %}{{ r.pf }}{% endif %}</td>
+        {% for on in r.cells %}<td class="rc cell {% if on %}on{% endif %} {% if on and r.spots[loop.index0] >= 0 %}s{{ r.spots[loop.index0] }}{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %} {% if r.marks and r.marks[loop.index0] is not none %}foul{% endif %} {% if r.tips and r.tips[loop.index0] %}tip{% endif %}"{% if r.tips and r.tips[loop.index0] %} title="{{ r.tips[loop.index0] }}"{% endif %}>{% if r.marks and r.marks[loop.index0] is not none %}{{ r.marks[loop.index0] }}{% endif %}</td>{% endfor %}
       </tr>
     {% endfor %}
     </tbody>
-    <tfoot><tr><td class="rn muted small">on floor</td><td class="rm"></td>{% for c in rot.counts %}<td class="rc cnt {% if c != 5 %}bad{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}">{{ c }}</td>{% endfor %}</tr></tfoot>
+    <tbody class="foot"><tr><td class="rl"></td><td class="rn muted small">on floor</td><td class="rm"></td><td class="rm"></td><td class="rm"></td>{% for c in rot.counts %}<td class="rc cnt {% if c != 5 %}bad{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}">{{ c }}</td>{% endfor %}</tr></tbody>
+    {% if rot.lanes %}<tbody class="lanes" title="each spot traced through the game: who held it, minute by minute">
+    {% for L in rot.lanes %}<tr><td class="rl"></td><td class="rn muted small"><i class="sw s{{ L.spot }}"></i>{{ L.spot + 1 }} {{ L.owner }}</td><td class="rm"></td><td class="rm"></td><td class="rm"></td>
+      {% for sg in L.segments %}<td class="lane {% if sg.key %}s{{ L.spot }}{% else %}gap{% endif %} {% if sg.start % 12 == 0 %}q{% endif %}" colspan="{{ sg.length }}" title="{% if sg.key %}{{ sg.key }} · {{ sg.length }} min{% else %}nobody in this spot{% endif %}">{% if sg.key %}{{ sg.short[:(sg.length * 1.6)|int] }}{% endif %}</td>{% endfor %}
+    </tr>{% endfor %}
+    </tbody>{% endif %}
   </table>
+  {% if rot.benched %}<div class="benched muted small">off the floor tonight (not in the pool):
+    {% for b in rot.benched %}<span class="bench-one" title="{{ b.pos }} · ${{ b.salary }}{% if b.hist %} · usual {{ '%.1f'|format(b.hist) }} min{% endif %}{% if b.status %} · {{ b.status }}{% endif %}{% if b.dropped %} · dropped by hand{% endif %}">{{ b.name }}{% if b.dropped %} <span class="status drop">DROPPED</span>{% endif %}{% if b.hist and b.hist >= 8 %} <i>({{ '%.0f'|format(b.hist) }})</i>{% endif %}
+      <form class="inline" hx-post="{{ root }}/team/{{ rot.team }}/rotation/{% if b.dropped %}restore{% else %}add{% endif %}" hx-target="#card-{{ rot.team }}" hx-swap="innerHTML"><input type="hidden" name="player" value="{{ b.key }}"><button type="submit" class="add" title="{% if b.dropped %}bring him back: the model fills him again{% else %}add him back at {{ b.add_minutes }} minutes (type another number to change it){% endif %}">+</button></form></span>{% endfor %}
+  </div>{% endif %}
   {% endif %}
 </div>

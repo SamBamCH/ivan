@@ -10,6 +10,12 @@
   </div>
   {% if log %}<pre class="log">{{ log }}</pre>{% endif %}
   {% endif %}
+  <div class="pipe-row">
+    <span class="muted small"><b>export</b> · <a href="{{ root }}/export/projections.csv" title="every player in the pool: our projection after the desk's edits (minutes, band, fpts, sd, fppm), the public projection, ownership, pins and locks">projections CSV</a>
+      · generated lineups, players in roster order only:
+      {% for sl in lineup_slates %}{% if sl.draft_group is not none %}<span class="export-slate {% if sl.draft_group == current_draft_group %}cur{% endif %}" title="slate {{ sl.draft_group }}{% if sl.lock %} · locks {{ sl.lock[5:16] }}{% endif %}{% if sl.draft_group == current_draft_group %} · the loaded slate{% endif %}">{% if sl.lock %}{{ sl.lock[5:10] }}{% else %}slate {{ sl.draft_group }}{% endif %} {{ sl.n }}: <a href="{{ root }}/export/lineups.csv?draft_group={{ sl.draft_group }}">names</a> / <a href="{{ root }}/export/lineups.csv?draft_group={{ sl.draft_group }}&ids=1">ids</a></span>{% endif %}{% endfor %}
+      {% if not lineup_slates %}<span class="muted">none generated yet</span>{% endif %}</span>
+  </div>
   {% if outputs %}
   <div class="pipe-row">
     <span><b>latest picks for this slate</b> {{ outputs.when.strftime('%a %H:%M') }} · {{ outputs.rows }} entries{% if outputs.slate_only %} <span class="muted">(other slates' contests in the same run are not shown)</span>{% endif %} · <a href="{{ root }}/download/{{ outputs.classic }}">download the DraftKings upload CSV</a>{% if outputs.error %} · <span class="bad">{{ outputs.error }}</span>{% endif %}</span>

@@ -1,11 +1,14 @@
 <h2>
   {{ c.team }}
   <span class="pill {{ c.starters }}">lineup {{ c.starters }}</span>
+  {% if c.rotation.locked %}<span class="pill lk">{{ c.rotation.locked|length }} locked</span>{% endif %}
   {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
-  {% if c.to_place|abs >= 0.5 %}<span class="pill toplace">{% if c.to_place > 0 %}{{ '%.0f'|format(c.to_place) }} min to place{% else %}{{ '%.0f'|format(-c.to_place) }} min over{% endif %}</span>{% endif %}
   <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
 </h2>
+<div class="rot-pair">
+{% with rot=c.rotation %}{% include "_nba_rotation.html" %}{% endwith %}
+{% with rot=c.last_game %}{% include "_nba_rotation.html" %}{% endwith %}
+</div>
+<details class="players-box"><summary>players · rates, bands and the books</summary>
 {% with card=c %}{% include "_nba_team.html" %}{% endwith %}
-<details class="rotbox" {% if c.rotation_drawn %}open{% endif %}><summary>rotation grid{% if c.rotation_drawn %} · drawn{% endif %}</summary>
-  <div hx-get="{{ root }}/team/{{ c.team }}/rotation" hx-trigger="toggle from:closest details once, revealed" hx-swap="innerHTML"><div class="muted small">loading…</div></div>
 </details>

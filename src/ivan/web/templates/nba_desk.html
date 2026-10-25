@@ -10,8 +10,11 @@
   :root { --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2e2; --bg:#f7f7f5; --card:#fff; --accent:#1f5fbf; --ok:#1a7f37; --bad:#b42318; --warn:#9a6700; }
   * { box-sizing:border-box } body { margin:0; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
   header { background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5 }
-  .bar { max-width:1700px; margin:0 auto; padding:16px 20px; display:flex; gap:22px; align-items:center; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; border-bottom:1px solid var(--line) }
-  .bar .spacer { flex:1 } .bar select { font:inherit; font-size:13px; max-width:280px; padding:5px 8px } .bar .clock { font-variant-numeric:tabular-nums }
+  .bar { max-width:1700px; margin:0 auto; padding:12px 20px; display:flex; gap:14px 22px; align-items:center; flex-wrap:wrap; white-space:nowrap; border-bottom:1px solid var(--line) }
+  .bar > * { flex:0 0 auto } .bar form, .bar button { flex:0 0 auto }
+  .bar .fresh { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis }  /* the freshness strip gives way first; the buttons never clip */
+  .bar .spacer { flex:1 0 12px }
+  .bar select { font:inherit; font-size:13px; max-width:280px; padding:5px 8px } .bar .clock { font-variant-numeric:tabular-nums }
   .bar label { font-size:12px; color:var(--muted); display:flex; gap:6px; align-items:center }
   .bar .brand { font-weight:700; font-size:16px } .bar .muted { color:var(--muted); font-size:12px }
   .bar form { display:inline } .bar button { font:inherit; font-size:13px; padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
@@ -51,16 +54,42 @@
   .jobstat { font-weight:600 } .jobstat.running, .jobstat.queued { color:var(--warn) } .jobstat.done { color:var(--ok) } .jobstat.failed, .jobstat.cancelled { color:var(--bad) }
   pre.log { background:#1b1b1b; color:#ddd; font:12px/1.35 ui-monospace,Menlo,Consolas,monospace; padding:8px 10px; border-radius:6px; max-height:230px; overflow:auto; margin:6px 0; white-space:pre-wrap }
   .pipe-results { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start } .pipe-results table.mini td, .pipe-results table.mini th { border-bottom:1px solid var(--line) }
-  .rotbox summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:8px } .rot { margin-top:6px }
+  table.rot-grid tr.sep td { border-bottom:2px solid var(--ink) } table.rot-grid tr.sep td.cell { border-bottom-color:var(--ink) }
+  table.rot-grid tr.tout td.rn { text-decoration:line-through; color:var(--bad) } table.rot-grid tr.tout td.rn .status { color:var(--bad); font-weight:700 } table.rot-grid tr.tout td.cell.on { opacity:.45 }
+  table.rot-grid tbody.lanes td { height:14px; font-size:9px } table.rot-grid tbody.lanes tr:first-child td { border-top:4px solid #fff }
+  table.rot-grid tbody.lanes td.rn { font-size:11px; width:214px } table.rot-grid tbody.lanes td.rn .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px }
+  table.rot-grid td.lane { color:#fff; font-weight:700; overflow:hidden; white-space:nowrap; max-width:0; border-right:1px solid #fff; border-bottom:1px solid #fff; padding:0 1px; line-height:14px; text-align:left }
+  table.rot-grid td.lane.gap { background:#ddd } table.rot-grid td.lane.s0 { background:var(--s0) } table.rot-grid td.lane.s1 { background:var(--s1) } table.rot-grid td.lane.s2 { background:var(--s2) } table.rot-grid td.lane.s3 { background:var(--s3); color:#0b0b0b } table.rot-grid td.lane.s4 { background:var(--s4) }
+  table.rot-grid.hist td.cell.tip { cursor:help } table.rot-grid.hist td.cell.tip.on { box-shadow: inset 0 0 0 1px rgba(0,0,0,.35) }
+  table.rot-grid .rsal { font-size:9px; color:var(--muted); font-weight:400; margin-left:3px } .status.drop { color:var(--warn) }
+  table.rot-grid td.rn form.drop { display:inline; margin-left:4px } table.rot-grid td.rn form.drop button.x { font:inherit; font-size:11px; line-height:12px; padding:0 4px; border:0; background:none; color:#bbb; cursor:pointer; visibility:hidden } table.rot-grid tr:hover td.rn form.drop button.x { visibility:visible } table.rot-grid td.rn form.drop button.x:hover { color:var(--bad) }
+  table.rot-grid td.rn form.inline { display:inline }
+  .rot { margin-top:6px } .rot-pair .rot-game { margin-top:14px; padding-top:10px; border-top:1px dashed var(--line) } .rot-empty { padding:6px 0 }
+  .rot-bar select.rot-game-pick { font:inherit; font-size:12px; padding:2px 6px }
   .rot-bar { display:flex; gap:10px; align-items:center; margin-bottom:6px } .rot-bar .spacer { flex:1 }
   .rot-bar select.rot-game { font:inherit; font-size:12px; padding:2px 6px }
   .rot-bar button { font:inherit; font-size:12px; padding:3px 9px; border-radius:5px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer } .rot-bar button.rot-apply { background:var(--accent); color:#fff }
   table.rot-grid { border-collapse:collapse; margin:0; width:auto; user-select:none } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
-  table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:178px } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
+  table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
   table.rot-grid td.cell.on { background:var(--accent) } table.rot-grid td.cell:hover { outline:1px solid #333 } table.rot-grid .q { border-left:2px solid #bbb }
   table.rot-grid td.cnt { font-size:9px; color:var(--ok) } table.rot-grid td.cnt.bad { color:#fff; background:var(--bad); font-weight:700 }
   table.rot-grid tr.outrow td.rn { color:#aaa; text-decoration:line-through } table.rot-grid tr.outrow td.cell.on { background:#e8a0a0 } table.rot-grid tr.outrow td.cell { cursor:not-allowed }
+  table.rot-grid tr.vacated td.cell.on { background:repeating-linear-gradient(45deg,#f1f1f1 0 2px,#d9c2c2 2px 4px) } table.rot-grid tr.vacated td.rm { color:#bbb }
+  table.rot-grid th.rl, table.rot-grid td.rl { width:16px; min-width:16px; text-align:center } table.rot-grid td.rl .lock { cursor:pointer; font-size:10px; color:#bbb } table.rot-grid tr.locked td.rl .lock { color:var(--accent); font-size:11px }
+  table.rot-grid tr.locked td.cell.on { box-shadow: inset 0 0 0 1.5px #1b1b1b } table.rot-grid tr.locked td.rn { font-style:italic }
+  :root { --s0:#2a78d6; --s1:#eb6834; --s2:#1baf7a; --s3:#eda100; --s4:#e87ba4 }
+  table.rot-grid td.cell.on.s0 { background:var(--s0) } table.rot-grid td.cell.on.s1 { background:var(--s1) } table.rot-grid td.cell.on.s2 { background:var(--s2) } table.rot-grid td.cell.on.s3 { background:var(--s3) } table.rot-grid td.cell.on.s4 { background:var(--s4) }
+  table.rot-grid td.cell.on:not(.s0):not(.s1):not(.s2):not(.s3):not(.s4) { background:#8a8a8a }
+  .spots { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:2px 0 6px } .spot-chip { white-space:nowrap } .spot-chip .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px }
+  .sw.s0 { background:var(--s0) } .sw.s1 { background:var(--s1) } .sw.s2 { background:var(--s2) } .sw.s3 { background:var(--s3) } .sw.s4 { background:var(--s4) }
+  table.rot-grid td.rm.tgt { color:#999; font-size:10px } table.rot-grid td.cell.foul { color:#fff; font-weight:700; font-size:9px; line-height:16px; background:var(--bad) } table.rot-grid td.cell.foul:not(.on) { background:#f3b2ad; color:#7a1a12 }
+  table.rot-grid td.rm.pf.hi { color:var(--bad); font-weight:700 } table.rot-grid td.rm.fshort { color:var(--bad); font-weight:700 } .heir { color:var(--ok); font-size:10px; font-weight:700 }
+  .pill.lk { background:#eef4ff; color:var(--accent) } .lk { color:var(--accent) }
+  .benched { margin-top:6px; display:flex; gap:12px; flex-wrap:wrap; align-items:center } .bench-one { white-space:nowrap } .bench-one form { display:inline } .bench-one button.add { font:inherit; font-size:11px; line-height:14px; padding:0 5px; border-radius:4px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer; margin-left:2px }
+  table.mini tr.fshort td { color:var(--bad) } table.mini td.pfhi { font-weight:700; color:var(--bad) }
+  .export-slate { margin-left:8px; padding:1px 6px; border-radius:8px; background:#f1f1f1 } .export-slate.cur { background:#eef4ff; color:var(--accent) }
+  details.players-box { margin-top:14px } details.players-box summary { cursor:pointer; color:var(--muted); font-size:12px; margin-bottom:6px }
   .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
@@ -78,9 +107,9 @@
   tr.starters td:first-child { font-weight:600; border-left:3px solid var(--accent) } tr.bench td:first-child, tr.out td:first-child { border-left:3px solid transparent }
   tr.divider td { background:#fff; border-top:3px solid #c9d7f2; border-bottom:0; padding:6px 6px 2px; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
   tr.divider.out td { border-top-color:#f0c4c4 } tr.divider.bench td { border-top-color:#ddd }
-  td.dist { min-width:150px } .bar { position:relative; height:10px; background:#eee; border-radius:5px; margin:3px 0 2px }
-  .bar .range { position:absolute; top:0; height:10px; background:#9db9e8; border-radius:5px } .bar .range.pinned { background:var(--accent) }
-  .bar .tick { position:absolute; top:-2px; width:2px; height:14px; background:var(--ink) }
+  td.dist { min-width:150px } td.dist .bar { position:relative; height:10px; background:#eee; border-radius:5px; margin:3px 0 2px }   /* the minutes band, not the header bar */
+  td.dist .bar .range { position:absolute; top:0; height:10px; background:#9db9e8; border-radius:5px } .bar .range.pinned { background:var(--accent) }
+  td.dist .bar .tick { position:absolute; top:-2px; width:2px; height:14px; background:var(--ink) }
   .bandin { font-size:11px; color:var(--muted) } input.min.sm { width:34px; font-size:11px; padding:1px 3px }
   td.hover { position:relative } td.hover .pop { display:none; position:absolute; right:0; top:100%; z-index:20; background:#fff; border:1px solid var(--line); border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.12); padding:6px 8px }
   td.hover:hover .pop { display:block } table.mini { margin:0; width:auto } table.mini td, table.mini th { padding:1px 6px; font-size:12px; border:0 } table.mini tr.mkt td { color:var(--ok) }
@@ -163,15 +192,87 @@
 
   // rotation grids: paint with the mouse, keep the counts live, Apply posts the grid
   let paint = null;
+  // the five spots: the five on at the tip own them (guards first, bigs last); a player coming on takes the spot of the
+  // likest player going off (same group, then nearest position order) - the same rule as rotation.spots_of
+  function rotSpots(grid) {
+    const trs = Array.from(grid.querySelectorAll("tbody.rows tr")).filter(tr => !tr.classList.contains("vacated"));
+    const cells = trs.map(tr => Array.from(tr.querySelectorAll("td.cell")));
+    const on = cells.map(cs => cs.map(c => c.classList.contains("on")));
+    const n = trs.length, M = 48;
+    const rank = trs.map(tr => parseFloat(tr.dataset.rank || "2")), group = trs.map(tr => tr.dataset.group || "wing");
+    let shares = {}; try { shares = JSON.parse(grid.dataset.shares || "{}"); } catch (e) { shares = {}; }
+    const keysAll = trs.map(tr => tr.dataset.key);
+    const habit = (o, i) => (shares[keysAll[o]] || {})[keysAll[i]] || 0;      // the coach's habit: share of o's exits that i covered
+    const S = on.map(r => r.map(() => -1));
+    let tip = []; for (let i = 0; i < n; i++) if (on[i][0]) tip.push(i);
+    tip.sort((a, b) => rank[a] - rank[b] || a - b); tip = tip.slice(0, 5);
+    tip.forEach((i, k) => { S[i][0] = k; });
+    let free = []; for (let k = tip.length; k < 5; k++) free.push(k);
+    const last = {}; tip.forEach((i, k) => { last[i] = k; });
+    for (let m = 1; m < M; m++) {
+      const outs = [], ins = [];
+      for (let i = 0; i < n; i++) {
+        if (on[i][m] && on[i][m - 1]) S[i][m] = S[i][m - 1];
+        else if (on[i][m - 1] && !on[i][m] && S[i][m - 1] >= 0) outs.push(i);
+        else if (on[i][m] && !on[i][m - 1]) ins.push(i);
+      }
+      let spots = outs.map(o => S[o][m - 1]).concat(free); free = [];
+      const own = i => (i in last) && spots.includes(last[i]);
+      ins.sort((a, b) => (own(a) ? 0 : 1) - (own(b) ? 0 : 1) || rank[a] - rank[b]);
+      const less = (k1, k2) => { for (let z = 0; z < k1.length; z++) { if (k1[z] !== k2[z]) return k1[z] < k2[z]; } return false; };
+      for (const i of ins) {
+        if (!spots.length) break;
+        let best = null, bk = null;
+        if (own(i)) best = last[i];
+        else for (const sp of spots) {
+          const o = outs.find(x => S[x][m - 1] === sp);
+          const hb = o === undefined ? 0 : habit(o, i);
+          const key = o === undefined ? [2, 0, 0] : [group[o] === group[i] ? 0 : 1, -hb, Math.abs(rank[o] - rank[i])];
+          if (bk === null || less(key, bk)) { best = sp; bk = key; }
+        }
+        S[i][m] = best; last[i] = best; spots.splice(spots.indexOf(best), 1);
+      }
+      free = spots;
+    }
+    cells.forEach((cs, i) => cs.forEach((c, m) => { c.classList.remove("s0", "s1", "s2", "s3", "s4"); if (on[i][m] && S[i][m] >= 0) c.classList.add("s" + S[i][m]); }));
+    // the lanes under the grid: who holds each spot, minute by minute
+    const lanes = grid.querySelector("tbody.lanes");
+    if (!lanes) return;
+    const keys = trs.map(tr => tr.dataset.key);
+    const shortOf = k => { const t = k.split(" ").filter(x => !["jr", "sr", "ii", "iii", "iv"].includes(x)); return t.length ? t[t.length - 1] : k; };
+    lanes.querySelectorAll("tr").forEach((tr, k) => {
+      const holder = new Array(M).fill(null);
+      for (let i = 0; i < n; i++) for (let m = 0; m < M; m++) if (on[i][m] && S[i][m] === k) holder[m] = keys[i];
+      tr.querySelectorAll("td.lane").forEach(td => td.remove());
+      let start = 0;
+      for (let m = 1; m <= M; m++) {
+        if (m === M || holder[m] !== holder[start]) {
+          const td = document.createElement("td"); const key = holder[start]; const len = m - start;
+          td.className = "lane " + (key ? "s" + k : "gap") + (start % 12 === 0 ? " q" : ""); td.colSpan = len;
+          td.title = key ? key + " · " + len + " min" : "nobody in this spot"; td.textContent = key ? shortOf(key).slice(0, Math.floor(len * 1.6)) : "";
+          tr.appendChild(td); start = m;
+        }
+      }
+    });
+  }
   function rotRefresh(grid) {
-    const rows = grid.querySelectorAll("tbody tr"); const counts = new Array(48).fill(0);
-    rows.forEach(tr => { const cells = tr.querySelectorAll("td.cell"); let n = 0; cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; counts[i]++; } }); tr.querySelector("td.rm").textContent = n; });
-    grid.querySelectorAll("tfoot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
+    rotSpots(grid);
+    const rows = grid.querySelectorAll("tbody.rows tr"); const counts = new Array(48).fill(0);
+    rows.forEach(tr => { const cells = tr.querySelectorAll("td.cell"); let n = 0; const vac = tr.classList.contains("vacated"); cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; if (!vac) counts[i]++; } }); const rm = tr.querySelector("td.rm:not(.tgt):not(.pf)"); if (rm && !vac) rm.textContent = n; });
+    grid.querySelectorAll("tbody.foot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
   }
   function setCell(cell, on) {
-    if (cell.closest("tr").classList.contains("outrow") && on) return;     // an out player can only be painted off
+    const tr = cell.closest("tr");
+    if (tr.classList.contains("outrow")) return;                            // an out player's row is his vacated slot: not tonight's
+    if (tr.closest("table.rot-grid").classList.contains("hist")) return;   // a played game is history
     cell.classList.toggle("on", on);
+    if (!tr.classList.contains("locked")) { tr.classList.add("locked"); const lk = tr.querySelector("td.rl .lock"); if (lk) { lk.innerHTML = "&#128274;"; lk.title = "locked: held exactly; click to unlock"; } }
   }
+  document.body.addEventListener("click", e => {
+    const lk = e.target.closest("table.rot-grid td.rl .lock"); if (!lk) return;
+    const tr = lk.closest("tr"); const on = !tr.classList.contains("locked");
+    tr.classList.toggle("locked", on); lk.innerHTML = on ? "&#128274;" : "&#8226;"; lk.title = on ? "locked: held exactly; click to unlock" : "filled by the model; paint to lock (unlocked rows are re-filled on Apply)";
+  });
   document.body.addEventListener("mousedown", e => {
     const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     paint = !cell.classList.contains("on"); setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid")); e.preventDefault();
@@ -184,11 +285,14 @@
   document.body.addEventListener("click", e => {
     const btn = e.target.closest("button.rot-apply"); if (!btn) return;
     const rot = btn.closest(".rot"); const team = rot.dataset.team;
-    const players = [], grid = [];
-    rot.querySelectorAll("tbody tr").forEach(tr => { players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll("td.cell")).map(c => c.classList.contains("on") ? 1 : 0)); });
-    const bad = Array.from(rot.querySelectorAll("tfoot td.cnt.bad")).length;
-    if (bad && !confirm(bad + " minute(s) do not have exactly 5 on the floor. Apply anyway?")) return;
-    fetch(ROOT + "/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({players, grid})})
+    const players = [], grid = [], locked = [];
+    rot.querySelectorAll("tbody.rows tr").forEach(tr => {
+      if (tr.classList.contains("vacated")) return;
+      players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll("td.cell")).map(c => c.classList.contains("on") ? 1 : 0));
+      if (tr.classList.contains("locked")) locked.push(tr.dataset.key);
+    });
+    if (!locked.length && !confirm("No row is locked: nothing to hold. Apply anyway (this only clears old locks)?")) return;
+    fetch(ROOT + "/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({players, grid, locked})})
       .then(r => r.text()).then(html => { const card = document.getElementById("card-" + team); card.innerHTML = html; htmx.process(card); applyFilter(); });
   });
 </script>
