@@ -816,6 +816,28 @@ class Desk:
         return dict(checked_at=last, checked=NF.age(last, now) if last else None, auto=bool(getattr(self, "news_auto", False)), n_slate=n,
                     newest=max((v[0].first_seen for v in recent.values()), default=None))
 
+    def team_states(self, now: Optional[datetime] = None) -> list:
+        """
+        One chip per team on the slate: green = mapped and no open question; yellow = an open question (a questionable
+        player who could shake the rotation), mapped or not; red = mapped but the inputs moved since; grey = unmapped
+        with nothing open. The header's one-line read of the slate.
+        """
+        now = now or datetime.now()
+        out = []
+        for t in sorted({p.team for p in self.slate.players if p.team}):
+            ms = self.mapped_state(t); qs = self.questions(t, now)
+            open_q = [q for q in qs if not q["answered"]]
+            if ms["state"] == "changed":
+                colour, why = "changed", "mapped, but changed since: " + ", ".join(ms["diff"])
+            elif open_q:
+                colour, why = "open", f"{len(open_q)} open question(s): " + ", ".join(f"{q['raw']} {q['status']}" for q in open_q) + (" · mapped" if ms["state"] == "mapped" else " · unmapped")
+            elif ms["state"] == "mapped":
+                colour, why = "ready", "mapped, no open questions"
+            else:
+                colour, why = "unmapped", "unmapped" + (f" · {', '.join(ms['diff'])}" if ms.get("diff") else "")
+            out.append(dict(team=t, state=ms["state"], colour=colour, why=why, open=len(open_q), new=sum(1 for q in open_q if q["news"] and q["news"]["new"])))
+        return out
+
     def mapped_summary(self) -> dict:
         teams = sorted({p.team for p in self.slate.players if p.team})
         states = {t: self.mapped_state(t) for t in teams}
@@ -1091,7 +1113,7 @@ class Desk:
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
                     slates=slates, slate_days=self.slate_days(now, dg), props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
-                    questions=self.questions_summary(now), news=self.news_status(now),
+                    questions=self.questions_summary(now), news=self.news_status(now), team_states=self.team_states(now),
                     overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)))
 
 
