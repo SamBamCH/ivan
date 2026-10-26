@@ -228,8 +228,8 @@
   // the five spots: the five on at the tip own them (guards first, bigs last); a player coming on takes the spot of the
   // likest player going off (same group, then nearest position order) - the same rule as rotation.spots_of
   function rotSpots(grid) {
-    const trs = Array.from(grid.querySelectorAll("tbody.rows tr")).filter(tr => !tr.classList.contains("vacated"));
-    const cells = trs.map(tr => Array.from(tr.querySelectorAll("td.cell")));
+    const trs = Array.from(grid.querySelectorAll("tbody.rows > tr[data-key]")).filter(tr => !tr.classList.contains("vacated"));
+    const cells = trs.map(tr => Array.from(tr.querySelectorAll(":scope > td.cell")));
     const on = cells.map(cs => cs.map(c => c.classList.contains("on")));
     const n = trs.length, M = 48;
     const rank = trs.map(tr => parseFloat(tr.dataset.rank || "2")), group = trs.map(tr => tr.dataset.group || "wing");
@@ -290,8 +290,8 @@
   }
   function rotRefresh(grid) {
     rotSpots(grid);
-    const rows = grid.querySelectorAll("tbody.rows tr"); const counts = new Array(48).fill(0);
-    rows.forEach(tr => { const cells = tr.querySelectorAll("td.cell"); let n = 0; const vac = tr.classList.contains("vacated"); cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; if (!vac) counts[i]++; } }); const rm = tr.querySelector("td.rm:not(.tgt):not(.pf)"); if (rm && !vac) rm.textContent = n; });
+    const rows = grid.querySelectorAll("tbody.rows > tr[data-key]"); const counts = new Array(48).fill(0);
+    rows.forEach(tr => { const cells = tr.querySelectorAll(":scope > td.cell"); let n = 0; const vac = tr.classList.contains("vacated"); cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; if (!vac) counts[i]++; } }); const rm = tr.querySelector("td.rm:not(.tgt):not(.pf)"); if (rm && !vac) rm.textContent = n; });
     grid.querySelectorAll("tbody.foot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
   }
   function setCell(cell, on) {
@@ -333,9 +333,9 @@
   const rotSaving = {}, rotDirty = {}; let paintTeam = null;
   function rotCollect(rot) {
     const players = [], grid = [], locked = [];
-    rot.querySelectorAll("tbody.rows tr").forEach(tr => {
+    rot.querySelectorAll("tbody.rows > tr[data-key]").forEach(tr => {
       if (tr.classList.contains("vacated")) return;
-      players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll("td.cell")).map(c => c.classList.contains("on") ? 1 : 0));
+      players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll(":scope > td.cell")).map(c => c.classList.contains("on") ? 1 : 0));
       if (tr.classList.contains("locked")) locked.push(tr.dataset.key);
     });
     return {players, grid, locked};
@@ -365,7 +365,7 @@
     const btn = e.target.closest("button.rot-apply, button.rot-hold"); if (!btn) return;
     const rot = btn.closest(".rot"); const team = rot.dataset.team;
     if (btn.classList.contains("rot-hold")) {
-      rot.querySelectorAll("tbody.rows tr").forEach(tr => {
+      rot.querySelectorAll("tbody.rows > tr[data-key]").forEach(tr => {
         if (tr.classList.contains("vacated") || tr.classList.contains("outrow")) return;
         tr.classList.add("locked"); const lk = tr.querySelector("td.rl .lock"); if (lk) { lk.innerHTML = "&#128274;"; lk.title = "locked: held exactly; click to unlock"; }
       });

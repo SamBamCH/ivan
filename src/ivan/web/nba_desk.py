@@ -697,6 +697,8 @@ class Desk:
         """
         from ivan.sports.nba.projection.live import OUT_STATUSES
         status = {normalize_name(p.name): (p.status or "").upper() for p in self.players(team)}
+        keep = [i for i, n in enumerate(players) if n and len(grid[i]) == ROT.MINUTES]       # rows without a key (a popup's table) are not the grid's
+        players = [players[i] for i in keep]; grid = [grid[i] for i in keep]
         g = pd.DataFrame(np.array(grid, dtype=bool).reshape(len(players), ROT.MINUTES), index=[normalize_name(n) for n in players], columns=list(range(ROT.MINUTES)))
         g = g.loc[[n for n in g.index if status.get(n, "") not in OUT_STATUSES]]
         lock_names = [normalize_name(n) for n in (locked if locked is not None else list(g.index))]
