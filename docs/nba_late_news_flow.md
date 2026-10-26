@@ -112,3 +112,23 @@ pool before lock and the switch at lock costs a publish and a sim.
 to the pool as it stands: entries, exposure, the field's ownership and the leverage against it, the projection at pick
 and ours now with the delta, minutes, the public number, status (a chosen player now OUT is struck in red at the top
 line), value; sortable by any column; team exposure totals.
+
+## Two desks, one projection (2026-10-26)
+
+Sam runs the minutes. His Publish writes the pool and pushes the live bundle, which now carries his edits too
+(`minutes_overrides.csv`, `rotations/`). The brother's desk (the server, a consumer) takes the pool as published on
+Refresh (`feed.pull`): no re-projection, the numbers are exactly Sam's. His edits land under
+`data/nba/input/published/` as the base layer; anything the brother types goes into his own files on top (the desk writes
+only its own layer), a blank box of his falls back to the published value, Clear locks drops his pins and grid for that
+team, and a pull re-projects only the teams he edited (his edits on top of the published projection) and leaves the rest
+as published. On his grid a published pin is a green placeholder; his own pins are the amber-bordered values; the card
+says "published" and counts "N of your own". The server's 5-minute pull timer follows the same rule.
+
+Verified 2026-10-26 on a separate checkout run as the consumer (the NFL app mounting the desk at /nba behind the login,
+IVAN_FEED_URL set): login, the games strip and one card, no link without the /nba prefix, Refresh pulls the feed with the
+pool equal to the published pool for all 241 players, published pins as green placeholders, Refigure keeps his value
+local, Clear locks returns to the published, paint autosaves through the mount, Map, Check news, late news reloads the
+page logged in on the same team, scenarios save and delete, every tab renders, the slate picker fills, a second Refresh
+says "unchanged". Bugs found and fixed on the way: Refigure copied the published pins into his file; Map's fingerprint
+was taken before the pins; flash messages were cleared by renders that never showed them; the late-news response consumed
+its own message before the page reload.
