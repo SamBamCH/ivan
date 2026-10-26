@@ -2480,7 +2480,10 @@ def late_news(request: Request, team: str, player: str = Form(...), call: str = 
                 except (TypeError, ValueError) as e:
                     desk.flash.append(f"not queued: {e}")
         desk.rebuild()
-        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+        # the call moved the pool, the header (questions, chips), the scenarios and the pipeline state: reload the whole page
+        resp = _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+        resp.headers["HX-Refresh"] = "true"
+        return resp
 
 
 @app.get("/export/projections.csv")
