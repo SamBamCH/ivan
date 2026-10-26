@@ -166,6 +166,21 @@ class LiveSlate:
                                        games_on_team=int(self.games_team.get((name, p.team), 0)), games_this_season=int(self.games_season.get(name, 0))))
         return roster
 
+    def team_profile(self, team: str) -> dict | None:
+        """The coach's pattern for the role prior and the grid's spans (config projection.team_profile, on by default); None = off."""
+        try:
+            from ivan.core.config import load_config
+            block = (load_config("nba") or {}).get("projection") or {}
+        except Exception:   # noqa: BLE001
+            block = {}
+        if not block.get("team_profile", True):
+            return None
+        try:
+            from .team_profile import profile
+            return profile(self.session, team)
+        except Exception:   # noqa: BLE001 - no stints yet: the league fallback through the old shift
+            return None
+
     def rotation_for(self, team: str, overrides: dict, forced_out: set[str]) -> dict | None:
         """
         The skeleton's inputs for project_team: every roster player's stint curve (absent players' curves are the
@@ -247,6 +262,8 @@ class LiveSlate:
             params = replace(params, spread=self.spread(team))
         if params.alloc == "solve" and params.group_targets is None:
             params = replace(params, group_targets=self.group_targets(team))
+        if params.team_profile is None:
+            params = replace(params, team_profile=self.team_profile(team))
         if params.minutes_model == "rotation" and params.rotation is None:
             params = replace(params, rotation=self.rotation_for(team, overrides, forced_out))
         if params.rotation is not None:

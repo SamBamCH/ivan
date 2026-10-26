@@ -42,6 +42,8 @@
     "depth_extra": 0,
     "_depth_note": "depth_cut (2026-10-24): the grid plays the team's measured rotation depth (players with 5+ min over the last 10 games, 8..12) plus depth_extra; the rest get no minutes and leave the pool. Backtest under live-like availability: rotation players' error falls (28+ min MAE 3.98 vs 4.53), the cut fringe is over-penalised (fpts MAE overall 8.34 vs 7.55, bias +1.1). false = every available player keeps his expected minutes.",
     "pool": "depth_cut",
-    "_pool_note": "pool (2026-10-25): which players are tonight's rotation. depth_cut = the measured depth above. last_game = the rotation of the last ordinary game this group played together (5+ min that night), minus tonight's outs, plus the returners (available, usual 15+ min); the depth cut stands when the team has no such game. Backtest with scripts/nba/backtest_skeleton.py --pool before switching."
+    "_pool_note": "pool (2026-10-25): which players are tonight's rotation. depth_cut = the measured depth above. last_game = the rotation of the last ordinary game this group played together (5+ min that night), minus tonight's outs, plus the returners (available, usual 15+ min); the depth cut stands when the team has no such game. Backtest with scripts/nba/backtest_skeleton.py --pool before switching.",
+    "team_profile": true,
+    "_team_profile_note": "team_profile (2026-10-26): the coach's pattern per team from its ordinary games this season, shrunk toward the league (projection/team_profile.py): how long the starters hold the tip and the Q3 tip, the lean to close the half with starters, and the starter / bench minutes the role prior pulls a named starter (or a benched regular) toward (minutes.STARTER_PRIOR_W = 0.6 of the way, scaled by how rarely he started). false = the fixed 3-minute spans and the old +6 start shift."
   }
 }

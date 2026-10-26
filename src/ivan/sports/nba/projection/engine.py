@@ -58,6 +58,7 @@ class ProjectionParams:
     rebalance: bool = False              # True: a pin re-allocates the rest of the team to 241; False: the others keep the model's
                                          # minutes and the difference is left for a person to place (the desk shows it)
     rotation: dict | None = None         # minutes_model "rotation": {"grid": DataFrame, "spreads": {name: sd}, "curve": DataFrame|None}
+    team_profile: dict | None = None     # the coach's pattern (team_profile.profile): starter / bench minutes for the role prior, opening spans for the grid
     salary_blend: bool = True            # blend the minutes baseline toward the salary curve (minutes.salary_weight)
     spread: float | None = None          # the team's own line for the team draw (negative = favoured); None = pick'em
     team_params: dict | None = None      # team_minutes.load_params() when None
@@ -161,7 +162,8 @@ def project_team(
         )
         recs[p.name] = dict(inputs=mi, rates=rates, fpm=fpts_per_minute(rates),
                             priced=bool(p.market_rates),
-                            baseline=baseline_minutes(mi, params.start_shift),
+                            baseline=baseline_minutes(mi, params.start_shift,
+                                                      team_starter_min=(params.team_profile or {}).get("starter_min"), team_bench_min=(params.team_profile or {}).get("bench_min")),
                             hist_sd=None if s is None else float(s["min_ewm_sd"]),
                             games=0 if s is None else int(s["games"]),
                             available=p.available)
@@ -218,7 +220,7 @@ def project_team(
                 alloc.loc[n, "minutes"] = targets[n]
         grid = build_grid(rot.get("curve"), targets, names,
                           starters=[p.name for p in avail if p.starter], groups={p.name: group_of(p.position or "") for p in roster},
-                          locks=locks, vacated=rot.get("vacated"), shares=rot.get("shares"))
+                          locks=locks, vacated=rot.get("vacated"), shares=rot.get("shares"), profile=params.team_profile)
         rot["grid"] = grid; rot["targets"] = dict(targets)
         gm = minutes_of(grid)
         alloc["target"] = alloc["minutes"]

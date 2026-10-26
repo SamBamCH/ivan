@@ -140,8 +140,12 @@ def cover_groups(groups: Sequence[str], target: np.ndarray) -> list:
     return out
 
 
+HALF_BONUS = 0.5           # the half-close lean: starters' scores at minutes 20-23 get HALF_BONUS x (team's starters-on-at-the-half - 2.5) / 2.5
+
+
 def schedule(P: np.ndarray, target: np.ndarray, starters: Sequence[bool], locked: Optional[np.ndarray] = None,
-             is_locked: Optional[np.ndarray] = None, groups: Optional[Sequence[str]] = None, habit: Optional[np.ndarray] = None) -> np.ndarray:
+             is_locked: Optional[np.ndarray] = None, groups: Optional[Sequence[str]] = None, habit: Optional[np.ndarray] = None,
+             open_q1: int = OPENING, open_q3: int = OPENING, half_close: Optional[float] = None) -> np.ndarray:
     """
     The minute-by-minute pass: a boolean grid with five on the floor. `locked` (rows x 48) with `is_locked` (rows) fixes
     those rows exactly (a locked row may be all False: a player painted off); the free rows fill the remaining places.
@@ -171,20 +175,23 @@ def schedule(P: np.ndarray, target: np.ndarray, starters: Sequence[bool], locked
         score[streak >= MAX_STINT] -= 5.0
         score[target <= 0] = -2.0
         score[(rest > 0) & (rest < MIN_STINT)] -= 5.0                 # just went off: he rests a while
+        if half_close is not None and 20 <= m < 24 and any(starters):
+            # the coach's lean toward closing the half with his starters (Denver 4.4 of 5, Golden State 3.1)
+            score = score + np.where(np.asarray(starters, dtype=bool), HALF_BONUS * (float(half_close) - 2.5) / 2.5, 0.0)
         fresh = (streak > 0) & (streak < MIN_STINT)                  # just came on: he stays a while
         fixed_on = {i for i in range(k) if is_locked[i] and locked[i, m]}
         slots = max(0, ON_COURT - len(fixed_on))
         cur = {i for i in on if i in free}
         if m == 0 and any(starters):
             cur = {i for i in cur if starters[i]}
-        elif m < OPENING and any(starters):
-            pass                                                   # the opening unit plays the first minutes
+        elif m < open_q1 and any(starters):
+            pass                                                   # the opening unit plays the first minutes (the team's own span)
         elif m == Q3_OPEN and any(starters):
             # the third quarter opens with the starters again (those with minutes left to give)
             opener = [i for i in free if starters[i] and target[i] > 0 and used[i] < cap[i]]
             cur = set(sorted(opener, key=lambda i: -need[i])[:slots])
-        elif Q3_OPEN < m < Q3_OPEN + OPENING and any(starters):
-            pass                                                   # ...and holds the floor as at the tip
+        elif Q3_OPEN < m < Q3_OPEN + open_q3 and any(starters):
+            pass                                                   # ...and holds the floor as at the tip (the team's own span)
         elif m == CLOSE_FROM:
             # the closing unit: the five with the largest targets who still have minutes, on until the end
             closers = sorted([i for i in free if target[i] > 0 and used[i] < cap[i]], key=lambda i: -target[i])[:slots]
@@ -430,7 +437,7 @@ def apply_depth(targets: Dict[str, float], depth: int, keep: Iterable[str] = ())
 
 def build_grid(curve: Optional[pd.DataFrame], targets: Dict[str, float], available: Sequence[str], starters: Optional[Iterable[str]] = None,
                groups: Optional[Dict[str, str]] = None, locks: Optional[pd.DataFrame] = None, vacated: Optional[Iterable[str]] = None,
-               shares: Optional[Dict[str, Dict[str, float]]] = None) -> pd.DataFrame:
+               shares: Optional[Dict[str, Dict[str, float]]] = None, profile: Optional[dict] = None) -> pd.DataFrame:
     """
     Tonight's grid: index = the available players (targets descending), columns 0..47, exactly five on in every minute
     (locked rows permitting). `targets` are the solve's minutes; `locks` a boolean frame of painted rows (held exactly);
@@ -480,12 +487,17 @@ def build_grid(curve: Optional[pd.DataFrame], targets: Dict[str, float], availab
     st = set(starters or [])
     starter_flags = [n in st for n in names]
     glist = [groups.get(n, "wing") for n in names]
-    grid = schedule(P, tgt, starter_flags, locked if is_locked.any() else None, is_locked if is_locked.any() else None, groups=glist, habit=habit)
+    # the team's own spans (team_profile.profile): how long the starters hold the tip and the Q3 tip, the half-close lean
+    open_q1 = int(round(float(profile["open_q1"]))) if profile and profile.get("open_q1") else OPENING
+    open_q3 = int(round(float(profile["open_q3"]))) if profile and profile.get("open_q3") else OPENING
+    open_q1, open_q3 = max(1, min(8, open_q1)), max(1, min(8, open_q3))
+    grid = schedule(P, tgt, starter_flags, locked if is_locked.any() else None, is_locked if is_locked.any() else None, groups=glist, habit=habit,
+                    open_q1=open_q1, open_q3=open_q3, half_close=(float(profile["half_close"]) if profile and profile.get("half_close") is not None else None))
     free = [not x for x in is_locked]
     grid = merge_short_stints(grid, P, free, groups=glist)
     grid = align_lines(grid, glist, free, tgt)                                                                   # same-line swaps a minute apart snap together...
-    prot = (set(range(Q3_OPEN, Q3_OPEN + OPENING)) if st else set()) | set(range(CLOSE_FROM, MINUTES))
-    grid = balance(grid, tgt, free, P, starters=starter_flags, groups=glist, protected=prot)                      # ...the balance restores the totals they moved
+    prot = (set(range(Q3_OPEN, Q3_OPEN + open_q3)) if st else set()) | set(range(CLOSE_FROM, MINUTES))
+    grid = balance(grid, tgt, free, P, starters=starter_flags, groups=glist, protected=prot | (set(range(open_q1)) if st else set()))   # ...the balance restores the totals they moved
     grid = balance(grid, tgt, free, P, tol=RELAXED_TOL, starters=starter_flags, min_stint=2, groups=glist, protected=prot)   # a row still far off may make 2-minute stints
     if ALIGN_AFTER_BALANCE:
         grid = align_lines(grid, glist, free, tgt)

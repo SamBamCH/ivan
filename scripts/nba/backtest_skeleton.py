@@ -38,6 +38,7 @@ def main() -> int:
     ap.add_argument("--no-depth", action="store_true", help="skip the rotation depth cut")
     ap.add_argument("--depth-extra", type=int, default=0, help="keep this many players beyond the team's measured depth")
     ap.add_argument("--pool", action="store_true", help="add the pool-rule variant: the last ordinary game's rotation minus the outs plus the returners")
+    ap.add_argument("--no-profile", action="store_true", help="skip the team-profile variant (the coach's spans and the starter prior, as known before each game)")
     a = ap.parse_args()
     session = get_session(init_db("nba"))
     box = load_box_scores(session); hist = build_history(box)
@@ -70,6 +71,10 @@ def main() -> int:
                                                                                                       "depth": None if a.no_depth else rotation_depth(box, c["team"], before=d) + a.depth_extra,
                                                                                                       "vacated": [p.name for p in roster if not p.available and p.name in curve.index]}),
         }
+        if not a.no_profile:
+            from ivan.sports.nba.projection.team_profile import profile as team_profile
+            prof = team_profile(session, c["team"], before=d)
+            variants["profile: the coach's spans + the starter prior"] = replace(variants["new: skeleton grid is the projection"], team_profile=prof)
         if a.pool:
             usual = {str(n): float(curve.loc[n, "minutes"]) for n in curve.index}
             season_start = date(d.year if d.month >= 10 else d.year - 1, 10, 1)
@@ -84,7 +89,7 @@ def main() -> int:
             j = j[j.index.isin(avail)]
             j["label"], j["team"], j["date"] = label, c["team"], d
             rows.append(j.reset_index())
-            if label.startswith(("new", "pool")):
+            if label.startswith(("new", "pool", "profile")):
                 zero = params.rotation.get("zero_minutes") or []
                 for n in zero:
                     act = float(c["actual"].loc[n, "minutes"]) if n in c["actual"].index else 0.0

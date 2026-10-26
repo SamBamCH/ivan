@@ -97,13 +97,25 @@ def salary_weight(history_games: int, new_team: bool, games_on_team: int, games_
 _CURVE = _load_salary_curve()
 
 
-def baseline_minutes(p: MinutesInputs, start_shift: float = START_SHIFT) -> float:
+STARTER_PRIOR_W = 0.6      # a named starter who rarely started: this share of the way from his history to the team's starter minutes
+                           # (a usual starter named to the bench: the same share toward the team's bench minutes); start_ewm scales it
+
+
+def baseline_minutes(p: MinutesInputs, start_shift: float = START_SHIFT, team_starter_min: float | None = None,
+                     team_bench_min: float | None = None, prior_w: float = STARTER_PRIOR_W) -> float:
     prior = salary_prior_minutes(p.salary)
     mu = prior if p.min_ewm is None else (1.0 - p.salary_w) * p.min_ewm + p.salary_w * prior
     if not p.starter:
         mu *= float(np.clip(p.play_prob, 0.0, 1.0))
     if p.starter is not None:
-        mu += start_shift * (float(p.starter) - p.start_ewm)
+        if team_starter_min is not None and team_bench_min is not None:
+            # the team's own numbers for the role: a new starter moves most of the way to what this coach gives a starter
+            # (Houston 34.8, Golden State 28.0), a benched regular toward the bench's; a player whose history already
+            # matches the call barely moves (start_ewm = his trailing share of starts)
+            w = prior_w * ((1.0 - p.start_ewm) if p.starter else p.start_ewm)
+            mu = (1.0 - w) * mu + w * (team_starter_min if p.starter else team_bench_min)
+        else:
+            mu += start_shift * (float(p.starter) - p.start_ewm)
     return float(np.clip(mu, 0.0, MAX_ALLOCATED))
 
 
