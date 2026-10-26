@@ -81,3 +81,13 @@ lock, else the last one; the pool as it was, its props and lines, then the proje
 nothing fetched, no capture row written). Either way the pins and drawn grids of the slate you leave are filed under
 `data/nba/input/edits/<draft group>/` and the slate you load gets its own back, so switching away and back loses
 nothing; a failed switch puts the files back where they were. A restore of a full slate takes about a minute (the props).
+
+## Questions and news (2026-10-25 evening)
+
+A questionable player (DK status Q / GTD / D / P, not ruled out) is an open question until you make a call (a minutes
+pin or a starter call). The header counts the slate's questions by team; "no questionable players" means good to go at
+lock barring a surprise lineup. Each team card lists its questions with the player's usual minutes and the latest news
+on file: Rotowire's NBA news page (`ivan.sports.nba.newsfeed`, `scripts/nba/newsfeed.py check|show`), fetched only by
+the Check news button, the auto checkbox (every 5 minutes while the desk runs, off by default) or the script; each
+headline links to the report it cites (the Underdog / Shams / beat tweet). Rotowire gives a date, not a time, so our
+first-seen time is the clock. "new since mapped" marks news that arrived after the team's mapping was saved.

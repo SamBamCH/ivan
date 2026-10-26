@@ -23,6 +23,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 from ivan.sports.nba.ingest import restore_from_archive
+from ivan.sports.nba import newsfeed as NF
 from pathlib import Path
 from typing import Optional
 
@@ -127,6 +128,8 @@ DESK_CONFIG = NBA_DATA_DIR / "jobs" / "desk_config.json"           # config/nba.
 
 MAX_UPLOAD = 5 * 1024 * 1024   # the DK entries export is tens of KB
 ROTATION_MIN = 15.0        # a scratch/questionable above this baseline is news
+QUESTION_STATUSES = {"Q", "GTD", "D", "P"}   # DK statuses that leave the player's night open
+NEWS_AUTO_SECONDS = 300    # the desk's auto-check interval while it is on
 NEAR_TIP_MIN = 75          # minutes before tip when an unconfirmed lineup becomes a warning
 MINUTES_DEV = 8.0          # model minutes this far from history is a role change
 MARKET_GAP = 0.20          # market mean vs history-only projection, relative
@@ -489,7 +492,7 @@ class Desk:
                     cell_tips[m] = txt
                 for m, no in fouls.get(n, []):
                     cell_tips[m] = (f"foul {no}" if no is not None else "technical") + (f" · {cell_tips[m]}" if cell_tips[m] else "")
-                rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None,
+                rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, status=((names[n].status or '').upper() if n in names else ''),
                                  starter=bool(cells[0]), out=bool(is_out.get(n, False)), gone=n not in names, vacated=False, locked=False, minutes=mins, target=None,
                                  hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips,
                                  group=SK_group(names[n].position) if n in names else "wing", rank=ROT._spot_rank(names[n].position if n in names else None, None),
@@ -522,7 +525,7 @@ class Desk:
             mins = int(grid.loc[n].sum())
             if mins <= 0 and n not in locked:
                 continue
-            rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None,
+            rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, status=((names[n].status or '').upper() if n in names else ''),
                              starter=n in starters, out=False, gone=False, vacated=False, locked=n in locked, minutes=mins,
                              target=None if n not in targets else round(float(targets[n]), 1),
                              hist=hist, cells=[bool(x) for x in grid.loc[n].values], marks=None, pf=None, foul_short=False,
@@ -533,7 +536,7 @@ class Desk:
         for n in names:
             if is_out.get(n) and curve is not None and n in curve.index and float(curve.loc[n, "minutes"]) >= 3:
                 cells = [bool(float(curve.loc[n, m]) >= 0.5) for m in range(48)]
-                rows.append(dict(name=n, key=n, pos=names[n].position, salary=names[n].salary, starter=n in starters, out=True, gone=False, vacated=True,
+                rows.append(dict(name=n, key=n, pos=names[n].position, salary=names[n].salary, status=(names[n].status or '').upper(), starter=n in starters, out=True, gone=False, vacated=True,
                                  locked=False, minutes=int(round(float(curve.loc[n, "minutes"]))), target=None, hist=float(curve.loc[n, "minutes"]),
                                  cells=cells, marks=None, pf=None, foul_short=False, heir_of="", spots=[-1] * 48, dropped=n in dropped,
                                  group=SK_group(names[n].position), rank=ROT._spot_rank(names[n].position, None)))
@@ -750,6 +753,67 @@ class Desk:
                 diff.append(f"{short(n)} {st}")
         return dict(state="changed" if diff else "mapped", diff=diff, saved_at=g.attrs.get("saved_at"))
 
+    def questions(self, team: str, now: Optional[datetime] = None) -> list:
+        """
+        The team's questionable players (DK status Q / GTD / D / P, not ruled out): who they are, what they usually play,
+        whether you have made a call (a minutes pin or a starter call answers the question), and the latest news on file
+        for each with its age and whether it arrived after the team was mapped. No questions = good to go at lock, barring
+        a surprise lineup.
+        """
+        now = now or datetime.now()
+        from ivan.sports.nba.projection.live import OUT_STATUSES
+        hist = {r["key"]: r for r in self.team_rows(team)} if team in self.proj else {}
+        ms = self.mapped_state(team)
+        mapped_at = None
+        if ms.get("state") in ("mapped", "changed") and ms.get("saved_at"):
+            try:
+                mapped_at = datetime.fromisoformat(str(ms["saved_at"]))
+            except ValueError:
+                mapped_at = None
+        qs = []
+        for p in self.players(team):
+            st = (p.status or "").upper()
+            if st not in QUESTION_STATUSES or st in OUT_STATUSES:
+                continue
+            n = normalize_name(p.name); ov = override_of(self.overrides, n)
+            call = None
+            if ov.get("minutes") is not None:
+                call = "scratched" if ov["minutes"] <= 0 else f"pinned {ov['minutes']:g} min"
+            elif ov.get("starter") is not None:
+                call = "starts" if ov["starter"] > 0 else "benched"
+            r = hist.get(n, {})
+            qs.append(dict(name=n, raw=p.name, status=st, hist=r.get("hist_min"), minutes=r.get("minutes"), starter=(r.get("starter") == "S"),
+                           answered=call is not None, call=call, salary=p.salary, news=None))
+        if qs:
+            news = NF.latest(self.session, [q["name"] for q in qs], hours=72, now=now)
+            for q in qs:
+                items = news.get(q["name"]) or []
+                if items:
+                    x = items[0]
+                    q["news"] = dict(headline=x.headline, text=x.text, url=x.source_url or x.url, rw=x.url, injury=x.injury, age=NF.age(x.first_seen, now),
+                                     first_seen=x.first_seen, new=(x.first_seen > mapped_at) if mapped_at else ((now - x.first_seen) <= timedelta(hours=3)),
+                                     n=len(items))
+        qs.sort(key=lambda q: (q["answered"], -(q["hist"] or 0)))
+        return qs
+
+    def questions_summary(self, now: Optional[datetime] = None) -> dict:
+        now = now or datetime.now()
+        teams = sorted({p.team for p in self.slate.players if p.team})
+        by = {t: self.questions(t, now) for t in teams}
+        by = {t: q for t, q in by.items() if q}
+        return dict(n=sum(len(q) for q in by.values()), open=sum(1 for q in by.values() for x in q if not x["answered"]),
+                    with_news=sum(1 for q in by.values() for x in q if x["news"]), new=sum(1 for q in by.values() for x in q if x["news"] and x["news"]["new"]),
+                    teams={t: [f"{x['raw'].split()[-1]} {x['status']}" + (" ✓" if x["answered"] else "") for x in q] for t, q in by.items()})
+
+    def news_status(self, now: Optional[datetime] = None) -> dict:
+        now = now or datetime.now()
+        pool = [p.name for p in self.slate.players]
+        recent = NF.latest(self.session, pool, hours=24, now=now)
+        n = sum(len(v) for v in recent.values())
+        last = getattr(self, "news_checked_at", None)
+        return dict(checked_at=last, checked=NF.age(last, now) if last else None, auto=bool(getattr(self, "news_auto", False)), n_slate=n,
+                    newest=max((v[0].first_seen for v in recent.values()), default=None))
+
     def mapped_summary(self) -> dict:
         teams = sorted({p.team for p in self.slate.players if p.team})
         states = {t: self.mapped_state(t) for t in teams}
@@ -958,6 +1022,7 @@ class Desk:
             to_place = 0.0
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
                     assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team), mapped=self.mapped_state(team),
+                    questions=self.questions(team, now),
                     last_game=self.game_grid(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
@@ -1024,6 +1089,7 @@ class Desk:
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
                     slates=slates, slate_days=self.slate_days(now, dg), props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
+                    questions=self.questions_summary(now), news=self.news_status(now),
                     overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)))
 
 
@@ -1319,6 +1385,56 @@ def _push_feed(log) -> None:
         feed.push("nba", log=log)
     except Exception as e:   # noqa: BLE001 - the publish itself succeeded; the push is best effort
         log(f"feed push failed: {type(e).__name__}: {e}")
+
+
+def _news_check(log) -> dict:
+    sess = get_session(engine)
+    try:
+        r = NF.check(sess, log=log)
+        pool = {p.name for p in desk.slate.players}
+        on_slate = [x for x in r["new"] if x.player_name in pool]
+        desk.news_checked_at = r["fetched_at"]
+        return dict(new=len(r["new"]), on_slate=on_slate, total=r["total"])
+    finally:
+        sess.close()
+
+
+@app.post("/news/check")
+def news_check(request: Request):
+    """Fetch Rotowire's news page once, store the new headlines, say which are about this slate's players."""
+    with LOCK:
+        try:
+            r = _news_check(desk.flash.append)
+            desk.flash.append(f"news: {r['new']} new headline(s) of {r['total']}" + (": " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]) if r["on_slate"] else "; none on this slate"))
+        except Exception as e:   # noqa: BLE001
+            desk.flash.append(f"news check failed: {type(e).__name__}: {e}")
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+
+
+@app.post("/news/auto")
+def news_auto(request: Request, on: str = Form("")):
+    """Auto-check every NEWS_AUTO_SECONDS while the desk runs (off by default; nothing else fetches on its own)."""
+    with LOCK:
+        desk.news_auto = bool(on)
+        desk.flash.append("news auto-check " + ("on: every 5 minutes while the desk runs" if desk.news_auto else "off"))
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+
+
+def _news_loop():
+    while True:
+        time.sleep(NEWS_AUTO_SECONDS)
+        if not getattr(desk, "news_auto", False):
+            continue
+        try:
+            with LOCK:
+                r = _news_check(lambda m: None)
+                if r["on_slate"]:
+                    desk.flash.append(f"news: {len(r['on_slate'])} new on this slate: " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]))
+        except Exception:   # noqa: BLE001 - the next tick tries again
+            pass
+
+
+threading.Thread(target=_news_loop, name="ivan-news", daemon=True).start()
 
 
 @app.post("/reload")

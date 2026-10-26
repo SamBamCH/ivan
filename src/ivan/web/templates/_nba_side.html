@@ -2,17 +2,20 @@
   {{ c.team }}
   <span class="pill {{ c.starters }}">lineup {{ c.starters }}</span>
   {% if c.mapped.state == 'mapped' %}<span class="pill mapped" title="every row with minutes is held and nothing has changed since (saved {{ c.mapped.saved_at }})">mapped</span>{% elif c.mapped.state == 'changed' %}<span class="pill changed" title="held, but the inputs moved since it was saved {{ c.mapped.saved_at }}: look again, then Map">changed: {{ c.mapped.diff|join(', ') }}</span>{% else %}<span class="pill unmapped" title="paint or accept the fill, then Map (hold all) to hold the whole grid{% if c.mapped.diff %} · {{ c.mapped.diff|join(', ') }}{% endif %}">unmapped</span>{% endif %}
+  {% if c.questions %}<span class="pill q" title="questionable players: see the list under the late-news line">{{ c.questions|length }} questionable{% set nn = c.questions|selectattr('news')|selectattr('news.new')|list %}{% if nn %} · {{ nn|length }} with new news{% endif %}</span>{% endif %}
   {% if c.rotation.locked %}<span class="pill lk">{{ c.rotation.locked|length }} locked</span>{% endif %}
   {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
   <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
 </h2>
 <form class="news" hx-post="{{ root }}/team/{{ c.team }}/news" hx-target="#card-{{ c.team }}" hx-swap="innerHTML" title="late news in one move: the call, the team re-allocated, the pool published, the next job queued">
   <b>late news</b>
-  <select name="player">{% for r in c.rows %}<option value="{{ r.key }}">{{ r.name }}{% if r.status %} ({{ r.status }}){% endif %}</option>{% endfor %}</select>
+  <select name="player">{% for r in (c.rows|selectattr('status', 'in', ['Q', 'GTD', 'D', 'P'])|list) + (c.rows|rejectattr('status', 'in', ['Q', 'GTD', 'D', 'P'])|list) %}<option value="{{ r.key }}">{{ r.name }}{% if r.status %} ({{ r.status }}){% endif %}</option>{% endfor %}</select>
   <select name="call"><option value="out">is OUT</option><option value="starts">starts</option><option value="bench">to the bench</option><option value="back">back in (clear the call)</option></select>
   <select name="then"><option value="sim" {% if not c.locked %}selected{% endif %}>publish, then sim + choose</option><option value="lateswap" {% if c.locked %}selected{% endif %}>publish, then late swap</option><option value="none">publish only</option></select>
   <button type="submit">Go</button>
 </form>
+{% if c.questions %}<div class="questions">{% for q in c.questions %}<div class="q {% if q.answered %}answered{% endif %}"><b>{{ q.raw }}</b> <span class="status q">{{ q.status }}</span>{% if q.hist %} · usual {{ q.hist|round(0)|int }} min{% endif %}{% if q.starter %} · starter{% endif %}{% if q.answered %} · <i>your call: {{ q.call }}</i>{% else %} · <i>no call yet</i>{% endif %}
+    {% if q.news %} · <a href="{{ q.news.url }}" target="_blank" title="{{ q.news.text }}">{{ q.news.headline }}</a>{% if q.news.injury %} <span class="muted">({{ q.news.injury }})</span>{% endif %} <span class="muted small">{{ q.news.age }}{% if q.news.n > 1 %} · {{ q.news.n }} items{% endif %}</span>{% if q.news.new %} <b class="warn">{% if c.mapped.state in ('mapped', 'changed') %}new since mapped{% else %}new{% endif %}</b>{% endif %}{% else %} · <span class="muted small">no news on file: check news</span>{% endif %}</div>{% endfor %}</div>{% endif %}
 <div class="rot-pair">
 {% with rot=c.rotation, info=c.info %}{% include "_nba_rotation.html" %}{% endwith %}
 {% with rot=c.last_game %}{% include "_nba_rotation.html" %}{% endwith %}

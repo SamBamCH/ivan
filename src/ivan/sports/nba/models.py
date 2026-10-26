@@ -381,3 +381,27 @@ class StartingLineups(NBABase):
     confirmed   = Column(Boolean, nullable=False, default=False)  # True if lineup is confirmed, False if expected
     fetched_at  = Column(DateTime, nullable=True)                 # when the Rotowire page was read
 
+
+
+class NBANews(NBABase):
+    """
+    One news item per Rotowire headline (ivan.sports.nba.newsfeed): the player, team, injury, headline, the report's text
+    and its source link (the tweet or article it cites: Underdog, Shams, the beat), Rotowire's date and when we first saw
+    it. Rotowire gives a date only, so first_seen is the clock: poll every few minutes and it is the news time within
+    the poll interval. Never updated; the id is Rotowire's headline id.
+    """
+    __tablename__ = "nba_news"
+
+    id          = Column(Integer,  primary_key=True)                # Rotowire's headline id
+    player_name = Column(String,   nullable=False, index=True)      # normalized
+    player_raw  = Column(String,   nullable=True)
+    team        = Column(String,   nullable=True, index=True)
+    position    = Column(String,   nullable=True)
+    injury      = Column(String,   nullable=True)
+    injured     = Column(Boolean,  nullable=True)                   # Rotowire's is-injured flag on the item
+    headline    = Column(String,   nullable=False)
+    text        = Column(String,   nullable=True)
+    source_url  = Column(String,   nullable=True)
+    url         = Column(String,   nullable=True)                   # Rotowire's headline page
+    date        = Column(String,   nullable=True)                   # Rotowire's date text
+    first_seen  = Column(DateTime, nullable=False, index=True)
