@@ -520,8 +520,20 @@ def last_game_grid(session: Session, team: str, before: Optional[date] = None, s
 
 
 # ----------------------------------------------------------------------------- drawn rotations (the desk's locked rows)
+PUBLISHED_ROTATIONS_DIR = INPUT_DIR / "published" / "rotations"   # a consumer's base layer: the producer's painted grids as pulled
+
+
 def drawn_path(team: str) -> Path:
     return ROTATIONS_DIR / f"{team}.json"
+
+
+def drawn_source(team: str) -> Optional[str]:
+    """Where the team's grid comes from: 'local' (painted on this machine), 'published' (the producer's, pulled), or None."""
+    if drawn_path(team).exists():
+        return "local"
+    if (PUBLISHED_ROTATIONS_DIR / f"{team}.json").exists():
+        return "published"
+    return None
 
 
 def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[Iterable[str]] = None, fingerprint: Optional[dict] = None) -> Path:
@@ -541,14 +553,17 @@ def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[I
 
 
 def load_drawn(team: str) -> Optional[pd.DataFrame]:
-    """The whole saved grid (locked rows and the fill that was saved with them); .attrs["locked"] names the locked rows."""
+    """The whole saved grid (locked rows and the fill that was saved with them); .attrs["locked"] names the locked rows.
+    This machine's own grid first, else the producer's published one (a consumer); .attrs["source"] says which."""
     p = drawn_path(team)
     if not p.exists():
-        return None
+        p = PUBLISHED_ROTATIONS_DIR / f"{team}.json"
+        if not p.exists():
+            return None
     d = json.loads(p.read_text())
     g = pd.DataFrame(np.array(d["grid"], dtype=bool).reshape(len(d["players"]), MINUTES), index=d["players"], columns=list(range(MINUTES)))
     g.attrs["locked"] = list(d.get("locked", d["players"]))
-    g.attrs["fingerprint"] = d.get("fingerprint"); g.attrs["saved_at"] = d.get("saved_at")
+    g.attrs["fingerprint"] = d.get("fingerprint"); g.attrs["saved_at"] = d.get("saved_at"); g.attrs["source"] = "local" if p == drawn_path(team) else "published"
     return g
 
 

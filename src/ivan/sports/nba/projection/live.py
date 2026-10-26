@@ -48,8 +48,26 @@ def apply_fpts_overrides(proj: pd.DataFrame, overrides: dict) -> pd.DataFrame:
     return proj
 
 
-def read_overrides_full(path: Path | None = None) -> dict[str, dict]:
-    """player -> {minutes, fppm, min_low, min_high, starter} (any of them None): the hand overrides file (columns player, minutes[, fppm, min_low, min_high, starter])."""
+PUBLISHED_DIR = MINUTES_OVERRIDES_CSV.parent / "published"      # a consumer's base layer: the producer's edits as pulled (core.feed)
+PUBLISHED_OVERRIDES_CSV = PUBLISHED_DIR / "minutes_overrides.csv"
+
+
+def read_overrides_full(path: Path | None = None, layered: bool = True) -> dict[str, dict]:
+    """
+    player -> {minutes, fppm, ..., fpts, pub} (any of them None): the hand overrides. With no path and `layered`, the
+    published base layer (the producer's pins, when this machine pulls a feed) under this machine's own file: a local
+    value wins per field, a blank local field falls back to the published one. `layered=False` reads one file as is.
+    """
+    if path is None and layered and PUBLISHED_OVERRIDES_CSV.exists():
+        base = read_overrides_full(PUBLISHED_OVERRIDES_CSV, layered=False)
+        local = read_overrides_full(MINUTES_OVERRIDES_CSV, layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}
+        out = {n: dict(v) for n, v in base.items()}
+        for n, v in local.items():
+            rec = out.setdefault(n, {k: None for k in OVERRIDE_KEYS})
+            for k in OVERRIDE_KEYS:
+                if v.get(k) is not None:
+                    rec[k] = v[k]
+        return out
     path = Path(path) if path else MINUTES_OVERRIDES_CSV
     if not path.exists():
         return {}
@@ -77,7 +95,7 @@ def write_overrides(overrides: dict, path: Path | None = None) -> Path:
     """Write the overrides file. Values are a minutes pin (float) or a dict with any of minutes, fppm, min_low, min_high; floats keep the player's other columns from the file."""
     path = Path(path) if path else MINUTES_OVERRIDES_CSV
     path.parent.mkdir(parents=True, exist_ok=True)
-    old = read_overrides_full(path) if path.exists() else {}
+    old = read_overrides_full(path, layered=False) if path.exists() else {}     # this machine's own file only: the published layer is never copied in
     rows = []
     for name, v in overrides.items():
         rec = dict(old.get(name, {}))
@@ -89,6 +107,13 @@ def write_overrides(overrides: dict, path: Path | None = None) -> Path:
             rows.append({"player": name, **{k: rec.get(k) for k in OVERRIDE_KEYS}})
     pd.DataFrame(rows, columns=["player", *OVERRIDE_KEYS]).to_csv(path, index=False)
     return path
+
+
+def override_layers(name: str) -> tuple[dict, dict]:
+    """(published, local) overrides for a player: what the producer pinned and what this machine typed on top (empty dicts when none)."""
+    pub = read_overrides_full(PUBLISHED_OVERRIDES_CSV, layered=False).get(name, {}) if PUBLISHED_OVERRIDES_CSV.exists() else {}
+    loc = read_overrides_full(MINUTES_OVERRIDES_CSV, layered=False).get(name, {}) if MINUTES_OVERRIDES_CSV.exists() else {}
+    return ({k: v for k, v in pub.items() if v is not None}, {k: v for k, v in loc.items() if v is not None})
 
 
 def override_of(overrides: dict, name: str) -> dict:

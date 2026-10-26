@@ -49,6 +49,11 @@ TABLES = {
         "live": ["nba_player", "odds", "nba_market_rate", "game_odds", "starting_lineups", "historical_contest_information", "payouts"],
         "reference": ["nba_stats", "nba_stint", "nba_projection_capture", "archived_slate", "projection_snapshot", "classic_contest_metadata"],
         "files": ["data/nba/models", "data/nba/input/historical_lines.csv", "data/nba/derived", "data/nba/diagnostics/scorecard"],
+        # the producer's edits (minutes pins, the sim / public overrides, the painted grids) travel with every live bundle;
+        # the consumer keeps them under data/nba/input/published/ as the base layer its own edits sit on (projection.live)
+        "live_files": ["data/nba/input/minutes_overrides.csv", "data/nba/input/rotations"],
+        "live_files_root": "data/nba/input",
+        "published_dir": "data/nba/input/published",
         "db": "data/nba/nba_history.sqlite",
     },
 }
@@ -92,6 +97,19 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
         n = dump_tables(db_path, spec[part], gz)
         manifest[part] = {"stamp": stamp, "sha256": _sha(gz), "bytes": n, "tables": spec[part]}
         log(f"feed {sport} {part}: {n / 1e6:.1f} MB")
+        if part == "live" and spec.get("live_files"):
+            lf = d / "live_files"; shutil.rmtree(lf, ignore_errors=True); lf.mkdir(parents=True)
+            root = PROJECT_ROOT / spec["live_files_root"]
+            for rel in spec["live_files"]:
+                src = PROJECT_ROOT / rel
+                if src.is_dir():
+                    shutil.copytree(src, lf / src.relative_to(root), dirs_exist_ok=True)
+                elif src.exists():
+                    (lf / src.relative_to(root)).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, lf / src.relative_to(root))
+            listing = {str(q.relative_to(lf)): _sha(q) for q in lf.rglob("*") if q.is_file()}
+            (d / "live_files.json").write_text(json.dumps(listing, indent=0))
+            manifest["live_files"] = {"stamp": stamp, "count": len(listing)}
+            log(f"feed {sport} live files: {len(listing)} (the producer's pins and grids)")
         if part == "reference":
             files = d / "files"; shutil.rmtree(files, ignore_errors=True)
             for rel in spec["files"]:
@@ -192,6 +210,7 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
     tables, and the reference files into this checkout. Returns what changed.
     """
     base = base_url.rstrip("/") + f"/{sport}"
+    spec = TABLES[sport]
     state_dir = Path(state_dir); state_dir.mkdir(parents=True, exist_ok=True)
     state_p = state_dir / f"{sport}.json"
     state = json.loads(state_p.read_text()) if state_p.exists() else {}
@@ -210,6 +229,14 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
             raise RuntimeError(f"{part} bundle digest mismatch; try again")
         changed[part] = apply(sport, gz, db_path, log)
         state[part] = {"stamp": m["stamp"], "pulled_at": datetime.now().isoformat(timespec="seconds")}
+        if part == "live" and manifest.get("live_files") and spec.get("published_dir"):
+            # the producer's edits become this machine's published base layer (replaced whole: a pin the producer lifted is lifted here too)
+            listing = json.loads(fetch(f"{base}/live_files.json", token, tmp / "live_files.json").read_text())
+            pub = PROJECT_ROOT / spec["published_dir"]; shutil.rmtree(pub, ignore_errors=True); pub.mkdir(parents=True, exist_ok=True)
+            for rel in listing:
+                fetch(f"{base}/live_files/{rel}", token, pub / rel)
+            log(f"feed {sport}: {len(listing)} published edit file(s) (the producer's pins and grids)"); changed["live_files"] = len(listing)
+            state["live_files"] = {"stamp": manifest["live_files"]["stamp"]}
         if part == "reference" and manifest.get("files"):
             listing = json.loads(fetch(f"{base}/files.json", token, tmp / "files.json").read_text())
             n = 0

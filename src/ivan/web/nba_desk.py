@@ -47,7 +47,7 @@ from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DI
 from ivan.web.jobs import JobRunner
 from ivan.web import auth
 from ivan.sports.nba.projection.engine import ProjectionParams
-from ivan.sports.nba.projection.live import LiveSlate, OVERRIDE_KEYS, override_of, read_overrides_full, write_overrides
+from ivan.sports.nba.projection.live import LiveSlate, OVERRIDE_KEYS, PUBLISHED_OVERRIDES_CSV, override_layers, override_of, read_overrides_full, write_overrides
 from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team
 from ivan.sports.nba.projection import rotation as ROT
@@ -1034,6 +1034,18 @@ class Desk:
             self.overrides.pop(name, None)
         write_overrides(self.overrides)                    # persisted at once; a reload or a capture tick cannot lose it
 
+    def _layer_of(self, name: str) -> dict:
+        """{field: 'local' | 'published'} for the player's pins: what this machine typed vs what the producer published (a consumer)."""
+        if not PUBLISHED_OVERRIDES_CSV.exists():
+            return {}
+        cache = self.__dict__.setdefault("_layers_cache", {})
+        if cache.get("_stamp") != (self.pool_stamp, len(self.overrides)):
+            cache.clear(); cache["_stamp"] = (self.pool_stamp, len(self.overrides))
+        if name not in cache:
+            pub, loc = override_layers(name)
+            cache[name] = {**{k: "published" for k in pub}, **{k: "local" for k in loc}}
+        return cache[name]
+
     def team_rows(self, team: str) -> list[dict]:
         proj, hist = self.proj[team], self.hist_only[team]
         review_flags = {r["name"]: r["flags"] for r in self.review(team)["rows"]}
@@ -1114,6 +1126,7 @@ class Desk:
                              pinned=ov.get("minutes") is not None, pin=ov.get("minutes"), starter_pin=ov.get("starter"),
                              fppm_pin=ov.get("fppm"), low_pin=ov.get("min_low"), high_pin=ov.get("min_high"), stats=stats,
                              fpts_pin=ov.get("fpts"), pub_pin=ov.get("pub"), fpts_model=None if r is None else float(r.get("fpts_model", r["fpts_mean"])),
+                             layer=self._layer_of(name),
                              fpts=fpts, sd=None if r is None else float(r["fpts_std"]),
                              fpm=None if r is None else float(r["fpm"]),
                              season_games=cur["games"] if cur else 0, season_min=cur["minutes"] if cur else None, season_fpm=cur["fpm"] if cur else None,
@@ -1176,6 +1189,8 @@ class Desk:
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
                     assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team), mapped=self.mapped_state(team),
                     questions=self.questions(team, now), scenarios=self.scenario_list(team),
+                    published=dict(grid=ROT.drawn_source(team), pins=sum(1 for r in rows if "published" in r.get("layer", {}).values()),
+                                   own=sum(1 for r in rows if "local" in r.get("layer", {}).values()), consumer=PUBLISHED_OVERRIDES_CSV.exists() or ROT.PUBLISHED_ROTATIONS_DIR.is_dir()),
                     last_game=self.game_grid(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
@@ -1970,7 +1985,8 @@ def rotation_restore(request: Request, team: str, player: str = Form(...)):
 def rotation_clear(request: Request, team: str):
     with LOCK:
         n = desk.clear_rotation(team)
-        desk.flash.append(f"{team}: locks cleared" + (f", {n} typed minutes lifted" if n else "") + "; the grid is the model's")
+        back = "the published grid and pins" if ROT.drawn_source(team) == "published" or PUBLISHED_OVERRIDES_CSV.exists() else "the model's"
+        desk.flash.append(f"{team}: locks cleared" + (f", {n} typed minutes lifted" if n else "") + f"; the grid is {back}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
