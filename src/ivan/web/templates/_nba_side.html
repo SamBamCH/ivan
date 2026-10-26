@@ -22,8 +22,7 @@
 </div>
 <div class="rot-pair">
 {% with rot=c.rotation, info=c.info %}{% include "_nba_rotation.html" %}{% endwith %}
+<details class="hist-box"><summary>played game{% if c.last_game.last_game %} · {{ c.last_game.last_game }}{% endif %}{% if c.last_game.match %}{% if c.last_game.match.exact %} · the last game with tonight's group{% else %} · closest to tonight's group: {{ c.last_game.match.match }}{% endif %}{% if c.last_game.match.odd %} · odd game{% endif %}{% endif %}{% if c.last_game.proj %} · vs our projection{% endif %}</summary>
 {% with rot=c.last_game %}{% include "_nba_rotation.html" %}{% endwith %}
-</div>
-<details class="players-box"><summary>players · rates, bands and the books</summary>
-{% with card=c %}{% include "_nba_team.html" %}{% endwith %}
 </details>
+</div>
