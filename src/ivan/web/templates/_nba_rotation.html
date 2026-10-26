@@ -74,7 +74,9 @@
       </tr>
     {% endfor %}
     </tbody>
-    <tbody class="foot"><tr><td class="rl fz" style="left:0"></td><td class="rn fz muted small" style="left:16px">on floor</td><td class="pos fz" style="left:230px"></td>{% for c in rot.counts %}<td class="rc cnt fz {% if c != 5 %}bad{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}" style="left:{{ 274 + loop.index0 * 12 }}px">{{ c }}</td>{% endfor %}</tr></tbody>
+    {% set tot = rot.rows|rejectattr('out')|rejectattr('vacated')|rejectattr('gone')|map(attribute='minutes')|sum %}
+    <tbody class="foot"><tr><td class="rl fz" style="left:0"></td><td class="rn fz muted small" style="left:16px">on floor</td><td class="pos fz" style="left:230px"></td>{% for c in rot.counts %}<td class="rc cnt fz {% if c != 5 %}bad{% endif %} {% if loop.index0 % 12 == 0 %}q{% endif %}" style="left:{{ 274 + loop.index0 * 12 }}px">{{ c }}</td>{% endfor %}
+      <td class="px n mintot {% if rot.kind != 'last' and tot != 240 %}bad{% endif %}" title="the grid's minutes added up (240 = 48 minutes x 5 on the floor; overtime adds to it)"><b>{{ tot }}</b></td>{% if rights|length > 1 %}<td class="px muted small" colspan="{{ rights|length - 1 }}">total minutes</td>{% endif %}</tr></tbody>
     {% if rot.lanes %}<tbody class="lanes" title="each spot traced through the game: who held it, minute by minute">
     {% for L in rot.lanes %}<tr><td class="rl fz" style="left:0"></td><td class="rn fz muted small" style="left:16px"><i class="sw s{{ L.spot }}"></i>{{ L.spot + 1 }} {{ L.owner }}</td><td class="pos fz" style="left:230px"></td>
       {% for sg in L.segments %}<td class="lane {% if sg.key %}s{{ L.spot }}{% else %}gap{% endif %} {% if sg.start % 12 == 0 %}q{% endif %}" colspan="{{ sg.length }}" title="{% if sg.key %}{{ sg.key }} · {{ sg.length }} min{% else %}nobody in this spot{% endif %}">{% if sg.key %}{{ sg.short[:(sg.length * 1.6)|int] }}{% endif %}</td>{% endfor %}
