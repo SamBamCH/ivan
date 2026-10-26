@@ -568,6 +568,15 @@ class Desk:
             benched.append(dict(name=n, key=n, pos=p.position, salary=p.salary, hist=hist, status=(p.status or "").upper(), dropped=n in dropped,
                                 add_minutes=round(max(ADD_BACK_MINUTES, hist or 0.0))))
         benched.sort(key=lambda r: -(r["salary"] or 0))
+        # they sit in the grid as blank rows (paint one to give him minutes; a dropped player shows DROPPED with his + to restore)
+        out_rows = [r for r in rows if r.get("vacated") or r.get("out")]
+        rows = [r for r in rows if not (r.get("vacated") or r.get("out"))]
+        for b in benched:
+            rows.append(dict(name=b["name"], key=b["key"], pos=b["pos"] or "", salary=b["salary"], status=b["status"], starter=False, out=False, gone=False,
+                             vacated=False, locked=False, minutes=0, target=None, hist=b["hist"], cells=[False] * 48, marks=[None] * 48, pf=0,
+                             spots=[-1] * 48, tips=[None] * 48, group=SK_group(b["pos"] or ""), rank=ROT._spot_rank(b["pos"], None), foul_short=False,
+                             heir_of="", dropped=b["dropped"], bench=True))
+        rows += out_rows
         avail_keys = {r["key"] for r in rows}
         shares_json = json.dumps({o: {i: round(v, 3) for i, v in hv.items() if i in avail_keys} for o, hv in shares.items() if o in avail_keys})
         return {**base, "kind": "model" if source != "propose" else "propose", "rows": rows, "counts": ROT.column_counts(grid), "drawn": bool(locked),
@@ -1100,6 +1109,7 @@ class Desk:
                              min_p90=None if r is None or pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"]),
                              pinned=ov.get("minutes") is not None, pin=ov.get("minutes"), starter_pin=ov.get("starter"),
                              fppm_pin=ov.get("fppm"), low_pin=ov.get("min_low"), high_pin=ov.get("min_high"), stats=stats,
+                             fpts_pin=ov.get("fpts"), pub_pin=ov.get("pub"), fpts_model=None if r is None else float(r.get("fpts_model", r["fpts_mean"])),
                              fpts=fpts, sd=None if r is None else float(r["fpts_std"]),
                              fpm=None if r is None else float(r["fpm"]),
                              season_games=cur["games"] if cur else 0, season_min=cur["minutes"] if cur else None, season_fpm=cur["fpm"] if cur else None,
@@ -1736,7 +1746,8 @@ def _num(raw: str, label: str) -> Optional[float]:
 
 
 @app.post("/team/{team}/pin", response_class=HTMLResponse)
-def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form("")):
+def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form(""),
+        fpts: str = Form(""), pub: str = Form("")):
     """One row's hand values: blank clears that field. Minutes 0 scratches."""
     if (b := _busy(request)) is not None:
         return b
@@ -1757,8 +1768,18 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         old = override_of(desk.overrides, key)
         if desk.priced_total(team, key) and new_fppm is not None and new_fppm != old.get("fppm"):
             desk.flash.append(f"{key}: fppm overridden on a priced player; the books' total no longer holds for him")
-        desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi)
+        new_fpts, new_pub = _num(fpts, "fpts"), _num(pub, "pub")
+        desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub)
         desk.reproject(team)                                  # the solve re-balances the team around the edit
+        if new_pub != old.get("pub"):
+            # the public number moved: the field and ownership are built on it, so they are rebuilt now (a few seconds)
+            try:
+                t0 = time.time()
+                refresh_ownership(desk.session, log=lambda m: None)
+                desk.flash.append(f"{key}: public projection {'set to %g' % new_pub if new_pub is not None else 'back to the replica'}; field and ownership rebuilt in {time.time() - t0:.0f}s")
+            except Exception as e:   # noqa: BLE001
+                desk.flash.append(f"{key}: public projection saved, but the field did not rebuild: {type(e).__name__}: {e}")
+            desk.rebuild()
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 

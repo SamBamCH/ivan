@@ -21,7 +21,31 @@ from .engine import project_team, RosterPlayer, ProjectionParams
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 
 
-OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter")      # starter: 1 / 0 overrides the Rotowire lineup for the player
+OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter", "fpts", "pub")
+# starter: 1 / 0 overrides the Rotowire lineup for the player; fpts: the fantasy points the sim and the lineups use for him
+# (the model's number is kept beside it); pub: the public projection the field and ownership are built on
+
+
+def apply_fpts_overrides(proj: pd.DataFrame, overrides: dict) -> pd.DataFrame:
+    """
+    A hand fpts override replaces the model's fantasy points for the sim and the lineups: fpts_mean becomes the override,
+    the sd and the quantiles scale with it, and the model's own number is kept in fpts_model (the desk shows both).
+    """
+    if "fpts_mean" not in proj or not len(proj):
+        return proj
+    proj = proj.copy()
+    proj["fpts_model"] = proj["fpts_mean"].astype(float)
+    for name, ov in (overrides or {}).items():
+        v = ov.get("fpts") if isinstance(ov, dict) else None
+        if v is None or name not in proj.index:
+            continue
+        old = float(proj.loc[name, "fpts_mean"]); ratio = (float(v) / old) if old > 0 else 1.0
+        proj.loc[name, "fpts_mean"] = float(v)
+        if "fpts_std" in proj and pd.notna(proj.loc[name, "fpts_std"]):
+            proj.loc[name, "fpts_std"] = float(proj.loc[name, "fpts_std"]) * ratio
+        if "quantiles" in proj and isinstance(proj.loc[name, "quantiles"], list):
+            proj.at[name, "quantiles"] = [round(float(q) * ratio, 2) for q in proj.loc[name, "quantiles"]]
+    return proj
 
 
 def read_overrides_full(path: Path | None = None) -> dict[str, dict]:
@@ -227,8 +251,9 @@ class LiveSlate:
             params = replace(params, rotation=self.rotation_for(team, overrides, forced_out))
         if params.rotation is not None:
             self._last_rotation = {**getattr(self, "_last_rotation", {}), team: params.rotation}
-        return project_team(self.roster(team, overrides, forced_out, rate_mults), self.state, self.hist,
+        proj = project_team(self.roster(team, overrides, forced_out, rate_mults), self.state, self.hist,
                             self.team_fpts.get(team), params, rng=rng)
+        return apply_fpts_overrides(proj, overrides)
 
     def write(self, team: str, proj: pd.DataFrame) -> int:
         """Store a team's projection on nba_player; players not in proj (out) get None."""

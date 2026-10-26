@@ -129,6 +129,10 @@
   table.rot-grid th.fz, table.rot-grid td.fz { position:sticky; z-index:2; background-clip:padding-box } table.rot-grid th.fz { background:var(--card) } table.rot-grid td.rl.fz, table.rot-grid td.rn.fz, table.rot-grid td.pos.fz { background:var(--card) }
   table.rot-grid th.pos, table.rot-grid td.pos { white-space:nowrap; overflow:hidden; font-size:10px; padding:0 4px 0 2px } table.rot-grid td.pos .st { font-weight:700; cursor:pointer; margin-right:3px } table.rot-grid td.pos .st.off { color:#ccc } table.rot-grid td.pos .st.pin { color:var(--accent) } table.rot-grid th.pos { text-align:left; font-size:9px }
   table.rot-grid td.pincell input.min.sm { width:44px } table.rot-grid td.px.n { text-align:right }
+  /* row shading on the data cells: green = priced by the props and projected, yellow = questionable, red = out or doubtful */
+  table.rot-grid tr.cov-good td.px, table.rot-grid tr.cov-good td.rn.fz, table.rot-grid tr.cov-good td.pos.fz { background:#eaf7ee } table.rot-grid tr.cov-q td.px, table.rot-grid tr.cov-q td.rn.fz, table.rot-grid tr.cov-q td.pos.fz { background:#fdf6dc } table.rot-grid tr.cov-out td.px, table.rot-grid tr.cov-out td.rn.fz, table.rot-grid tr.cov-out td.pos.fz { background:#fdeaea }
+  table.rot-grid tr.benchrow td.rn { color:#777 } table.rot-grid tr.benchrow td.cell { background:#f7f7f7 } table.rot-grid td.simcell input.min.sm, table.rot-grid td.pubc input.min.sm { width:44px } table.rot-grid td.pubc input.pubin { color:#7c5cff }
+  table.rot-grid td.hover .pop { font-size:11px; min-width:260px }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
@@ -347,6 +351,17 @@
   document.body.addEventListener("mouseover", e => {
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
+  });
+  // hover popups inside a scrolling grid: the box clips them, so while hovered the popup is positioned fixed at the cell
+  document.body.addEventListener("mouseover", e => {
+    const td = e.target.closest(".grid-scroll td.hover"); if (!td) return;
+    const pop = td.querySelector(":scope > .pop"); if (!pop) return;
+    const r = td.getBoundingClientRect(); pop.style.position = "fixed"; pop.style.top = (r.bottom + 2) + "px"; pop.style.right = "auto";
+    pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 360)) + "px"; pop.style.zIndex = 50;
+  });
+  document.body.addEventListener("mouseout", e => {
+    const td = e.target.closest(".grid-scroll td.hover"); if (!td || td.contains(e.relatedTarget)) return;
+    const pop = td.querySelector(":scope > .pop"); if (pop) { pop.style.position = ""; pop.style.top = ""; pop.style.left = ""; pop.style.right = ""; }
   });
   // the exposures table's filters: text (player / team / pos), team, status, a minimum exposure
   window.expFilter = function () {

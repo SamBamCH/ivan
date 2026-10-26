@@ -134,9 +134,23 @@ def refresh_public(session: Session, history, log: Log = print, on: Optional[dat
     Safe to call often: the field is rebuilt only when its key changes.
     """
     pub = public_projection(session, history, on)
+    # a hand override of the public number (the desk's pub column) replaces the replica's for that player: the field and
+    # ownership are then built on it (the field key carries pub_fpts, so the field is re-sampled)
+    try:
+        from ivan.sports.nba.projection.live import read_overrides_full
+        from ivan.core.utils import normalize_name
+        ov = read_overrides_full()
+    except Exception:   # noqa: BLE001
+        ov = {}
     now = datetime.now()
+    n_ov = 0
     for p in session.query(NBAPlayer).all():
+        hand = (ov.get(normalize_name(p.name)) or {}).get("pub")
+        if hand is not None:
+            pub[int(p.id)] = float(hand); n_ov += 1
         p.pub_fpts = pub.get(int(p.id), 0.0); p.pub_updated_at = now
+    if n_ov:
+        log(f"public projection: {n_ov} hand override(s) applied")
     session.commit()
     try:
         own = field_ownership(session, log=log)
