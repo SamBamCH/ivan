@@ -339,6 +339,30 @@ class Desk:
         games = ROT.team_games(self.session, team, since=season_start)
         rot = self.rot.get(team) or {}
         curve = rot.get("curve")
+        # which played game is the last time tonight's group played together: tonight's rotation (available, with history
+        # minutes, or a named starter) against each game's players with 5+ minutes; the dropdown says how close each one is
+        matches: list = []
+        if games:
+            try:
+                usual = {} if curve is None or curve.empty else {str(n): float(curve.loc[n, "minutes"]) for n in curve.index}
+                grid_now = rot.get("grid")                      # tonight's grid when it exists: its players with minutes are the group
+                if grid_now is not None and len(grid_now):
+                    tonight = {str(n): max(usual.get(str(n), 0.0), float(grid_now.loc[n].sum())) for n in grid_now.index if float(grid_now.loc[n].sum()) > 0 and not is_out.get(str(n), False)}
+                else:
+                    tonight = {n: usual.get(n, 0.0) for n, p in names.items() if not is_out[n] and (n in starters or usual.get(n, 0.0) >= ROTATION_MIN)}
+                matches = ROT.lineup_matches(games, ROT.played_sets(self.session, team, [g["game_id"] for g in games]), tonight)
+                def label(m):
+                    if m["exact"]:
+                        return "same group"
+                    bits = [f"{n.split()[-1]} out" for n in sorted(m["missing"], key=lambda k: -m["missing"][k])[:2]] + \
+                           [f"{n.split()[-1]} played" for n in sorted(m["extra"], key=lambda k: -m["extra"][k])[:2]]
+                    more = len(m["missing"]) + len(m["extra"]) - len(bits)
+                    return ", ".join(bits) + (f" +{more}" if more > 0 else "")
+                for m in matches:
+                    m["match"] = label(m)
+                games = matches
+            except Exception:   # noqa: BLE001 - the match is a convenience; the latest game is the fallback
+                matches = []
         proj = self.proj.get(team)
         targets = rot.get("targets") or {}
         base = dict(team=team, games=games, kind="none", drawn=False, locked=[], rows=[], counts=[], benched=[], game_id=None, last_game=None,
@@ -346,6 +370,9 @@ class Desk:
                     fouls=False, owners=[])
 
         if source == "last":
+            best = ROT.best_match(matches) if (game_id is None and matches) else None
+            if best is not None:
+                game_id = best["game_id"]
             last = ROT.last_game_grid(self.session, team, since=season_start, game_id=game_id)
             if last is None:
                 return base
@@ -396,8 +423,9 @@ class Desk:
                                  hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips,
                                  group=SK_group(names[n].position) if n in names else "wing", rank=ROT._spot_rank(names[n].position if n in names else None, None),
                                  foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
+            match = next((m for m in matches if str(m["game_id"]) == str(last["game_id"])), None)
             return {**base, "kind": "last", "rows": rows, "counts": ROT.column_counts(grid), "game_id": last["game_id"], "last_game": last["game_date"], "fouls": True,
-                    "owners": owners}
+                    "owners": owners, "match": match, "games": games}
 
         grid = rot.get("grid")
         if grid is None or proj is None:

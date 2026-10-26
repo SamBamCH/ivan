@@ -354,6 +354,41 @@ def team_games(session: Session, team: str, before: Optional[date] = None, since
     return [dict(game_id=str(g), game_date=str(d), opp=o or "") for g, d, o in rows]
 
 
+def played_sets(session: Session, team: str, game_ids: Iterable[str], min_minutes: float = 5.0) -> Dict[str, Dict[str, float]]:
+    """{game_id: {player: minutes}} for the players who played at least `min_minutes` in each game (garbage-time cameos left out)."""
+    ids = [str(g) for g in game_ids]
+    if not ids:
+        return {}
+    q = text("select game_id, player_name, sum(minutes) as m from nba_stint where team = :t and game_id in (" + ",".join(f"'{g}'" for g in ids) + ")"
+             " group by game_id, player_name having sum(minutes) >= :mm")
+    out: Dict[str, Dict[str, float]] = {g: {} for g in ids}
+    for g, n, m in session.execute(q.bindparams(t=team, mm=float(min_minutes))).all():
+        out[str(g)][str(n)] = float(m)
+    return out
+
+
+def lineup_matches(games: List[dict], played: Dict[str, Dict[str, float]], tonight: Dict[str, float]) -> List[dict]:
+    """
+    How close each played game's group is to tonight's: `tonight` = {player: usual minutes} for the players available
+    tonight who matter (the rotation), `played` from played_sets. Each game gets missing (tonight's players who did not
+    play that night, with their usual minutes), extra (players who played that night and are not available tonight,
+    with the minutes they played) and a score = the minutes on both lists; 0 = the same group. Games newest first, so
+    the best score's first holder is the last time this group played together.
+    """
+    out = []
+    for g in games:
+        pl = played.get(str(g["game_id"]), {})
+        missing = {n: m for n, m in tonight.items() if n not in pl}
+        extra = {n: m for n, m in pl.items() if n not in tonight}
+        out.append(dict(g, missing=missing, extra=extra, score=float(sum(missing.values()) + sum(extra.values())), exact=not missing and not extra))
+    return out
+
+
+def best_match(matches: List[dict]) -> Optional[dict]:
+    """The lowest score, the newest game on ties (the list is newest first)."""
+    return min(matches, key=lambda m: m["score"]) if matches else None
+
+
 def last_game_grid(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None, game_id: Optional[str] = None) -> Optional[dict]:
     """
     The team's most recent game (or `game_id`) as a grid (index player, columns
