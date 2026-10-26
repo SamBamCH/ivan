@@ -968,13 +968,17 @@ class Desk:
         return dict(n=len(teams), n_mapped=sum(1 for v in states.values() if v["state"] == "mapped"),
                     changed=[t for t, v in states.items() if v["state"] == "changed"], unmapped=[t for t, v in states.items() if v["state"] == "unmapped"])
 
-    def clear_rotation(self, team: str) -> None:
-        g = ROT.load_drawn(team)
+    def clear_rotation(self, team: str) -> int:
+        """Clear locks: the drawn grid goes, and so does every typed minutes pin on the team (locked rows' pins and hand-typed ones alike),
+        so the grid is the model's again. Rates, bands, starter calls and the sim / public overrides stay. Returns the pins lifted."""
         ROT.clear_drawn(team)
-        if g is not None:
-            for n in g.attrs.get("locked", list(g.index)):
-                self.set_override(n, minutes=None)
+        n = 0
+        for p in self.players(team):
+            key = normalize_name(p.name)
+            if override_of(self.overrides, key).get("minutes") is not None:
+                self.set_override(key, minutes=None); n += 1
         self.reproject(team)
+        return n
 
     def add_back(self, team: str, player: str) -> float:
         """A player the rotation left off the floor, back in by hand: a minutes pin at his history (at least ADD_BACK_MINUTES)."""
@@ -1920,7 +1924,8 @@ def rotation_restore(request: Request, team: str, player: str = Form(...)):
 @app.post("/team/{team}/rotation/clear", response_class=HTMLResponse)
 def rotation_clear(request: Request, team: str):
     with LOCK:
-        desk.clear_rotation(team)
+        n = desk.clear_rotation(team)
+        desk.flash.append(f"{team}: locks cleared" + (f", {n} typed minutes lifted" if n else "") + "; the grid is the model's")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
