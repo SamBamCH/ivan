@@ -87,6 +87,7 @@
   table.rot-grid td.hd { color:#999 } table.rot-grid td.hd.mid { color:var(--warn); font-weight:600 } table.rot-grid td.hd.big { color:var(--bad); font-weight:700 }
   table.rot-grid.hist td.cell.gt.on { opacity:.35 } table.rot-grid.hist td.cell.gt { background:repeating-linear-gradient(45deg,#f1f1f1 0 2px,#e4e4e4 2px 4px) } .rot-bar b.warn { color:var(--warn) } .rot-bar b.ok { color:var(--ok) }
   .pill.mapped { background:#dcfce7; color:var(--ok) } .pill.changed { background:#fef3c7; color:#92400e } .pill.unmapped { background:#f1f1f1; color:var(--muted) }
+  #slate-form { display:flex; gap:4px; align-items:center } #slate-form button[disabled] { opacity:.5 }
   .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
@@ -169,11 +170,12 @@
     </span>
   {% endif %}
   {% if header.stale %}<form method="post" action="{{ root }}/reload" title="the pool, lineups or props changed on disk since this page was built (a terminal ingest or project, a feed pull); load it without fetching anything"><button class="stale">new data · load</button></form>{% endif %}
-  <form method="post" action="{{ root }}/slate" title="pick a slate: its pool is fetched, projected and loaded (nothing else moves it until you Refresh)">
-    <select name="draft_group" onchange="if (this.value) this.form.submit()">
-      {% if not header.draft_group %}<option value="" selected>pick a slate…</option>{% endif %}
-      {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
-    </select>
+  <form method="post" action="{{ root }}/slate" id="slate-form" title="pick a day, then one of its slates: a lobby slate is fetched from DraftKings and projected; an archived one is restored from its capture (nothing fetched)">
+    <select id="slate-day" title="the day">{% for d, label, sl in header.slate_days %}<option value="{{ d }}" {% if sl|selectattr("loaded")|list %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    <select name="draft_group" id="slate-pick" title="the day's slates"></select>
+    <input type="hidden" name="source" id="slate-source" value="lobby">
+    <button type="submit" id="slate-load">Load</button>
+    <script type="application/json" id="slate-days">{{ header.slate_days|tojson }}</script>
   </form>
   {% if header.mapped and header.mapped.n %}<span class="mapped-sum {% if header.mapped.n_mapped == header.mapped.n %}ok{% elif header.mapped.changed %}warn{% endif %}" title="teams whose whole grid is held and whose inputs have not moved since; the jobs warn when the count is short">mapped {{ header.mapped.n_mapped }}/{{ header.mapped.n }}{% if header.mapped.changed %} · <b>changed: {{ header.mapped.changed|join(', ') }}</b>{% endif %}{% if header.mapped.unmapped %} · unmapped: {{ header.mapped.unmapped|join(', ') }}{% endif %}</span>{% endif %}
   <label title="hide players projected below this many fantasy points">show ≥
@@ -301,6 +303,19 @@
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
   });
+  // the slate picker: a day, then its slates (the loaded one selected; Load is disabled while it is the loaded one)
+  (function () {
+    const form = document.getElementById("slate-form"); if (!form) return;
+    const days = JSON.parse(document.getElementById("slate-days").textContent || "[]");
+    const day = document.getElementById("slate-day"), pick = document.getElementById("slate-pick"), src = document.getElementById("slate-source"), load = document.getElementById("slate-load");
+    function fill() {
+      const row = days.find(r => r[0] === day.value); pick.innerHTML = "";
+      (row ? row[2] : []).forEach(s => { const o = document.createElement("option"); o.value = s.id; o.dataset.source = s.source; o.textContent = s.label + (s.loaded ? " (loaded)" : ""); if (s.loaded) o.selected = true; pick.appendChild(o); });
+      sync();
+    }
+    function sync() { const o = pick.options[pick.selectedIndex]; src.value = o ? o.dataset.source : "lobby"; load.disabled = !o || /\(loaded\)$/.test(o.textContent); load.textContent = (o && o.dataset.source === "archive") ? "Restore" : "Load"; }
+    day.addEventListener("change", fill); pick.addEventListener("change", sync); fill();
+  })();
   // the grid saves itself: on every stroke's mouseup and on every lock click the rows go to the server (the locked rows are
   // held, the rest re-filled); a stroke during a save marks it dirty and it saves again when the reply lands, so nothing
   // painted is ever lost to a re-render

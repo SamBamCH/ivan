@@ -21,7 +21,8 @@ import os
 import sys
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from ivan.sports.nba.ingest import restore_from_archive
 from pathlib import Path
 from typing import Optional
 
@@ -177,10 +178,59 @@ class Desk:
                 start = str(sl.get("start") or "")
                 if start and not start.startswith(today):
                     continue
-                out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None)
+                out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None, start=start, name=sl.get("name"))
         except Exception as e:   # noqa: BLE001 - the lobby is a convenience
             self.flash.append(f"could not list the lobby's slates ({type(e).__name__}); showing the known ones")
         self._lobby = (now, out)
+        return out
+
+    def slate_days(self, now: datetime, dg) -> list:
+        """
+        [(date iso, date label, [slate, ...])] newest day first, each slate {id, label, source, loaded}: the DraftKings lobby's
+        draft groups placed on their day (DK gives a weekday + time), then every slate with an archive capture (loadable from
+        the capture: scripts/nba archive at ingest and at tip), the loaded slate always present. The picker: a day, then its slates.
+        """
+        days: dict = {}
+        seen = set()
+        wd = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+        for key, v in self.lobby_slates().items():
+            start = str(v.get("start") or v.get("label") or "")
+            head = start.split()[0].lower()[:3] if start else ""
+            if head in wd:
+                d = now.date() + timedelta(days=(wd[head] - now.weekday()) % 7)
+            elif head == "tom":
+                d = now.date() + timedelta(days=1)
+            else:
+                d = now.date()
+            name = str(v.get("name") or "").replace("NBA ", "")[:30]
+            days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=(start.split(" ", 1)[1] if " " in start else start) + (f" · {name}" if name else ""),
+                                                           source="lobby", sort=start, loaded=str(key) == str(dg)))
+            seen.add(str(key))
+        from sqlalchemy import text as _t
+        names: dict = {}
+        for k, nm, n in self.session.execute(_t("select draft_group_id, name, total_entries from historical_contest_information where draft_group_id is not null")).all():
+            if str(k) not in names or (n or 0) > names[str(k)][1]:
+                names[str(k)] = (str(nm or ""), n or 0)
+        for key, lock, src, n in self.session.execute(_t("select slate_key, min(lock), max(source), count(*) from archived_slate where sport = 'nba' group by slate_key")).all():
+            if str(key) in seen:
+                continue
+            try:
+                t = datetime.fromisoformat(str(lock))
+            except (TypeError, ValueError):
+                continue
+            nm = names.get(str(key), ("", 0))[0].replace("NBA ", "")[:30]
+            days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {nm}" if nm else f" · slate {key}") + f" · archive ({n})",
+                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg)))
+            seen.add(str(key))
+        if dg is not None and str(dg) not in seen:
+            lock = min((p.gametime for p in self.slate.players if p.gametime), default=None)
+            d = (lock or now).date().isoformat()
+            days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M} · " if lock else "") + f"loaded slate {dg}", source="loaded", sort="", loaded=True))
+        out = []
+        for d in sorted(days, reverse=True):
+            dd = date.fromisoformat(d)
+            tag = "today" if dd == now.date() else ("tomorrow" if dd == now.date() + timedelta(days=1) else ("yesterday" if dd == now.date() - timedelta(days=1) else ""))
+            out.append((d, f"{dd:%a %m-%d}" + (f" · {tag}" if tag else ""), sorted(days[d], key=lambda x: x["sort"])))
         return out
 
     def _stamp(self):
@@ -959,7 +1009,7 @@ class Desk:
         return dict(draft_group=dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None,
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
-                    slates=slates, props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
+                    slates=slates, slate_days=self.slate_days(now, dg), props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
                     overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)))
 
 
@@ -1048,6 +1098,26 @@ def board(request: Request, view: str = "games"):
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
         return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, **_pipeline_ctx())
+
+
+def _start_restore(draft_group: int) -> None:
+    """Load a past slate from its archive capture in a background thread (ingest.restore_from_archive): nothing fetched."""
+    def run():
+        log = []
+        sess = get_session(engine)
+        try:
+            info = restore_from_archive(sess, int(draft_group), n_sims=1000, log=log.append)
+            msg = f"slate {draft_group} restored from its {info['source']} capture of {info['captured_at']:%m-%d %H:%M} ({info['players']} players, {info['odds']} prop rows)"
+        except IngestError as e:
+            msg = f"restore failed: {e}"
+        except Exception as e:   # noqa: BLE001
+            msg = f"restore failed, the previous pool is unchanged: {type(e).__name__}: {e}"
+        finally:
+            sess.close()
+        with LOCK:
+            desk.rebuild(); desk.busy = None; desk.flash.append(msg)
+    desk.busy = f"restoring slate {draft_group} from the archive"
+    threading.Thread(target=run, name="ivan-restore", daemon=True).start()
 
 
 def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
@@ -1823,8 +1893,9 @@ def download(name: str):
 
 
 @app.post("/slate")
-def switch_slate(request: Request, draft_group: int = Form(...)):
-    """Load another slate and remember the pick, so the capture tick keeps it (scripts/nba/capture.py ends on it while open)."""
+def switch_slate(request: Request, draft_group: int = Form(...), source: str = Form("lobby")):
+    """Load another slate: a lobby slate is fetched from DraftKings, an archived one restored from its capture (nothing fetched).
+    The pick is remembered (data/nba/active_slate.json)."""
     with LOCK:
         from ivan.sports.nba.paths import ACTIVE_SLATE_JSON
         try:
@@ -1835,6 +1906,8 @@ def switch_slate(request: Request, draft_group: int = Form(...)):
             desk.flash.append("a job is running on the current slate; switch after it finishes (or cancel it)")
         elif desk.busy:
             desk.flash.append(f"already {desk.busy}")
+        elif source == "archive":
+            _start_restore(int(draft_group))
         else:
             _start_refresh(f"loading slate {draft_group}", int(draft_group), update_odds=False)
     return RedirectResponse(auth.root_of(request) + "/", status_code=303)

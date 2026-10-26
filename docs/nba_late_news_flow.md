@@ -72,3 +72,12 @@ team, write the pool) then the sim or the swap. Two commands.
 4. The picker always lists the loaded slate, lobby or not.
 5. A "late news" form on the team card: player + call (out / starts / bench / back) + what to run next (sim + choose before lock, late swap after, or publish only). One request: pin, re-allocate, publish, queue.
 6. The grid shows **proj** (ours: lineups and the sim) next to **pub** (the public projection: the field and ownership). Our edits never move pub.
+
+## Loading a slate (2026-10-25 evening)
+
+The picker is a day, then that day's slates. A lobby slate (today, tomorrow) is fetched from DraftKings and projected,
+as before. A past slate is restored from its archive capture (`ingest.restore_from_archive`: the last capture before
+lock, else the last one; the pool as it was, its props and lines, then the projection with the model as it is now;
+nothing fetched, no capture row written). Either way the pins and drawn grids of the slate you leave are filed under
+`data/nba/input/edits/<draft group>/` and the slate you load gets its own back, so switching away and back loses
+nothing; a failed switch puts the files back where they were. A restore of a full slate takes about a minute (the props).
