@@ -25,9 +25,10 @@
   {% if view == 'exposures' %}{% set ex = exposures %}
   <div class="exposures">
     <div class="exp-head">
-      <label>set <select class="exp-set" onchange="htmx.ajax('GET', '{{ root }}/board?view=exposures&set=' + encodeURIComponent(this.value) + '&metric={{ ex.metric }}', {target: '#board', swap: 'innerHTML'})" title="which lineups: the candidate pool, a simmed contest's sampled field, or the chosen entries (one contest or all)">
+      <label>set <select class="exp-set" onchange="htmx.ajax('GET', '{{ root }}/board?view=exposures&set=' + encodeURIComponent(this.value) + '&metric={{ ex.metric }}{% if ex.bins %}&bins={{ ex.bins }}{% endif %}', {target: '#board', swap: 'innerHTML'})" title="which lineups: the candidate pool, a simmed contest's sampled field, or the chosen entries (one contest or all)">
         {% for o in ex.options %}<option value="{{ o.key }}" {% if o.key == ex.set %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</select></label>
-      <span class="seg">{% for m, lab in (('proj', 'projected total'), ('own', 'ownership sum'), ('sal', 'salary used')) %}<a class="{% if ex.metric == m %}on{% endif %}" hx-get="{{ root }}/board?view=exposures&set={{ ex.set|urlencode }}&metric={{ m }}" hx-target="#board" hx-swap="innerHTML">{{ lab }}</a>{% endfor %}</span>
+      <span class="seg">{% for m, lab in (('proj', 'projected total'), ('own', 'ownership sum'), ('sal', 'salary used')) %}<a class="{% if ex.metric == m %}on{% endif %}" hx-get="{{ root }}/board?view=exposures&set={{ ex.set|urlencode }}&metric={{ m }}{% if ex.bins %}&bins={{ ex.bins }}{% endif %}" hx-target="#board" hx-swap="innerHTML">{{ lab }}</a>{% endfor %}</span>
+      <label title="how many equal bins the histogram uses; blank = a fixed width (5 fpts, 20 ownership points, $500)">bins <input type="number" min="4" max="80" step="1" value="{{ ex.bins or '' }}" placeholder="auto" style="width:60px;font:inherit;font-size:12px;padding:3px 5px" onchange="htmx.ajax('GET', '{{ root }}/board?view=exposures&set={{ ex.set|urlencode }}&metric={{ ex.metric }}' + (this.value ? '&bins=' + this.value : ''), {target: '#board', swap: 'innerHTML'})"></label>
       <span class="muted small">{{ ex.n }} lineups · {{ ex.rows|length }} players</span>
     </div>
     <figure class="hist big">

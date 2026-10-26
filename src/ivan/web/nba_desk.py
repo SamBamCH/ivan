@@ -1295,7 +1295,7 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj"):
+def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: Optional[int] = None):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
     with LOCK:
         now = datetime.now()
@@ -1314,7 +1314,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
         if view == "exposures":
-            exposures = _exposures_view(set, metric)
+            exposures = _exposures_view(set, metric, bins)
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
@@ -1507,15 +1507,21 @@ def _sim_fields() -> dict:
     return {}
 
 
-def _hist1(values: np.ndarray, weights: Optional[np.ndarray], step: float) -> dict:
-    """One series: {edges, counts (weighted), shares, n, mean, p10, p50, p90}."""
+def _hist1(values: np.ndarray, weights: Optional[np.ndarray], step: float, bins: Optional[int] = None) -> dict:
+    """One series: {edges, counts (weighted), shares, n, mean, p10, p50, p90}. `bins` fixes the number of equal bins over the range; else `step` sets the width."""
     if values is None or not len(values):
         return dict(edges=[], counts=[], shares=[], n=0)
     w = np.ones(len(values)) if weights is None else np.asarray(weights, dtype=float)
-    lo = float(np.floor(values.min() / step) * step); hi = float(np.ceil(values.max() / step) * step)
-    if hi <= lo:
-        hi = lo + step
-    edges = np.arange(lo, hi + step / 2, step)
+    if bins:
+        lo, hi = float(values.min()), float(values.max())
+        if hi <= lo:
+            hi = lo + step
+        edges = np.linspace(lo, hi, int(bins) + 1)
+    else:
+        lo = float(np.floor(values.min() / step) * step); hi = float(np.ceil(values.max() / step) * step)
+        if hi <= lo:
+            hi = lo + step
+        edges = np.arange(lo, hi + step / 2, step)
     c, _ = np.histogram(values, bins=edges, weights=w)
     tot = float(w.sum()) or 1.0
     order = np.argsort(values); cw = np.cumsum(w[order]) / tot
@@ -1524,7 +1530,7 @@ def _hist1(values: np.ndarray, weights: Optional[np.ndarray], step: float) -> di
                 mean=float(np.average(values, weights=w)), p10=q(0.10), p50=q(0.50), p90=q(0.90), ymax=float(c.max() / tot) if len(c) else 0.0)
 
 
-def _exposures_view(set_key: str = "pool", metric: str = "proj") -> dict:
+def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[int] = None) -> dict:
     """
     The exposures screen: one set of lineups in view (the candidate pool, a simmed contest's sampled field, or the chosen
     entries of one contest or all), one histogram of a per-lineup metric over it (projected total under our projection,
@@ -1567,7 +1573,8 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj") -> dict:
            "sal": (sals, 500.0, "salary used per lineup", "$")}
     table, step, title, unit = per[metric]
     vals = np.array([sum(table.get(int(i), 0.0) for i in lu) for lu in lineups], dtype=float)
-    hist = _hist1(vals, w, step) if n else dict(edges=[], counts=[], shares=[], n=0)
+    bins = int(bins) if bins and 4 <= int(bins) <= 80 else None
+    hist = _hist1(vals, w, step, bins=bins) if n else dict(edges=[], counts=[], shares=[], n=0)
     counts: dict = {}
     for lu, wt in zip(lineups, w):
         for i in lu:
@@ -1590,7 +1597,7 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj") -> dict:
         x["delta"] = None if x["proj_then"] is None or r.get("fpts") is None else r["fpts"] - x["proj_then"]
         rows.append(x)
     rows.sort(key=lambda x: (-x["exposure"], -(x["fpts"] or 0)))
-    return dict(set=set_key, metric=metric, options=options, label=label, n=int(round(tot)) if n else 0, rows=rows, hist=hist, title=title, unit=unit,
+    return dict(set=set_key, metric=metric, bins=bins, options=options, label=label, n=int(round(tot)) if n else 0, rows=rows, hist=hist, title=title, unit=unit,
                 is_entries=set_key.startswith("entries"), teams=sorted({x["team"] for x in rows}),
                 color=HIST_COLORS["entries" if set_key.startswith("entries") else ("field" if set_key.startswith("field") else "pool")])
 
