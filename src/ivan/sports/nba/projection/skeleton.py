@@ -37,6 +37,10 @@ MIN_STINT = 3              # minutes: a player who comes on stays at least this 
                            # shorter stints are merged away (never in a locked row)
 MAX_STINT = 15             # minutes on the floor before a breather is forced
 OPENING = 3                # minutes the named starters hold the floor before any swap
+Q3_OPEN = 24               # the named starters open the third quarter too and hold it OPENING minutes (1,348 team-games 2025-26: all five on at the
+                           # Q3 tip 86% of ordinary games, four or more 99%; the skeleton managed all five 29% of the time before this, 2026-10-26)
+CLOSE_FROM = 44            # from here the five with the largest targets close the game (close games: 4.4 of the top five by minutes on at minute 46,
+                           # four or more 93%; the named starters only 3.85, so the closing five is the most-played five, not the starting five)
 CAP_EXTRA = 2.0            # a player may run this far over his target in the schedule (the balance pass pulls him back)
 HARD_CAP = 44.0
 BALANCE_TOL = 0.5          # rows end within this of their target (integer grid: a target of 31.4 lands on 31 or 32)
@@ -175,6 +179,18 @@ def schedule(P: np.ndarray, target: np.ndarray, starters: Sequence[bool], locked
             cur = {i for i in cur if starters[i]}
         elif m < OPENING and any(starters):
             pass                                                   # the opening unit plays the first minutes
+        elif m == Q3_OPEN and any(starters):
+            # the third quarter opens with the starters again (those with minutes left to give)
+            opener = [i for i in free if starters[i] and target[i] > 0 and used[i] < cap[i]]
+            cur = set(sorted(opener, key=lambda i: -need[i])[:slots])
+        elif Q3_OPEN < m < Q3_OPEN + OPENING and any(starters):
+            pass                                                   # ...and holds the floor as at the tip
+        elif m == CLOSE_FROM:
+            # the closing unit: the five with the largest targets who still have minutes, on until the end
+            closers = sorted([i for i in free if target[i] > 0 and used[i] < cap[i]], key=lambda i: -target[i])[:slots]
+            cur = set(closers)
+        elif m > CLOSE_FROM:
+            pass                                                   # the closers stay
         else:
             for _ in range(ON_COURT):
                 if not cur:
@@ -231,7 +247,8 @@ def _stints(row: np.ndarray) -> List[Tuple[int, int]]:
 
 
 def balance(grid: np.ndarray, target: np.ndarray, free: Sequence[bool], P: np.ndarray, tol: float = BALANCE_TOL, passes: int = BALANCE_PASSES,
-            starters: Optional[Sequence[bool]] = None, min_stint: int = MIN_STINT, groups: Optional[Sequence[str]] = None) -> np.ndarray:
+            starters: Optional[Sequence[bool]] = None, min_stint: int = MIN_STINT, groups: Optional[Sequence[str]] = None,
+            protected: Optional[set] = None) -> np.ndarray:
     """
     Move boundary minutes from players over their target to players under it, one minute at a time, at a minute where
     the giver is on and the taker is off and at least one of them sits at a stint edge there (so stints stretch and
@@ -254,6 +271,8 @@ def balance(grid: np.ndarray, target: np.ndarray, free: Sequence[bool], P: np.nd
             for b in takers:
                 best, best_s = None, -1e9
                 for m in range(OPENING if protect_opening else 0, MINUTES):
+                    if protected and m in protected:               # the Q3 opening and the close are the scheduler's
+                        continue
                     if not g[a, m] or g[b, m]:
                         continue
                     a_edge = (m == 0 or not g[a, m - 1]) or (m == MINUTES - 1 or not g[a, m + 1])
@@ -465,8 +484,9 @@ def build_grid(curve: Optional[pd.DataFrame], targets: Dict[str, float], availab
     free = [not x for x in is_locked]
     grid = merge_short_stints(grid, P, free, groups=glist)
     grid = align_lines(grid, glist, free, tgt)                                                                   # same-line swaps a minute apart snap together...
-    grid = balance(grid, tgt, free, P, starters=starter_flags, groups=glist)                                     # ...the balance restores the totals they moved
-    grid = balance(grid, tgt, free, P, tol=RELAXED_TOL, starters=starter_flags, min_stint=2, groups=glist)     # a row still far off may make 2-minute stints
+    prot = (set(range(Q3_OPEN, Q3_OPEN + OPENING)) if st else set()) | set(range(CLOSE_FROM, MINUTES))
+    grid = balance(grid, tgt, free, P, starters=starter_flags, groups=glist, protected=prot)                      # ...the balance restores the totals they moved
+    grid = balance(grid, tgt, free, P, tol=RELAXED_TOL, starters=starter_flags, min_stint=2, groups=glist, protected=prot)   # a row still far off may make 2-minute stints
     if ALIGN_AFTER_BALANCE:
         grid = align_lines(grid, glist, free, tgt)
     out = pd.DataFrame(grid, index=pd.Index(names, name="player"), columns=list(range(MINUTES)))
