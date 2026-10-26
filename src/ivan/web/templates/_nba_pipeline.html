@@ -11,17 +11,14 @@
     </div>
     <div class="pipe-row pipe-sec {% if not ready.generate %}off{% endif %}" title="{% if not ready.generate %}opens once a slate is loaded and projected{% endif %}">
       <span class="sec">generate</span>
-      <label>lineups <input name="lineups" value="{{ form.lineups }}" size="6"></label>
       <label title="ticked: the pool starts empty. Unticked: the new lineups join the existing pool (build a second scenario's lineups beside the first; the sim scores them all under whatever is published)"><input type="checkbox" name="fresh" value="on" {% if form.fresh %}checked{% endif %}> fresh pool</label>
+      <label>lineups <input name="lineups" value="{{ form.lineups }}" size="6"></label>
       <label title="parallel solver processes, at most 8">jobs <input name="jobs" value="{{ form.jobs }}" size="2" type="number" min="1" max="8"></label>
+      <label title="every lineup must spend at least this">min salary <input name="min_salary" value="{{ form.min_salary }}" size="5"></label>
+      <label title="at most this much salary on one team's players">max salary / team <input name="max_salary_per_team" value="{{ form.max_salary_per_team }}" size="5"></label>
       <label title="spread of the sampled worlds the lineups are optimised in, 0-1; lower = closer to the optimal">randomness <input name="randomness" value="{{ form.randomness }}" size="4"></label>
       <label title="every lineup must project at least this share of the mean-optimal lineup">min fpts frac <input name="min_fpts_frac" value="{{ form.min_fpts_frac }}" size="4"></label>
       <label title="players projected below this are left out of the solver's pool">player min fpts <input name="player_min_fpts" value="{{ form.player_min_fpts }}" size="3"></label>
-      <label title="salary cap">max salary <input name="max_salary" value="{{ form.max_salary }}" size="5"></label>
-      <label title="every lineup must spend at least this">min salary <input name="min_salary" value="{{ form.min_salary }}" size="5"></label>
-      <label title="at most this much salary on one team's players">max salary / team <input name="max_salary_per_team" value="{{ form.max_salary_per_team }}" size="5"></label>
-      <label title="sampled worlds per worker; each solve optimises one world">samples <input name="n_samples" value="{{ form.n_samples }}" size="5"></label>
-      <label title="per-player multiplicative noise on each world, ± this">jitter <input name="jitter" value="{{ form.jitter }}" size="4"></label>
     </div>
     <div class="pipe-row pipe-sec {% if not ready.sim %}off{% endif %}" title="{% if not ready.sim %}opens once the pool is generated{% endif %}">
       <span class="sec">sim</span>
