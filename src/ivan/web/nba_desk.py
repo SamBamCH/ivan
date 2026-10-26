@@ -731,11 +731,12 @@ class Desk:
         lock_names = [n for n in lock_names if n in g.index]
         before = ROT.load_drawn(team)
         was_locked = set(before.attrs.get("locked", list(before.index))) if before is not None else set()
-        ROT.save_drawn(team, g, note, locked=lock_names, fingerprint=self.fingerprint(team))
         for n in was_locked - set(lock_names):
             self.set_override(n, minutes=None)
         for n in lock_names:
             self.set_override(n, minutes=float(g.loc[n].sum()))
+        # the fingerprint is taken after the pins: a row locked empty scratches its player, and that is part of the mapping
+        ROT.save_drawn(team, g, note, locked=lock_names, fingerprint=self.fingerprint(team))
         self.reproject(team)
         return len(lock_names)
 
