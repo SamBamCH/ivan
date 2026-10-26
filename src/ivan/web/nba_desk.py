@@ -1277,6 +1277,45 @@ def _render(request: Request, template: str, **ctx):
                                                           "limited": LIMITED, "limits": LIMITS, "job_max_minutes": JOB_MAX_MINUTES, **ctx})
 
 
+def games_menu(now: datetime) -> list[dict]:
+    """
+    The slate's games for the menu without building every team's card: per team its tip, lineup state, mapped / question
+    state (team_states, with the open questions as the chip's hover), paired into games with the line, grouped by tip.
+    """
+    states = {t["team"]: t for t in desk.team_states(now)}
+    teams = {}
+    for t in desk.slate.teams():
+        tip = desk.tip(t); mtt = (tip - now).total_seconds() / 60 if tip else None
+        st = desk.starters_of(t); confirmed = desk.slate.starters_confirmed.get(t, False)
+        opp = next((p.opponent for p in desk.players(t)), "")
+        qs = [q for q in desk.questions(t, now) if not q["answered"]]
+        teams[t] = dict(team=t, opp=opp, tip=tip, mins_to_tip=mtt, locked=bool(mtt is not None and mtt < 0),
+                        starters="confirmed" if confirmed else ("expected" if st else "none"),
+                        qtext="; ".join(f"{q['raw']} {q['status']}" + (f" · {q['news']['headline']}" if q.get("news") else "") for q in qs),
+                        **{k: states.get(t, {}).get(k) for k in ("colour", "why", "open", "new", "state")})
+    seen, games = set(), []
+    for t, c in sorted(teams.items(), key=lambda kv: (kv[1]["tip"] or now, kv[0])):
+        if t in seen:
+            continue
+        opp = teams.get(c["opp"])
+        pair = [c] + ([opp] if opp is not None else [])
+        seen.update(x["team"] for x in pair)
+        info = (desk.slate._lines.by_team.get(t) if getattr(desk.slate, "_lines", None) else None) or {}
+        if len(pair) == 2 and info.get("home") is True:
+            pair = [pair[1], pair[0]]
+        home = pair[-1]["team"] if len(pair) == 2 else None
+        spread = desk.slate.spread(home) if home else None
+        total = desk.slate._lines.team_total(home) if home and getattr(desk.slate, "_lines", None) else None
+        games.append(dict(teams=pair, tip=c["tip"], mins_to_tip=c["mins_to_tip"], locked=all(x["locked"] for x in pair), home=home, spread=spread, total=total))
+    games.sort(key=lambda g: (g["locked"], g["tip"] or now))
+    menu = []
+    for g in games:
+        if not menu or menu[-1]["tip"] != g["tip"]:
+            menu.append(dict(tip=g["tip"], games=[]))
+        menu[-1]["games"].append(g)
+    return menu
+
+
 def games_of(cards: list[dict], now: datetime) -> list[dict]:
     """Pair the team cards into games (away on the left, home on the right when the lines say which is which), earliest tip first."""
     by_team = {c["team"]: c for c in cards}
@@ -1309,7 +1348,7 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = ""):
+def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = "", team: str = ""):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
     with LOCK:
         now = datetime.now()
@@ -1317,13 +1356,18 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
             return _render(request, "_nba_board.html", busy=desk.busy, view=view, games=[], menu=[], players=[], lateswap=None, exposures=None)
         for t in desk.slate.teams():
             desk.slate.spread(t)                            # loads the lines once
-        cards = [desk.team_card(t, now) for t in desk.slate.teams()]
-        games = games_of(cards, now)
-        menu = []                                            # games grouped by tip time, in order
-        for g in games:
-            if not menu or menu[-1]["tip"] != g["tip"]:
-                menu.append(dict(tip=g["tip"], games=[]))
-            menu[-1]["games"].append(g)
+        menu = games_menu(now)                               # the games strip: tip, line, one chip per team (its state, the questions on hover)
+        teams = desk.slate.teams()
+        if team and team in teams:
+            desk.open_team = team
+        open_team = getattr(desk, "open_team", None)
+        if open_team not in teams:
+            open_team = next((c["team"] for grp in menu for g in grp["games"] for c in g["teams"]), teams[0] if teams else None)
+            desk.open_team = open_team
+        card = desk.team_card(open_team, now) if (view == "games" and open_team) else None
+        game = next((g for grp in menu for g in grp["games"] if any(c["team"] == open_team for c in g["teams"])), None)
+        cards = [desk.team_card(t, now) for t in teams] if view == "players" else []
+        games = []
         players = []; lateswap = None; exposures = None
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
@@ -1332,7 +1376,8 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
-        return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures, **_pipeline_ctx())
+        return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
+                       card=card, game=game, open_team=open_team, **_pipeline_ctx())
 
 
 def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:

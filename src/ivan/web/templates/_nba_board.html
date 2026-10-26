@@ -10,8 +10,8 @@
   <div class="slot">
     <div class="slot-time">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }}</div>
     {% for g in grp.games %}
-    <div class="gm {% if g.locked %}locked{% endif %}">
-      <div class="gm-teams">{% for c in g.teams %}<a class="{{ c.starters }}" href="#card-{{ c.team }}" title="lineup {{ c.starters }}">{{ c.team }}</a>{% if not loop.last %}<span class="at">@</span>{% endif %}{% endfor %}</div>
+    <div class="gm {% if g.locked %}locked{% endif %} {% if open_team in g.teams|map(attribute='team') %}cur{% endif %}">
+      <div class="gm-teams">{% for c in g.teams %}<a class="chip {{ c.colour or 'unmapped' }} {% if c.team == open_team %}on{% endif %}" hx-get="{{ root }}/board?view=games&team={{ c.team }}" hx-target="#board" hx-swap="innerHTML" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}">{{ c.team }}{% if c.new %}<i class="dot"></i>{% endif %}</a>{% if not loop.last %}<span class="at">@</span>{% endif %}{% endfor %}</div>
       <div class="gm-line">{% if g.spread is not none %}{{ g.home }} {{ '%+g'|format(g.spread) }}{% if g.total %} · {{ '%g'|format(g.total) }}{% endif %}{% else %}no line{% endif %}</div>
     </div>
     {% endfor %}
@@ -111,19 +111,18 @@
     </table>
   </div>
   {% endif %}
-  {% for g in games if view not in ('players', 'lateswap', 'exposures') %}
-    <div class="game {% if g.locked %}locked{% elif g.score >= 10 %}hot{% elif g.score >= 3 %}warm{% endif %}">
+  {% if view == 'games' and card %}{% set g = game %}
+    <div class="game {% if g and g.locked %}locked{% elif card.score >= 10 %}hot{% elif card.score >= 3 %}warm{% endif %}">
       <div class="gh">
-        <span class="tip {% if g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% elif g.locked %} <span class="muted">started</span>{% endif %}</span>
-        {% if g.spread is not none %}<span class="muted">{{ g.home }} {{ '%+g'|format(g.spread) }}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line</span>{% endif %}
+        <span class="tip {% if g and g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{% if g %}{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% endif %}{% else %}{{ card.team }}{% endif %}</span>
+        {% if g and g.spread is not none %}<span class="muted">{{ g.home }} {{ '%+g'|format(g.spread) }}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line</span>{% endif %}
+        {% if g and g.teams|length == 2 %}<span class="muted small">· <a class="other" hx-get="{{ root }}/board?view=games&team={{ (g.teams|rejectattr('team', 'equalto', card.team)|first).team }}" hx-target="#board" hx-swap="innerHTML">the other side</a></span>{% endif %}
       </div>
       <div class="sides">
-      {% for c in g.teams %}
-        <div class="side" id="card-{{ c.team }}">{% include "_nba_side.html" %}</div>
-      {% endfor %}
+        <div class="side" id="card-{{ card.team }}">{% with c=card %}{% include "_nba_side.html" %}{% endwith %}</div>
       </div>
     </div>
-  {% endfor %}
+  {% endif %}
   <p class="muted" style="font-size:12px;margin-top:14px">Type into min, the band's low–high, or fppm to override the model for that player (blank restores it); ✕ scratches; the team re-allocates around every edit. Publish saves the edits for the sim and the capture loop. Green rows have book odds behind them (the props set their rates); grey rows are history-only and are the ones to question or remove. Amber cell = worth a look, red = likely wrong; hover for why. Hover a projection for the stat lines behind it. Italic history = last season's.</p>
 
 {% endif %}
