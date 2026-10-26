@@ -78,7 +78,9 @@
   table.rot-grid { border-collapse:collapse; margin:0; table-layout:fixed; width:916px; min-width:916px; user-select:none }
   table.rot-grid.wide { width:1596px; min-width:1596px }           /* + the player columns right of the minutes: 26+50+46+160+72+66+50+76+50+44+40 = 680 */
   table.rot-grid col.c-pst { width:26px } table.rot-grid col.c-ppin { width:50px } table.rot-grid td.stcell { cursor:pointer; text-align:center } table.rot-grid td.stcell .st.off { color:#ccc } table.rot-grid td.stcell .st.pin { color:var(--accent); font-weight:700 }
-  table.rot-grid td.pincell input.min.sm { width:40px } details.hist-box { margin-top:10px } details.hist-box > summary { cursor:pointer; font-size:12px; color:var(--muted); padding:4px 0 } details.hist-box[open] > summary { margin-bottom:4px }
+  table.rot-grid td.pincell input.min.sm { width:40px } details.hist-box { margin-top:12px } details.hist-box > summary { cursor:pointer; font-size:14px; font-weight:600; color:var(--ink); padding:8px 12px; background:var(--card); border:1px solid var(--line); border-radius:6px; list-style:none; display:flex; align-items:center; gap:8px }
+  details.hist-box > summary::-webkit-details-marker { display:none } details.hist-box > summary::before { content:'▸'; font-size:13px; color:var(--muted) } details.hist-box[open] > summary::before { content:'▾' } details.hist-box[open] > summary { margin-bottom:8px }
+  details.hist-box > summary:hover { border-color:var(--accent) } details.hist-box > summary .muted { font-weight:400 }
   table.rot-grid col.c-ppub { width:50px } table.rot-grid th.pubh, table.rot-grid td.pubc { color:#7c5cff } table.rot-grid th.ours { color:var(--ink) }
   form.news { display:flex; gap:6px; align-items:center; margin:4px 0 2px; font-size:12px } form.news select { font:inherit; font-size:12px; padding:2px 4px; max-width:220px } form.news button { font:inherit; font-size:12px; padding:2px 10px }
   .rot-bar button.rot-hold { margin-right:4px }
