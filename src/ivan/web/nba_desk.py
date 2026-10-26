@@ -42,7 +42,7 @@ from ivan.core.config import config_path
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
-from ivan.sports.nba.models import Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
+from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
 from ivan.web import auth
@@ -1295,7 +1295,7 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", mode: str = "pool", contest: Optional[int] = None):
+def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj"):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
     with LOCK:
         now = datetime.now()
@@ -1314,7 +1314,7 @@ def board(request: Request, view: str = "games", mode: str = "pool", contest: Op
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
         if view == "exposures":
-            exposures = _exposures_view(mode if mode in ("pool", "field", "entries") else "pool", contest)
+            exposures = _exposures_view(set, metric)
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
@@ -1479,54 +1479,120 @@ def _hist(series: dict, step: float, lo: Optional[float] = None, hi: Optional[fl
     return dict(edges=[float(e) for e in edges], series=out, ymax=max((max(d["shares"]) for d in out.values()), default=0.0))
 
 
-def _exposures_view(mode: str = "pool", contest: Optional[int] = None) -> dict:
+def _sim_fields() -> dict:
+    """The sampled field of every simmed contest of this slate, from the newest sim artifacts (unique lineups x copies): {contest_id: {name, lineups, dupes}}."""
+    mine = _slate_contest_ids()
+    if not mine:
+        return {}
+    names = {int(c.contest_id): str(c.name or "") for c in desk.session.query(HistoricalContest).filter(HistoricalContest.contest_id.in_(list(mine))).all()}
+    base = OUTPUT_DIR / "sim"
+    if not base.is_dir():
+        return {}
+    for d in sorted(base.iterdir(), reverse=True):
+        found = {}
+        for f in d.glob("contest_*.npz"):
+            try:
+                cid = int(f.stem.split("_")[1])
+            except ValueError:
+                continue
+            if cid not in mine:
+                continue
+            try:
+                z = np.load(f, allow_pickle=True)
+                found[cid] = dict(name=names.get(cid, str(cid)), lineups=z["lineup_players"].astype(int), dupes=z["dupes"].astype(float), stamp=d.name)
+            except Exception:   # noqa: BLE001
+                continue
+        if found:
+            return found
+    return {}
+
+
+def _hist1(values: np.ndarray, weights: Optional[np.ndarray], step: float) -> dict:
+    """One series: {edges, counts (weighted), shares, n, mean, p10, p50, p90}."""
+    if values is None or not len(values):
+        return dict(edges=[], counts=[], shares=[], n=0)
+    w = np.ones(len(values)) if weights is None else np.asarray(weights, dtype=float)
+    lo = float(np.floor(values.min() / step) * step); hi = float(np.ceil(values.max() / step) * step)
+    if hi <= lo:
+        hi = lo + step
+    edges = np.arange(lo, hi + step / 2, step)
+    c, _ = np.histogram(values, bins=edges, weights=w)
+    tot = float(w.sum()) or 1.0
+    order = np.argsort(values); cw = np.cumsum(w[order]) / tot
+    q = lambda f: float(values[order][min(len(values) - 1, int(np.searchsorted(cw, f)))])   # noqa: E731
+    return dict(edges=[float(e) for e in edges], counts=[float(x) for x in c], shares=[float(x) / tot for x in c], n=int(round(tot)),
+                mean=float(np.average(values, weights=w)), p10=q(0.10), p50=q(0.50), p90=q(0.90), ymax=float(c.max() / tot) if len(c) else 0.0)
+
+
+def _exposures_view(set_key: str = "pool", metric: str = "proj") -> dict:
     """
-    Everything behind the exposures screen: the chosen set of lineups (the candidate pool, the sampled public field, or the
-    chosen entries of one contest or all), every player in it with the full player row (the team card's data, hover popups
-    included) plus his exposure in the set, and the histograms of lineup projected totals and ownership sums for all three
-    sets at once, so the set in view reads against the other two.
+    The exposures screen: one set of lineups in view (the candidate pool, a simmed contest's sampled field, or the chosen
+    entries of one contest or all), one histogram of a per-lineup metric over it (projected total under our projection,
+    ownership sum under the field's ownership, or salary used), and every player in the set with the team card's full row
+    plus his exposure in the set, ownership and leverage (and for entries the projection at pick with the delta).
     """
     players = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
     means = {i: float(p.fpts_mean or 0.0) for i, p in players.items()}
     owns = {i: float(p.ownership or 0.0) for i, p in players.items()}
-    sets = {"pool": _pool_lineups(), "field": _field_sample() or []}
-    ent = _entries_lineups(contest)
-    sets["entries"] = ent["lineups"] if ent else []
-    sums = {k: [sum(means.get(i, 0.0) for i in lu) for lu in v] for k, v in sets.items()}
-    osum = {k: [sum(owns.get(i, 0.0) for i in lu) for lu in v] for k, v in sets.items()}
-    chosen = sets.get(mode) or []
+    sals = {i: float(p.salary or 0.0) for i, p in players.items()}
+    fields = _sim_fields()
+    ent = _entries_lineups(None)
+    options = [dict(key="pool", label=f"candidate pool · {len(_pool_lineups())} lineups", group="pool")]
+    for cid, f in fields.items():
+        options.append(dict(key=f"field:{cid}", label=f"sampled field · {f['name'][:46]} · {int(round(f['dupes'].sum()))} entries", group="field"))
+    if ent:
+        options.append(dict(key="entries", label=f"chosen entries · all contests · {len(ent['lineups'])} entries", group="entries"))
+        for cid, name, k in ent["contests"]:
+            options.append(dict(key=f"entries:{cid}", label=f"chosen entries · {name[:46]} · {k} entries", group="entries"))
+    keys = {o["key"] for o in options}
+    if set_key not in keys:
+        set_key = "pool"
+    weights = None; label = next(o["label"] for o in options if o["key"] == set_key); then = {}
+    if set_key == "pool":
+        lineups = [np.asarray(x, dtype=int) for x in _pool_lineups()]
+    elif set_key.startswith("field:"):
+        f = fields[int(set_key.split(":")[1])]
+        lineups = [row for row in f["lineups"]]; weights = f["dupes"]
+    else:
+        cid = int(set_key.split(":")[1]) if ":" in set_key else None
+        e = _entries_lineups(cid) if cid is not None else ent
+        lineups = [np.asarray(x, dtype=int) for x in (e["lineups"] if e else [])]
+        if e is not None:
+            then = e["frame"].groupby("player_id")["projection"].first().to_dict()
+    n = len(lineups)
+    w = np.ones(n) if weights is None else np.asarray(weights, dtype=float)
+    metric = metric if metric in ("proj", "own", "sal") else "proj"
+    per = {"proj": (means, 5.0, "projected total per lineup (our projection)", "fpts"),
+           "own": (owns, 20.0, "ownership sum per lineup (the field's ownership)", "%"),
+           "sal": (sals, 500.0, "salary used per lineup", "$")}
+    table, step, title, unit = per[metric]
+    vals = np.array([sum(table.get(int(i), 0.0) for i in lu) for lu in lineups], dtype=float)
+    hist = _hist1(vals, w, step) if n else dict(edges=[], counts=[], shares=[], n=0)
     counts: dict = {}
-    for lu in chosen:
+    for lu, wt in zip(lineups, w):
         for i in lu:
-            counts[i] = counts.get(i, 0) + 1
-    n = len(chosen)
-    # the full player rows from the team cards, by player id
+            counts[int(i)] = counts.get(int(i), 0.0) + float(wt)
+    tot = float(w.sum()) or 1.0
     by_id = {}
     for t in sorted({p.team for p in players.values() if p.team}):
         if t not in desk.proj:
             desk.reproject(t)
         for r in desk.team_rows(t):
             by_id[int(r["id"])] = r
-    then = {}
-    if mode == "entries" and ent is not None:
-        then = ent["frame"].groupby("player_id")["projection"].first().to_dict()
     rows = []
     for pid, k in counts.items():
         r = by_id.get(pid)
         if r is None:
             continue
-        exp = k / max(1, n)
-        x = dict(r)
-        x.update(n_in=k, exposure=exp, leverage=None if r.get("own") is None else exp * 100 - r["own"],
-                 proj_then=None if pid not in then or pd.isna(then[pid]) else float(then[pid]))
+        exp = k / tot
+        x = dict(r); x.update(n_in=int(round(k)), exposure=exp, leverage=None if r.get("own") is None else exp * 100 - r["own"],
+                             proj_then=None if pid not in then or pd.isna(then[pid]) else float(then[pid]))
         x["delta"] = None if x["proj_then"] is None or r.get("fpts") is None else r["fpts"] - x["proj_then"]
         rows.append(x)
     rows.sort(key=lambda x: (-x["exposure"], -(x["fpts"] or 0)))
-    labels = {"pool": "candidate pool", "field": "sampled field", "entries": "chosen entries"}
-    return dict(mode=mode, contest=contest, label=labels[mode], n=n, rows=rows, sizes={k: len(v) for k, v in sets.items()},
-                entries=None if ent is None else dict(stamp=ent["stamp"], when=ent["when"], contests=ent["contests"]),
-                hist_proj=_hist(sums, 5.0), hist_own=_hist(osum, 20.0), colors=HIST_COLORS,
-                teams=sorted({(x["team"]) for x in rows}))
+    return dict(set=set_key, metric=metric, options=options, label=label, n=int(round(tot)) if n else 0, rows=rows, hist=hist, title=title, unit=unit,
+                is_entries=set_key.startswith("entries"), teams=sorted({x["team"] for x in rows}),
+                color=HIST_COLORS["entries" if set_key.startswith("entries") else ("field" if set_key.startswith("field") else "pool")])
 
 
 def _start_restore(draft_group: int) -> None:

@@ -117,6 +117,8 @@
   .exp-head { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:8px } .exp-head .seg { display:inline-flex; border:1px solid #cfcfcf; border-radius:6px; overflow:hidden } .exp-head .seg a { font-size:12px; font-weight:600; padding:4px 11px; color:var(--muted); text-decoration:none; cursor:pointer } .exp-head .seg a.on { background:var(--accent); color:#fff } .exp-head .seg a.on .muted { color:#dbe7fb } .exp-contest { font:inherit; font-size:12px; padding:3px 6px; max-width:360px }
   .exp-charts { display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:18px; margin:4px 0 14px } figure.hist { margin:0; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px 4px } figure.hist figcaption { font-size:12px; color:var(--muted); margin-bottom:2px }
   figure.hist svg { display:block } figure.hist .base { stroke:#ddd; stroke-width:1 } figure.hist .hl { font-size:10px; fill:var(--muted) } figure.hist .hl.on { fill:var(--ink); font-weight:700 } figure.hist .hs { font-size:9px; fill:#999 } figure.hist rect:hover { opacity:1; stroke:#333; stroke-width:1 }
+  .exp-set { font:inherit; font-size:12px; padding:3px 6px; max-width:560px } figure.hist.big { margin:0 0 14px } figure.hist .grid { stroke:#eee; stroke-width:1 }
+  .exp-filters { display:flex; gap:10px; align-items:center; margin:0 0 6px; font-size:12px } .exp-filters input, .exp-filters select { font:inherit; font-size:12px; padding:3px 6px }
   .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
@@ -337,6 +339,19 @@
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
   });
+  // the exposures table's filters: text (player / team / pos), team, status, a minimum exposure
+  window.expFilter = function () {
+    const t = document.getElementById("exposures-table"); if (!t) return;
+    const q = (document.getElementById("exp-q").value || "").toLowerCase().trim(), team = document.getElementById("exp-team").value, st = document.getElementById("exp-st").value;
+    const mn = parseFloat(document.getElementById("exp-min").value); let shown = 0, total = 0;
+    t.querySelectorAll("tbody > tr").forEach(tr => {
+      total++;
+      let ok = (!q || tr.dataset.q.toLowerCase().includes(q)) && (!team || tr.dataset.team === team) && (isNaN(mn) || parseFloat(tr.dataset.exp) >= mn);
+      if (st === "q" || st === "out") ok = ok && tr.dataset.st === st; else if (st) ok = ok && tr.dataset.starter === st;
+      tr.style.display = ok ? "" : "none"; if (ok) shown++;
+    });
+    const c = document.getElementById("exp-count"); if (c) c.textContent = shown === total ? `${total} players` : `${shown} of ${total} players`;
+  };
   // sortable tables: click a header to sort by that column (numbers as numbers, via data-v on the cells)
   document.body.addEventListener("click", e => {
     const th = e.target.closest("table.sortable thead th"); if (!th) return;
