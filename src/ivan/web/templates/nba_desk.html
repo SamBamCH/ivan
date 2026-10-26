@@ -135,6 +135,7 @@
   table.rot-grid td.hover .pop { font-size:11px; min-width:260px }
   table.rot-grid:not(.hist):not(.show-out) tbody.rows > tr.outrow { display:none }     /* out players folded by default; the bar's link shows them */
   .rot-bar a.out-toggle { font-size:11px; color:var(--muted); text-decoration:underline dotted }
+  table.rot-grid input[data-pin].dirty { border-color:var(--warn); background:#fffbeb } .rot-bar button.rot-refigure { margin-right:4px; border-color:var(--warn); color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
@@ -402,6 +403,29 @@
     function sync() { const o = pick.options[pick.selectedIndex]; src.value = o ? o.dataset.source : "lobby"; load.disabled = !o || /\(loaded\)$/.test(o.textContent); load.textContent = (o && o.dataset.source === "archive") ? "Restore" : "Load"; }
     day.addEventListener("change", fill); pick.addEventListener("change", sync); fill();
   })();
+  // typed values in the grid's columns wait for Refigure. Until then they survive any re-render of the card (a paint stroke, a
+  // starter click, a news check): dirty inputs are stashed before the swap and put back after it.
+  const pendingByTeam = {};
+  function stashPending(card) {
+    if (!card) return; const team = card.id.replace("card-", ""); const m = {};
+    card.querySelectorAll("table.rot-grid input[data-pin].dirty").forEach(i => { const tr = i.closest("tr"); if (tr && tr.dataset.key) m[tr.dataset.key + "|" + i.dataset.pin] = i.value; });
+    if (Object.keys(m).length) pendingByTeam[team] = m;
+  }
+  function restorePending(card) {
+    if (!card) return; const team = card.id.replace("card-", ""); const m = pendingByTeam[team]; if (!m) return;
+    card.querySelectorAll("table.rot-grid input[data-pin]").forEach(i => { const tr = i.closest("tr"); const k = tr && tr.dataset.key ? tr.dataset.key + "|" + i.dataset.pin : null; if (k && k in m) { i.value = m[k]; i.classList.add("dirty"); } });
+  }
+  document.body.addEventListener("htmx:beforeSwap", e => { const t = e.detail.target; if (t && t.id && t.id.startsWith("card-")) stashPending(t); });
+  document.body.addEventListener("htmx:afterSwap", e => { const t = e.detail.target; if (t && t.id && t.id.startsWith("card-")) { restorePending(t); delete pendingByTeam[t.id.replace("card-", "")]; } });
+  document.body.addEventListener("click", e => {
+    const btn = e.target.closest("button.rot-refigure"); if (!btn) return;
+    const rot = btn.closest(".rot"); const team = rot.dataset.team; const rows = {};
+    rot.querySelectorAll("table.rot-grid tbody.rows > tr[data-key] input[data-pin]").forEach(i => { const k = i.closest("tr").dataset.key; (rows[k] = rows[k] || {player: k})[i.dataset.pin] = i.value; });
+    btn.disabled = true; btn.textContent = "refiguring…";
+    fetch(ROOT + "/team/" + team + "/refigure", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rows: Object.values(rows)})})
+      .then(r => r.text()).then(html => { delete pendingByTeam[team]; const card = document.getElementById("card-" + team); if (card) { card.innerHTML = html; htmx.process(card); applyFilter(); } })
+      .catch(() => { btn.disabled = false; btn.textContent = "Refigure"; });
+  });
   // the grid saves itself: on every stroke's mouseup and on every lock click the rows go to the server (the locked rows are
   // held, the rest re-filled); a stroke during a save marks it dirty and it saves again when the reply lands, so nothing
   // painted is ever lost to a re-render
@@ -424,7 +448,7 @@
       .then(r => r.text()).then(html => {
         rotSaving[team] = false;
         if (rotDirty[team]) { rotSave(team); return; }               // painted meanwhile: that stroke is what goes in, not this reply
-        const card = document.getElementById("card-" + team); if (card) { card.innerHTML = html; htmx.process(card); applyFilter(); }
+        const card = document.getElementById("card-" + team); if (card) { stashPending(card); card.innerHTML = html; htmx.process(card); restorePending(card); delete pendingByTeam[team]; applyFilter(); }
       }).catch(() => { rotSaving[team] = false; });
   }
   document.addEventListener("mouseup", () => { if (paint !== null && paintTeam) { const t = paintTeam; paint = null; paintTeam = null; rotSave(t); } paint = null; });

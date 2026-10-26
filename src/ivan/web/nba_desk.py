@@ -1789,6 +1789,58 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
+@app.post("/team/{team}/refigure", response_class=HTMLResponse)
+async def refigure(request: Request, team: str):
+    """
+    Body: JSON {rows: [{player, minutes, fppm, fpts, pub}, ...]}: every typed value of the team's grid, applied in one go (blank
+    clears that pin), then the team re-projected once: the skeleton re-fills the grid to the typed minutes (a row whose minutes
+    changed loses its lock so it can move), the other free rows move around them. The public numbers that changed rebuild the field.
+    """
+    if (b := _busy(request)) is not None:
+        return b
+    body = await request.json()
+    with LOCK:
+        changed_min, changed_pub, n_set = [], 0, 0
+        for r in body.get("rows") or []:
+            key = normalize_name(str(r.get("player") or ""))
+            if not key:
+                continue
+            old = override_of(desk.overrides, key)
+            vals = {}
+            for k in ("minutes", "fppm", "fpts", "pub"):
+                if k in r:
+                    try:
+                        vals[k] = _num(r.get(k), k)
+                    except ValueError as e:
+                        desk.flash.append(str(e)); continue
+            if not vals:
+                continue
+            if "minutes" in vals and vals["minutes"] != old.get("minutes"):
+                changed_min.append(key)
+            if "pub" in vals and vals["pub"] != old.get("pub"):
+                changed_pub += 1
+            if any(vals.get(k) != old.get(k) for k in vals):
+                n_set += 1
+            desk.set_override(key, **vals)
+        if changed_min:
+            g = ROT.load_drawn(team)
+            if g is not None:
+                kept = [n for n in g.attrs.get("locked", []) if n not in changed_min]
+                if len(kept) != len(g.attrs.get("locked", [])):
+                    ROT.save_drawn(team, g, locked=kept, fingerprint=g.attrs.get("fingerprint"))
+        desk.reproject(team)
+        msg = f"{team}: {n_set} value(s) applied, the grid refigured" + (f" ({len(changed_min)} minutes changed)" if changed_min else "")
+        if changed_pub:
+            try:
+                t0 = time.time(); refresh_ownership(desk.session, log=lambda m: None)
+                msg += f"; {changed_pub} public number(s) changed: field and ownership rebuilt in {time.time() - t0:.0f}s"
+            except Exception as e:   # noqa: BLE001
+                msg += f"; the field did not rebuild: {type(e).__name__}: {e}"
+            desk.rebuild()
+        desk.flash.append(msg)
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
 @app.post("/team/{team}/starter", response_class=HTMLResponse)
 def starter_toggle(request: Request, team: str, player: str = Form(...)):
     """Click the st cell: a bench player becomes a starter, a starter goes to the bench; a second click on a hand call clears it
