@@ -1530,6 +1530,64 @@ def _hist1(values: np.ndarray, weights: Optional[np.ndarray], step: float, bins:
                 mean=float(np.average(values, weights=w)), p10=q(0.10), p50=q(0.50), p90=q(0.90), ymax=float(c.max() / tot) if len(c) else 0.0)
 
 
+_FIELD_TARGET: dict = {}
+
+
+def _field_target(metric: str) -> Optional[dict]:
+    """
+    The real fields the two-group sampler was fitted to (data/nba/derived/contests/<id>: DraftKings standings parsed at
+    lock, one row per unique lineup with copies): per-lineup values for the histogram's target line. proj = the lineup's
+    projected total as a share of that contest's best projected lineup (slates differ in scale; tonight's best rescales it),
+    own = the sum of the eight players' real ownership, sal = salary used. Cached per process. None without derived contests.
+    """
+    if metric in _FIELD_TARGET:
+        return _FIELD_TARGET[metric]
+    from ivan.sports.nba.standings import DERIVED_DIR
+    vals, wts, n_contests, dates = [], [], 0, []
+    for d in sorted(DERIVED_DIR.glob("*")) if DERIVED_DIR.is_dir() else []:
+        lp, pc = d / "lineups.parquet", d / "players.csv"
+        if not lp.exists():
+            continue
+        try:
+            lu = pd.read_parquet(lp)
+            if metric == "proj":
+                if "proj_sum" not in lu or lu.proj_sum.max() <= 0:
+                    continue
+                v = lu.proj_sum.values / float(lu.proj_sum.max())
+            elif metric == "own":
+                if not pc.exists():
+                    continue
+                pl = pd.read_csv(pc); own = dict(zip(pl["id"].astype(int), pd.to_numeric(pl["drafted_pct"], errors="coerce").fillna(0.0)))
+                v = np.array([sum(own.get(int(getattr(r, f"p{j}")), 0.0) for j in range(1, 9)) for r in lu.itertuples()])
+            else:
+                if "salary" not in lu:
+                    continue
+                v = lu.salary.values.astype(float)
+            w = lu.copies.values.astype(float); v = np.asarray(v, dtype=float)
+            ok = np.isfinite(v)                                   # a lineup with an unprojected player has no total
+            vals.append(v[ok]); wts.append(w[ok]); n_contests += 1
+            try:
+                dates.append(json.loads((d / "field.json").read_text()).get("capture_at", "")[:10])
+            except Exception:   # noqa: BLE001
+                pass
+        except Exception:   # noqa: BLE001
+            continue
+    out = None if not vals else dict(values=np.concatenate(vals), weights=np.concatenate(wts), contests=n_contests,
+                                     span=(min(x for x in dates if x), max(x for x in dates if x)) if any(dates) else None)
+    _FIELD_TARGET[metric] = out
+    return out
+
+
+def _target_line(target: dict, edges: list, scale: float = 1.0) -> Optional[dict]:
+    """The target's share per bin of the histogram's own edges (mass outside the edges is kept in the denominator)."""
+    if not target or not edges:
+        return None
+    v = target["values"] * scale; w = target["weights"]
+    c, _ = np.histogram(v, bins=np.asarray(edges), weights=w)
+    tot = float(w.sum()) or 1.0
+    return dict(shares=[float(x) / tot for x in c], contests=target["contests"], span=target["span"], inside=float(c.sum() / tot))
+
+
 def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[int] = None) -> dict:
     """
     The exposures screen: one set of lineups in view (the candidate pool, a simmed contest's sampled field, or the chosen
@@ -1579,6 +1637,18 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[
     vals = np.array([sum(table.get(int(i), 0.0) for i in lu) for lu in lineups], dtype=float)
     bins = int(bins) if bins and 4 <= int(bins) <= 80 else None
     hist = _hist1(vals, w, step, bins=bins) if n else dict(edges=[], counts=[], shares=[], n=0)
+    # the dotted target over a sampled field: the real fields' shape, projected totals rescaled to tonight's best lineup
+    target = None
+    if set_key.startswith("field") and hist.get("edges"):
+        tg = _field_target(metric)
+        if tg:
+            anchor = 1.0
+            if metric == "proj":
+                pool_sums = [sum(means.get(int(i), 0.0) for i in lu) for lu in _pool_lineups()]
+                anchor = float(max(pool_sums)) if pool_sums else float(vals.max())
+            target = _target_line(tg, hist["edges"], anchor)
+            if target:
+                hist["ymax"] = max(float(hist.get("ymax") or 0.0), max(target["shares"], default=0.0))
     counts: dict = {}
     for lu, wt in zip(lineups, w):
         for i in lu:
@@ -1601,7 +1671,7 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[
         x["delta"] = None if x["proj_then"] is None or r.get("fpts") is None else r["fpts"] - x["proj_then"]
         rows.append(x)
     rows.sort(key=lambda x: (-x["exposure"], -(x["fpts"] or 0)))
-    return dict(set=set_key, metric=metric, bins=bins, options=options, label=label, n=int(round(tot)) if n else 0, rows=rows, hist=hist, title=title, unit=unit,
+    return dict(set=set_key, metric=metric, bins=bins, options=options, label=label, n=int(round(tot)) if n else 0, rows=rows, hist=hist, title=title, unit=unit, target=target,
                 is_entries=set_key.startswith("entries"), teams=sorted({x["team"] for x in rows}),
                 color=HIST_COLORS["entries" if set_key.startswith("entries") else ("field" if set_key.startswith("field") else "pool")])
 

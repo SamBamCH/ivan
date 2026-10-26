@@ -41,7 +41,9 @@
         {% for sh in ex.hist.shares %}{% set h = (H - bottom - 14) * (sh / ex.hist.ymax if ex.hist.ymax else 0) %}
         <rect x="{{ left + loop.index0 * bw + 1 }}" y="{{ H - bottom - h }}" width="{{ bw - 2 if bw > 3 else bw }}" height="{{ h }}" rx="2" fill="{{ ex.color }}"><title>{{ '%.0f'|format(ex.hist.edges[loop.index0]) }}–{{ '%.0f'|format(ex.hist.edges[loop.index]) }} {{ ex.unit }} · {{ '%.1f'|format(100 * sh) }}% ({{ '%.0f'|format(ex.hist.counts[loop.index0]) }} of {{ ex.hist.n }})</title></rect>{% endfor %}
         {% for e in ex.hist.edges %}{% if loop.index0 % (4 if nb > 28 else 2 if nb > 14 else 1) == 0 or loop.last %}<text x="{{ left + loop.index0 * bw }}" y="{{ H - 6 }}" text-anchor="middle" class="hs">{{ '%.0f'|format(e) }}</text>{% endif %}{% endfor %}
-      </svg>{% endif %}
+        {% if ex.target %}<polyline class="target" points="{% for sh in ex.target.shares %}{{ left + (loop.index0 + 0.5) * bw }},{{ H - bottom - (H - bottom - 14) * (sh / ex.hist.ymax if ex.hist.ymax else 0) }} {% endfor %}"><title>the real fields' shape: {{ ex.target.contests }} contests{% if ex.target.span %} ({{ ex.target.span[0] }} .. {{ ex.target.span[1] }}){% endif %}{% if ex.metric == 'proj' %}, projected totals scaled to tonight's best lineup{% endif %}</title></polyline>{% endif %}
+      </svg>
+      {% if ex.target %}<div class="legend"><span class="sw-line"></span> real fields the sampler was fitted to ({{ ex.target.contests }} contests{% if ex.target.span %}, {{ ex.target.span[0][5:] }} to {{ ex.target.span[1][5:] }}{% endif %}){% if ex.metric == 'proj' %}, scaled to tonight's best lineup{% endif %}{% if ex.target.inside < 0.97 %} · {{ '%.0f%%'|format(100 * (1 - ex.target.inside)) }} of it lies outside this range{% endif %}</div>{% endif %}{% endif %}
     </figure>
     {% if not ex.rows %}<p class="muted">nothing in this set yet</p>{% else %}
     <div class="exp-filters">
