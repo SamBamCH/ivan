@@ -1,45 +1,47 @@
 {
- "paths": {
-  "entries_csv": "data/nba/input/entries.csv"
- },
- "solver": {},
- "min_salary": 49000,
- "max_salary": 50000,
- "randomness": 1,
- "max_salary_per_team": 30000,
- "player_min_fpts": 15.0,
- "generate": {
-  "n_samples": 5000,
-  "randomness": 0.25,
-  "jitter": 0.05,
-  "min_fpts": null,
+  "paths": {
+    "entries_csv": "data/nba/input/entries.csv"
+  },
+  "solver": {},
+  "min_salary": 49000,
+  "max_salary": 50000,
+  "randomness": 1,
+  "max_salary_per_team": 30000,
   "player_min_fpts": 15.0,
-  "min_fpts_frac": 0.9
- },
- "field": {
-  "sampler": "two_group",
-  "cap": 10000,
-  "_note": "two_group (2026-10-23): the field is its own lineups from the fitted two-group model (data/nba/models/field_two_group.json), every candidate scored against it; projection_model is the old bin sampler on our pool"
- },
- "sim": {
-  "n_sims": 1000
- },
- "choose": {
-  "cash_pct": 0.5,
-  "avg_roi_win": 0.5,
-  "diversity_lambda": 0.1,
-  "method": "greedy",
-  "bankroll": 3.0
- },
- "projection": {
-  "minutes_model": "rotation",
-  "n_sims": 4000,
-  "rebalance": false,
-  "salary_blend": true,
-  "alloc": "solve",
-  "_alloc_note": "solve (2026-10-24): per-team quadratic solve on anchors (books' implied minutes for priced players, history for the rest, desk edits held) within position-group budgets; headroom = the old allocator",
-  "depth_cut": true,
-  "depth_extra": 0,
-  "_depth_note": "depth_cut (2026-10-24): the grid plays the team's measured rotation depth (players with 5+ min over the last 10 games, 8..12) plus depth_extra; the rest get no minutes and leave the pool. Backtest under live-like availability: rotation players' error falls (28+ min MAE 3.98 vs 4.53), the cut fringe is over-penalised (fpts MAE overall 8.34 vs 7.55, bias +1.1). false = every available player keeps his expected minutes."
- }
+  "generate": {
+    "n_samples": 5000,
+    "randomness": 0.25,
+    "jitter": 0.05,
+    "min_fpts": null,
+    "player_min_fpts": 15.0,
+    "min_fpts_frac": 0.9
+  },
+  "field": {
+    "sampler": "two_group",
+    "cap": 10000,
+    "_note": "two_group (2026-10-23): the field is its own lineups from the fitted two-group model (data/nba/models/field_two_group.json), every candidate scored against it; projection_model is the old bin sampler on our pool"
+  },
+  "sim": {
+    "n_sims": 1000
+  },
+  "choose": {
+    "cash_pct": 0.5,
+    "avg_roi_win": 0.5,
+    "diversity_lambda": 0.1,
+    "method": "greedy",
+    "bankroll": 3.0
+  },
+  "projection": {
+    "minutes_model": "rotation",
+    "n_sims": 4000,
+    "rebalance": false,
+    "salary_blend": true,
+    "alloc": "solve",
+    "_alloc_note": "solve (2026-10-24): per-team quadratic solve on anchors (books' implied minutes for priced players, history for the rest, desk edits held) within position-group budgets; headroom = the old allocator",
+    "depth_cut": true,
+    "depth_extra": 0,
+    "_depth_note": "depth_cut (2026-10-24): the grid plays the team's measured rotation depth (players with 5+ min over the last 10 games, 8..12) plus depth_extra; the rest get no minutes and leave the pool. Backtest under live-like availability: rotation players' error falls (28+ min MAE 3.98 vs 4.53), the cut fringe is over-penalised (fpts MAE overall 8.34 vs 7.55, bias +1.1). false = every available player keeps his expected minutes.",
+    "pool": "depth_cut",
+    "_pool_note": "pool (2026-10-25): which players are tonight's rotation. depth_cut = the measured depth above. last_game = the rotation of the last ordinary game this group played together (5+ min that night), minus tonight's outs, plus the returners (available, usual 15+ min); the depth cut stands when the team has no such game. Backtest with scripts/nba/backtest_skeleton.py --pool before switching."
+  }
 }

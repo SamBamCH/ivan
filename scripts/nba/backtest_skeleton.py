@@ -25,7 +25,7 @@ from ivan.sports.nba.projection.engine import ProjectionParams, project_team
 from ivan.sports.nba.projection.groups import group_of, position_map, rotation_depth
 from ivan.sports.nba.projection.history import build_history, load_box_scores
 from ivan.sports.nba.projection.minutes import salary_prior_minutes
-from ivan.sports.nba.projection.rotation import boundary_spreads, curves, propose
+from ivan.sports.nba.projection.rotation import boundary_spreads, curves, last_game_pool, propose
 from ivan.sports.nba.pbp import sub_shares
 from ivan.sports.nba.projection.walkforward import build_cases
 
@@ -37,6 +37,7 @@ def main() -> int:
     ap.add_argument("--dnp-available", action="store_true", help="dressed-but-DNP players count as available (live conditions: nobody knows who sits)")
     ap.add_argument("--no-depth", action="store_true", help="skip the rotation depth cut")
     ap.add_argument("--depth-extra", type=int, default=0, help="keep this many players beyond the team's measured depth")
+    ap.add_argument("--pool", action="store_true", help="add the pool-rule variant: the last ordinary game's rotation minus the outs plus the returners")
     a = ap.parse_args()
     session = get_session(init_db("nba"))
     box = load_box_scores(session); hist = build_history(box)
@@ -69,13 +70,21 @@ def main() -> int:
                                                                                                       "depth": None if a.no_depth else rotation_depth(box, c["team"], before=d) + a.depth_extra,
                                                                                                       "vacated": [p.name for p in roster if not p.available and p.name in curve.index]}),
         }
+        if a.pool:
+            usual = {str(n): float(curve.loc[n, "minutes"]) for n in curve.index}
+            season_start = date(d.year if d.month >= 10 else d.year - 1, 10, 1)
+            info = last_game_pool(session, c["team"], avail, usual, before=d, since=season_start)
+            variants["pool: last ordinary game's rotation"] = replace(base, minutes_model="rotation", rotation={
+                "skeleton": True, "curve": curve, "spreads": spreads, "shares": shares,
+                "pool": None if info is None else info["pool"], "depth": (rotation_depth(box, c["team"], before=d) + a.depth_extra) if info is None else None,
+                "vacated": [p.name for p in roster if not p.available and p.name in curve.index]})
         for label, params in variants.items():
             proj = project_team(roster, state, hist, tf.get(c["team"]), params, rng=rng, simulate=True)
             j = proj.join(c["actual"], how="outer", rsuffix="_act")
             j = j[j.index.isin(avail)]
             j["label"], j["team"], j["date"] = label, c["team"], d
             rows.append(j.reset_index())
-            if label.startswith("new"):
+            if label.startswith(("new", "pool")):
                 zero = params.rotation.get("zero_minutes") or []
                 for n in zero:
                     act = float(c["actual"].loc[n, "minutes"]) if n in c["actual"].index else 0.0

@@ -86,6 +86,8 @@
   table.rot-grid col.c-hp { width:52px } table.rot-grid col.c-hd { width:44px } table.rot-grid td.hp { color:var(--muted) } table.rot-grid td.hf { font-weight:700 }
   table.rot-grid td.hd { color:#999 } table.rot-grid td.hd.mid { color:var(--warn); font-weight:600 } table.rot-grid td.hd.big { color:var(--bad); font-weight:700 }
   table.rot-grid.hist td.cell.gt.on { opacity:.35 } table.rot-grid.hist td.cell.gt { background:repeating-linear-gradient(45deg,#f1f1f1 0 2px,#e4e4e4 2px 4px) } .rot-bar b.warn { color:var(--warn) } .rot-bar b.ok { color:var(--ok) }
+  .pill.mapped { background:#dcfce7; color:var(--ok) } .pill.changed { background:#fef3c7; color:#92400e } .pill.unmapped { background:#f1f1f1; color:var(--muted) }
+  .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
@@ -173,6 +175,7 @@
       {% for dg, s in header.slates.items() %}<option value="{{ dg }}" {% if dg|int == header.draft_group %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
     </select>
   </form>
+  {% if header.mapped and header.mapped.n %}<span class="mapped-sum {% if header.mapped.n_mapped == header.mapped.n %}ok{% elif header.mapped.changed %}warn{% endif %}" title="teams whose whole grid is held and whose inputs have not moved since; the jobs warn when the count is short">mapped {{ header.mapped.n_mapped }}/{{ header.mapped.n }}{% if header.mapped.changed %} · <b>changed: {{ header.mapped.changed|join(', ') }}</b>{% endif %}{% if header.mapped.unmapped %} · unmapped: {{ header.mapped.unmapped|join(', ') }}{% endif %}</span>{% endif %}
   <label title="hide players projected below this many fantasy points">show ≥
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>

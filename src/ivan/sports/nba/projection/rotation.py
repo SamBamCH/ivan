@@ -440,6 +440,44 @@ def game_oddities(session: Session, team: str, game_ids: Iterable[str], usual: O
     return out
 
 
+POOL_USUAL_MIN = 15.0        # a returner (available, not in the matched game) joins the pool when his usual minutes reach this
+POOL_PLAYED_MIN = 5.0        # minutes in the matched game that put a player in its rotation
+
+
+def last_game_pool(session: Session, team: str, available: Iterable[str], usual: Dict[str, float], before: Optional[date] = None,
+                   since: Optional[date] = None, limit: int = 20) -> Optional[dict]:
+    """
+    The pool rule "last game": tonight's rotation is the rotation of the last ordinary game this group played together,
+    minus anyone out tonight, plus the returners (available tonight, not in that game, usual minutes POOL_USUAL_MIN+).
+    `available` = tonight's available players, `usual` = {player: usual minutes}. The matched game is the closest ordinary
+    group match (lineup_matches / game_oddities / best_match) among the team's games with stints (`before` / `since`
+    bound them: the backtest asks for the games known before the case's date). None when the team has no such game.
+    Returns pool (set), base (the game's rotation still available), returners, dropped (available players left out),
+    game_id, game_date, odd, reasons, match (the label pieces).
+    """
+    games = team_games(session, team, before=before, since=since, limit=limit)
+    if not games:
+        return None
+    avail = [str(n) for n in available]
+    tonight = {n: float(usual.get(n, 0.0)) for n in avail if float(usual.get(n, 0.0)) >= POOL_USUAL_MIN}
+    played = played_sets(session, team, [g["game_id"] for g in games], min_minutes=POOL_PLAYED_MIN)
+    matches = lineup_matches(games, played, tonight)
+    odd = game_oddities(session, team, [g["game_id"] for g in games], usual)
+    for m in matches:
+        m.update(odd.get(str(m["game_id"]), {}))
+    best = best_match(matches)
+    if best is None:
+        return None
+    rotation = set(played.get(str(best["game_id"]), {}))
+    base = sorted(n for n in rotation if n in avail)
+    returners = sorted(n for n in avail if n not in rotation and float(usual.get(n, 0.0)) >= POOL_USUAL_MIN)
+    pool = set(base) | set(returners)
+    dropped = sorted(n for n in avail if n not in pool)
+    return dict(pool=pool, base=base, returners=returners, dropped=dropped, game_id=str(best["game_id"]), game_date=str(best["game_date"]),
+                odd=bool(best.get("odd")), reasons=list(best.get("reasons") or []), missing=best.get("missing") or {}, extra=best.get("extra") or {},
+                exact=bool(best.get("exact")))
+
+
 def best_match(matches: List[dict]) -> Optional[dict]:
     """The lowest score among the ordinary games, else the lowest overall; the newest game on ties (the list is newest first)."""
     if not matches:
@@ -486,16 +524,19 @@ def drawn_path(team: str) -> Path:
     return ROTATIONS_DIR / f"{team}.json"
 
 
-def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[Iterable[str]] = None) -> Path:
+def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[Iterable[str]] = None, fingerprint: Optional[dict] = None) -> Path:
     """
     The team's painted rotation. `locked` names the rows the desk holds exactly (the skeleton fills the others around
-    them, projection/skeleton.py); None locks every row (the older meaning of a drawn grid).
+    them, projection/skeleton.py); None locks every row (the older meaning of a drawn grid). `fingerprint` is what the
+    mapping was made against (availability, statuses, starters: desk.fingerprint); the desk compares it to the live pool
+    and says "mapped" or "changed since mapped".
     """
     p = drawn_path(team); p.parent.mkdir(parents=True, exist_ok=True)
     names = [str(n) for n in grid.index]
     p.write_text(json.dumps({"team": team, "saved_at": datetime.now().isoformat(timespec="seconds"), "note": note,
                              "players": names, "grid": [[int(x) for x in row] for row in grid[list(range(MINUTES))].values],
-                             "locked": names if locked is None else [str(n) for n in locked if str(n) in names]}, indent=0))
+                             "locked": names if locked is None else [str(n) for n in locked if str(n) in names],
+                             "fingerprint": fingerprint}, indent=0))
     return p
 
 
@@ -507,6 +548,7 @@ def load_drawn(team: str) -> Optional[pd.DataFrame]:
     d = json.loads(p.read_text())
     g = pd.DataFrame(np.array(d["grid"], dtype=bool).reshape(len(d["players"]), MINUTES), index=d["players"], columns=list(range(MINUTES)))
     g.attrs["locked"] = list(d.get("locked", d["players"]))
+    g.attrs["fingerprint"] = d.get("fingerprint"); g.attrs["saved_at"] = d.get("saved_at")
     return g
 
 

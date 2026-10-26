@@ -174,10 +174,23 @@ class LiveSlate:
         depth = None
         if block.get("depth_cut", True):
             depth = rotation_depth(self.box, team) + int(block.get("depth_extra", 0))
+        pool, pool_info = None, None
+        if str(block.get("pool", "depth_cut")) == "last_game":
+            # the pool rule: the last ordinary game this group played together, minus the outs, plus the returners
+            from .rotation import last_game_pool
+            from datetime import date as _date
+            today = _date.today(); season_start = _date(today.year if today.month >= 10 else today.year - 1, 10, 1)
+            usual = {} if curve.empty else {str(n): float(curve.loc[n, "minutes"]) for n in curve.index}
+            try:
+                pool_info = last_game_pool(self.session, team, avail, usual, since=season_start)
+            except Exception:   # noqa: BLE001 - no stints yet: the depth cut stands
+                pool_info = None
+            if pool_info is not None:
+                pool, depth = pool_info["pool"], None
         return {"skeleton": True, "curve": curve if not curve.empty else None, "locks": locks,
                 "vacated": [p.name for p in roster if not p.available and (curve.empty or p.name in curve.index)],
                 "spreads": boundary_spreads(self.session, avail), "drawn": locks is not None, "shares": shares,
-                "depth": depth}
+                "depth": depth, "pool": pool, "pool_info": pool_info}
 
     def group_targets(self, team: str) -> dict:
         """The team's trailing minutes by position group for the solve (groups.group_targets), from the box scores."""

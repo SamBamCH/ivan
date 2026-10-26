@@ -636,13 +636,61 @@ class Desk:
         lock_names = [n for n in lock_names if n in g.index]
         before = ROT.load_drawn(team)
         was_locked = set(before.attrs.get("locked", list(before.index))) if before is not None else set()
-        ROT.save_drawn(team, g, note, locked=lock_names)
+        ROT.save_drawn(team, g, note, locked=lock_names, fingerprint=self.fingerprint(team))
         for n in was_locked - set(lock_names):
             self.set_override(n, minutes=None)
         for n in lock_names:
             self.set_override(n, minutes=float(g.loc[n].sum()))
         self.reproject(team)
         return len(lock_names)
+
+    def fingerprint(self, team: str) -> dict:
+        """What a mapping is made against: who is available, who is out, each player's status, the five starters (Rotowire or hand calls)."""
+        from ivan.sports.nba.projection.live import OUT_STATUSES
+        avail, out, status = [], [], {}
+        for p in self.players(team):
+            n = normalize_name(p.name); st = (p.status or "").upper()
+            ov = override_of(self.overrides, n)
+            (out if (st in OUT_STATUSES or (ov.get("minutes") is not None and ov.get("minutes") <= 0)) else avail).append(n)
+            if st and st != "NONE":
+                status[n] = st
+        return dict(available=sorted(avail), out=sorted(out), status=status, starters=sorted(self.starters_of(team) or []))
+
+    def mapped_state(self, team: str) -> dict:
+        """
+        The team's mapping: unmapped (no held grid: nothing locked, or rows with minutes left to the model), mapped (every row
+        with minutes locked and the inputs as they were when it was saved) or changed (held, but the availability, a status
+        or the starters moved since: the differences listed). A refresh re-renders the card, so a change shows at once.
+        """
+        g = ROT.load_drawn(team)
+        if g is None:
+            return dict(state="unmapped", diff=[], saved_at=None)
+        locked = set(g.attrs.get("locked", [])); rows = [str(n) for n in g.index if g.loc[n].sum() > 0]
+        free = [n for n in rows if n not in locked]
+        if not rows or free:
+            return dict(state="unmapped", diff=([f"{len(free)} row(s) left to the model"] if rows else []), saved_at=g.attrs.get("saved_at"))
+        fp = g.attrs.get("fingerprint")
+        if not fp:
+            return dict(state="changed", diff=["saved before fingerprints: map it again to track changes"], saved_at=g.attrs.get("saved_at"))
+        now = self.fingerprint(team); diff = []
+        short = lambda n: n.split()[-1]   # noqa: E731
+        for n in sorted(set(fp["available"]) - set(now["available"])):
+            diff.append(f"{short(n)} now OUT" if n in now["out"] else f"{short(n)} gone")
+        for n in sorted(set(now["available"]) - set(fp["available"])):
+            diff.append(f"{short(n)} back" if n in fp["out"] else f"{short(n)} new")
+        if set(fp["starters"]) != set(now["starters"]):
+            diff.append("starters: " + ", ".join([f"+{short(n)}" for n in sorted(set(now["starters"]) - set(fp["starters"]))] +
+                                                 [f"-{short(n)}" for n in sorted(set(fp["starters"]) - set(now["starters"]))]))
+        for n, st in now["status"].items():
+            if n in now["available"] and n in fp["available"] and (fp.get("status") or {}).get(n) != st:
+                diff.append(f"{short(n)} {st}")
+        return dict(state="changed" if diff else "mapped", diff=diff, saved_at=g.attrs.get("saved_at"))
+
+    def mapped_summary(self) -> dict:
+        teams = sorted({p.team for p in self.slate.players if p.team})
+        states = {t: self.mapped_state(t) for t in teams}
+        return dict(n=len(teams), n_mapped=sum(1 for v in states.values() if v["state"] == "mapped"),
+                    changed=[t for t, v in states.items() if v["state"] == "changed"], unmapped=[t for t, v in states.items() if v["state"] == "unmapped"])
 
     def clear_rotation(self, team: str) -> None:
         g = ROT.load_drawn(team)
@@ -845,7 +893,7 @@ class Desk:
         if abs(to_place) < 1.5:
             to_place = 0.0
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
-                    assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team),
+                    assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team), mapped=self.mapped_state(team),
                     last_game=self.game_grid(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
@@ -911,7 +959,7 @@ class Desk:
         return dict(draft_group=dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None,
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
-                    slates=slates, props_fetches=st.get("props_fetches", 0),
+                    slates=slates, props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
                     overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)))
 
 
@@ -1465,6 +1513,10 @@ async def pipeline_run(request: Request, step: str):
         elif runner.active():
             desk.flash.append("a job is already running; wait for it or cancel it")
         else:
+            ms = desk.mapped_summary()
+            if ms["n"] and ms["n_mapped"] < ms["n"] and step != "choose":
+                desk.flash.append(f"heads up: {ms['n_mapped']} of {ms['n']} teams mapped and unchanged"
+                                  + (f"; changed: {', '.join(ms['changed'])}" if ms["changed"] else "") + (f"; unmapped: {', '.join(ms['unmapped'])}" if ms["unmapped"] else ""))
             if step in ("generate", "sim", "lateswap", "all"):
                 write_overrides(desk.overrides)
                 try:

@@ -200,18 +200,20 @@ def project_team(
         names = list(alloc.index)
         locks = rot.get("locks")
         targets = {n: float(alloc.loc[n, "minutes"]) for n in names}
-        if rot.get("depth"):
+        if rot.get("depth") or rot.get("pool") is not None:
             # the coach plays about `depth` players: the deep bench's small expected minutes (honest on average, not on a
             # night) fold into the rotation. Locked rows, hand pins and named starters always stay. The kept players are
             # re-solved through their anchors (books, history, position budgets), so the freed minutes land where the
             # anchors are loosest rather than pro rata on the stars.
             keep = [p.name for p in avail if p.minutes_override is not None or p.starter] + ([n for n in locks.index] if locks is not None else [])
-            chosen = choose_rotation(targets, int(rot["depth"]), keep)
+            # the pool rule (rot["pool"]: the last ordinary game's rotation minus the outs plus the returners, live.rotation_for)
+            # names the rotation outright; the depth cut picks it by the targets
+            chosen = ((set(rot["pool"]) & set(names)) | set(keep)) if rot.get("pool") is not None else choose_rotation(targets, int(rot["depth"]), keep)
             if params.alloc == "solve" and len(chosen) < len(names):
                 kept_alloc, _ = solve_allocation([p for p in avail if p.name in chosen], recs, state, history, params)
                 targets = {n: (float(kept_alloc.loc[n, "minutes"]) if n in kept_alloc.index else 0.0) for n in names}
             else:
-                targets = apply_depth(targets, int(rot["depth"]), keep)
+                targets = {n: (t if n in chosen else 0.0) for n, t in targets.items()} if rot.get("pool") is not None else apply_depth(targets, int(rot["depth"]), keep)
             for n in names:
                 alloc.loc[n, "minutes"] = targets[n]
         grid = build_grid(rot.get("curve"), targets, names,
