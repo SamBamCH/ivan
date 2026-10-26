@@ -212,7 +212,7 @@
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>
   <span class="fresh">{% for f in header.fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{{ '%02d'|format((f.age % 60)|int) }}{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}</span>
-  <span class="views"><a href="{{ root }}/" class="{% if view not in ('players', 'lateswap', 'exposures') %}on{% endif %}">games</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a><a href="{{ root }}/?view=exposures" class="{% if view == 'exposures' %}on{% endif %}">exposures</a></span>
+  <span class="views"><a href="{{ root }}/" class="{% if view not in ('players', 'lateswap', 'exposures') %}on{% endif %}">slate</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a><a href="{{ root }}/?view=exposures" class="{% if view == 'exposures' %}on{% endif %}">exposures</a></span>
   <span class="spacer"></span>
   {% if consumer %}
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections pushed from the laptop">Refresh</button></form>
