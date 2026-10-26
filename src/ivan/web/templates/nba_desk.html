@@ -345,7 +345,7 @@
     const t = document.getElementById("exposures-table"); if (!t) return;
     const q = (document.getElementById("exp-q").value || "").toLowerCase().trim(), team = document.getElementById("exp-team").value, st = document.getElementById("exp-st").value;
     const mn = parseFloat(document.getElementById("exp-min").value); let shown = 0, total = 0;
-    t.querySelectorAll("tbody > tr").forEach(tr => {
+    t.querySelectorAll(":scope > tbody > tr").forEach(tr => {
       total++;
       let ok = (!q || tr.dataset.q.toLowerCase().includes(q)) && (!team || tr.dataset.team === team) && (isNaN(mn) || parseFloat(tr.dataset.exp) >= mn);
       if (st === "q" || st === "out") ok = ok && tr.dataset.st === st; else if (st) ok = ok && tr.dataset.starter === st;
@@ -358,11 +358,11 @@
     const th = e.target.closest("table.sortable thead th"); if (!th) return;
     const table = th.closest("table"); const idx = Array.from(th.parentNode.children).indexOf(th);
     const desc = !th.classList.contains("desc");
-    table.querySelectorAll("thead th").forEach(h => h.classList.remove("asc", "desc")); th.classList.add(desc ? "desc" : "asc");
-    const rows = Array.from(table.querySelectorAll("tbody > tr"));
+    table.querySelectorAll(":scope > thead th").forEach(h => h.classList.remove("asc", "desc")); th.classList.add(desc ? "desc" : "asc");
+    const rows = Array.from(table.querySelectorAll(":scope > tbody > tr"));      // the table's own rows, not the hover popups' tables inside them
     const val = tr => { const td = tr.children[idx]; const v = td ? (td.dataset.v ?? td.textContent.trim()) : ""; const n = parseFloat(v); return isNaN(n) || v === "" ? v : n; };
     rows.sort((a, b) => { const x = val(a), y = val(b); if (typeof x === "number" && typeof y === "number") return desc ? y - x : x - y; return desc ? String(y).localeCompare(String(x)) : String(x).localeCompare(String(y)); });
-    const tb = table.querySelector("tbody"); rows.forEach(r => tb.appendChild(r));
+    const tb = table.querySelector(":scope > tbody"); rows.forEach(r => tb.appendChild(r));
   });
   // the slate picker: a day, then its slates (the loaded one selected; Load is disabled while it is the loaded one)
   (function () {
