@@ -55,7 +55,11 @@
   pre.log { background:#1b1b1b; color:#ddd; font:12px/1.35 ui-monospace,Menlo,Consolas,monospace; padding:8px 10px; border-radius:6px; max-height:230px; overflow:auto; margin:6px 0; white-space:pre-wrap }
   .pipe-results { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start } .pipe-results table.mini td, .pipe-results table.mini th { border-bottom:1px solid var(--line) }
   table.rot-grid tr.sep td { border-bottom:2px solid var(--ink) } table.rot-grid tr.sep td.cell { border-bottom-color:var(--ink) }
-  table.rot-grid tr.tout td.rn { text-decoration:line-through; color:var(--bad) } table.rot-grid tr.tout td.rn .status { color:var(--bad); font-weight:700 } table.rot-grid tr.tout td.cell.on { opacity:.45 }
+  /* a player who played that game and is OUT tonight: the whole row struck through in red (name, minutes, every cell) */
+  table.rot-grid tr.tout td.rn { text-decoration:line-through; text-decoration-color:var(--bad); text-decoration-thickness:2px; color:var(--bad) } table.rot-grid tr.tout td.rn .status { color:var(--bad); font-weight:700 }
+  table.rot-grid tr.tout td.rm { text-decoration:line-through; text-decoration-color:var(--bad); color:var(--bad) }
+  table.rot-grid tbody.rows tr.tout > td.cell, table.rot-grid tbody.rows tr.tout > td.cell.on { opacity:.55; background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--bad) calc(50% - 1px), var(--bad) calc(50% + 1px), transparent calc(50% + 1px)) !important }
+  table.rot-grid tbody.rows tr.tout > td.px { text-decoration:line-through; text-decoration-color:var(--bad); color:var(--bad) }
   table.rot-grid tbody.lanes td { height:14px; font-size:9px } table.rot-grid tbody.lanes tr:first-child td { border-top:4px solid #fff }
   table.rot-grid tbody.lanes td.rn { font-size:11px; width:214px } table.rot-grid tbody.lanes td.rn .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px }
   table.rot-grid td.lane { color:#fff; font-weight:700; overflow:hidden; white-space:nowrap; max-width:0; border-right:1px solid #fff; border-bottom:1px solid #fff; padding:0 1px; line-height:14px; text-align:left }
