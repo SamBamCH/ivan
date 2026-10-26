@@ -125,6 +125,10 @@
   .exp-filters { display:flex; gap:10px; align-items:center; margin:0 0 6px; font-size:12px } .exp-filters input, .exp-filters select { font:inherit; font-size:12px; padding:3px 6px }
   figure.hist polyline.target { fill:none; stroke:#333; stroke-width:2; stroke-dasharray:4 4; stroke-linejoin:round } figure.hist .legend { font-size:11px; color:var(--muted); margin:2px 0 4px } figure.hist .legend .sw-line { display:inline-block; width:22px; border-top:2px dashed #333; vertical-align:middle; margin-right:6px }
   .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
+  .grid-scroll { overflow-x:auto; overflow-y:visible; max-width:100%; scrollbar-width:thin } .grid-scroll table.rot-grid { table-layout:fixed }
+  table.rot-grid th.fz, table.rot-grid td.fz { position:sticky; z-index:2; background-clip:padding-box } table.rot-grid th.fz { background:var(--card) } table.rot-grid td.rl.fz, table.rot-grid td.rn.fz, table.rot-grid td.pos.fz { background:var(--card) }
+  table.rot-grid th.pos, table.rot-grid td.pos { white-space:nowrap; overflow:hidden; font-size:10px; padding:0 4px 0 2px } table.rot-grid td.pos .st { font-weight:700; cursor:pointer; margin-right:3px } table.rot-grid td.pos .st.off { color:#ccc } table.rot-grid td.pos .st.pin { color:var(--accent) } table.rot-grid th.pos { text-align:left; font-size:9px }
+  table.rot-grid td.pincell input.min.sm { width:44px } table.rot-grid td.px.n { text-align:right }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
@@ -149,7 +153,7 @@
   .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
-  .sides { display:grid; grid-template-columns:1fr; gap:16px }       /* one team across the screen (2026-10-25) */ .side { min-width:0; overflow-x:auto }
+  .sides { display:grid; grid-template-columns:1fr; gap:16px }       /* one team across the screen (2026-10-25) */ .side { min-width:0 }
   .side h2 { font-size:15px; margin:0 0 4px; display:flex; gap:10px; align-items:baseline }
   .side { scroll-margin-top:150px }
   .side h2 .muted { font-weight:400; font-size:12px; color:var(--muted) } .side h2 .score { margin-left:auto; font-size:12px; color:var(--muted) }
@@ -321,7 +325,7 @@
   function rotRefresh(grid) {
     rotSpots(grid);
     const rows = grid.querySelectorAll("tbody.rows > tr[data-key]"); const counts = new Array(48).fill(0);
-    rows.forEach(tr => { const cells = tr.querySelectorAll(":scope > td.cell"); let n = 0; const vac = tr.classList.contains("vacated"); cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; if (!vac) counts[i]++; } }); const rm = tr.querySelector("td.rm:not(.tgt):not(.pf)"); if (rm && !vac) rm.textContent = n; });
+    rows.forEach(tr => { const cells = tr.querySelectorAll(":scope > td.cell"); let n = 0; const vac = tr.classList.contains("vacated"); cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; if (!vac) counts[i]++; } }); const inp = tr.querySelector("td.pincell input"); if (inp && !vac) { inp.placeholder = n; if (!inp.classList.contains("pinned")) inp.title = "the grid's row: " + n + " min; type to pin"; } });
     grid.querySelectorAll("tbody.foot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
   }
   function setCell(cell, on) {
