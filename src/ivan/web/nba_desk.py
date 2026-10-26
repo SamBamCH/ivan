@@ -1295,7 +1295,7 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games"):
+def board(request: Request, view: str = "games", mode: str = "pool", contest: Optional[int] = None):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
     with LOCK:
         now = datetime.now()
@@ -1314,7 +1314,7 @@ def board(request: Request, view: str = "games"):
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
         if view == "exposures":
-            exposures = _exposures_full()
+            exposures = _exposures_view(mode if mode in ("pool", "field", "entries") else "pool", contest)
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
@@ -1412,6 +1412,121 @@ def pipeline_exposures(request: Request, mode: str = Form("entries")):
     with LOCK:
         desk.exp_mode = "pool" if mode == "pool" else "entries"
         return _render(request, "_nba_pipeline_side.html", side=_side_ctx(), oob=False)
+
+
+# ---------------------------------------------------------------- the exposures view: pool | field | entries, histograms, every player column
+HIST_COLORS = {"field": "#2a78d6", "pool": "#eb6834", "entries": "#1baf7a"}   # the reference palette's first three slots (validated together)
+
+
+def _field_sample() -> Optional[list]:
+    """The sampled public field for the loaded pool, from its cache (refresh_ownership writes it with every pool refresh); None when absent."""
+    from ivan.sports.nba import public_field as PF
+    try:
+        path = PF.FIELD_CACHE_DIR / f"{PF.field_key(desk.session)}.json"
+        if not path.exists():
+            return None
+        return [list(x) for x in json.loads(path.read_text())]
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def _pool_lineups() -> list:
+    from ivan.core.utils import coerce_player_ids
+    dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
+    q = desk.session.query(Lineup.player_ids_list)
+    if dg is not None:
+        q = q.filter((Lineup.draft_group_id == int(dg)) | (Lineup.draft_group_id.is_(None)))
+    return [coerce_player_ids(ids) for (ids,) in q.all()]
+
+
+def _entries_lineups(contest: Optional[int] = None) -> Optional[dict]:
+    """The chosen entries of the newest run covering this slate: {stamp, when, contests: [(id, name, n)], lineups: [[ids]], frame}."""
+    mine = _slate_contest_ids()
+    for classic in sorted(OUTPUT_DIR.glob("chosen_entries.classic.*.csv"), reverse=True):
+        stamp = classic.name.split(".")[2]
+        lu = OUTPUT_DIR / f"chosen_entries.lineups.{stamp}.csv"
+        if not lu.exists():
+            continue
+        try:
+            L = pd.read_csv(lu)
+        except Exception:   # noqa: BLE001
+            continue
+        L = L[L["contest_id"].astype(int).isin(mine)]
+        if not len(L):
+            continue
+        contests = [(int(cid), str(g["contest_name"].iloc[0]), int(g["entry_id"].nunique())) for cid, g in L.groupby("contest_id")]
+        if contest is not None:
+            L = L[L["contest_id"].astype(int) == int(contest)]
+        lineups = [[int(x) for x in g["player_id"].tolist()] for _, g in L.groupby("entry_id")]
+        return dict(stamp=stamp, when=datetime.strptime(stamp, "%Y%m%d-%H%M%S"), contests=contests, lineups=lineups, frame=L)
+    return None
+
+
+def _hist(series: dict, step: float, lo: Optional[float] = None, hi: Optional[float] = None) -> dict:
+    """Shared bins over every series: {edges, series: {name: {shares, counts, n, mean}}}; shares are per-series so sizes compare."""
+    vals = {k: np.asarray(v, dtype=float) for k, v in series.items() if v is not None and len(v)}
+    if not vals:
+        return dict(edges=[], series={})
+    allv = np.concatenate(list(vals.values()))
+    lo = float(np.floor((allv.min() if lo is None else lo) / step) * step); hi = float(np.ceil((allv.max() if hi is None else hi) / step) * step)
+    if hi <= lo:
+        hi = lo + step
+    edges = np.arange(lo, hi + step / 2, step)
+    out = {}
+    for k, v in vals.items():
+        c, _ = np.histogram(v, bins=edges)
+        out[k] = dict(counts=[int(x) for x in c], shares=[float(x) / max(1, len(v)) for x in c], n=int(len(v)), mean=float(v.mean()), p90=float(np.percentile(v, 90)))
+    return dict(edges=[float(e) for e in edges], series=out, ymax=max((max(d["shares"]) for d in out.values()), default=0.0))
+
+
+def _exposures_view(mode: str = "pool", contest: Optional[int] = None) -> dict:
+    """
+    Everything behind the exposures screen: the chosen set of lineups (the candidate pool, the sampled public field, or the
+    chosen entries of one contest or all), every player in it with the full player row (the team card's data, hover popups
+    included) plus his exposure in the set, and the histograms of lineup projected totals and ownership sums for all three
+    sets at once, so the set in view reads against the other two.
+    """
+    players = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
+    means = {i: float(p.fpts_mean or 0.0) for i, p in players.items()}
+    owns = {i: float(p.ownership or 0.0) for i, p in players.items()}
+    sets = {"pool": _pool_lineups(), "field": _field_sample() or []}
+    ent = _entries_lineups(contest)
+    sets["entries"] = ent["lineups"] if ent else []
+    sums = {k: [sum(means.get(i, 0.0) for i in lu) for lu in v] for k, v in sets.items()}
+    osum = {k: [sum(owns.get(i, 0.0) for i in lu) for lu in v] for k, v in sets.items()}
+    chosen = sets.get(mode) or []
+    counts: dict = {}
+    for lu in chosen:
+        for i in lu:
+            counts[i] = counts.get(i, 0) + 1
+    n = len(chosen)
+    # the full player rows from the team cards, by player id
+    by_id = {}
+    for t in sorted({p.team for p in players.values() if p.team}):
+        if t not in desk.proj:
+            desk.reproject(t)
+        for r in desk.team_rows(t):
+            by_id[int(r["id"])] = r
+    then = {}
+    if mode == "entries" and ent is not None:
+        then = ent["frame"].groupby("player_id")["projection"].first().to_dict()
+    rows = []
+    for pid, k in counts.items():
+        r = by_id.get(pid)
+        if r is None:
+            continue
+        exp = k / max(1, n)
+        x = dict(r)
+        x.update(n_in=k, exposure=exp, leverage=None if r.get("own") is None else exp * 100 - r["own"],
+                 proj_then=None if pid not in then or pd.isna(then[pid]) else float(then[pid]))
+        x["delta"] = None if x["proj_then"] is None or r.get("fpts") is None else r["fpts"] - x["proj_then"]
+        rows.append(x)
+    rows.sort(key=lambda x: (-x["exposure"], -(x["fpts"] or 0)))
+    labels = {"pool": "candidate pool", "field": "sampled field", "entries": "chosen entries"}
+    return dict(mode=mode, contest=contest, label=labels[mode], n=n, rows=rows, sizes={k: len(v) for k, v in sets.items()},
+                entries=None if ent is None else dict(stamp=ent["stamp"], when=ent["when"], contests=ent["contests"]),
+                hist_proj=_hist(sums, 5.0), hist_own=_hist(osum, 20.0), colors=HIST_COLORS,
+                teams=sorted({(x["team"]) for x in rows}))
 
 
 def _start_restore(draft_group: int) -> None:

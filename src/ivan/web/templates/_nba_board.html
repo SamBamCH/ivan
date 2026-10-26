@@ -22,31 +22,71 @@
   {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
   {% include "_nba_pipeline.html" %}
   {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% endif %}
-  {% if view == 'exposures' %}
+  {% if view == 'exposures' %}{% set ex = exposures %}
   <div class="exposures">
-    {% if not exposures %}<p class="muted">no picks for this slate yet: run choose (the pipeline panel) and the entries' exposures appear here</p>{% else %}
-    <p><b>exposures</b> · the picks of {{ exposures.when.strftime('%a %H:%M') }} · {{ exposures.entries }} entries in {{ exposures.contests }} contest(s) of this slate
-      {% if exposures.out %} · <b class="bad">{{ exposures.out|length }} chosen player(s) now OUT: {{ exposures.out|map(attribute='name')|join(', ') }}</b>{% endif %}
-      {% if exposures.questionable %} · <span class="warnt">{{ exposures.questionable|length }} questionable: {{ exposures.questionable|map(attribute='name')|join(', ') }}</span>{% endif %}
-      · <span class="muted small">teams: {% for t in exposures.teams[:10] %}{{ t.team }} {{ '%.1f'|format(t.exposure) }}{% if t.out %} <b class="bad">({{ t.out }} out)</b>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</span></p>
+    <div class="exp-head">
+      <span class="seg">
+        {% for m, lab in (('pool', 'candidate pool'), ('field', 'sampled field'), ('entries', 'chosen entries')) %}<a class="{% if ex.mode == m %}on{% endif %}" hx-get="{{ root }}/board?view=exposures&mode={{ m }}" hx-target="#board" hx-swap="innerHTML" title="{{ ex.sizes[m] }} lineups">{{ lab }} <span class="muted">{{ ex.sizes[m] }}</span></a>{% endfor %}
+      </span>
+      {% if ex.mode == 'entries' and ex.entries %}<select class="exp-contest" onchange="htmx.ajax('GET', '{{ root }}/board?view=exposures&mode=entries' + (this.value ? '&contest=' + this.value : ''), {target: '#board', swap: 'innerHTML'})" title="one contest's entries, or all of them">
+        <option value="" {% if not ex.contest %}selected{% endif %}>all contests ({{ ex.entries.contests|sum(attribute=2) }} entries)</option>
+        {% for cid, name, k in ex.entries.contests %}<option value="{{ cid }}" {% if ex.contest == cid %}selected{% endif %}>{{ name|truncate(44, True, '') }} ({{ k }})</option>{% endfor %}</select>
+        <span class="muted small">picks of {{ ex.entries.when.strftime('%a %H:%M') }}</span>{% endif %}
+      <span class="muted small">{{ ex.n }} lineups in view · {{ ex.rows|length }} players · hover a projection for the props behind it</span>
+    </div>
+    <div class="exp-charts">
+      {% for key, H, title, unit, fmt in (('proj', ex.hist_proj, 'projected total per lineup (our projection)', 'fpts', '%.0f'), ('own', ex.hist_own, 'ownership sum per lineup (the field)', '%', '%.0f')) %}
+      <figure class="hist">
+        <figcaption>{{ title }}</figcaption>
+        {% if not H.edges %}<p class="muted small">nothing to draw yet</p>{% else %}
+        {% set W = 560 %}{% set rowH = 56 %}{% set left = 104 %}{% set nb = H.edges|length - 1 %}{% set bw = (W - left - 10) / nb %}
+        {% set order = ['field', 'pool', 'entries'] %}{% set labels = {'field': 'sampled field', 'pool': 'candidate pool', 'entries': 'chosen entries'} %}
+        <svg viewBox="0 0 {{ W }} {{ rowH * 3 + 22 }}" width="100%" role="img" aria-label="{{ title }}: three small histograms, one per set">
+          {% for sname in order %}{% set d = H.series.get(sname) %}{% set y0 = loop.index0 * rowH %}
+          <text x="{{ left - 6 }}" y="{{ y0 + rowH / 2 }}" text-anchor="end" dominant-baseline="middle" class="hl {% if sname == ex.mode %}on{% endif %}">{{ labels[sname] }}</text>
+          <line x1="{{ left }}" x2="{{ W - 10 }}" y1="{{ y0 + rowH - 6 }}" y2="{{ y0 + rowH - 6 }}" class="base"/>
+          {% if d %}{% for sh in d.shares %}{% set h = (rowH - 14) * (sh / H.ymax if H.ymax else 0) %}
+            <rect x="{{ left + loop.index0 * bw + 1 }}" y="{{ y0 + rowH - 6 - h }}" width="{{ bw - 2 if bw > 3 else bw }}" height="{{ h }}" rx="2" fill="{{ ex.colors[sname] }}" opacity="{% if sname == ex.mode %}1{% else %}.45{% endif %}"><title>{{ labels[sname] }} · {{ fmt|format(H.edges[loop.index0]) }}–{{ fmt|format(H.edges[loop.index]) }} {{ unit }} · {{ '%.1f'|format(100 * sh) }}% ({{ d.counts[loop.index0] }} of {{ d.n }})</title></rect>{% endfor %}
+            <text x="{{ W - 10 }}" y="{{ y0 + 10 }}" text-anchor="end" class="hs">n {{ d.n }} · mean {{ fmt|format(d.mean) }} · p90 {{ fmt|format(d.p90) }}</text>
+          {% else %}<text x="{{ left + 4 }}" y="{{ y0 + rowH / 2 }}" dominant-baseline="middle" class="hs">none</text>{% endif %}
+          {% endfor %}
+          {% for e in H.edges %}{% if loop.index0 % (4 if nb > 24 else 2) == 0 or loop.last %}<text x="{{ left + loop.index0 * bw }}" y="{{ rowH * 3 + 14 }}" text-anchor="middle" class="hs">{{ fmt|format(e) }}</text>{% endif %}{% endfor %}
+        </svg>{% endif %}
+      </figure>
+      {% endfor %}
+    </div>
+    {% if not ex.rows %}<p class="muted">nothing in the {{ ex.label }} yet{% if ex.mode == 'pool' %}: Publish + Generate{% elif ex.mode == 'entries' %}: Sim, then Choose{% else %}: refresh the pool{% endif %}</p>{% else %}
     <table class="players sortable" id="exposures-table">
       <thead><tr>
-        <th data-k="name">player</th><th data-k="team">team</th><th data-k="position">pos</th><th class="n" data-k="salary">sal</th><th data-k="status" title="DK status now">st</th>
-        <th class="n" data-k="n" title="entries holding him">entries</th><th class="n" data-k="exposure" title="share of the entries">exp</th>
-        <th class="n" data-k="own" title="the field's ownership (the public projection's field)">own</th><th class="n" data-k="leverage" title="exposure minus ownership, points">lev</th>
-        <th class="n" data-k="proj_then" title="our projection when he was chosen">proj@pick</th><th class="n" data-k="proj_now" title="our projection now">proj now</th><th class="n" data-k="delta" title="now minus at pick: what the news did">Δ</th>
-        <th class="n" data-k="minutes" title="minutes projected now">min</th><th class="n" data-k="pub" title="the public projection">pub</th><th class="n" data-k="value" title="proj now per $1k">val</th>
+        <th>player</th><th>tm</th><th>pos</th><th class="n">sal</th><th title="DK status">st</th>
+        <th class="n" title="lineups in the {{ ex.label }} holding him">in</th><th class="n" title="share of the {{ ex.label }}">exp</th>
+        <th class="n" title="the field's ownership">own</th><th class="n" title="exposure minus ownership, points">lev</th>
+        <th class="n" title="projected minutes (pinned: bold)">min</th><th class="n" title="the books' implied minutes">book</th>
+        <th class="n" title="this season's minutes per game; hover for the recent games">hist</th><th class="n" title="fantasy points per minute (green = from the props)">fppm</th>
+        <th class="n" title="our projection ± sd; hover for the stat lines and the props behind it">proj</th><th class="n" title="the public projection: the field's number">pub</th>
+        <th class="n" title="proj per $1k">val</th>{% if ex.mode == 'entries' %}<th class="n" title="our projection when he was chosen">@pick</th><th class="n" title="now minus at pick">Δ</th>{% endif %}
       </tr></thead>
-      <tbody>{% for r in exposures.rows %}
-        <tr class="{% if r.status in ('OUT', 'O', 'IR', 'SUSP') %}out{% elif r.status in ('Q', 'GTD', 'D', 'P') %}qrow{% endif %} {% if not r.in_pool %}gone{% endif %}">
-          <td data-v="{{ r.name }}">{{ r.name }}{% if not r.in_pool %} <span class="status">not in the pool</span>{% endif %}</td><td data-v="{{ r.team }}">{{ r.team }}</td><td data-v="{{ r.position }}">{{ r.position }}</td>
-          <td class="n" data-v="{{ r.salary }}">{{ r.salary }}</td><td data-v="{{ r.status }}">{% if r.status %}<span class="status {% if r.status in ('Q','GTD','D','P') %}q{% endif %}">{{ r.status }}</span>{% endif %}</td>
-          <td class="n" data-v="{{ r.n }}">{{ r.n }}</td><td class="n" data-v="{{ r.exposure }}"><b>{{ '%.0f%%'|format(100 * r.exposure) }}</b></td>
-          <td class="n" data-v="{{ r.own or 0 }}">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td><td class="n {% if r.leverage is not none and r.leverage >= 15 %}hi{% elif r.leverage is not none and r.leverage <= -10 %}lo{% endif %}" data-v="{{ r.leverage or 0 }}">{{ '%+.0f'|format(r.leverage) if r.leverage is not none else '' }}</td>
-          <td class="n" data-v="{{ r.proj_then or 0 }}">{{ '%.1f'|format(r.proj_then) if r.proj_then is not none else '' }}</td><td class="n" data-v="{{ r.proj_now or 0 }}"><b>{{ '%.1f'|format(r.proj_now) if r.proj_now is not none else '' }}</b></td>
-          <td class="n {% if r.delta is not none and r.delta <= -3 %}lo{% elif r.delta is not none and r.delta >= 3 %}hi{% endif %}" data-v="{{ r.delta or 0 }}">{{ '%+.1f'|format(r.delta) if r.delta is not none else '' }}</td>
-          <td class="n" data-v="{{ r.minutes or 0 }}">{{ '%.0f'|format(r.minutes) if r.minutes is not none else '' }}</td><td class="n" data-v="{{ r.pub or 0 }}">{{ '%.1f'|format(r.pub) if r.pub is not none else '' }}</td>
+      <tbody>{% for r in ex.rows %}
+        <tr class="{% if r.out %}out{% elif r.status in ('Q','GTD','D','P') %}qrow{% endif %}">
+          <td data-v="{{ r.name }}" class="{{ r.loud.name }}" title="{{ r.cells.name }}">{{ r.name }}{% if r.status %} <span class="status {% if r.status in ('Q','GTD','D','P') %}q{% endif %}">{{ r.status }}</span>{% endif %}</td>
+          <td data-v="{{ r.team }}">{{ r.team }}</td><td data-v="{{ r.pos }}">{{ r.pos }}</td><td class="n" data-v="{{ r.salary }}">{{ r.salary }}</td>
+          <td data-v="{{ r.starter }}">{{ r.starter if r.starter else '·' }}</td>
+          <td class="n" data-v="{{ r.n_in }}">{{ r.n_in }}</td><td class="n" data-v="{{ r.exposure }}"><b>{{ '%.0f%%'|format(100 * r.exposure) }}</b></td>
+          <td class="n" data-v="{{ r.own or 0 }}">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td>
+          <td class="n {% if r.leverage is not none and r.leverage >= 15 %}hi{% elif r.leverage is not none and r.leverage <= -10 %}lo{% endif %}" data-v="{{ r.leverage or 0 }}">{{ '%+.0f'|format(r.leverage) if r.leverage is not none else '' }}</td>
+          <td class="n {{ r.loud.min }}" data-v="{{ r.minutes or 0 }}" title="{{ r.cells.min }}">{% if r.pinned %}<b>{{ '%g'|format(r.pin) }}</b>{% elif r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% endif %}</td>
+          <td class="n" data-v="{{ r.book_min or 0 }}">{{ '%.1f'|format(r.book_min) if r.book_min is not none else '' }}</td>
+          <td class="n hover {{ r.loud.hist }}" data-v="{{ r.season_min or r.last_min or 0 }}" title="{{ r.cells.hist }}">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}<span class="muted small"> ({{ r.season_games }}g)</span>{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% else %}—{% endif %}
+            {% if r.recent %}<div class="pop"><table class="mini"><tr><th>date</th><th>tm</th><th class="n">min</th><th class="n">pf</th><th class="n">fpts</th><th class="n">fppm</th></tr>
+              {% for g in r.recent %}<tr class="{% if g.foul_short %}fshort{% endif %}"><td>{{ g.date[5:] }}</td><td>{{ g.team }}</td><td class="n">{{ '%.0f'|format(g.minutes) }}</td><td class="n">{{ g.pf if g.pf is not none else '' }}</td><td class="n">{{ '%.1f'|format(g.fpts) }}</td><td class="n">{{ '%.2f'|format(g.fpm) if g.fpm is not none else '' }}</td></tr>{% endfor %}</table></div>{% endif %}</td>
+          <td class="n {{ r.loud.fpm }} {% if r.priced %}mkt{% endif %}" data-v="{{ r.fpm or 0 }}" title="{{ r.cells.fpm }}">{{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}</td>
+          <td class="n hover" data-v="{{ r.fpts or 0 }}"><b>{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</b>{% if r.sd is not none %}<span class="muted small"> ±{{ '%.0f'|format(r.sd) }}</span>{% endif %}
+            {% if r.stats %}<div class="pop"><table class="mini"><tr><th>stat</th><th class="n">proj</th><th class="n">line</th><th class="n" title="consensus over / under prices at the line">odds</th><th class="n">mkt mean</th><th class="n">books</th></tr>
+              {% for st in r.stats %}<tr class="{% if st.priced %}mkt{% endif %}"><td>{{ st.stat }}</td><td class="n">{{ '%.1f'|format(st.proj) }}</td><td class="n">{{ '%g'|format(st.line) if st.line is not none else '' }}</td><td class="n">{{ st.odds if st.odds else '' }}</td><td class="n">{{ '%.1f'|format(st.mean) if st.mean is not none else '' }}</td><td class="n">{{ st.books if st.books else '' }}</td></tr>{% endfor %}
+              <tr><td colspan="6" class="muted small">{{ '%.1f'|format(r.minutes or 0) }} min × {{ '%.2f'|format(r.fpm or 0) }} fppm{% if r.market %} · books' total {{ '%.1f'|format(r.market) }}{% endif %}{% if r.dk_avg %} · DK avg {{ '%.1f'|format(r.dk_avg) }}{% endif %}</td></tr></table></div>{% endif %}</td>
+          <td class="n" data-v="{{ r.pub or 0 }}">{{ '%.1f'|format(r.pub) if r.pub is not none else '—' }}</td>
           <td class="n" data-v="{{ r.value or 0 }}">{{ '%.2f'|format(r.value) if r.value is not none else '' }}</td>
+          {% if ex.mode == 'entries' %}<td class="n" data-v="{{ r.proj_then or 0 }}">{{ '%.1f'|format(r.proj_then) if r.proj_then is not none else '' }}</td><td class="n {% if r.delta is not none and r.delta <= -3 %}lo{% elif r.delta is not none and r.delta >= 3 %}hi{% endif %}" data-v="{{ r.delta or 0 }}">{{ '%+.1f'|format(r.delta) if r.delta is not none else '' }}</td>{% endif %}
         </tr>{% endfor %}
       </tbody>
     </table>{% endif %}
