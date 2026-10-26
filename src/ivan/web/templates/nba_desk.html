@@ -103,6 +103,16 @@
   .exposures table.players tr.out td { color:var(--bad) } .exposures table.players tr.out td:first-child { text-decoration:line-through } .exposures table.players tr.qrow td:first-child { color:#92400e } .exposures table.players tr.gone td { color:#aaa }
   .exposures td.hi { color:var(--ok); font-weight:600 } .exposures td.lo { color:var(--bad); font-weight:600 } .exposures .warnt { color:#92400e } .exposures p .bad { color:var(--bad) }
   table.sortable th { cursor:pointer; user-select:none } table.sortable th.asc::after { content:' ▲'; font-size:9px } table.sortable th.desc::after { content:' ▼'; font-size:9px }
+  /* the pipeline dashboard: settings and the terminal on the left (2/3), the exposures beside them (1/3) */
+  .pipe.dash { display:grid; grid-template-columns:minmax(0, 2fr) minmax(280px, 1fr); grid-template-areas:'form side' 'entries side' 'status side'; gap:6px 18px; align-items:start }
+  .pipe.dash > .dash-form { grid-area:form } .pipe.dash > .dash-entries { grid-area:entries } .pipe.dash > .dash-status { grid-area:status; min-width:0 } .pipe.dash > .dash-side { grid-area:side; min-width:0 }
+  .pipe.dash .pipe-form { gap:8px 12px } .pipe.dash .pipe-form input, .pipe.dash .pipe-form select { font-size:12px; padding:3px 5px }
+  .dash-side { border-left:1px solid var(--line); padding-left:16px; font-size:12px; max-height:520px; overflow:auto } .side-head { display:flex; gap:10px; align-items:center; margin-bottom:4px } .side-head .seg { display:inline-flex; border:1px solid #cfcfcf; border-radius:6px; overflow:hidden }
+  .side-head .seg button { font:inherit; font-size:11px; padding:2px 9px; border:0; background:#fff; color:var(--muted); cursor:pointer } .side-head .seg button.on { background:var(--accent); color:#fff } .side-head .seg form { margin:0 }
+  table.mini.exp { width:100% } table.mini.exp td, table.mini.exp th { padding:2px 4px; border-bottom:1px solid var(--line); white-space:nowrap } table.mini.exp td:first-child { overflow:hidden; text-overflow:ellipsis; max-width:150px }
+  table.mini.exp tr.out td { color:var(--bad) } table.mini.exp tr.out td:first-child { text-decoration:line-through } table.mini.exp tr.qrow td:first-child { color:#92400e } table.mini.exp td.hi { color:var(--ok) } table.mini.exp td.lo { color:var(--bad) }
+  pre.log.muted { color:#888 } .pipe.dash pre.log { max-height:300px }
+  @media (max-width:1100px) { .pipe.dash { grid-template-columns:1fr; grid-template-areas:'form' 'entries' 'status' 'side' } .dash-side { border-left:0; padding-left:0 } }
   .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }

@@ -1369,6 +1369,51 @@ def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:
     return None
 
 
+def _pool_exposures(top: int = 24) -> Optional[dict]:
+    """The candidate pool's exposures: how many of the generated lineups hold each player, joined to the pool as it stands."""
+    from ivan.core.utils import coerce_player_ids
+    dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
+    q = desk.session.query(Lineup.player_ids_list)
+    if dg is not None:
+        q = q.filter((Lineup.draft_group_id == int(dg)) | (Lineup.draft_group_id.is_(None)))
+    counts: dict = {}; n = 0
+    for (ids,) in q.all():
+        n += 1
+        for pid in coerce_player_ids(ids):
+            counts[int(pid)] = counts.get(int(pid), 0) + 1
+    if not n:
+        return None
+    now = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
+    rows = []
+    for pid, k in counts.items():
+        p = now.get(pid)
+        if p is None:
+            continue
+        rows.append(dict(name=p.name, team=p.team, position=p.position, n=k, exposure=k / n, own=None if p.ownership in (None, 0) else float(p.ownership),
+                         proj=None if p.fpts_mean is None else float(p.fpts_mean), status=((p.status or "").upper() if p.status and p.status != "None" else "")))
+    rows.sort(key=lambda x: (-x["exposure"], -(x["proj"] or 0)))
+    return dict(lineups=n, players=len(rows), rows=rows[:top])
+
+
+def _side_ctx() -> dict:
+    """The dashboard's side panel: the exposures of the candidate pool or of the chosen entries (desk.exp_mode), compact."""
+    mode = getattr(desk, "exp_mode", "entries")
+    if mode == "pool":
+        return dict(mode=mode, pool=_pool_exposures(), entries=None)
+    ex = _exposures_full()
+    if ex:
+        ex = dict(ex, rows=ex["rows"][:24])
+    return dict(mode=mode, pool=None, entries=ex)
+
+
+@app.post("/pipeline/exposures", response_class=HTMLResponse)
+def pipeline_exposures(request: Request, mode: str = Form("entries")):
+    """Flip the side panel between the candidate pool's exposures and the chosen entries'."""
+    with LOCK:
+        desk.exp_mode = "pool" if mode == "pool" else "entries"
+        return _render(request, "_nba_pipeline_side.html", side=_side_ctx(), oob=False)
+
+
 def _start_restore(draft_group: int) -> None:
     """Load a past slate from its archive capture in a background thread (ingest.restore_from_archive): nothing fetched."""
     def run():
@@ -1836,7 +1881,7 @@ def _pipeline_ctx() -> dict:
     current = next((p.draft_group_id for p in (desk.slate.players if desk.slate else []) if p.draft_group_id), None)
     return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=_entries_info(),
                 outputs=_latest_outputs(), lineups_in_db=desk.session.query(Lineup).count(),
-                sims_in_db=desk.session.query(LineupSimulationResult).count(), lineup_slates=slates, current_draft_group=current)
+                sims_in_db=desk.session.query(LineupSimulationResult).count(), lineup_slates=slates, current_draft_group=current, side=_side_ctx())
 
 
 def _field(raw, label: str, kind=float):

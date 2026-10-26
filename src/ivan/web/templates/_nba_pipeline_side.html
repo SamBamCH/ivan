@@ -1,0 +1,24 @@
+{# the dashboard's side panel: exposures of the candidate pool or of the chosen entries; re-rendered out of band by the status poll #}
+<aside id="pipe-side" class="dash-side" {% if oob %}hx-swap-oob="true"{% endif %}>
+  <div class="side-head">
+    <b>exposures</b>
+    <span class="seg">
+      <form class="inline" hx-post="{{ root }}/pipeline/exposures" hx-vals='{"mode": "pool"}' hx-target="#pipe-side" hx-swap="outerHTML"><button type="submit" class="{% if side.mode == 'pool' %}on{% endif %}" title="the generated candidate pool: share of the lineups holding each player">pool</button></form>
+      <form class="inline" hx-post="{{ root }}/pipeline/exposures" hx-vals='{"mode": "entries"}' hx-target="#pipe-side" hx-swap="outerHTML"><button type="submit" class="{% if side.mode == 'entries' %}on{% endif %}" title="the lineups chosen for the entries: share of the entries holding each player">entries</button></form>
+    </span>
+    <a class="muted small" href="{{ root }}/?view=exposures" title="the full exposures table">full table</a>
+  </div>
+  {% if side.mode == 'pool' %}
+    {% if not side.pool %}<p class="muted small">no lineups in the pool yet: Publish + Generate</p>{% else %}
+    <p class="muted small">{{ side.pool.lineups }} lineups · {{ side.pool.players }} players used</p>
+    <table class="mini exp"><tr><th>player</th><th>tm</th><th class="n" title="share of the pool's lineups">exp</th><th class="n" title="the field's ownership">own</th><th class="n">proj</th></tr>
+      {% for r in side.pool.rows %}<tr class="{% if r.status in ('OUT','O','IR','SUSP') %}out{% elif r.status in ('Q','GTD','D','P') %}qrow{% endif %}"><td>{{ r.name }}{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}</td><td>{{ r.team }}</td><td class="n"><b>{{ '%.0f%%'|format(100 * r.exposure) }}</b></td><td class="n">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td><td class="n">{{ '%.1f'|format(r.proj) if r.proj is not none else '' }}</td></tr>{% endfor %}
+    </table>{% endif %}
+  {% else %}
+    {% if not side.entries %}<p class="muted small">no picks for this slate yet: Sim, then Choose</p>{% else %}
+    <p class="muted small">picks of {{ side.entries.when.strftime('%a %H:%M') }} · {{ side.entries.entries }} entries · {{ side.entries.contests }} contest(s){% if side.entries.out %} · <b class="bad">{{ side.entries.out|length }} now OUT</b>{% endif %}</p>
+    <table class="mini exp"><tr><th>player</th><th>tm</th><th class="n" title="share of the entries">exp</th><th class="n" title="the field's ownership">own</th><th class="n" title="our projection now">proj</th><th class="n" title="now minus at pick">Δ</th></tr>
+      {% for r in side.entries.rows %}<tr class="{% if r.status in ('OUT','O','IR','SUSP') %}out{% elif r.status in ('Q','GTD','D','P') %}qrow{% endif %}"><td>{{ r.name }}{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}</td><td>{{ r.team }}</td><td class="n"><b>{{ '%.0f%%'|format(100 * r.exposure) }}</b></td><td class="n">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td><td class="n">{{ '%.1f'|format(r.proj_now) if r.proj_now is not none else '' }}</td><td class="n {% if r.delta is not none and r.delta <= -3 %}lo{% elif r.delta is not none and r.delta >= 3 %}hi{% endif %}">{{ '%+.1f'|format(r.delta) if r.delta is not none else '' }}</td></tr>{% endfor %}
+    </table>{% endif %}
+  {% endif %}
+</aside>

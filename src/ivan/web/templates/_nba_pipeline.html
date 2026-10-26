@@ -1,5 +1,5 @@
-<div id="pipeline" class="pipe">
-  <form class="pipe-form" hx-post="{{ root }}/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML">
+<div id="pipeline" class="pipe dash">
+  <form class="pipe-form dash-form" hx-post="{{ root }}/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML">
     <div class="pipe-row">
       <span class="brand-sm">Pipeline</span>
       {% if limited %}<span class="muted small" title="this desk is shared: settings above these are lowered, and a job running longer than {{ job_max_minutes }} minutes is stopped">limits: {{ limits.lineups }} lineups, {{ limits.jobs }} jobs, {{ limits.sims }} sims, field {{ limits.field_cap }}, {{ job_max_minutes }} min per job</span>{% endif %}
@@ -38,11 +38,12 @@
       <label title="portfolio method: utility scale in multiples of the entry fees">bankroll <input name="bankroll" value="{{ form.bankroll }}" size="3"></label>
     </div>
   </form>
-  <div class="pipe-row muted">
+  <div class="pipe-row muted dash-entries">
     <span>entries: {% if entries.exists %}<b>{{ entries.path }}</b>{% if entries.entries is defined %} · {{ entries.entries }} entries in {{ entries.contests|length }} contest{{ 's' if entries.contests|length != 1 else '' }} ({% for n, k in entries.contests.items() %}{{ n|truncate(34, True, '') }} ×{{ k }}{% if not loop.last %}, {% endif %}{% endfor %}) · {{ entries.modified.strftime('%H:%M') }}{% elif entries.error %} · <span class="bad">{{ entries.error }}</span>{% endif %}{% else %}<span class="bad">none at {{ entries.path }}</span>{% endif %}</span>
     <form class="inline" hx-post="{{ root }}/entries" hx-target="#pipeline" hx-swap="outerHTML" hx-encoding="multipart/form-data"><input type="file" name="file" accept=".csv" onchange="this.form.requestSubmit()"><span class="muted small">upload the DraftKings entries export</span></form>
     <span class="spacer"></span>
     <span>{{ lineups_in_db }} lineups · {{ sims_in_db }} sim rows in the database</span>
   </div>
-  {% include "_nba_pipeline_status.html" %}
+  {% with poll=False %}{% include "_nba_pipeline_status.html" %}{% endwith %}
+  {% with oob=False %}{% include "_nba_pipeline_side.html" %}{% endwith %}
 </div>
