@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Iterable, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -274,6 +274,19 @@ def isolate_slate(session, draft_group_id: int, log: Log = print) -> dict:
     return out
 
 
+def locally_edited_teams(session: Session) -> set:
+    """On a consumer: the teams whose players this machine pinned or whose grid it painted (its own layer, not the published one)."""
+    from ivan.sports.nba.projection.rotation import ROTATIONS_DIR
+    local = read_overrides_full(layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}
+    teams = set()
+    if local:
+        by_name = {normalize_name(p.name): p.team for p in session.query(NBAPlayer).all()}
+        teams |= {by_name[n] for n in local if n in by_name and by_name[n]}
+    if ROTATIONS_DIR.is_dir():
+        teams |= {f.stem for f in ROTATIONS_DIR.glob("*.json")}
+    return teams
+
+
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
                  log: Log = print) -> tuple:
     """
@@ -388,7 +401,8 @@ def refresh_ownership(session: Session, log: Log = print) -> dict:
 
 
 def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool = True, write_csv: bool = True,
-                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = False) -> ProjectInfo:
+                  log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = False,
+                  teams: Optional[Iterable[str]] = None) -> ProjectInfo:
     info = ProjectInfo()
     slate = LiveSlate(session)
     if not slate.players:
@@ -398,7 +412,10 @@ def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool =
     rng = np.random.default_rng(0)
     now = datetime.now()
     frames = []
+    only = None if teams is None else {str(t) for t in teams}
     for team in slate.teams():
+        if only is not None and team not in only:
+            continue                                        # a consumer re-projects only the teams it edited: the rest stay as published
         proj = slate.project(team, overrides, set(), params, rng=rng)
         slate.write(team, proj)
         proj = proj.copy(); proj["team"] = team

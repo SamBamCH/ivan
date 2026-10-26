@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
-from ivan.sports.nba.ingest import restore_from_archive
+from ivan.sports.nba.ingest import locally_edited_teams, restore_from_archive
 from ivan.sports.nba import newsfeed as NF
 from ivan.sports.nba import scenarios as SC
 from pathlib import Path
@@ -272,7 +272,8 @@ class Desk:
         self.session.expire_all()
         self.slate = LiveSlate(self.session, history=self.history())
         self.pool_stamp = self._stamp(); self.stale = False
-        self.overrides = read_overrides_full()            # the file is the source of truth: every edit is written to it
+        self.overrides = read_overrides_full()            # what the projection reads: the published layer (a consumer) under this machine's own
+        self.local_overrides = read_overrides_full(layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}   # what this machine writes
         self.proj, self.hist_only, self.rot = {}, {}, {}
         self._auto_pending = True                         # scenarios are matched once the rest of the rebuild is done (see end of rebuild)
         if getattr(self, "_calls_dg", None) != self.pool_stamp[2]:
@@ -579,7 +580,8 @@ class Desk:
         rows += out_rows
         avail_keys = {r["key"] for r in rows}
         shares_json = json.dumps({o: {i: round(v, 3) for i, v in hv.items() if i in avail_keys} for o, hv in shares.items() if o in avail_keys})
-        return {**base, "kind": "model" if source != "propose" else "propose", "rows": rows, "counts": ROT.column_counts(grid), "drawn": bool(locked),
+        n_pins = sum(1 for n in names if override_of(self.overrides, n).get("minutes") is not None)
+        return {**base, "kind": "model" if source != "propose" else "propose", "rows": rows, "counts": ROT.column_counts(grid), "drawn": bool(locked), "pins": n_pins,
                 "locked": locked, "benched": benched, "owners": owners, "lanes": lanes, "shares_json": shares_json}
 
     @staticmethod
@@ -864,7 +866,7 @@ class Desk:
     # ---------------------------------------------------------------- scenarios: a team's edits saved under an assumption
     def team_overrides(self, team: str) -> dict:
         names = {normalize_name(p.name) for p in self.players(team)}
-        return {n: dict(ov) for n, ov in self.overrides.items() if n in names}
+        return {n: dict(ov) for n, ov in self.local_overrides.items() if n in names}
 
     def raw_facts(self, team: str, calls: Optional[dict] = None) -> dict:
         """The facts a scenario is matched against: DK statuses and Rotowire's starters, plus the calls typed into the late-news form
@@ -918,11 +920,11 @@ class Desk:
         return SC.save_scenario(team, name, self.team_overrides(team), assumes)
 
     def activate_scenario(self, team: str, slug: str) -> Optional[dict]:
-        new = SC.activate(team, slug, self.overrides, [normalize_name(p.name) for p in self.players(team)])
+        new = SC.activate(team, slug, self.local_overrides, [normalize_name(p.name) for p in self.players(team)])
         if new is None:
             return None
-        self.overrides = new
-        write_overrides(self.overrides)
+        self.local_overrides = new
+        self.write_local()
         self.reproject(team)
         return SC.load_scenario(team, slug)
 
@@ -1023,16 +1025,22 @@ class Desk:
         return review_team(self.slate, team, self.proj[team], self._recent, market_points(self.session), self.pins())
 
     def set_override(self, name: str, **fields) -> None:
-        """Set or clear a player's minutes / fppm / min_low / min_high; a player with nothing left is dropped."""
-        rec = dict(self.overrides.get(name, {}))
+        """Set or clear a player's pins in this machine's own layer (a value None clears that field here; on a consumer the
+        published value then shows through); the merged view is refreshed. Persisted at once."""
+        rec = dict(self.local_overrides.get(name, {}))
         for k, v in fields.items():
             rec[k] = v
         rec = {k: v for k, v in rec.items() if v is not None}
         if rec:
-            self.overrides[name] = {k: rec.get(k) for k in OVERRIDE_KEYS}
+            self.local_overrides[name] = {k: rec.get(k) for k in OVERRIDE_KEYS}
         else:
-            self.overrides.pop(name, None)
-        write_overrides(self.overrides)                    # persisted at once; a reload or a capture tick cannot lose it
+            self.local_overrides.pop(name, None)
+        self.write_local()
+
+    def write_local(self) -> None:
+        """Write this machine's own layer and refresh the merged view the projection reads."""
+        write_overrides(self.local_overrides)
+        self.overrides = read_overrides_full()
 
     def _layer_of(self, name: str) -> dict:
         """{field: 'local' | 'published'} for the player's pins: what this machine typed vs what the producer published (a consumer)."""
@@ -1995,7 +2003,7 @@ def clear_team(request: Request, team: str):
     with LOCK:
         for p in desk.players(team):
             desk.overrides.pop(normalize_name(p.name), None)
-        write_overrides(desk.overrides)
+        desk.write_local()
         desk.reproject(team)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
@@ -2006,7 +2014,7 @@ def publish(request: Request):
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
-        write_overrides(desk.overrides)
+        desk.write_local()
         try:
             info = project_slate(desk.session, n_sims=2000, log=desk.flash.append)
             desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
@@ -2135,7 +2143,12 @@ def refresh(request: Request, what: str = Form("dk")):
                 from ivan.core import feed
                 changed = feed.pull(feed_url, os.environ.get("IVAN_FEED_TOKEN"), "nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
                 if changed:
-                    project_slate(desk.session, n_sims=1000, log=desk.flash.append)
+                    mine = locally_edited_teams(desk.session)
+                    if mine:
+                        project_slate(desk.session, n_sims=2000, log=desk.flash.append, teams=mine)
+                        desk.flash.append(f"the published projection is in; your own edits re-projected on top for {', '.join(sorted(mine))}")
+                    else:
+                        desk.flash.append("the published projection is in, as published")
                 else:
                     desk.flash.append("feed unchanged since the last pull")
             except Exception as e:   # noqa: BLE001
@@ -2398,7 +2411,7 @@ async def pipeline_run(request: Request, step: str):
                 desk.flash.append(f"heads up: {ms['n_mapped']} of {ms['n']} teams mapped and unchanged"
                                   + (f"; changed: {', '.join(ms['changed'])}" if ms["changed"] else "") + (f"; unmapped: {', '.join(ms['unmapped'])}" if ms["unmapped"] else ""))
             if step in ("generate", "sim", "lateswap", "all"):
-                write_overrides(desk.overrides)
+                desk.write_local()
                 try:
                     info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
                     desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits, then queued {step}")
@@ -2519,7 +2532,7 @@ def late_news(request: Request, team: str, player: str = Form(...), call: str = 
             desk.flash.append(f"unknown call {call}")
             return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
         desk.reproject(team)
-        write_overrides(desk.overrides)
+        desk.write_local()
         desk.note_call(team, key, call)
         try:
             for m in desk.auto_scenarios(calls={team: {key: call}}):

@@ -42,17 +42,19 @@ def do_pull(a) -> dict:
         raise SystemExit("give --url or set IVAN_FEED_URL in .env")
     changed = feed.pull(url, token, "nba", PROJECT_ROOT / "data" / "feed-state", which=a.which, log=print)
     if changed and not a.no_project and "live" in changed:
+        # the published projection stands as pulled; only the teams this machine edited (its own pins or grids) are re-projected on top
         from ivan.database.session import get_session, init_db
-        from ivan.sports.nba.ingest import ensure_schema, project_slate
+        from ivan.sports.nba.ingest import ensure_schema, locally_edited_teams, project_slate
         engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
         try:
-            info = project_slate(session, n_sims=2000, write_capture=False, write_csv=False, log=print)
-            print(f"re-projected {info.players} players with this machine's edits")
+            mine = locally_edited_teams(session)
+            if mine:
+                info = project_slate(session, n_sims=2000, write_capture=False, write_csv=False, log=print, teams=mine)
+                print(f"re-projected {info.players} players of {len(mine)} team(s) with this machine's own edits on top of the published projection")
+            else:
+                print("the published projection stands (no edits of this machine's own)")
         except Exception as e:   # noqa: BLE001
             print(f"re-projection skipped: {type(e).__name__}: {e}")
-    if not changed:
-        print("feed unchanged")
-    return changed
 
 
 def main() -> int:
