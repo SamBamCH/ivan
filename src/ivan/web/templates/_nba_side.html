@@ -5,8 +5,15 @@
   {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
   <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
 </h2>
+<form class="news" hx-post="{{ root }}/team/{{ c.team }}/news" hx-target="#card-{{ c.team }}" hx-swap="innerHTML" title="late news in one move: the call, the team re-allocated, the pool published, the next job queued">
+  <b>late news</b>
+  <select name="player">{% for r in c.rows %}<option value="{{ r.key }}">{{ r.name }}{% if r.status %} ({{ r.status }}){% endif %}</option>{% endfor %}</select>
+  <select name="call"><option value="out">is OUT</option><option value="starts">starts</option><option value="bench">to the bench</option><option value="back">back in (clear the call)</option></select>
+  <select name="then"><option value="sim" {% if not c.locked %}selected{% endif %}>publish, then sim + choose</option><option value="lateswap" {% if c.locked %}selected{% endif %}>publish, then late swap</option><option value="none">publish only</option></select>
+  <button type="submit">Go</button>
+</form>
 <div class="rot-pair">
-{% with rot=c.rotation %}{% include "_nba_rotation.html" %}{% endwith %}
+{% with rot=c.rotation, info=c.info %}{% include "_nba_rotation.html" %}{% endwith %}
 {% with rot=c.last_game %}{% include "_nba_rotation.html" %}{% endwith %}
 </div>
 <details class="players-box"><summary>players · rates, bands and the books</summary>

@@ -238,15 +238,10 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
     and refresh its public side in ONE transaction. Nothing downstream can see a half-written or unprojected pool
     (2026-10-23: a sim started during a rewrite found no point guard). Returns (StoreInfo, ProjectInfo).
+    The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
-    fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
-    current = session.query(NBAPlayer.draft_group_id).first()
-    if current and current[0] and int(current[0]) != int(draft_group_id):
-        retire_edits(int(current[0]), log=log)                 # a new slate starts clean: pins and drawn rotations belong to the old one
-    with one_transaction(session):
-        info = store_slate(session, fetched, log=log)
-        pinfo = project_slate(session, n_sims=n_sims, log=log)
-    return info, pinfo
+    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log)
+    return out["stored"], out["projected"]
 
 
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
@@ -446,7 +441,18 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
                n_sims: int = 4000, log: Log = print) -> dict:
-    fetched = fetch_slate(session, draft_group_id, update_odds=update_odds, starters=starters, log=log)
-    stored = store_slate(session, fetched, log=log)
-    projected = project_slate(session, n_sims=n_sims, log=log) if project else None
+    """
+    Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
+    replaced, projected and its public side refreshed in one transaction, so a desk serving the same database from another
+    process never sees a half-written pool (it notices the new stamp and shows "new data"). When the pool moves to another
+    draft group the old slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the
+    desk then shows an unprojected pool until something projects it.
+    """
+    fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
+    current = session.query(NBAPlayer.draft_group_id).first()
+    if current and current[0] and int(current[0]) != int(draft_group_id):
+        retire_edits(int(current[0]), log=log)                 # a new slate starts clean: pins and drawn rotations belong to the old one
+    with one_transaction(session):
+        stored = store_slate(session, fetched, log=log)
+        projected = project_slate(session, n_sims=n_sims, log=log) if project else None
     return {"fetched": fetched, "stored": stored, "projected": projected}

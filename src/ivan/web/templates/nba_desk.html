@@ -69,7 +69,23 @@
   .rot-bar { display:flex; gap:10px; align-items:center; margin-bottom:6px } .rot-bar .spacer { flex:1 }
   .rot-bar select.rot-game { font:inherit; font-size:12px; padding:2px 6px }
   .rot-bar button { font:inherit; font-size:12px; padding:3px 9px; border-radius:5px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer } .rot-bar button.rot-apply { background:var(--accent); color:#fff }
-  table.rot-grid { border-collapse:collapse; margin:0; width:auto; user-select:none } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
+  /* fixed geometry: tonight's grid and the played game sit one above the other and every minute column must line up
+     exactly, whatever the names are (16 + 222 + 3x34 + 48x12 = 916px; the .side scrolls sideways rather than squeeze it) */
+  table.rot-grid { border-collapse:collapse; margin:0; table-layout:fixed; width:916px; min-width:916px; user-select:none }
+  table.rot-grid.wide { width:1520px; min-width:1520px }           /* + the player columns right of the minutes: 46+160+72+66+50+76+50+44+40 = 604 */
+  table.rot-grid col.c-ppub { width:50px } table.rot-grid th.pubh, table.rot-grid td.pubc { color:#7c5cff } table.rot-grid th.ours { color:var(--ink) }
+  form.news { display:flex; gap:6px; align-items:center; margin:4px 0 2px; font-size:12px } form.news select { font:inherit; font-size:12px; padding:2px 4px; max-width:220px } form.news button { font:inherit; font-size:12px; padding:2px 10px }
+  .rot-bar button.rot-hold { margin-right:4px }
+  table.rot-grid col.c-pbook { width:46px } table.rot-grid col.c-pdist { width:160px } table.rot-grid col.c-phist { width:72px } table.rot-grid col.c-pfpm { width:66px }
+  table.rot-grid col.c-pavg { width:50px } table.rot-grid col.c-pproj { width:76px } table.rot-grid col.c-pval { width:44px } table.rot-grid col.c-pown { width:40px }
+  table.rot-grid th.px, table.rot-grid td.px { padding:0 4px; font-size:11px; color:var(--ink); white-space:nowrap; overflow:hidden; vertical-align:middle } table.rot-grid th.px { color:var(--muted); font-weight:600; text-align:right } table.rot-grid th.px.l { text-align:left }
+  table.rot-grid th.px:first-of-type, table.rot-grid td.px:first-of-type { border-left:2px solid #bbb } table.rot-grid td.px input.min.sm { width:30px; height:15px; box-sizing:border-box; font-size:10px; padding:0 2px; line-height:13px; vertical-align:middle }
+  table.rot-grid td.px.dist { min-width:0 } table.rot-grid td.px.dist .bar { display:inline-block; width:70px; height:8px; padding:0; max-width:none; margin:0 4px 0 0; vertical-align:middle }   /* .bar is also the header bar's class: its padding must not reach here */ table.rot-grid td.px.dist .bar .range { height:8px } table.rot-grid td.px.dist .bar .tick { top:-2px; height:12px }
+  table.rot-grid td.px.bookmin button.bm { font-size:10px; height:15px; box-sizing:border-box; padding:0 3px; line-height:13px; vertical-align:middle } table.rot-grid td.px .bandin { line-height:15px } table.rot-grid td.px .pop { font-size:11px }
+  table.rot-grid.wideh { width:1160px; min-width:1160px }          /* the played game: our projection vs the box score, 3x52 + 2x44 = 244 */
+  table.rot-grid col.c-hp { width:52px } table.rot-grid col.c-hd { width:44px } table.rot-grid td.hp { color:var(--muted) } table.rot-grid td.hf { font-weight:700 }
+  table.rot-grid td.hd { color:#999 } table.rot-grid td.hd.mid { color:var(--warn); font-weight:600 } table.rot-grid td.hd.big { color:var(--bad); font-weight:700 }
+  table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
   table.rot-grid .rc { width:12px; min-width:12px; height:16px; text-align:center; color:var(--muted); font-size:9px } table.rot-grid td.cell { background:#f1f1f1; border-right:1px solid #fff; border-bottom:1px solid #fff; cursor:crosshair }
   table.rot-grid td.cell.on { background:var(--accent) } table.rot-grid td.cell:hover { outline:1px solid #333 } table.rot-grid .q { border-left:2px solid #bbb }
@@ -93,7 +109,7 @@
   .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
-  .sides { display:grid; grid-template-columns:1fr 1fr; gap:16px } .side { min-width:0; overflow-x:auto }
+  .sides { display:grid; grid-template-columns:1fr; gap:16px }       /* one team across the screen (2026-10-25) */ .side { min-width:0; overflow-x:auto }
   .side h2 { font-size:15px; margin:0 0 4px; display:flex; gap:10px; align-items:baseline }
   .side { scroll-margin-top:150px }
   .side h2 .muted { font-weight:400; font-size:12px; color:var(--muted) } .side h2 .score { margin-left:auto; font-size:12px; color:var(--muted) }
@@ -149,7 +165,7 @@
       {% if header.mins_to_lock is not none and header.mins_to_lock > 0 %}locks in {{ (header.mins_to_lock // 60)|int }}h {{ (header.mins_to_lock % 60)|int }}m{% else %}locked{% endif %}
     </span>
   {% endif %}
-  {% if header.stale %}<form method="post" action="{{ root }}/refresh" title="the pool, lineups or props changed on disk since this page was built; nothing moves until you load it"><input type="hidden" name="what" value="dk"><button class="stale">new data · Refresh to load</button></form>{% endif %}
+  {% if header.stale %}<form method="post" action="{{ root }}/reload" title="the pool, lineups or props changed on disk since this page was built (a terminal ingest or project, a feed pull); load it without fetching anything"><button class="stale">new data · load</button></form>{% endif %}
   <form method="post" action="{{ root }}/slate" title="pick a slate: its pool is fetched, projected and loaded (nothing else moves it until you Refresh)">
     <select name="draft_group" onchange="if (this.value) this.form.submit()">
       {% if not header.draft_group %}<option value="" selected>pick a slate…</option>{% endif %}
@@ -281,19 +297,50 @@
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
   });
-  document.addEventListener("mouseup", () => { paint = null; });
-  document.body.addEventListener("click", e => {
-    const btn = e.target.closest("button.rot-apply"); if (!btn) return;
-    const rot = btn.closest(".rot"); const team = rot.dataset.team;
+  // the grid saves itself: on every stroke's mouseup and on every lock click the rows go to the server (the locked rows are
+  // held, the rest re-filled); a stroke during a save marks it dirty and it saves again when the reply lands, so nothing
+  // painted is ever lost to a re-render
+  const rotSaving = {}, rotDirty = {}; let paintTeam = null;
+  function rotCollect(rot) {
     const players = [], grid = [], locked = [];
     rot.querySelectorAll("tbody.rows tr").forEach(tr => {
       if (tr.classList.contains("vacated")) return;
       players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll("td.cell")).map(c => c.classList.contains("on") ? 1 : 0));
       if (tr.classList.contains("locked")) locked.push(tr.dataset.key);
     });
-    if (!locked.length && !confirm("No row is locked: nothing to hold. Apply anyway (this only clears old locks)?")) return;
-    fetch(ROOT + "/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({players, grid, locked})})
-      .then(r => r.text()).then(html => { const card = document.getElementById("card-" + team); card.innerHTML = html; htmx.process(card); applyFilter(); });
+    return {players, grid, locked};
+  }
+  function rotSave(team) {
+    const rot = document.getElementById("rot-" + team); if (!rot) return;
+    if (rotSaving[team]) { rotDirty[team] = true; return; }
+    const body = rotCollect(rot);
+    rotSaving[team] = true; rotDirty[team] = false;
+    fetch(ROOT + "/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+      .then(r => r.text()).then(html => {
+        rotSaving[team] = false;
+        if (rotDirty[team]) { rotSave(team); return; }               // painted meanwhile: that stroke is what goes in, not this reply
+        const card = document.getElementById("card-" + team); if (card) { card.innerHTML = html; htmx.process(card); applyFilter(); }
+      }).catch(() => { rotSaving[team] = false; });
+  }
+  document.addEventListener("mouseup", () => { if (paint !== null && paintTeam) { const t = paintTeam; paint = null; paintTeam = null; rotSave(t); } paint = null; });
+  document.body.addEventListener("mousedown", e => {
+    const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
+    const rot = cell.closest(".rot"); paintTeam = rot ? rot.dataset.team : null;
+  }, true);
+  document.body.addEventListener("click", e => {
+    const lk = e.target.closest("table.rot-grid td.rl .lock"); if (!lk) return;
+    const rot = lk.closest(".rot"); if (rot && !lk.closest("table.rot-grid").classList.contains("hist")) setTimeout(() => rotSave(rot.dataset.team), 0);
+  });
+  document.body.addEventListener("click", e => {
+    const btn = e.target.closest("button.rot-apply, button.rot-hold"); if (!btn) return;
+    const rot = btn.closest(".rot"); const team = rot.dataset.team;
+    if (btn.classList.contains("rot-hold")) {
+      rot.querySelectorAll("tbody.rows tr").forEach(tr => {
+        if (tr.classList.contains("vacated") || tr.classList.contains("outrow")) return;
+        tr.classList.add("locked"); const lk = tr.querySelector("td.rl .lock"); if (lk) { lk.innerHTML = "&#128274;"; lk.title = "locked: held exactly; click to unlock"; }
+      });
+    }
+    rotSave(team);
   });
 </script>
 </body>

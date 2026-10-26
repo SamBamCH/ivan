@@ -490,7 +490,57 @@ class Desk:
         # the game's starters first (struck through when out tonight: those are the minutes to give away), then the bench
         rot["rows"] = self.mark_starter_rule(self.order_rows(rot.get("rows") or [], rot.get("owners") or []))
         rot["lanes"] = self.lanes_of(rot["rows"], rot.get("owners") or [])
+        if rot.get("game_id"):
+            try:
+                rot["proj"], rot["proj_meta"], rot["missed"] = self.game_projection(team, rot["game_id"], rot["last_game"], {r["key"] for r in rot["rows"]})
+            except Exception as e:   # noqa: BLE001 - the comparison is a convenience; the grid stands without it
+                rot["proj"], rot["proj_meta"], rot["missed"] = {}, dict(error=f"{type(e).__name__}: {e}"), []
         return rot
+
+    def game_projection(self, team: str, game_id: str, game_date, grid_keys: set) -> tuple[dict, dict, list]:
+        """
+        What we projected for this team's players at this game, next to what they did: the at-tip archive of the game
+        (scripts/nba/archive_at_lock.py) when one exists, else the last projection published before the tip, else the last
+        one captured for the game. Returns ({player: pmin, pfpts, psd, pstarter, min_act, fpts_act, status}, meta, missed)
+        where `missed` lists players we projected minutes for who are not on the grid (did not play).
+        """
+        from sqlalchemy import text as _t
+        day = str(game_date)[:10]
+        caps = pd.read_sql(_t("select captured_at, source, draft_group_id, gametime, player_name, status, starter, minutes_proj, fpts_mean, fpts_std, pinned "
+                              "from nba_projection_capture where team = :t and date(gametime) = :d and source in ('at_tip', 'ours')").bindparams(t=team, d=day),
+                           self.session.get_bind())
+        if caps.empty:
+            return {}, dict(none=True), []
+        caps["captured_at"] = pd.to_datetime(caps["captured_at"]); caps["gametime"] = pd.to_datetime(caps["gametime"])
+        tip = caps["gametime"].max()
+        at_tip = caps[caps.source == "at_tip"]
+        if len(at_tip):
+            pick, how = at_tip[at_tip.captured_at == at_tip.captured_at.max()], "at tip"
+        else:
+            before = caps[(caps.source == "ours") & (caps.captured_at <= tip)]
+            src = before if len(before) else caps[caps.source == "ours"]
+            pick, how = src[src.captured_at == src.captured_at.max()], ("published" if len(before) else "captured after the tip")
+        pick = pick.drop_duplicates("player_name", keep="last")
+        act = pd.read_sql(_t("select player_name, minutes, dk_fpts, position from nba_stats where game_id = :g and team_abbreviation = :t").bindparams(g=str(game_id), t=team),
+                          self.session.get_bind())
+        act_by = {str(r.player_name): r for r in act.itertuples()}
+        by, missed = {}, []
+        for r in pick.itertuples():
+            n = str(r.player_name); a = act_by.get(n)
+            d = dict(pmin=None if pd.isna(r.minutes_proj) else float(r.minutes_proj), pfpts=None if pd.isna(r.fpts_mean) else float(r.fpts_mean),
+                     psd=None if pd.isna(r.fpts_std) else float(r.fpts_std), pstarter=str(r.starter or ""), status=str(r.status or ""), pinned=bool(r.pinned),
+                     min_act=None if a is None else float(a.minutes), fpts_act=None if a is None else float(a.dk_fpts),
+                     started_act=bool(a is not None and a.position and a.position != "BENCH" and float(a.minutes) > 0))
+            by[n] = d
+            if n not in grid_keys and (d["pmin"] or 0) >= 1:
+                missed.append(dict(name=n, pmin=d["pmin"], pfpts=d["pfpts"], status=d["status"]))
+        missed.sort(key=lambda m: -(m["pmin"] or 0))
+        stamp = pick.captured_at.max().to_pydatetime()
+        meta = dict(how=how, captured_at=stamp, draft_group=int(pick.draft_group_id.iloc[0]) if pick.draft_group_id.notna().any() else None,
+                    before_tip=None if tip is None or pd.isna(tip) else (tip.to_pydatetime() - stamp).total_seconds() / 60.0,
+                    n=len(by), pmin_sum=float(pick.minutes_proj.fillna(0).sum()), pfpts_sum=float(pick.fpts_mean.fillna(0).sum()),
+                    min_sum=float(act.minutes.sum()) if len(act) else 0.0, fpts_sum=float(act.dk_fpts.sum()) if len(act) else 0.0)
+        return by, meta, missed
 
     @staticmethod
     def order_rows(rows: list[dict], owners: list[str]) -> list[dict]:
@@ -706,7 +756,7 @@ class Desk:
                              last_games=last_season["games"] if last_season else 0, last_min=last_season["minutes"] if last_season else None,
                              last_fpm=last_season["fpm"] if last_season else None,
                              value=None if fpts is None or not p.salary else fpts / (p.salary / 1000.0),
-                             own=None if p.ownership in (None, 0) else float(p.ownership),
+                             own=None if p.ownership in (None, 0) else float(p.ownership), pub=getattr(p, "pub_fpts", None),
                              hist_fpts=None if h is None else float(h["fpts_mean"]), market=market,
                              dk_avg=p.dk_avg_fpts, priced=bool(r is not None and r.get("priced")), recent=self.recent.get(name, []),
                              team=p.team, opp=p.opponent,
@@ -765,7 +815,7 @@ class Desk:
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
-                    team_fpts=team_fpts, trailing=self.slate.team_fpts.get(team), rows=rows,
+                    team_fpts=team_fpts, trailing=self.slate.team_fpts.get(team), rows=rows, info={r["key"]: r for r in rows},
                     n_book=sum(1 for r in rows if r.get("book_min") is not None))
 
     def freshness(self, now: datetime) -> list:
@@ -815,6 +865,8 @@ class Desk:
             except (TypeError, ValueError):
                 continue
             slates[k] = dict(v, lock_dt=t, label=f"{t:%a %m-%d %H:%M} · " + str(v.get("name", "")).replace("NBA ", "")[:28])
+        if dg is not None and str(dg) not in slates:          # the lobby drops a group near lock and the capture state may never have seen it
+            slates[str(dg)] = dict(lock_dt=lock, label=(f"{lock:%a %m-%d %H:%M} · " if lock else "") + f"loaded slate {dg}")
         days = sorted({v["lock_dt"].date() for v in slates.values() if v.get("lock_dt") is not None})
         if days:                                                  # dated slates: today's only (the next day's when today has none); the lobby's
             ahead = [d for d in days if d >= now.date()]          # (already today's, undated) and the loaded slate always stay
@@ -1102,6 +1154,18 @@ def _push_feed(log) -> None:
         log(f"feed push failed: {type(e).__name__}: {e}")
 
 
+@app.post("/reload")
+def reload(request: Request):
+    """Load what is on disk without fetching anything: the pool another process wrote (scripts/nba/ingest.py or project.py
+    in a terminal, a feed pull), the pins file, the lineups. The "new data" badge posts here."""
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        desk.rebuild()
+        desk.flash.append("reloaded from disk")
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+
+
 @app.post("/refresh")
 def refresh(request: Request, what: str = Form("dk")):
     if CONSUMER and what == "props":
@@ -1348,7 +1412,8 @@ def pipeline(request: Request):
 
 @app.post("/pipeline/{step}", response_class=HTMLResponse)
 async def pipeline_run(request: Request, step: str):
-    """generate | sim | choose | all. Generate (and all) publish the desk's projections first, so the pool is what you see."""
+    """generate | sim | choose | all | lateswap. Every job but choose publishes the desk's projections first, so the pool is what
+    you see on the grid (2026-10-25: a sim run on a stale pool after a repaint was the late-swap mess)."""
     form = await request.form()
     if (b := _busy(request)) is not None:
         return b
@@ -1365,7 +1430,7 @@ async def pipeline_run(request: Request, step: str):
         elif runner.active():
             desk.flash.append("a job is already running; wait for it or cancel it")
         else:
-            if step in ("generate", "all"):
+            if step in ("generate", "sim", "lateswap", "all"):
                 write_overrides(desk.overrides)
                 try:
                     info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
@@ -1462,6 +1527,53 @@ EXPORT_SLOTS = ("PG", "SG", "SF", "PF", "C", "G", "F", "UTIL")
 def _csv_line(values) -> str:
     import csv, io
     buf = io.StringIO(); csv.writer(buf, lineterminator="\n").writerow(values); return buf.getvalue()
+
+
+@app.post("/team/{team}/news", response_class=HTMLResponse)
+def late_news(request: Request, team: str, player: str = Form(...), call: str = Form("out"), then: str = Form("sim")):
+    """
+    Late news in one move: the call (out / starts / bench / back), the team re-allocated around it, the pool published, and
+    the sim + choose (before lock) or the late swap (after) queued. What the pin, Publish and the pipeline buttons did
+    one after another, with nothing to forget in between.
+    """
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        key = normalize_name(player)
+        if call == "out":
+            desk.set_override(key, minutes=0.0)
+        elif call == "starts":
+            desk.set_override(key, starter=1.0, minutes=None)          # a starter: any scratch pin lifted, the solve gives him his minutes
+        elif call == "bench":
+            desk.set_override(key, starter=0.0)
+        elif call == "back":
+            desk.set_override(key, minutes=None, starter=None)
+        else:
+            desk.flash.append(f"unknown call {call}")
+            return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+        desk.reproject(team)
+        write_overrides(desk.overrides)
+        try:
+            info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
+            desk.flash.append(f"{team}: {player} {call}: published {info.players} players with {len(desk.overrides)} edits")
+            _push_feed(desk.flash.append)
+        except IngestError as e:
+            desk.flash.append(f"{team}: {player} {call}: publish failed: {e}")
+            then = "none"
+        if then in ("sim", "lateswap"):
+            if runner.active():
+                desk.flash.append("a job is already running: nothing queued (cancel it or wait, then run Sim / Late swap)")
+            else:
+                try:
+                    if then == "sim":
+                        _submit("sim", pipeline_form); _submit("choose", pipeline_form)
+                    else:
+                        _submit("lateswap", pipeline_form)
+                    desk.flash.append("queued " + ("sim + choose" if then == "sim" else "the late swap"))
+                except (TypeError, ValueError) as e:
+                    desk.flash.append(f"not queued: {e}")
+        desk.rebuild()
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
 @app.get("/export/projections.csv")

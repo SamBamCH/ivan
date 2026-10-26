@@ -2,7 +2,9 @@
 """
 Ingest an NBA slate: DraftKings pool, Rotowire starters, player props (--update-odds),
 then project it and record a timestamped projection capture. Steps live in
-ivan.sports.nba.ingest.
+ivan.sports.nba.ingest. The pool is replaced and projected in one transaction, the same path as the desk's
+Refresh, so this can run while scripts/nba/serve.py is up: the desk shows "new data · load" and loads
+it on a click (a different slate reloads by itself).
 
   python scripts/nba/ingest.py --list                       # today's classic draft groups
   python scripts/nba/ingest.py --draft-group 154575 --update-odds
