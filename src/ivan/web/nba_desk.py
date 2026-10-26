@@ -173,16 +173,30 @@ class Desk:
         out = {}
         try:
             from ivan.sports.nba.ingest import classic_slates
-            today = datetime.now().strftime("%a")
-            for sl in classic_slates():
+            for sl in classic_slates():                       # every day the lobby lists; the day picker places each on its day
                 start = str(sl.get("start") or "")
-                if start and not start.startswith(today):
-                    continue
-                out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None, start=start, name=sl.get("name"))
+                out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None, start=start, name=sl.get("name"),
+                                          games=sl.get("games"), lock=sl.get("lock"))
         except Exception as e:   # noqa: BLE001 - the lobby is a convenience
             self.flash.append(f"could not list the lobby's slates ({type(e).__name__}); showing the known ones")
         self._lobby = (now, out)
         return out
+
+    def slate_games(self, key: str) -> Optional[int]:
+        """How many games an archived slate had: the distinct team pairs of its capture's players (cached per slate key)."""
+        cache = self.__dict__.setdefault("_slate_games", {})
+        if key in cache:
+            return cache[key]
+        from ivan.core import archive
+        try:
+            caps = [c for c in archive.captures(self.session, "nba") if str(c.slate_key) == str(key)]
+            cap = max(caps, key=lambda c: c.captured_at) if caps else None
+            players = archive.load_blobs(self.session, cap.id).get("players", []) if cap else []
+            pairs = {frozenset((str(r.get("team")), str(r.get("opponent")))) for r in players if r.get("team") and r.get("opponent")}
+            cache[key] = len(pairs) or None
+        except Exception:   # noqa: BLE001
+            cache[key] = None
+        return cache[key]
 
     def slate_days(self, now: datetime, dg) -> list:
         """
@@ -202,15 +216,14 @@ class Desk:
                 d = now.date() + timedelta(days=1)
             else:
                 d = now.date()
-            name = str(v.get("name") or "").replace("NBA ", "")[:30]
-            days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=(start.split(" ", 1)[1] if " " in start else start) + (f" · {name}" if name else ""),
-                                                           source="lobby", sort=start, loaded=str(key) == str(dg)))
+            lk = v.get("lock"); ng = v.get("games")
+            if lk is not None:
+                d = lk.date()
+            when = f"{lk:%H:%M}" if lk is not None else (start.split(" ", 1)[1] if " " in start else start)
+            days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=when + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
+                                                           source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=str(key) == str(dg)))
             seen.add(str(key))
         from sqlalchemy import text as _t
-        names: dict = {}
-        for k, nm, n in self.session.execute(_t("select draft_group_id, name, total_entries from historical_contest_information where draft_group_id is not null")).all():
-            if str(k) not in names or (n or 0) > names[str(k)][1]:
-                names[str(k)] = (str(nm or ""), n or 0)
         for key, lock, src, n in self.session.execute(_t("select slate_key, min(lock), max(source), count(*) from archived_slate where sport = 'nba' group by slate_key")).all():
             if str(key) in seen:
                 continue
@@ -218,14 +231,15 @@ class Desk:
                 t = datetime.fromisoformat(str(lock))
             except (TypeError, ValueError):
                 continue
-            nm = names.get(str(key), ("", 0))[0].replace("NBA ", "")[:30]
-            days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {nm}" if nm else f" · slate {key}") + f" · archive ({n})",
+            ng = self.slate_games(str(key))
+            days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else "") + " · archived",
                                                                   source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg)))
             seen.add(str(key))
         if dg is not None and str(dg) not in seen:
             lock = min((p.gametime for p in self.slate.players if p.gametime), default=None)
             d = (lock or now).date().isoformat()
-            days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M} · " if lock else "") + f"loaded slate {dg}", source="loaded", sort="", loaded=True))
+            ng = len({frozenset((p.team, p.opponent)) for p in self.slate.players if p.team and p.opponent})
+            days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M}" if lock else "loaded") + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""), source="loaded", sort="", loaded=True))
         out = []
         for d in sorted(days, reverse=True):
             dd = date.fromisoformat(d)

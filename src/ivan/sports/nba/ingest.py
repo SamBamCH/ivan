@@ -61,7 +61,15 @@ def classic_slates(day: Optional[datetime] = None) -> list[dict]:
         if str(s.get("game_type", "")).lower() != "classic":
             continue
         # DK's start is a display string ("Tue 2:00PM"); the lock comes from the draftables' game times
-        out.append({"id": int(s["id"]), "start": s.get("start"), "name": s.get("name"), "contests": s.get("contests")})
+        lock = None
+        if s.get("start_utc"):
+            try:                                              # "2026-10-25T23:00:00.0000000Z" -> local naive datetime
+                from datetime import timezone
+                lock = datetime.fromisoformat(str(s["start_utc"])[:19]).replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+            except ValueError:
+                lock = None
+        out.append({"id": int(s["id"]), "start": s.get("start"), "name": s.get("name"), "contests": s.get("contests"),
+                    "games": s.get("games"), "lock": lock})
     return out
 
 

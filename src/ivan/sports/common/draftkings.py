@@ -302,6 +302,9 @@ def download_contest_dataframe(sess: requests.Session, contest_id: int,
     print(f"[error] Contest {contest_id} skipped after {max_retries} attempts.")
     return None
 
+_last_lobby_draft_groups: Dict[int, Dict[str, Any]] = {}      # DraftGroups of the last lobby fetch (list_slates reads it)
+
+
 def fetch_all_contests(sport: str = "MLB", raw_sport: str | None = None) -> List[Dict[str, Any]]:
     """
     Hit the Lobby endpoint and return the raw list of contests. With raw_sport the lobby payload is kept (raw dk/lobby).
@@ -330,6 +333,10 @@ def fetch_all_contests(sport: str = "MLB", raw_sport: str | None = None) -> List
         logging.error(f"[draftkings] Failed to parse JSON: {e}; first 300 chars: {r.text[:300]!r}")
         raise
 
+    global _last_lobby_draft_groups
+    if isinstance(data, dict):
+        # the lobby's own draft-group block: game count and start, which the contests do not carry
+        _last_lobby_draft_groups = {int(g["DraftGroupId"]): g for g in (data.get("DraftGroups") or []) if g.get("DraftGroupId") is not None}
     if isinstance(data, dict) and "Contests" in data:
         return data["Contests"]
     if isinstance(data, dict) and "contests" in data:
@@ -507,8 +514,12 @@ def list_slates(sport) -> list[dict]:
     Each item: {"id", "game_type", "contests", "start", "name"}.
     """
     slate_info = summarize_slates(fetch_all_contests(sport))
-    return [{"id": dg, "game_type": info["gameType"], "contests": info["count"],
-             "start": info["sdstring"], "name": info["name"]} for dg, info in slate_info.items()]
+    out = []
+    for dg, info in slate_info.items():
+        g = _last_lobby_draft_groups.get(int(dg), {})
+        out.append({"id": dg, "game_type": info["gameType"], "contests": info["count"], "start": info["sdstring"], "name": info["name"],
+                    "games": g.get("GameCount"), "start_utc": g.get("StartDate")})      # from the lobby's draft-group block, when present
+    return out
 
 
 def _prompt_for_slate(sport, slates: list[dict]) -> int:
