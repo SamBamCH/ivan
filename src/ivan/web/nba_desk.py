@@ -24,6 +24,7 @@ import time
 from datetime import date, datetime, timedelta
 from ivan.sports.nba.ingest import restore_from_archive
 from ivan.sports.nba import newsfeed as NF
+from ivan.sports.nba import scenarios as SC
 from pathlib import Path
 from typing import Optional
 
@@ -123,6 +124,7 @@ if LIMITED:
     for _k, _cap in LIMITS.items():
         if _k in PIPELINE_DEFAULTS and float(PIPELINE_DEFAULTS[_k] or 0) > _cap:
             PIPELINE_DEFAULTS[_k] = str(_cap)
+PIPELINE_DEFAULTS.setdefault("fresh", "on")          # generate starts the pool fresh unless the box is unticked (add to the pool: a second scenario's lineups)
 pipeline_form: dict = dict(PIPELINE_DEFAULTS)
 DESK_CONFIG = NBA_DATA_DIR / "jobs" / "desk_config.json"           # config/nba.json with the panel's knobs applied; the jobs read it
 
@@ -272,6 +274,9 @@ class Desk:
         self.pool_stamp = self._stamp(); self.stale = False
         self.overrides = read_overrides_full()            # the file is the source of truth: every edit is written to it
         self.proj, self.hist_only, self.rot = {}, {}, {}
+        self._auto_pending = True                         # scenarios are matched once the rest of the rebuild is done (see end of rebuild)
+        if getattr(self, "_calls_dg", None) != self.pool_stamp[2]:
+            self._calls, self._calls_dg = {}, self.pool_stamp[2]   # typed calls belong to their slate
         self.season = self.season_averages(self.slate.box)
         from ivan.sports.nba import pbp as PBP
         try:
@@ -289,7 +294,16 @@ class Desk:
         for t in self.slate.teams():
             self.reproject(t)
 
+        if getattr(self, "_auto_pending", False):
+            self._auto_pending = False
+            try:
+                for m in self.auto_scenarios():
+                    self.flash.append(m)
+            except Exception as e:   # noqa: BLE001 - the pick is a convenience
+                self.flash.append(f"scenario pick failed: {type(e).__name__}: {e}")
+
     @staticmethod
+
     def season_averages(box: pd.DataFrame) -> dict:
         """player -> (games, minutes per game, fantasy points per minute) this season, and the same over last season as a fallback."""
         today = datetime.now().date()
@@ -838,6 +852,107 @@ class Desk:
             out.append(dict(team=t, state=ms["state"], colour=colour, why=why, open=len(open_q), new=sum(1 for q in open_q if q["news"] and q["news"]["new"])))
         return out
 
+    # ---------------------------------------------------------------- scenarios: a team's edits saved under an assumption
+    def team_overrides(self, team: str) -> dict:
+        names = {normalize_name(p.name) for p in self.players(team)}
+        return {n: dict(ov) for n, ov in self.overrides.items() if n in names}
+
+    def raw_facts(self, team: str, calls: Optional[dict] = None) -> dict:
+        """The facts a scenario is matched against: DK statuses and Rotowire's starters, plus the calls typed into the late-news form
+        (not the pins: an active scenario's own scratch pin must not keep it matching after DK says otherwise)."""
+        from ivan.sports.nba.projection.live import OUT_STATUSES
+        out, avail, status_now = set(), set(), {}
+        for p in self.players(team):
+            n = normalize_name(p.name); status_now[n] = (p.status or "").upper()
+            (out if status_now[n] in OUT_STATUSES else avail).add(n)
+        starters = set(self.slate.starters.get(team) or set())
+        # the calls typed into the late-news form stay facts until DK's own status for the player moves (then DK wins)
+        kept = self.__dict__.setdefault("_calls", {}).get(team, {})
+        merged = {n: c for n, (c, st0) in kept.items() if status_now.get(n) == st0}
+        merged.update(calls or {})
+        for n, call in merged.items():
+            if call == "out":
+                out.add(n); avail.discard(n); starters.discard(n)
+            elif call in ("in", "back"):
+                avail.add(n); out.discard(n)
+            elif call == "starts":
+                avail.add(n); out.discard(n); starters.add(n)
+            elif call == "bench":
+                starters.discard(n)
+        return dict(out=out, available=avail, starters=starters)
+
+    def note_call(self, team: str, player: str, call: str) -> None:
+        """Remember a typed late-news call as a fact for the scenario pick, with DK's status at the time (see raw_facts)."""
+        st = next(((p.status or "").upper() for p in self.players(team) if normalize_name(p.name) == player), "")
+        self.__dict__.setdefault("_calls", {}).setdefault(team, {})[player] = (call, st)
+
+    def scenario_list(self, team: str) -> list:
+        out = []
+        for sc in SC.list_scenarios(team):
+            a = sc.get("assumes") or {}
+            sc["assumes_text"] = ", ".join(f"{n.split()[-1]} {c}" for n, c in a.items()) or "no assumption (never picked by itself)"
+            sc["holds"] = bool(a) and SC.holds(a, self.raw_facts(team))
+            out.append(sc)
+        return out
+
+    def save_scenario(self, team: str, name: str) -> dict:
+        statuses = {normalize_name(p.name): (p.status or "").upper() for p in self.players(team)}
+        q = [n for n, st in statuses.items() if st in QUESTION_STATUSES]
+        grid = None
+        gp = ROT.drawn_path(team)
+        if gp.exists():
+            try:
+                grid = json.loads(gp.read_text())
+            except (OSError, ValueError):
+                grid = None
+        assumes = SC.assumptions(self.team_overrides(team), statuses, q, grid)
+        return SC.save_scenario(team, name, self.team_overrides(team), assumes)
+
+    def activate_scenario(self, team: str, slug: str) -> Optional[dict]:
+        new = SC.activate(team, slug, self.overrides, [normalize_name(p.name) for p in self.players(team)])
+        if new is None:
+            return None
+        self.overrides = new
+        write_overrides(self.overrides)
+        self.reproject(team)
+        return SC.load_scenario(team, slug)
+
+    def auto_scenarios(self, calls: Optional[dict] = None) -> list:
+        """
+        When the facts of a team with scenarios change (a refresh moved a status or the lineup, a late-news call), the one
+        scenario whose assumptions all hold is activated. Returns the messages to flash. Two matches or none: said, not acted on.
+        """
+        msgs = []
+        seen = self.__dict__.setdefault("_facts_seen", {})
+        if not SC.SCENARIOS_DIR.is_dir():
+            return msgs
+        teams = {p.team for p in self.slate.players if p.team}
+        for d in SC.SCENARIOS_DIR.iterdir():
+            team = d.name
+            if not d.is_dir() or team not in teams:
+                continue
+            scs = SC.list_scenarios(team)
+            if not scs:
+                continue
+            facts = self.raw_facts(team, (calls or {}).get(team))
+            key = (frozenset(facts["out"]), frozenset(facts["available"]), frozenset(facts["starters"]))
+            if seen.get(team) == key:
+                continue
+            seen[team] = key
+            matches = [sc for sc in scs if sc.get("assumes") and SC.holds(sc["assumes"], facts)]
+            act = SC.active_slug(team)
+            if len(matches) == 1:
+                if matches[0]["slug"] != act:
+                    self.activate_scenario(team, matches[0]["slug"])
+                    msgs.append(f"{team}: the news matches scenario '{matches[0]['name']}' ({', '.join(f'{n.split()[-1]} {c}' for n, c in matches[0]['assumes'].items())}): activated")
+            elif len(matches) > 1:
+                msgs.append(f"{team}: {len(matches)} scenarios match the news ({', '.join(m['name'] for m in matches)}): pick one")
+            elif act:
+                cur = SC.load_scenario(team, act)
+                if cur and cur.get("assumes") and not SC.holds(cur["assumes"], facts):
+                    msgs.append(f"{team}: the active scenario '{cur['name']}' no longer matches the news; no saved scenario does")
+        return msgs
+
     def mapped_summary(self) -> dict:
         teams = sorted({p.team for p in self.slate.players if p.team})
         states = {t: self.mapped_state(t) for t in teams}
@@ -1046,7 +1161,7 @@ class Desk:
             to_place = 0.0
         return dict(team=team, opp=next((p.opponent for p in self.players(team)), ""), tip=tip, mins_to_tip=mins_to_tip,
                     assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team), mapped=self.mapped_state(team),
-                    questions=self.questions(team, now),
+                    questions=self.questions(team, now), scenarios=self.scenario_list(team),
                     last_game=self.game_grid(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
@@ -1185,7 +1300,7 @@ def board(request: Request, view: str = "games"):
     with LOCK:
         now = datetime.now()
         if desk.busy:
-            return _render(request, "_nba_board.html", busy=desk.busy, view=view, games=[], menu=[], players=[], lateswap=None)
+            return _render(request, "_nba_board.html", busy=desk.busy, view=view, games=[], menu=[], players=[], lateswap=None, exposures=None)
         for t in desk.slate.teams():
             desk.slate.spread(t)                            # loads the lines once
         cards = [desk.team_card(t, now) for t in desk.slate.teams()]
@@ -1195,13 +1310,63 @@ def board(request: Request, view: str = "games"):
             if not menu or menu[-1]["tip"] != g["tip"]:
                 menu.append(dict(tip=g["tip"], games=[]))
             menu[-1]["games"].append(g)
-        players = []; lateswap = None
+        players = []; lateswap = None; exposures = None
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
+        if view == "exposures":
+            exposures = _exposures_full()
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
-        return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, **_pipeline_ctx())
+        return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures, **_pipeline_ctx())
+
+
+def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:
+    """
+    The exposures view: every player in the newest choose run that covered this slate's contests, joined to the pool as it
+    stands now. Per player: entries holding him, exposure, the field's ownership and the leverage against it, the
+    projection he was chosen on and ours now (the delta is what the news did to him since), minutes now, the public
+    number, status (a chosen player now OUT is the first thing to see), value. Per team: the entries' exposure summed.
+    """
+    mine = _slate_contest_ids() if mine is None else mine
+    for classic in sorted(OUTPUT_DIR.glob("chosen_entries.classic.*.csv"), reverse=True):
+        stamp = classic.name.split(".")[2]
+        lu = OUTPUT_DIR / f"chosen_entries.lineups.{stamp}.csv"
+        if not lu.exists():
+            continue
+        try:
+            L = pd.read_csv(lu)
+        except Exception:   # noqa: BLE001
+            continue
+        L = L[L["contest_id"].astype(int).isin(mine)]
+        if not len(L):
+            continue
+        n_entries = int(L["entry_id"].nunique())
+        e = (L.groupby(["player_id"]).agg(name=("name", "first"), team=("team", "first"), position=("position", "first"), salary=("salary", "first"),
+                                           n=("entry_id", "nunique"), proj_then=("projection", "first")).reset_index())
+        now = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
+        rows = []
+        for r in e.itertuples():
+            p = now.get(int(r.player_id))
+            proj_now = None if p is None or p.fpts_mean is None else float(p.fpts_mean)
+            own = None if p is None or p.ownership in (None, 0) else float(p.ownership)
+            exp = float(r.n) / max(1, n_entries)
+            rows.append(dict(player_id=int(r.player_id), name=r.name, team=r.team, position=r.position, salary=int(r.salary or 0), n=int(r.n), exposure=exp,
+                             own=own, leverage=None if own is None else exp * 100 - own, status=((p.status or "").upper() if p and p.status and p.status != "None" else ""),
+                             in_pool=p is not None, proj_then=None if pd.isna(r.proj_then) else float(r.proj_then), proj_now=proj_now,
+                             delta=None if proj_now is None or pd.isna(r.proj_then) else proj_now - float(r.proj_then),
+                             minutes=None if p is None or p.minutes_proj is None else float(p.minutes_proj),
+                             pub=None if p is None or getattr(p, "pub_fpts", None) is None else float(p.pub_fpts),
+                             value=None if proj_now is None or not r.salary else proj_now / (float(r.salary) / 1000.0)))
+        rows.sort(key=lambda x: (-x["exposure"], -(x["proj_now"] or 0)))
+        teams = {}
+        for x in rows:
+            t = teams.setdefault(x["team"], dict(team=x["team"], exposure=0.0, players=0, out=0))
+            t["exposure"] += x["exposure"]; t["players"] += 1; t["out"] += 1 if x["status"] in ("OUT", "O", "IR", "SUSP") else 0
+        return dict(stamp=stamp, when=datetime.strptime(stamp, "%Y%m%d-%H%M%S"), entries=n_entries, contests=int(L["contest_id"].nunique()), rows=rows,
+                    teams=sorted(teams.values(), key=lambda t: -t["exposure"]), out=[x for x in rows if x["status"] in ("OUT", "O", "IR", "SUSP")],
+                    questionable=[x for x in rows if x["status"] in QUESTION_STATUSES])
+    return None
 
 
 def _start_restore(draft_group: int) -> None:
@@ -1461,6 +1626,38 @@ def _news_loop():
 threading.Thread(target=_news_loop, name="ivan-news", daemon=True).start()
 
 
+@app.post("/team/{team}/scenario/save", response_class=HTMLResponse)
+def scenario_save(request: Request, team: str, name: str = Form(...)):
+    """Save the team's current edits (pins + grid) under a name; the assumptions are read off the calls in them."""
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        name = name.strip()[:60]
+        if name:
+            sc = desk.save_scenario(team, name)
+            desk.flash.append(f"{team}: scenario '{sc['name']}' saved" + (f" (assumes {', '.join(f'{n.split()[-1]} {c}' for n, c in sc['assumes'].items())})" if sc["assumes"] else " (no assumption: it will not pick itself)"))
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.post("/team/{team}/scenario/activate", response_class=HTMLResponse)
+def scenario_activate(request: Request, team: str, slug: str = Form(...)):
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        sc = desk.activate_scenario(team, slug)
+        desk.flash.append(f"{team}: scenario '{sc['name']}' active" if sc else f"{team}: no scenario {slug}")
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.post("/team/{team}/scenario/delete", response_class=HTMLResponse)
+def scenario_delete(request: Request, team: str, slug: str = Form(...)):
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        SC.delete_scenario(team, slug)
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
 @app.post("/reload")
 def reload(request: Request):
     """Load what is on disk without fetching anything: the pool another process wrote (scripts/nba/ingest.py or project.py
@@ -1685,7 +1882,7 @@ def _submit(step: str, form: dict) -> list:
     cfg = write_desk_config(form)
     n_jobs = max(1, min(MAX_JOBS, int(_field(form.get("jobs"), "jobs", int) or MAX_JOBS)))
     if step in ("generate", "all"):
-        cmd = [py, str(SCRIPTS / "generate_lineups.py"), str(int(form["lineups"])), str(n_jobs), "-c", str(cfg), "--fresh", "--no-progress"]
+        cmd = [py, str(SCRIPTS / "generate_lineups.py"), str(int(form["lineups"])), str(n_jobs), "-c", str(cfg), "--no-progress"] + (["--fresh"] if str(form.get("fresh", "on")) else [])
         jobs.append(runner.submit("generate", cmd, meta=dict(step="generate")))
     if step in ("sim", "all"):
         jobs.append(runner.submit("sim", [py, str(SCRIPTS / "sim.py"), "--config", str(cfg), "-n", str(int(form["sims"])), "-c", str(int(form["field_cap"]))], meta=dict(step="sim")))
@@ -1864,6 +2061,12 @@ def late_news(request: Request, team: str, player: str = Form(...), call: str = 
             return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
         desk.reproject(team)
         write_overrides(desk.overrides)
+        desk.note_call(team, key, call)
+        try:
+            for m in desk.auto_scenarios(calls={team: {key: call}}):
+                desk.flash.append(m)
+        except Exception as e:   # noqa: BLE001
+            desk.flash.append(f"scenario pick failed: {type(e).__name__}: {e}")
         try:
             info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
             desk.flash.append(f"{team}: {player} {call}: published {info.players} players with {len(desk.overrides)} edits")

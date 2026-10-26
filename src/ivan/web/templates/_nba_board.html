@@ -22,6 +22,36 @@
   {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
   {% include "_nba_pipeline.html" %}
   {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% endif %}
+  {% if view == 'exposures' %}
+  <div class="exposures">
+    {% if not exposures %}<p class="muted">no picks for this slate yet: run choose (the pipeline panel) and the entries' exposures appear here</p>{% else %}
+    <p><b>exposures</b> · the picks of {{ exposures.when.strftime('%a %H:%M') }} · {{ exposures.entries }} entries in {{ exposures.contests }} contest(s) of this slate
+      {% if exposures.out %} · <b class="bad">{{ exposures.out|length }} chosen player(s) now OUT: {{ exposures.out|map(attribute='name')|join(', ') }}</b>{% endif %}
+      {% if exposures.questionable %} · <span class="warnt">{{ exposures.questionable|length }} questionable: {{ exposures.questionable|map(attribute='name')|join(', ') }}</span>{% endif %}
+      · <span class="muted small">teams: {% for t in exposures.teams[:10] %}{{ t.team }} {{ '%.1f'|format(t.exposure) }}{% if t.out %} <b class="bad">({{ t.out }} out)</b>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</span></p>
+    <table class="players sortable" id="exposures-table">
+      <thead><tr>
+        <th data-k="name">player</th><th data-k="team">team</th><th data-k="position">pos</th><th class="n" data-k="salary">sal</th><th data-k="status" title="DK status now">st</th>
+        <th class="n" data-k="n" title="entries holding him">entries</th><th class="n" data-k="exposure" title="share of the entries">exp</th>
+        <th class="n" data-k="own" title="the field's ownership (the public projection's field)">own</th><th class="n" data-k="leverage" title="exposure minus ownership, points">lev</th>
+        <th class="n" data-k="proj_then" title="our projection when he was chosen">proj@pick</th><th class="n" data-k="proj_now" title="our projection now">proj now</th><th class="n" data-k="delta" title="now minus at pick: what the news did">Δ</th>
+        <th class="n" data-k="minutes" title="minutes projected now">min</th><th class="n" data-k="pub" title="the public projection">pub</th><th class="n" data-k="value" title="proj now per $1k">val</th>
+      </tr></thead>
+      <tbody>{% for r in exposures.rows %}
+        <tr class="{% if r.status in ('OUT', 'O', 'IR', 'SUSP') %}out{% elif r.status in ('Q', 'GTD', 'D', 'P') %}qrow{% endif %} {% if not r.in_pool %}gone{% endif %}">
+          <td data-v="{{ r.name }}">{{ r.name }}{% if not r.in_pool %} <span class="status">not in the pool</span>{% endif %}</td><td data-v="{{ r.team }}">{{ r.team }}</td><td data-v="{{ r.position }}">{{ r.position }}</td>
+          <td class="n" data-v="{{ r.salary }}">{{ r.salary }}</td><td data-v="{{ r.status }}">{% if r.status %}<span class="status {% if r.status in ('Q','GTD','D','P') %}q{% endif %}">{{ r.status }}</span>{% endif %}</td>
+          <td class="n" data-v="{{ r.n }}">{{ r.n }}</td><td class="n" data-v="{{ r.exposure }}"><b>{{ '%.0f%%'|format(100 * r.exposure) }}</b></td>
+          <td class="n" data-v="{{ r.own or 0 }}">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td><td class="n {% if r.leverage is not none and r.leverage >= 15 %}hi{% elif r.leverage is not none and r.leverage <= -10 %}lo{% endif %}" data-v="{{ r.leverage or 0 }}">{{ '%+.0f'|format(r.leverage) if r.leverage is not none else '' }}</td>
+          <td class="n" data-v="{{ r.proj_then or 0 }}">{{ '%.1f'|format(r.proj_then) if r.proj_then is not none else '' }}</td><td class="n" data-v="{{ r.proj_now or 0 }}"><b>{{ '%.1f'|format(r.proj_now) if r.proj_now is not none else '' }}</b></td>
+          <td class="n {% if r.delta is not none and r.delta <= -3 %}lo{% elif r.delta is not none and r.delta >= 3 %}hi{% endif %}" data-v="{{ r.delta or 0 }}">{{ '%+.1f'|format(r.delta) if r.delta is not none else '' }}</td>
+          <td class="n" data-v="{{ r.minutes or 0 }}">{{ '%.0f'|format(r.minutes) if r.minutes is not none else '' }}</td><td class="n" data-v="{{ r.pub or 0 }}">{{ '%.1f'|format(r.pub) if r.pub is not none else '' }}</td>
+          <td class="n" data-v="{{ r.value or 0 }}">{{ '%.2f'|format(r.value) if r.value is not none else '' }}</td>
+        </tr>{% endfor %}
+      </tbody>
+    </table>{% endif %}
+  </div>
+  {% endif %}
   {% if view == 'players' %}
   <div class="game">
     <table class="players">
@@ -44,7 +74,7 @@
     </table>
   </div>
   {% endif %}
-  {% for g in games if view not in ('players', 'lateswap') %}
+  {% for g in games if view not in ('players', 'lateswap', 'exposures') %}
     <div class="game {% if g.locked %}locked{% elif g.score >= 10 %}hot{% elif g.score >= 3 %}warm{% endif %}">
       <div class="gh">
         <span class="tip {% if g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% elif g.locked %} <span class="muted">started</span>{% endif %}</span>

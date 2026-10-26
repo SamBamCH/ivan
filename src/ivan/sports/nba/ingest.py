@@ -253,6 +253,27 @@ def retire_edits(old_draft_group: int, log: Log = print, new_draft_group: Option
                 log(f"restored {n} edit file(s) of slate {new_draft_group}")
 
 
+def isolate_slate(session, draft_group_id: int, log: Log = print) -> dict:
+    """
+    The working tables belong to the loaded slate: lineups, pool snapshots, simulation results and contest reports of any
+    other draft group are deleted when a slate is loaded (2026-10-26: Monday's desk still carried Sunday's 12k lineups and
+    sims). Rows of the loaded slate stay, so coming back to a slate finds its own work. The pool, props, captures, news and
+    box scores are never touched.
+    """
+    from sqlalchemy import text
+    from ivan.sports.nba.models import ContestSimReport, Lineup, LineupPool, LineupSimulationResult
+    dg = int(draft_group_id)
+    n_l = session.query(Lineup).filter((Lineup.draft_group_id != dg) | (Lineup.draft_group_id.is_(None))).delete(synchronize_session=False)
+    n_p = session.query(LineupPool).filter(LineupPool.draft_group_id != dg).delete(synchronize_session=False)
+    n_s = session.execute(text("DELETE FROM lineup_simulation_results WHERE lineup_id NOT IN (SELECT id FROM lineup)")).rowcount
+    n_r = session.execute(text("DELETE FROM contest_sim_report WHERE contest_id NOT IN (SELECT contest_id FROM historical_contest_information WHERE draft_group_id = :dg)").bindparams(dg=dg)).rowcount
+    session.commit()
+    out = dict(lineups=int(n_l or 0), pool=int(n_p or 0), sims=int(n_s or 0), reports=int(n_r or 0))
+    if any(out.values()):
+        log(f"cleared another slate's work: {out['lineups']} lineups, {out['sims']} sim results, {out['reports']} reports, {out['pool']} pool rows")
+    return out
+
+
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
                  log: Log = print) -> tuple:
     """
@@ -482,6 +503,8 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
         if switching:
             retire_edits(int(draft_group_id), log=log, new_draft_group=int(current[0]))   # the pool did not move: the edits go back where they were
         raise
+    if switching:
+        isolate_slate(session, int(draft_group_id), log=log)
     return {"fetched": fetched, "stored": stored, "projected": projected}
 
 
@@ -560,6 +583,8 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
         if switching:
             retire_edits(int(draft_group_id), log=log, new_draft_group=int(current[0]))   # the pool did not move: the edits go back
         raise
+    if switching:
+        isolate_slate(session, int(draft_group_id), log=log)
     log(f"restored slate {draft_group_id} from capture {cap.id} ({cap.source}, {cap.captured_at:%m-%d %H:%M}): {len(players)} players, "
         f"{n_st} starters, {len(odds_rows)} prop rows, {len(line_rows)} line rows; projected {info.players}")
     return dict(capture=cap.id, source=cap.source, captured_at=cap.captured_at, players=len(players), starters=n_st, odds=len(odds_rows), lines=len(line_rows))

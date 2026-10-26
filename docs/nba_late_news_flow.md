@@ -91,3 +91,24 @@ on file: Rotowire's NBA news page (`ivan.sports.nba.newsfeed`, `scripts/nba/news
 the Check news button, the auto checkbox (every 5 minutes while the desk runs, off by default) or the script; each
 headline links to the report it cites (the Underdog / Shams / beat tweet). Rotowire gives a date, not a time, so our
 first-seen time is the clock. "new since mapped" marks news that arrived after the team's mapping was saved.
+
+## Scenarios, one slate at a time, exposures (2026-10-26)
+
+**One slate.** Loading a slate (fetch or restore) deletes the lineups, pool snapshots, sim results and contest reports
+of every other draft group (`ingest.isolate_slate`); the loaded slate's own rows stay, so coming back to a slate finds
+its work. The pool, props, captures, news and box scores are never touched.
+
+**Scenarios** (`ivan.sports.nba.scenarios`, `data/nba/input/scenarios/<TEAM>/`): a team's edits (its pins + its drawn
+grid) saved under a name with the assumption they encode, read off the calls: a scratch pin on a player DK does not
+list as OUT = "out", a starter call = "starts"/"bench", a questionable player pinned or locked with minutes = "in".
+"Save current as…" on the card; click a name to activate (the team's pins and grid are swapped in, the team
+re-projects); × deletes. The pick is automatic: when the facts move (a refresh changed a status or the lineup, or a call
+typed into the late-news form, which stays a fact until DK's own status for that player moves), the one scenario whose
+assumptions all hold activates itself and the desk says so; two matches or none are reported, not acted on. The generate
+panel's "fresh pool" box unticked adds a scenario's lineups to the existing pool, so both worlds' lineups sit in the
+pool before lock and the switch at lock costs a publish and a sim.
+
+**Exposures** (the exposures view): the newest choose run that covered this slate's contests, every chosen player joined
+to the pool as it stands: entries, exposure, the field's ownership and the leverage against it, the projection at pick
+and ours now with the delta, minutes, the public number, status (a chosen player now OUT is struck in red at the top
+line), value; sortable by any column; team exposure totals.

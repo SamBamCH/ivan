@@ -98,6 +98,11 @@
   .team-chips { display:inline-flex; gap:3px; flex-wrap:wrap } .team-chips .chip { font-size:11px; font-weight:700; padding:1px 6px; border-radius:4px; text-decoration:none; color:#555; background:#ececec; border:1px solid #ddd; position:relative }
   .team-chips .chip.ready { background:#dcfce7; color:#166534; border-color:#bbf7d0 } .team-chips .chip.open { background:#fef3c7; color:#92400e; border-color:#fde68a } .team-chips .chip.changed { background:#fee2e2; color:#991b1b; border-color:#fecaca }
   .team-chips .chip .dot { position:absolute; top:-3px; right:-3px; width:7px; height:7px; border-radius:50%; background:var(--bad); border:1px solid #fff }
+  .scenarios { font-size:12px; margin:2px 0 4px; display:flex; gap:6px; align-items:center; flex-wrap:wrap } .scenarios .scn { display:inline-flex; align-items:center; border:1px solid #ddd; border-radius:4px; padding:0 2px 0 0 } .scenarios .scn.active { border-color:var(--accent); background:#eef4ff } .scenarios .scn.holds:not(.active) { border-color:#fde68a; background:#fffbeb }
+  .scenarios .scn button.scn-name { font:inherit; font-size:12px; border:0; background:none; padding:1px 6px; cursor:pointer } .scenarios .scn button.x { font:inherit; font-size:11px; border:0; background:none; color:#bbb; cursor:pointer; padding:0 3px } .scenarios .scn button.x:hover { color:var(--bad) } .scenarios input { font:inherit; font-size:12px; padding:1px 4px } .scenarios form.inline button { font-size:12px }
+  .exposures table.players tr.out td { color:var(--bad) } .exposures table.players tr.out td:first-child { text-decoration:line-through } .exposures table.players tr.qrow td:first-child { color:#92400e } .exposures table.players tr.gone td { color:#aaa }
+  .exposures td.hi { color:var(--ok); font-weight:600 } .exposures td.lo { color:var(--bad); font-weight:600 } .exposures .warnt { color:#92400e } .exposures p .bad { color:var(--bad) }
+  table.sortable th { cursor:pointer; user-select:none } table.sortable th.asc::after { content:' ▲'; font-size:9px } table.sortable th.desc::after { content:' ▼'; font-size:9px }
   .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
@@ -197,7 +202,7 @@
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>
   <span class="fresh">{% for f in header.fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{{ '%02d'|format((f.age % 60)|int) }}{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}</span>
-  <span class="views"><a href="{{ root }}/" class="{% if view != 'players' %}on{% endif %}">games</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a></span>
+  <span class="views"><a href="{{ root }}/" class="{% if view not in ('players', 'lateswap', 'exposures') %}on{% endif %}">games</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a><a href="{{ root }}/?view=exposures" class="{% if view == 'exposures' %}on{% endif %}">exposures</a></span>
   <span class="spacer"></span>
   {% if consumer %}
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections pushed from the laptop">Refresh</button></form>
@@ -317,6 +322,17 @@
   document.body.addEventListener("mouseover", e => {
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
+  });
+  // sortable tables: click a header to sort by that column (numbers as numbers, via data-v on the cells)
+  document.body.addEventListener("click", e => {
+    const th = e.target.closest("table.sortable thead th"); if (!th) return;
+    const table = th.closest("table"); const idx = Array.from(th.parentNode.children).indexOf(th);
+    const desc = !th.classList.contains("desc");
+    table.querySelectorAll("thead th").forEach(h => h.classList.remove("asc", "desc")); th.classList.add(desc ? "desc" : "asc");
+    const rows = Array.from(table.querySelectorAll("tbody > tr"));
+    const val = tr => { const td = tr.children[idx]; const v = td ? (td.dataset.v ?? td.textContent.trim()) : ""; const n = parseFloat(v); return isNaN(n) || v === "" ? v : n; };
+    rows.sort((a, b) => { const x = val(a), y = val(b); if (typeof x === "number" && typeof y === "number") return desc ? y - x : x - y; return desc ? String(y).localeCompare(String(x)) : String(x).localeCompare(String(y)); });
+    const tb = table.querySelector("tbody"); rows.forEach(r => tb.appendChild(r));
   });
   // the slate picker: a day, then its slates (the loaded one selected; Load is disabled while it is the loaded one)
   (function () {
