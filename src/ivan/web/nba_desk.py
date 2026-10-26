@@ -1879,9 +1879,16 @@ def _pipeline_ctx() -> dict:
     except Exception:   # noqa: BLE001 - a desk without the lineup tables yet
         slates = []
     current = next((p.draft_group_id for p in (desk.slate.players if desk.slate else []) if p.draft_group_id), None)
-    return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=_entries_info(),
-                outputs=_latest_outputs(), lineups_in_db=desk.session.query(Lineup).count(),
-                sims_in_db=desk.session.query(LineupSimulationResult).count(), lineup_slates=slates, current_draft_group=current, side=_side_ctx())
+    n_lineups = desk.session.query(Lineup).count(); n_sims = desk.session.query(LineupSimulationResult).count()
+    projected = desk.session.query(NBAPlayer).filter(NBAPlayer.fpts_mean.isnot(None)).count() > 0
+    ent = _entries_info()
+    # each step opens when the one before it has run: generate needs a projected pool, sim needs lineups (and entries), choose needs sims
+    ready = dict(generate=projected, sim=bool(projected and n_lineups and ent.get("exists")), choose=bool(n_sims and ent.get("exists")),
+                 all=bool(projected and ent.get("exists")))
+    just_finished = bool(jobs and not runner.active() and jobs[0].finished and (time.time() - jobs[0].finished) < 8)
+    return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=ent,
+                outputs=_latest_outputs(), lineups_in_db=n_lineups, sims_in_db=n_sims, lineup_slates=slates, current_draft_group=current,
+                side=_side_ctx(), ready=ready, projected=projected, just_finished=just_finished)
 
 
 def _field(raw, label: str, kind=float):

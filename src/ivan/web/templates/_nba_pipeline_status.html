@@ -1,6 +1,7 @@
 {# the part of the pipeline panel that changes while a job runs: it polls itself, the form above it is never re-rendered #}
 <div id="pipe-status" class="dash-status" {% if active %}hx-get="{{ root }}/pipeline/status" hx-trigger="load delay:2s" hx-swap="outerHTML"{% endif %}>
   {% if (poll is not defined or poll) and side is defined and side %}{% with oob=True %}{% include "_nba_pipeline_side.html" %}{% endwith %}{% endif %}
+  {% if (poll is not defined or poll) and just_finished %}<div hx-get="{{ root }}/pipeline" hx-target="#pipeline" hx-swap="outerHTML" hx-trigger="load delay:300ms"></div>{% endif %}
   {% if current or log %}
   <div class="pipe-row">
     {% if current %}

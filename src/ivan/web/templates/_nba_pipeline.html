@@ -4,12 +4,12 @@
       <span class="brand-sm">Pipeline</span>
       {% if limited %}<span class="muted small" title="this desk is shared: settings above these are lowered, and a job running longer than {{ job_max_minutes }} minutes is stopped">limits: {{ limits.lineups }} lineups, {{ limits.jobs }} jobs, {{ limits.sims }} sims, field {{ limits.field_cap }}, {{ job_max_minutes }} min per job</span>{% endif %}
       <span class="spacer"></span>
-      <button type="button" hx-post="{{ root }}/pipeline/generate" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML"  title="publish the projections, then generate the lineup pool (clears the old one)">Publish + generate</button>
-      <button type="button" hx-post="{{ root }}/pipeline/sim" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not entries.exists %}disabled{% endif %} title="simulate every contest in the entries file">Sim</button>
-      <button type="button" hx-post="{{ root }}/pipeline/choose" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not entries.exists %}disabled{% endif %} title="choose lineups and write the upload CSV">Choose</button>
-      <button type="submit" class="primary" {% if not entries.exists %}disabled{% endif %} title="publish, generate, sim, choose">Run all</button>
+      <button type="button" hx-post="{{ root }}/pipeline/generate" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.generate %}disabled{% endif %} title="{% if ready.generate %}publish the projections, then generate the lineup pool{% else %}load and project a slate first{% endif %}">Publish + generate</button>
+      <button type="button" hx-post="{{ root }}/pipeline/sim" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.sim %}disabled{% endif %} title="{% if ready.sim %}publish, then simulate every contest in the entries file over the pool{% elif not entries.exists %}upload the entries export first{% else %}generate the lineup pool first{% endif %}">Sim</button>
+      <button type="button" hx-post="{{ root }}/pipeline/choose" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}choose lineups and write the upload CSV{% elif not entries.exists %}upload the entries export first{% else %}run the sim first{% endif %}">Choose</button>
+      <button type="submit" class="primary" {% if not ready.all %}disabled{% endif %} title="{% if ready.all %}publish, generate, sim, choose{% elif not projected %}load and project a slate first{% else %}upload the entries export first{% endif %}">Run all</button>
     </div>
-    <div class="pipe-row pipe-sec">
+    <div class="pipe-row pipe-sec {% if not ready.generate %}off{% endif %}" title="{% if not ready.generate %}opens once a slate is loaded and projected{% endif %}">
       <span class="sec">generate</span>
       <label>lineups <input name="lineups" value="{{ form.lineups }}" size="6"></label>
       <label title="ticked: the pool starts empty. Unticked: the new lineups join the existing pool (build a second scenario's lineups beside the first; the sim scores them all under whatever is published)"><input type="checkbox" name="fresh" value="on" {% if form.fresh %}checked{% endif %}> fresh pool</label>
@@ -23,19 +23,19 @@
       <label title="sampled worlds per worker; each solve optimises one world">samples <input name="n_samples" value="{{ form.n_samples }}" size="5"></label>
       <label title="per-player multiplicative noise on each world, ± this">jitter <input name="jitter" value="{{ form.jitter }}" size="4"></label>
     </div>
-    <div class="pipe-row pipe-sec">
+    <div class="pipe-row pipe-sec {% if not ready.sim %}off{% endif %}" title="{% if not ready.sim %}opens once the pool is generated{% endif %}">
       <span class="sec">sim</span>
       <label title="simulated worlds per contest">sims <input name="sims" value="{{ form.sims }}" size="5"></label>
       <label title="largest field size simulated; bigger contests are scaled down to it">field cap <input name="field_cap" value="{{ form.field_cap }}" size="6"></label>
     </div>
-    <div class="pipe-row pipe-sec">
+    <div class="pipe-row pipe-sec {% if not ready.choose %}off{% endif %}" title="{% if not ready.choose %}opens once the sim has run{% endif %}">
       <span class="sec">choose</span>
-      <label>method <select name="method"><option value="greedy" {% if form.method == 'greedy' %}selected{% endif %}>greedy</option><option value="portfolio" {% if form.method == 'portfolio' %}selected{% endif %}>portfolio</option></select></label>
-      <label title="weight on a lineup's cash rate in its quality score">cash weight <input name="cash_pct" value="{{ form.cash_pct }}" size="3"></label>
-      <label title="weight on a lineup's mean ROI in its quality score">roi weight <input name="avg_roi_win" value="{{ form.avg_roi_win }}" size="3"></label>
-      <label title="greedy: how much a pick is rewarded for being unlike the picks so far (0 = none)">diversity <input name="diversity_lambda" value="{{ form.diversity_lambda }}" size="3" {% if form.jam %}disabled{% endif %}></label>
-      <label title="take the top lineups by quality in order, no diversity between them"><input type="checkbox" name="jam" {% if form.jam %}checked{% endif %} onchange="this.form.querySelector('[name=diversity_lambda]').disabled = this.checked"> jam the best</label>
-      <label title="portfolio method: utility scale in multiples of the entry fees">bankroll <input name="bankroll" value="{{ form.bankroll }}" size="3"></label>
+      <label>method <select name="method" onchange="var f=this.form; f.querySelectorAll('.only-greedy').forEach(function(x){x.style.display=this.value==='greedy'?'':'none'}.bind(this)); f.querySelectorAll('.only-portfolio').forEach(function(x){x.style.display=this.value==='portfolio'?'':'none'}.bind(this))" title="greedy: best quality first, then quality plus a diversity bonus. portfolio: the set that maximises the log-utility of the bankroll over the simulated worlds"><option value="greedy" {% if form.method == 'greedy' %}selected{% endif %}>greedy</option><option value="portfolio" {% if form.method == 'portfolio' %}selected{% endif %}>portfolio</option></select></label>
+      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="weight on a lineup's cash rate in its quality score">cash weight <input name="cash_pct" value="{{ form.cash_pct }}" size="3"></label>
+      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="weight on a lineup's mean ROI in its quality score">roi weight <input name="avg_roi_win" value="{{ form.avg_roi_win }}" size="3"></label>
+      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="how much a pick is rewarded for being unlike the picks so far (0 = none)">diversity <input name="diversity_lambda" value="{{ form.diversity_lambda }}" size="3" {% if form.jam %}disabled{% endif %}></label>
+      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="take the top lineups by quality in order, no diversity between them"><input type="checkbox" name="jam" {% if form.jam %}checked{% endif %} onchange="this.form.querySelector('[name=diversity_lambda]').disabled = this.checked"> jam the best</label>
+      <label class="only-portfolio" {% if form.method != 'portfolio' %}style="display:none"{% endif %} title="utility scale in multiples of the entry fees: lower = more risk-averse picks">bankroll <input name="bankroll" value="{{ form.bankroll }}" size="3"></label>
     </div>
   </form>
   <div class="pipe-row muted dash-entries">

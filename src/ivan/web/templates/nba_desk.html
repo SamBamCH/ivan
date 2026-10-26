@@ -113,6 +113,7 @@
   table.mini.exp tr.out td { color:var(--bad) } table.mini.exp tr.out td:first-child { text-decoration:line-through } table.mini.exp tr.qrow td:first-child { color:#92400e } table.mini.exp td.hi { color:var(--ok) } table.mini.exp td.lo { color:var(--bad) }
   pre.log.muted { color:#888 } .pipe.dash pre.log { max-height:300px }
   @media (max-width:1100px) { .pipe.dash { grid-template-columns:1fr; grid-template-areas:'form' 'entries' 'status' 'side' } .dash-side { border-left:0; padding-left:0 } }
+  .pipe-sec.off { opacity:.4 } .pipe-sec.off input, .pipe-sec.off select { pointer-events:none }
   .mapped-sum { font-size:12px; color:var(--muted) } .mapped-sum.ok { color:var(--ok) } .mapped-sum.warn { color:#92400e }
   table.rot-grid col.c-rl { width:16px } table.rot-grid col.c-rn { width:222px } table.rot-grid col.c-rm { width:34px } table.rot-grid col.c-rc { width:12px } table.rot-grid th, table.rot-grid td { padding:0; border:0; font-size:11px }
   table.rot-grid th.rn, table.rot-grid td.rn { text-align:left; padding:0 8px 0 0; white-space:nowrap; width:214px; max-width:214px; overflow:hidden; text-overflow:ellipsis } table.rot-grid .rpos { font-size:9px; color:var(--muted); font-weight:400 } table.rot-grid td.rm, table.rot-grid th.rm { text-align:right; padding-right:6px; width:28px; font-variant-numeric:tabular-nums; color:var(--muted) }
