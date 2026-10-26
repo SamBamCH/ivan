@@ -381,6 +381,13 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
     """simulate_one_contest for every contest in the entries file; a failure is logged and the others still run."""
     contests = contests_in_entries(entries_csv)
     art = Path(artifact_dir) if artifact_dir is not None else None
+    # every run starts from nothing: the per-lineup results and the contest reports of earlier runs are gone, whatever
+    # contests they covered (2026-10-26: a sim run must never sit beside stale results of another run or slate)
+    n_old = session.query(LineupSimulationResult).delete(synchronize_session=False)
+    n_rep = session.query(ContestSimReport).delete(synchronize_session=False)
+    session.commit()
+    if n_old or n_rep:
+        log(f"cleared the previous sim: {n_old:,} per-lineup results, {n_rep} contest reports")
     log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}" + (f"; run artifacts -> {art}" if art else ""))
     out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}}
     biggest: dict = {}
