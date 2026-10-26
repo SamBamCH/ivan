@@ -336,7 +336,9 @@ class Desk:
                    and override_of(self.overrides, n).get("minutes") <= 0}
         starters = self.starters_of(team) or set()
         today = datetime.now().date(); season_start = date(today.year if today.month >= 10 else today.year - 1, 10, 1)
-        games = ROT.team_games(self.session, team, since=season_start)
+        games = [dict(g, season="this") for g in ROT.team_games(self.session, team, since=season_start)]
+        last_start = date(season_start.year - 1, 10, 1)              # last season's games stay selectable (a returning player's habits, a roster that
+        games += [dict(g, season="last") for g in ROT.team_games(self.session, team, before=season_start, since=last_start, limit=100)]   # has barely played)
         rot = self.rot.get(team) or {}
         curve = rot.get("curve")
         # which played game is the last time tonight's group played together: tonight's rotation (available, with history
@@ -351,6 +353,9 @@ class Desk:
                 else:
                     tonight = {n: usual.get(n, 0.0) for n, p in names.items() if not is_out[n] and (n in starters or usual.get(n, 0.0) >= ROTATION_MIN)}
                 matches = ROT.lineup_matches(games, ROT.played_sets(self.session, team, [g["game_id"] for g in games]), tonight)
+                oddities = ROT.game_oddities(self.session, team, [g["game_id"] for g in games], usual)
+                for m in matches:
+                    m.update(oddities.get(str(m["game_id"]), {}))
                 def label(m):
                     if m["exact"]:
                         return "same group"
@@ -370,7 +375,9 @@ class Desk:
                     fouls=False, owners=[])
 
         if source == "last":
-            best = ROT.best_match(matches) if (game_id is None and matches) else None
+            # the default comes from this season when it has any game; last season's are there to pick, not to pick from
+            this_season = [m for m in matches if m.get("season") == "this"]
+            best = ROT.best_match(this_season or matches) if (game_id is None and matches) else None
             if best is not None:
                 game_id = best["game_id"]
             last = ROT.last_game_grid(self.session, team, since=season_start, game_id=game_id)
@@ -425,7 +432,7 @@ class Desk:
                                  foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
             match = next((m for m in matches if str(m["game_id"]) == str(last["game_id"])), None)
             return {**base, "kind": "last", "rows": rows, "counts": ROT.column_counts(grid), "game_id": last["game_id"], "last_game": last["game_date"], "fouls": True,
-                    "owners": owners, "match": match, "games": games}
+                    "owners": owners, "match": match, "games": games, "garbage_from": (match or {}).get("garbage_from")}
 
         grid = rot.get("grid")
         if grid is None or proj is None:

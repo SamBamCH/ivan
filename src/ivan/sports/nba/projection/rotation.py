@@ -384,9 +384,67 @@ def lineup_matches(games: List[dict], played: Dict[str, Dict[str, float]], tonig
     return out
 
 
+BLOWOUT_MARGIN = 20          # a final margin this wide is a blowout even when the stints never crossed the garbage threshold
+LEFT_EARLY_SEC = 12 * 60     # a rotation player whose last exit came with this much time left, before garbage time, left early (injury, ejection)
+LEFT_EARLY_SHARE = 0.6       # ... and played under this share of his usual minutes
+FOUL_TROUBLE = 5
+
+
+def game_oddities(session: Session, team: str, game_ids: Iterable[str], usual: Optional[Dict[str, float]] = None) -> Dict[str, dict]:
+    """
+    Was each game ordinary, or not a picture of the coach's plan? {game_id: odd, reasons, margin, ot, garbage_from, fouls,
+    left_early}. Odd when: a blowout (garbage time began, or the final margin is BLOWOUT_MARGIN+), overtime, a player in
+    foul trouble (FOUL_TROUBLE+ personal fouls), or a rotation player who left early (last exit LEFT_EARLY_SEC+ before the
+    end and before garbage time, under LEFT_EARLY_SHARE of his usual minutes). The desk prefers an ordinary game as the
+    played-game default and dims the garbage-time columns.
+    """
+    ids = [str(g) for g in game_ids]
+    out: Dict[str, dict] = {g: dict(odd=False, reasons=[], margin=None, ot=False, garbage_from=None, fouls={}, left_early=[]) for g in ids}
+    if not ids:
+        return out
+    inl = ",".join(f"'{g}'" for g in ids)
+    st = pd.read_sql(text(f"select game_id, player_name, start_sec, end_sec, minutes, margin_out, to_buzzer from nba_stint where team = :t and game_id in ({inl})").bindparams(t=team),
+                     session.get_bind())
+    if st.empty:
+        return out
+    st["game_id"] = st["game_id"].astype(str)
+    onsets = garbage_onsets(st)
+    fouls = pd.read_sql(text(f"select game_id, player_name, count(*) as n from nba_foul where team = :t and personal = 1 and game_id in ({inl}) group by game_id, player_name").bindparams(t=team),
+                        session.get_bind())
+    usual = usual or {}
+    for gid, g in st.groupby("game_id"):
+        o = out[str(gid)]
+        last = g.sort_values("end_sec").iloc[-1]
+        o["margin"] = None if pd.isna(last.margin_out) else int(last.margin_out)
+        o["ot"] = bool(g.end_sec.max() > 2880)
+        on, _ = onsets.get(gid, (None, set()))
+        o["garbage_from"] = on
+        if on is not None:
+            o["reasons"].append(f"blowout {o['margin']:+d}, garbage time from minute {on}" if o["margin"] is not None else f"garbage time from minute {on}")
+        elif o["margin"] is not None and abs(o["margin"]) >= BLOWOUT_MARGIN:
+            o["reasons"].append(f"blowout {o['margin']:+d}")
+        if o["ot"]:
+            o["reasons"].append("overtime")
+        f = fouls[fouls.game_id.astype(str) == str(gid)]
+        o["fouls"] = {str(r.player_name): int(r.n) for r in f.itertuples()}
+        for n, k in o["fouls"].items():
+            if k >= FOUL_TROUBLE:
+                o["reasons"].append(f"{n.split()[-1]} {k} fouls")
+        cutoff = (on * 60) if on is not None else 2880
+        for n, pg in g.groupby("player_name"):
+            u = float(usual.get(str(n), 0.0))
+            end = float(pg.end_sec.max()); mins = float(pg.minutes.sum())
+            if u >= 15 and end <= cutoff - LEFT_EARLY_SEC and mins < LEFT_EARLY_SHARE * u:
+                o["left_early"].append(str(n)); o["reasons"].append(f"{n.split()[-1]} left early ({mins:.0f} of {u:.0f} min)")
+        o["odd"] = bool(o["reasons"])
+    return out
+
+
 def best_match(matches: List[dict]) -> Optional[dict]:
-    """The lowest score, the newest game on ties (the list is newest first)."""
-    return min(matches, key=lambda m: m["score"]) if matches else None
+    """The lowest score among the ordinary games, else the lowest overall; the newest game on ties (the list is newest first)."""
+    if not matches:
+        return None
+    return min(matches, key=lambda m: (bool(m.get("odd")), m["score"]))
 
 
 def last_game_grid(session: Session, team: str, before: Optional[date] = None, since: Optional[date] = None, game_id: Optional[str] = None) -> Optional[dict]:
