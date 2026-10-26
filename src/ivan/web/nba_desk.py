@@ -1295,7 +1295,7 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: Optional[int] = None):
+def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = ""):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
     with LOCK:
         now = datetime.now()
@@ -1314,7 +1314,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
         if view == "exposures":
-            exposures = _exposures_view(set, metric, bins)
+            exposures = _exposures_view(set, metric, int(bins) if str(bins).strip().isdigit() else None)
         if view == "players":
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
