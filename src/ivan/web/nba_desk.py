@@ -274,6 +274,7 @@ class Desk:
         self.pool_stamp = self._stamp(); self.stale = False
         self.overrides = read_overrides_full()            # what the projection reads: the published layer (a consumer) under this machine's own
         self.local_overrides = read_overrides_full(layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}   # what this machine writes
+        self.__dict__.pop("_layers_cache", None); self.__dict__.pop("_published_cache", None)
         self.proj, self.hist_only, self.rot = {}, {}, {}
         self._auto_pending = True                         # scenarios are matched once the rest of the rebuild is done (see end of rebuild)
         if getattr(self, "_calls_dg", None) != self.pool_stamp[2]:
@@ -1041,17 +1042,25 @@ class Desk:
         """Write this machine's own layer and refresh the merged view the projection reads."""
         write_overrides(self.local_overrides)
         self.overrides = read_overrides_full()
+        self.__dict__.pop("_layers_cache", None); self.__dict__.pop("_published_cache", None)
 
     def _layer_of(self, name: str) -> dict:
         """{field: 'local' | 'published'} for the player's pins: what this machine typed vs what the producer published (a consumer)."""
         if not PUBLISHED_OVERRIDES_CSV.exists():
             return {}
         cache = self.__dict__.setdefault("_layers_cache", {})
-        if cache.get("_stamp") != (self.pool_stamp, len(self.overrides)):
-            cache.clear(); cache["_stamp"] = (self.pool_stamp, len(self.overrides))
         if name not in cache:
             pub, loc = override_layers(name)
             cache[name] = {**{k: "published" for k in pub}, **{k: "local" for k in loc}}
+        return cache[name]
+
+    def _published_of(self, name: str) -> dict:
+        """The producer's published pins for the player (a consumer), {} elsewhere."""
+        if not PUBLISHED_OVERRIDES_CSV.exists():
+            return {}
+        cache = self.__dict__.setdefault("_published_cache", {})
+        if name not in cache:
+            cache[name] = override_layers(name)[0]
         return cache[name]
 
     def team_rows(self, team: str) -> list[dict]:
@@ -1134,7 +1143,7 @@ class Desk:
                              pinned=ov.get("minutes") is not None, pin=ov.get("minutes"), starter_pin=ov.get("starter"),
                              fppm_pin=ov.get("fppm"), low_pin=ov.get("min_low"), high_pin=ov.get("min_high"), stats=stats,
                              fpts_pin=ov.get("fpts"), pub_pin=ov.get("pub"), fpts_model=None if r is None else float(r.get("fpts_model", r["fpts_mean"])),
-                             layer=self._layer_of(name),
+                             layer=self._layer_of(name), local=dict(self.local_overrides.get(name, {})), published_pins=self._published_of(name),
                              fpts=fpts, sd=None if r is None else float(r["fpts_std"]),
                              fpm=None if r is None else float(r["fpm"]),
                              season_games=cur["games"] if cur else 0, season_min=cur["minutes"] if cur else None, season_fpm=cur["fpm"] if cur else None,
