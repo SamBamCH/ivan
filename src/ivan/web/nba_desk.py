@@ -1769,8 +1769,14 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         if desk.priced_total(team, key) and new_fppm is not None and new_fppm != old.get("fppm"):
             desk.flash.append(f"{key}: fppm overridden on a priced player; the books' total no longer holds for him")
         new_fpts, new_pub = _num(fpts, "fpts"), _num(pub, "pub")
+        if new_min is not None and new_min != old.get("minutes"):
+            # typed minutes repaint the row: the lock (if any) is lifted so the skeleton re-fills him to the number, and the
+            # other free rows move around him; a row you still want held exactly, paint it again
+            g = ROT.load_drawn(team)
+            if g is not None and key in set(g.attrs.get("locked", [])):
+                ROT.save_drawn(team, g, locked=[n for n in g.attrs.get("locked", []) if n != key], fingerprint=g.attrs.get("fingerprint"))
         desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub)
-        desk.reproject(team)                                  # the solve re-balances the team around the edit
+        desk.reproject(team)                                  # the solve re-balances the team around the edit; the grid is rebuilt to the pins
         if new_pub != old.get("pub"):
             # the public number moved: the field and ownership are built on it, so they are rebuilt now (a few seconds)
             try:
