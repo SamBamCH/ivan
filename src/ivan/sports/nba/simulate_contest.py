@@ -397,7 +397,7 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
             own: dict = {}
             cfg = json.load(open(config_path, encoding="utf-8"))
             if str(_cfg(cfg, "field.sampler", "projection_model")) == "two_group":
-                report = simulate_vs_field(session, int(cid), name, field_cap=field_cap, num_sims=n_sims, log=log, own_out=own)
+                report = simulate_vs_field(session, int(cid), name, field_cap=field_cap, num_sims=n_sims, log=log, own_out=own, artifact_dir=art)
             else:
                 report = simulate_one_contest(session, int(cid), name, str(config_path), field_cap=field_cap, num_sims=n_sims, artifact_dir=art, log=log, own_out=own)
             out["reports"][int(cid)] = report; out["simulated"] += 1
@@ -444,8 +444,10 @@ def pay_against(field_sorted: np.ndarray, scores: np.ndarray, copies: np.ndarray
 
 
 def simulate_vs_field(session: Session, contest_id: int, contest_name: str, field_cap: int = 10000, num_sims: int = 1000,
-                      log: Log = print, own_out: Optional[dict] = None) -> dict:
-    """Score every candidate lineup against the two-group field; store per-world results for the best KEEP_RESULTS. Returns a report."""
+                      log: Log = print, own_out: Optional[dict] = None, artifact_dir: str | Path | None = None) -> dict:
+    """Score every candidate lineup against the two-group field; store per-world results for the best KEEP_RESULTS. Returns a report.
+    With artifact_dir, writes contest_<id>.npz / .json there: the sampled field (unique lineups x copies), its player exposures and
+    every candidate's mean ROI and cash rate, which the desk's exposures tab reads (a sampled field per simmed contest)."""
     from collections import Counter
     from ivan.core.utils import coerce_player_ids
     t0 = time.time()
@@ -507,6 +509,18 @@ def simulate_vs_field(session: Session, contest_id: int, contest_name: str, fiel
     exposure = Counter(p for lu in field for p in lu)
     if own_out is not None:
         own_out.update({int(pid): 100.0 * c / n for pid, c in exposure.items()}); own_out["total_entries"] = field_sz
+    if artifact_dir is not None:
+        uniq = list(copies.keys())
+        arrays = dict(lineup_players=np.array([list(lu) for lu in uniq], dtype=np.int64).reshape(len(uniq), -1), dupes=np.array([copies[lu] for lu in uniq], dtype=np.int32),
+                      player_id=np.array(sorted(exposure), dtype=np.int64), player_exposure_pct=np.array([100.0 * exposure[p] / n for p in sorted(exposure)]),
+                      lineup_id=np.array([lid for lid, _ in cands], dtype=np.int64), avg_roi=means.astype(np.float32), cash_pct=cashes.astype(np.float32),
+                      in_field=tie_extra.astype(np.int32))
+        meta = {"version": REPORT_VERSION, "created_at": datetime.now().isoformat(timespec="seconds"), "seed": seed, "n_sims": int(ns), "simulated_size": int(n),
+                "unique_lineups": len(uniq), "contest": {"id": int(contest_id), "name": contest_name, "entry_fee": entry_fee, "total_entries": field_sz,
+                                                        "field_cap": int(field_cap or 0), "candidates": len(cands)}, "sampler": {"sampler": "two_group", **{k: v for k, v in field_params().items() if k != "notes"}}}
+        npz, js = contest_artifact_paths(Path(artifact_dir), contest_id)
+        npz.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(npz, **arrays); js.write_text(json.dumps(jsonable(meta), indent=1, default=str))
     players = player_meta(session, list(exposure)[:2000])
     label = lambda pid: f"{players.get(pid, {}).get('name', pid)} ({players.get(pid, {}).get('team', '?')})"   # noqa: E731
     fs = np.array([sum(float(players.get(p, {}).get('fpts_mean') or 0.0) for p in lu) for lu in field])

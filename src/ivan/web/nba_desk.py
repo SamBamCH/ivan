@@ -1544,6 +1544,8 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[
     fields = _sim_fields()
     ent = _entries_lineups(None)
     options = [dict(key="pool", label=f"candidate pool · {len(_pool_lineups())} lineups", group="pool")]
+    if fields:
+        options.append(dict(key="field", label=f"sampled fields · all {len(fields)} contests · {int(round(sum(f['dupes'].sum() for f in fields.values())))} entries", group="field"))
     for cid, f in fields.items():
         options.append(dict(key=f"field:{cid}", label=f"sampled field · {f['name'][:46]} · {int(round(f['dupes'].sum()))} entries", group="field"))
     if ent:
@@ -1556,6 +1558,8 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[
     weights = None; label = next(o["label"] for o in options if o["key"] == set_key); then = {}
     if set_key == "pool":
         lineups = [np.asarray(x, dtype=int) for x in _pool_lineups()]
+    elif set_key == "field":
+        lineups = [row for f in fields.values() for row in f["lineups"]]; weights = np.concatenate([f["dupes"] for f in fields.values()])
     elif set_key.startswith("field:"):
         f = fields[int(set_key.split(":")[1])]
         lineups = [row for row in f["lineups"]]; weights = f["dupes"]
