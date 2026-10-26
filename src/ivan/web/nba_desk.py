@@ -1304,8 +1304,17 @@ def _busy(request: Request):
     return None
 
 
+SHOWS_FLASH = {"_nba_board.html", "_nba_side.html", "_nba_rotation.html"}   # the templates that display the flash: only they consume it
+
+
 def _render(request: Request, template: str, **ctx):
-    flash = desk.flash[:]; desk.flash.clear()
+    # the page shell and the partials that do not show messages leave them for the next render that does (the board after
+    # a redirect, the card after an edit); before this every render cleared them and most were never seen
+    flash = desk.flash[:]
+    if template in SHOWS_FLASH:
+        desk.flash.clear()
+    else:
+        flash = []
     return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "root": auth.root_of(request), "consumer": CONSUMER,
                                                           "limited": LIMITED, "limits": LIMITS, "job_max_minutes": JOB_MAX_MINUTES, **ctx})
 
