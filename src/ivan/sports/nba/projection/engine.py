@@ -173,7 +173,7 @@ def project_team(
     budget = None
     if params.alloc == "solve":
         # one solve per team: the books' implied minutes anchor priced players, history the rest, a hand pin is held almost
-        # exactly, the team sums to its budget within the position groups (projection/solve.py; docs/nba_minutes_model_plan.md)
+        # exactly, the team sums to its budget within the position groups (projection/solve.py; docs/nba/notes/minutes_model_plan.md)
         alloc, book = solve_allocation(avail, recs, state, history, params)
         for n, bm in book.items():
             recs[n]["book_minutes"] = bm
