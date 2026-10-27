@@ -18,9 +18,9 @@
   <div class="tiles">
     <div class="tile"><div class="v">{{ '{:,}'.format(v.n_candidates) }}</div><div class="l">candidate lineups</div><div class="s">simulated for this contest, duplicates removed{% if v.n_shown < v.n_candidates %}; {{ '{:,}'.format(v.n_shown) }} drawn below{% endif %}</div></div>
     <div class="tile"><div class="v">{{ v.entries }}</div><div class="l">picks to make</div><div class="s">one per entry</div></div>
-    <div class="tile"><div class="v">{{ v.method or 'greedy' }}</div><div class="l">method</div><div class="s">{% if v.method == 'portfolio' %}log utility of the book over sim worlds, bankroll {{ v.bankroll|num(1) }}× fees{% else %}quality + diversity, lineup by lineup{% endif %}</div></div>
+    <div class="tile"><div class="v">{{ v.method or 'greedy' }}</div><div class="l">method</div><div class="s">{% if v.method == 'portfolio' %}log utility of the book over sim worlds, bankroll {{ v.bankroll|num(1) }}× fees{% elif v.method == 'slate' %}the whole slate as one book in dollars, bankroll ${{ v.bankroll|num(0) }}{% else %}quality + diversity, lineup by lineup{% endif %}</div></div>
     <div class="tile"><div class="v">{{ v.weights.cash_pct }} / {{ v.weights.avg_roi_win }}</div><div class="l">weight on cash % / ROI</div><div class="s">what "quality" means here</div></div>
-    <div class="tile"><div class="v">{{ v['lambda'] }}</div><div class="l">diversity λ</div><div class="s">how much being different is worth{% if v.method == 'portfolio' %} (not used by portfolio){% endif %}</div></div>
+    <div class="tile"><div class="v">{{ v['lambda'] }}</div><div class="l">diversity λ</div><div class="s">how much being different is worth{% if v.method in ('portfolio', 'slate') %} (not used by {{ v.method }}){% endif %}</div></div>
     <div class="tile"><div class="v">{{ v.chosen.roi|pct1 }} · {{ v.chosen.cash|pct1 }}</div><div class="l">picked: mean ROI · cash %</div><div class="s">quality alone would give {{ v.top.roi|pct1 }} · {{ v.top.cash|pct1 }}</div></div>
     <div class="tile"><div class="v">{{ v.overlap }} of {{ v.chosen.n }}</div><div class="l">picks that quality alone would also make</div><div class="s">the rest were taken for diversity</div></div>
     {% if v.book and v.book.chosen %}{% set b = v.book.chosen %}{% set t = v.book.top_quality %}
@@ -32,7 +32,25 @@
     {% endif %}
     {% if v.spread.chosen is not none %}<div class="tile"><div class="v">{{ v.spread.chosen|num(2) }} vs {{ v.spread.top_quality|num(2) }}</div><div class="l">spread of the picks vs quality-only picks</div><div class="s">mean distance between lineups, 0–1 (all candidates: {{ v.spread.all|num(2) }})</div></div>{% endif %}
   </div>
-  {% if v.method == 'portfolio' %}<p class="help">The <b>portfolio</b> chooser judges the book, not the lineup. Every candidate carries its ROI in each simulated world; each step adds the lineup that most raises the book's log return summed over worlds, with the bankroll as the scale. A lineup that wins in worlds the book already wins adds little, so the picks spread across outcomes, and a lineup that wins two of two thousand worlds no longer outranks one that cashes steadily. The chart below still shows quality (cash % and ROI) for reference; the trace's "gain" is the utility each pick added.</p>
+  {% if v.method == 'slate' and v.slate %}{% set sb = v.slate %}{% set sc = sb.chosen %}{% set st = sb.top_quality %}
+  <h3 style="margin-top:1em">The slate as one book</h3>
+  <div class="tiles">
+    <div class="tile"><div class="v">{{ sb.entries }} · ${{ sb.fees|num(2) }}</div><div class="l">entries · fees across {{ sb.contests|length }} contest(s)</div><div class="s">bankroll ${{ sb.bankroll_dollars|num(0) }}; {{ sb.worlds }} shared worlds ({{ sb.shared.method }}, draw {{ sb.shared.draw }}){% if sb.clipped_worlds %}; <b>{{ sb.clipped_worlds }} worlds lose more than the bankroll</b>{% endif %}</div></div>
+    {% if sc %}
+    <div class="tile"><div class="v">${{ sc.mean|num(2) }} · {{ sc.roi_mean|pct1 }}</div><div class="l">mean net · ROI on fees</div><div class="s">{% if st %}quality alone: ${{ st.mean|num(2) }} · {{ st.roi_mean|pct1 }}{% endif %}</div></div>
+    <div class="tile"><div class="v">${{ sc.p50|num(2) }} · ${{ sc.p5|num(2) }}</div><div class="l">median · 5th pct net over the worlds</div><div class="s">{% if st %}quality alone: ${{ st.p50|num(2) }} · ${{ st.p5|num(2) }}{% endif %}</div></div>
+    <div class="tile"><div class="v">{{ sc.p_loss|pct1 }} · {{ sc.p_lose_half|pct1 }}</div><div class="l">P(slate loses) · P(loses half the fees)</div><div class="s">{% if st %}quality alone: {{ st.p_loss|pct1 }} · {{ st.p_lose_half|pct1 }}{% endif %}</div></div>
+    <div class="tile"><div class="v">{{ sc.log_growth|num(4) }}</div><div class="l">mean log growth of the bankroll</div><div class="s">the objective{% if st %}; quality alone {{ st.log_growth|num(4) }}{% endif %}</div></div>
+    {% endif %}
+    {% if sb.cross_fit %}{% set c = sb.cross_fit %}
+    <div class="tile"><div class="v">${{ c.out_of_sample.mean|num(2) }} · {{ c.out_of_sample.roi_mean|pct1 }}</div><div class="l">honest mean net (chosen on half the worlds, scored on the rest)</div><div class="s">in-sample ${{ c.in_sample.mean|num(2) }}; selection bias ${{ c.selection_bias|num(2) }}</div></div>
+    {% endif %}
+  </div>
+  <table class="small" style="margin-top:.5em"><tr><th>Contest</th><th class="r">Entries</th><th class="r">Fee</th><th class="r">Mean net</th><th class="r">Mean ROI</th><th class="r">Honest ROI</th></tr>
+  {% for c in sb.contests %}<tr><td>{{ c.contest_name }}</td><td class="r">{{ c.entries }}</td><td class="r">${{ c.fee|num(2) }}</td><td class="r">${{ c.mean_net|num(2) }}</td><td class="r">{% if c.roi_mean is not none %}{{ c.roi_mean|pct1 }}{% endif %}</td><td class="r">{% if c.honest_roi is not none %}{{ c.honest_roi|pct1 }}{% endif %}</td></tr>{% endfor %}
+  </table>
+  <p class="help">The <b>slate</b> chooser picks every contest at once. Each candidate is a (contest, lineup) pair carrying its net dollars (fee × ROI) in every simulated world, and the worlds are the slate's shared draw, so world <i>w</i> is the same game in every contest. Each step adds the pair that most raises the slate's log return, mean over worlds of log(1 + net / bankroll), with the bankroll in dollars. With a bankroll well above the fees the log is nearly linear and the picks sit close to the shrunk mean-ROI picks; a smaller bankroll figure asks for more caution. The per-contest tiles above are this contest's share of the book; the trace's "gain" is the utility each pick added to the slate.</p>
+  {% elif v.method == 'portfolio' %}<p class="help">The <b>portfolio</b> chooser judges the book, not the lineup. Every candidate carries its ROI in each simulated world; each step adds the lineup that most raises the book's log return summed over worlds, with the bankroll as the scale. A lineup that wins in worlds the book already wins adds little, so the picks spread across outcomes, and a lineup that wins two of two thousand worlds no longer outranks one that cashes steadily. The chart below still shows quality (cash % and ROI) for reference; the trace's "gain" is the utility each pick added.</p>
   {% else %}<p class="help">The chooser scores every candidate on <b>quality</b> (a weighted blend of its simulated cash % and ROI, each scaled 0–1 across the candidates), takes the best one, and then repeatedly takes the lineup with the highest <i>quality + λ × distance from the lineups already picked</i>. Distance is measured between the lineups' simulated point totals across all simulations: two lineups that boom and bust together are close, even if they share few players.</p>{% endif %}
 </div>
 

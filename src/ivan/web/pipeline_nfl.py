@@ -32,9 +32,10 @@ CURRENT_ENTRIES = WEB_INPUT_DIR / "entries.csv"
 WEIGHTS_FILE = WEB_INPUT_DIR / "weights.json"        # per-contest choose weights, remembered between runs
 
 WEIGHT_KEYS = ("method", "cash_pct", "avg_roi_win", "diversity_lambda", "bankroll")
-WEIGHT_LABELS = {"method": "Method", "cash_pct": "Cash %", "avg_roi_win": "ROI", "diversity_lambda": "Diversity", "bankroll": "Bankroll x fees"}
-WEIGHT_METHODS = ("greedy", "portfolio")
-DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": "greedy", "bankroll": 3.0}
+WEIGHT_LABELS = {"method": "Method", "cash_pct": "Cash %", "avg_roi_win": "ROI", "diversity_lambda": "Diversity", "bankroll": "Bankroll x fees",
+                 "bankroll_dollars": "Bankroll $"}
+WEIGHT_METHODS = ("greedy", "portfolio", "slate")
+DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": "greedy", "bankroll": 3.0, "bankroll_dollars": 1000.0}
 
 
 @dataclass
@@ -200,7 +201,7 @@ def _build_choose(form: dict) -> list[list[str]]:
                 continue
             if key == "method":
                 if raw not in WEIGHT_METHODS:
-                    raise ValueError(f"'{raw}' is not a chooser method (greedy or portfolio) for {row['name']}.")
+                    raise ValueError(f"'{raw}' is not a chooser method (greedy, portfolio or slate) for {row['name']}.")
                 w[key] = raw
                 continue
             try:
@@ -517,6 +518,7 @@ def choose_view(choose_json: Path, lineups_csv: Optional[Path], contest_id: Opti
     return {"contests": contests, "contest_id": contest_id, "name": d["contest_name"], "entries": d["entries"],
             "n_candidates": d["n_candidates"], "n_shown": d["n_shown"], "weights": w, "lambda": lam,
             "method": d.get("method") or w.get("method") or "greedy", "bankroll": d.get("bankroll"), "book": d.get("book"),
+            "slate": d.get("slate"),
             "chosen": {"cash": _mean([p["cash"] for p in picks]), "roi": _mean([p["roi"] for p in picks]), "n": len(picks)},
             "top": {"cash": _mean([p["cash"] for p in tops]), "roi": _mean([p["roi"] for p in tops]), "n": len(tops)},
             "overlap": overlap, "spread": d["spread"], "explained_variance": evr, "rooting": d.get("rooting"),

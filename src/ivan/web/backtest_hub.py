@@ -185,6 +185,7 @@ def write_selection(run: dict) -> Path:
     if p.get("method"):                                         # the chooser and its weights picked on the parameters step
         weights["method"] = str(p["method"])
         weights["bankroll"] = float(p.get("bankroll") or 3.0)
+        weights["bankroll_dollars"] = float(p.get("bankroll_dollars") or 1000.0)
         for k in ("cash_pct", "avg_roi_win", "diversity_lambda"):
             if p.get(k) is not None:
                 weights[k] = float(p[k])

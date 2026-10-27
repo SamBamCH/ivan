@@ -534,13 +534,14 @@ async def backtest_run(request: Request, name: str):
                   "lineups": int(form.get("lineups") or 3000), "sims": int(form.get("sims") or 500), "field_cap": int(form.get("field_cap") or 5000),
                   "seed": int(form.get("seed") or 0),
                   "method": (form.get("method") or "greedy").strip().lower(), "bankroll": float(form.get("bankroll") or 3.0),
+                  "bankroll_dollars": float(form.get("bankroll_dollars") or 1000.0),
                   "cash_pct": float(form.get("cash_pct") if form.get("cash_pct") not in (None, "") else 0.5),
                   "avg_roi_win": float(form.get("avg_roi_win") if form.get("avg_roi_win") not in (None, "") else 0.5),
                   "diversity_lambda": float(form.get("diversity_lambda") if form.get("diversity_lambda") not in (None, "") else 0.1)}
-        if params["method"] not in ("greedy", "portfolio"):
+        if params["method"] not in ("greedy", "portfolio", "slate"):
             raise ValueError(params["method"])
     except ValueError:
-        return _redirect(f"/backtest/{name}?step=params", "The parameters must be numbers (and the chooser greedy or portfolio).")
+        return _redirect(f"/backtest/{name}?step=params", "The parameters must be numbers (and the chooser greedy, portfolio or slate).")
     busy = _replay_in_progress(name)
     if busy:
         return _redirect(f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")

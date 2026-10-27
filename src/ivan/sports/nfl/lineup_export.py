@@ -29,7 +29,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from ivan.sports.nfl.choose import choose_lineup_ids, sim_roi_traces
+from ivan.sports.nfl.choose import choose_lineup_ids, choose_slate, sim_roi_traces
 from ivan.sports.nfl.models import Lineup, NFLPlayer
 
 Log = Callable[[str], None]
@@ -40,9 +40,10 @@ POSITION_ORDER_CLASSIC = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST
 SLOT_CODE = {"CPT": 511, "FLEX": 512, "QB": 66, "RB": 67, "WR": 68, "TE": 69, "DST": 71}
 CODE_TO_SLOT = {v: k for k, v in SLOT_CODE.items()}
 BASE_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"]
-DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": "greedy", "bankroll": 3.0}
-# method: "greedy" (quality + diversity, lineup by lineup) or "portfolio" (log utility of the whole book over the
-# simulated worlds; bankroll = its scale in multiples of the entries' fees). See ivan.sports.nfl.choose.
+DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": "greedy", "bankroll": 3.0, "bankroll_dollars": 1000.0}
+# method: "greedy" (quality + diversity, lineup by lineup), "portfolio" (log utility of one contest's book over the
+# simulated worlds; bankroll = its scale in multiples of the entries' fees) or "slate" (every contest at once as one
+# book in dollars, bankroll_dollars = the real bankroll). See ivan.sports.nfl.choose.
 WEIGHT_KEYS = tuple(DEFAULT_WEIGHTS)
 EXPOSURE_ORDER = ["CPT", "FLEX", "QB", "RB", "WR", "TE", "DST"]
 
@@ -219,6 +220,7 @@ class ChooseRun:
     choose_viz: Dict[str, dict] = field(default_factory=dict)  # per contest, what the chooser saw
     sim_rows: List[tuple] = field(default_factory=list)        # (entry_id, contest_id, lineup_id, fee, roi trace, realized draws)
     contests: List[dict] = field(default_factory=list)         # per contest summary (stats)
+    slate_book: Optional[dict] = None                           # the slate method's book (dollar distribution, split, cross-fit)
 
     def exposures(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """(showdown exposures by roster slot, classic exposures by position), exposure as a fraction of entries."""
@@ -235,19 +237,59 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
     """Pick and slot-assign lineups for every contest in the entries frame (read_entries)."""
     run = ChooseRun()
     last = dict(DEFAULT_WEIGHTS)
-    for cid, group in entries.groupby("Contest ID", sort=False):
-        cid = int(cid)
+    groups = [(int(cid), group) for cid, group in entries.groupby("Contest ID", sort=False)]
+    weights_by: Dict[int, Dict[str, float]] = {}
+    for cid, group in groups:                              # every contest's weights first: the slate method needs them all
+        last = weights_for(cid, group["Contest Name"].iloc[0].strip(), last)
+        weights_by[cid] = last
+
+    # the slate method: one pass over every contest that asks for it, as one book in dollars
+    slate_contests = [{"contest_id": cid, "contest_name": group["Contest Name"].iloc[0].strip(), "entries": len(group),
+                       "fee": parse_money(group["Entry Fee"].iloc[0])}
+                      for cid, group in groups if str(weights_by[cid].get("method") or "greedy") == "slate"]
+    slate = None
+    if slate_contests:
+        w0 = weights_by[slate_contests[0]["contest_id"]]
+        banks = {float(weights_by[c["contest_id"]].get("bankroll_dollars") or DEFAULT_WEIGHTS["bankroll_dollars"]) for c in slate_contests}
+        if len(banks) > 1:
+            log(f"  NOTE: the slate contests carry different bankroll_dollars {sorted(banks)}; the slate uses ${max(banks):,.0f}")
+        w_slate = {**w0, "bankroll_dollars": max(banks)}
+        log(f"\n=== Slate: {len(slate_contests)} contest(s) chosen as one book (bankroll ${max(banks):,.0f}) ===")
+        slate = choose_slate(session, slate_contests, w_slate, log=log)
+        run.slate_book = slate.get("book")
+        b = run.slate_book or {}
+        if b.get("chosen"):
+            ch, tq, cf = b["chosen"], b.get("top_quality") or {}, b.get("cross_fit")
+            log(f"  slate book: {b['entries']} entries, ${b['fees']:,.2f} in fees; mean net ${ch['mean']:+,.2f} ({ch['roi_mean']:+.0%}), "
+                f"median ${ch['p50']:+,.2f}, p5 ${ch['p5']:+,.2f}, P(loss) {ch['p_loss']:.0%}, P(lose half) {ch['p_lose_half']:.0%}, "
+                f"mean log growth {ch['log_growth']:+.4f}"
+                + (f"  (quality alone: mean ${tq['mean']:+,.2f}, p5 ${tq['p5']:+,.2f}, log growth {tq['log_growth']:+.4f})" if tq else ""))
+            if cf:
+                log(f"  honest expectation (chosen on {cf['worlds_fit']} worlds, scored on the other {cf['worlds_score']}): "
+                    f"mean net ${cf['out_of_sample']['mean']:+,.2f} ({cf['out_of_sample']['roi_mean']:+.0%}) vs "
+                    f"${cf['in_sample']['mean']:+,.2f} in-sample; selection bias ${cf['selection_bias']:+,.2f}")
+            for c in b.get("contests") or []:
+                hr = c.get("honest_roi")
+                log(f"    {c['contest_name']}: {c['entries']} entries, mean net ${c['mean_net']:+,.2f}"
+                    + (f", mean ROI {c['roi_mean']:+.0%}" if c.get("roi_mean") is not None else "")
+                    + (f", honest {hr:+.0%}" if hr is not None else ""))
+
+    for cid, group in groups:
         n_entries = len(group)
         cname = group["Contest Name"].iloc[0].strip()
         log(f"\n=== Contest {cid} \"{cname}\" -> {n_entries} entries ===")
-        w = weights_for(cid, cname, last)
-        last = w
+        w = weights_by[cid]
         method = str(w.get("method") or "greedy")
         log(f"  method: {method}" + (f" (bankroll {w.get('bankroll', 3.0)}x fees)" if method == "portfolio" else "")
+            + (f" (slate book, bankroll ${float(w.get('bankroll_dollars') or DEFAULT_WEIGHTS['bankroll_dollars']):,.0f})" if method == "slate" else "")
             + f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
 
         stats: dict = {}
-        chosen_ids = choose_lineup_ids(session=session, weights=w, num_lineups=n_entries, contest_name=cname, stats=stats)
+        if method == "slate" and slate is not None:
+            chosen_ids = list(slate["picks"].get(cname) or [])
+            stats = dict(slate["stats"].get(cname) or {})
+        else:
+            chosen_ids = choose_lineup_ids(session=session, weights=w, num_lineups=n_entries, contest_name=cname, stats=stats)
         if stats:
             log(f"  candidates: {stats['results']:,} simulated"
                 + (f" -> {stats['after_roi_filter']:,} with ROI >= 0" if stats['after_roi_filter'] != stats['results'] else "")

@@ -2528,6 +2528,18 @@ def _csv_line(values) -> str:
     buf = io.StringIO(); csv.writer(buf, lineterminator="\n").writerow(values); return buf.getvalue()
 
 
+def _csv_response(body, filename: str) -> StreamingResponse:
+    """
+    A CSV download that is never cached on the way: Cloudflare caches a .csv URL by default when the origin sends no
+    cache headers, and the brother's desk arrives through the tunnel, so without these every download of the same URL
+    came back as the first one for hours. no-store covers browsers and the edge (CDN-Cache-Control is Cloudflare's own).
+    """
+    return StreamingResponse(body, media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                                      "Cache-Control": "no-store, private, max-age=0", "CDN-Cache-Control": "no-store",
+                                      "Pragma": "no-cache", "Expires": "0"})
+
+
 @app.post("/team/{team}/news", response_class=HTMLResponse)
 def late_news(request: Request, team: str, player: str = Form(...), call: str = Form("out"), then: str = Form("sim")):
     """
@@ -2588,6 +2600,8 @@ def export_projections():
     """Every player in the current pool with our projection (after the desk's edits) and the public one, one row each."""
     with LOCK:
         desk.maybe_reload()
+        if desk.stale:                       # a newer projection is on disk (a pull, a publish): a file has no page state to keep, so take it
+            desk.rebuild()
         rows = [list(("name", "dk_id", "team", "opponent", "position", "salary", "status", "starter", "minutes", "solve_minutes", "minutes_p10", "minutes_p90",
                       "fpts", "fpts_sd", "fppm", "public_fpts", "ownership", "pinned", "locked", "in_pool"))]
         for team in desk.slate.teams():
@@ -2605,9 +2619,10 @@ def export_projections():
                              f(None if r is None else r["fpts_mean"], 2), f(None if r is None else r["fpts_std"], 2), f(None if r is None else r["fpm"], 3),
                              f(getattr(p, "pub_fpts", None), 2), f(p.ownership, 3) if p.ownership not in (None, 0) else "",
                              int(ov.get("minutes") is not None), int(n in locked), int(r is not None and float(r["minutes"]) > 0)])
-        stamp = datetime.now().strftime("%Y%m%d-%H%M")
+        proj_at = desk.pool_stamp[0] if desk.pool_stamp and desk.pool_stamp[0] else None      # when the pool's projection was published
+        stamp = (proj_at.strftime("%Y%m%d-%H%M") if hasattr(proj_at, "strftime") else str(proj_at or "")[:16].replace(" ", "-").replace(":", "")) or datetime.now().strftime("%Y%m%d-%H%M")
     body = "".join(_csv_line(r) for r in rows)
-    return StreamingResponse(iter([body]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="nba_projections_{stamp}.csv"'})
+    return _csv_response(iter([body]), f"nba_projections_{stamp}.csv")
 
 
 def lineup_slates(session) -> list[dict]:
@@ -2711,7 +2726,7 @@ def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
         dg = draft_group if draft_group is not None else (current if current in have else (have[0] if have else None))
         if dg is None:
             body = _csv_line(["no generated lineups in the pool table: run generate first"])
-            return StreamingResponse(iter([body]), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="nba_lineups_none.csv"'})
+            return _csv_response(iter([body]), "nba_lineups_none.csv")
         lookup = lineup_names(desk.session, int(dg))
         lineups = desk.session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.draft_group_id == int(dg)).all()
         stamp = datetime.now().strftime("%Y%m%d-%H%M")
@@ -2731,7 +2746,7 @@ def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
                 except ValueError:
                     ordered = objs                       # an odd eligibility: the stored order
             yield _csv_line([o.id if ids else o.name for o in ordered])
-    return StreamingResponse(gen(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="nba_lineups_{dg}_{stamp}{"_ids" if ids else ""}.csv"'})
+    return _csv_response(gen(), f'nba_lineups_{dg}_{stamp}{"_ids" if ids else ""}.csv')
 
 
 @app.get("/download/{name}")
