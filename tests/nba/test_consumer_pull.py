@@ -88,3 +88,19 @@ def test_project_slate_with_no_matching_team_returns_quietly(session, paths, mon
     monkeypatch.setattr(ingest, "LiveSlate", Slate)
     info = ingest.project_slate(session, n_sims=10, teams={"LAL"}, log=lambda m: None)
     assert info.players == 0
+
+
+def test_consumer_publish_restores_the_bundle_then_projects_only_its_edited_teams(session, paths, monkeypatch, tmp_path):
+    seed(session, 2)
+    paths["overrides"].write_text("player,minutes\njalen brunson,38\n")                              # BOS, on the slate
+    gz = tmp_path / "live.sql.gz"; gz.write_bytes(b"x")
+    monkeypatch.setattr(ingest, "PULLED_LIVE_BUNDLE", gz)
+    applied, calls = [], []
+    from ivan.core import feed
+    monkeypatch.setattr(feed, "apply", lambda sport, path, **kw: applied.append((sport, path)) or [])
+    monkeypatch.setattr(ingest, "project_slate", lambda s, **kw: calls.append(kw) or ingest.ProjectInfo(players=2))
+    r = ingest.consumer_publish(session, log=lambda m: None)
+    assert applied == [("nba", gz)] and r["restored"] is True and r["teams"] == {"BOS"} and calls[0]["teams"] == {"BOS"} and r["players"] == 2
+    paths["overrides"].unlink()                                                                       # the edit cleared: nothing projected, the bundle stands
+    r = ingest.consumer_publish(session, log=lambda m: None)
+    assert len(applied) == 2 and r["teams"] == set() and len(calls) == 1

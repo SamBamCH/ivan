@@ -77,7 +77,8 @@ minutes provenance and flags for a team.
 
 ## 4. Publish
 
-**Publish** writes the desk's projection into the pool (`nba_player.minutes_proj`, `fpts_mean`,
+**Publish** first applies any value still typed into a grid and not yet refigured (the page sends them along,
+so nothing typed is lost to the reload), then writes the desk's projection into the pool (`nba_player.minutes_proj`, `fpts_mean`,
 `fpts_std`, `fpts_quantiles`), records an `nba_projection_capture` row per player (source "ours"),
 writes a projections CSV artifact under `data/nba/output/projections/`, and runs `feed.publish` +
 `feed.push` (with a producer note: desk, autopilot or nightly, and the autopilot state) so the server's

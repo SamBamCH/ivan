@@ -13,7 +13,11 @@ page is what is on the screen.
   tomorrow, from the archive for past days; the loaded slate is always listed). **Load** switches.
 - **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). On a consumer a
   single **Refresh** pulls the feed instead.
-- **Publish**: writes the projection into the pool, records a capture, publishes and pushes the feed.
+- **Publish**: applies any values still typed into the grids (not yet refigured) first, writes the projection into
+  the pool, records a capture, publishes and pushes the feed. On a consumer (`ingest.consumer_publish`) the live
+  bundle last pulled is applied again and only the slate's teams it edited are projected on top: the other teams
+  are exactly as published, and clearing an edit then publishing gives the published numbers back. Generate, Sim
+  and Late swap do the same before they queue.
 - **Check news** and the **auto** box (every 5 minutes while the desk runs).
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
   fetches props at the offsets and publishes + pushes every 15 minutes while nobody is editing here; the
@@ -94,9 +98,11 @@ for `--source raw`.
 ## Exports and downloads
 
 - `/export/projections.csv`: the pool's projection (name, team, position, salary, minutes, proj, sd, pub,
-  ownership, status). Rebuilt when the desk is stale; sent with `Cache-Control: no-store`. On a consumer the
-  teams it did not edit are written exactly as published (the pool's numbers, not the desk's own 600-world
-  re-simulation, which differs by a few tenths); its edited teams carry its own re-projection. The filename's
+  ownership, status). Rebuilt when the desk is stale; sent with `Cache-Control: no-store`. The producer exports
+  its desk view (edits included, published or not). A consumer exports the **pool**: the laptop's projection as
+  published with the consumer's own edits in it as of its last Publish, which is also what Generate reads, so the
+  file and the lineups agree; an edit typed but not published is not in the file. The desk's own 600-world
+  re-simulation (what the card shows before Publish) differs by a few tenths and is never the file. The filename's
   stamp is the pool's projection time. `scripts/nba/consumer_check.py` compares the file with the producer's pool.
 - `/export/lineups.csv`: the loaded slate's generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`;
   when the loaded slate has no lineups the file is one explanatory line, never another slate's lineups (that happened

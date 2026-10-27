@@ -312,6 +312,33 @@ def after_pull(session: Session, previous_draft_group: Optional[int], *, n_sims:
     return dict(moved=moved, teams=mine, players=players, draft_group=current)
 
 
+PULLED_LIVE_BUNDLE = PROJECT_ROOT / "data" / "feed-state" / "tmp" / "live.sql.gz"     # what feed.pull last fetched and applied
+
+
+def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) -> dict:
+    """
+    A consumer's Publish. The live bundle last pulled is applied again, so the pool holds the laptop's projection exactly as
+    published, then only the slate's teams this machine edited (its own pins and grids) are projected on top. Clearing an
+    edit and publishing therefore gives the published numbers back, and the teams never touched are never re-simulated
+    (a re-simulation differs from the published numbers by a few tenths). Returns {restored, teams, players}.
+    """
+    from ivan.core import feed
+    restored = False
+    if PULLED_LIVE_BUNDLE.exists():
+        feed.apply("nba", PULLED_LIVE_BUNDLE, log=lambda m: None)
+        session.expire_all()
+        restored = True
+    else:
+        log("no pulled bundle on disk: the pool is projected as it stands")
+    slate_teams = {t for (t,) in session.query(NBAPlayer.team).distinct().all() if t}
+    mine = locally_edited_teams(session) & slate_teams
+    players = 0
+    if mine:
+        info = project_slate(session, n_sims=n_sims, log=log, teams=mine)
+        players = info.players
+    return dict(restored=restored, teams=mine, players=players)
+
+
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
                  log: Log = print) -> tuple:
     """

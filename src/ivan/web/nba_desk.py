@@ -42,7 +42,7 @@ from ivan.core.config import config_path
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import after_pull, ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
@@ -1905,6 +1905,62 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
+def _apply_pin_rows(team: str, rows: list) -> tuple[list, int, int]:
+    """Apply typed grid values for one team ([{player, minutes, fppm, fpts, pub}], blank clears that pin) to this machine's own
+    layer. A row whose minutes changed loses its lock so the skeleton can move it. Returns (players whose minutes changed, public
+    numbers changed, values set). The caller re-projects."""
+    changed_min, changed_pub, n_set = [], 0, 0
+    for r in rows:
+        key = normalize_name(str(r.get("player") or ""))
+        if not key:
+            continue
+        old = override_of(desk.overrides, key)
+        vals = {}
+        for k in ("minutes", "fppm", "fpts", "pub"):
+            if k in r:
+                try:
+                    vals[k] = _num(r.get(k), k)
+                except ValueError as e:
+                    desk.flash.append(str(e)); continue
+        if not vals:
+            continue
+        if "minutes" in vals and vals["minutes"] != old.get("minutes"):
+            changed_min.append(key)
+        if "pub" in vals and vals["pub"] != old.get("pub"):
+            changed_pub += 1
+        if any(vals.get(k) != old.get(k) for k in vals):
+            n_set += 1
+        desk.set_override(key, **vals)
+    if changed_min:
+        g = ROT.load_drawn(team)
+        if g is not None:
+            kept = [n for n in g.attrs.get("locked", []) if n not in changed_min]
+            if len(kept) != len(g.attrs.get("locked", [])):
+                ROT.save_drawn(team, g, locked=kept, fingerprint=g.attrs.get("fingerprint"))
+    return changed_min, changed_pub, n_set
+
+
+def _apply_typed_pins(pins: str) -> int:
+    """
+    Values typed into the grids but not yet refigured, sent along with Publish / Generate / Sim as JSON {team: [rows]} (the page
+    collects every dirty input): applied first, so a number typed and then published is what gets published (2026-10-27: an
+    fpts typed on the consumer's desk vanished on Publish because the page reload threw the unsent input away). Returns the
+    number of values set.
+    """
+    if not pins:
+        return 0
+    try:
+        by_team = json.loads(pins)
+    except ValueError:
+        desk.flash.append("typed values not applied: the page sent them in a form the desk could not read")
+        return 0
+    total = 0
+    for team, rows in (by_team or {}).items():
+        _, _, n = _apply_pin_rows(str(team), rows or [])
+        total += n
+    return total
+
+
 @app.post("/team/{team}/refigure", response_class=HTMLResponse)
 async def refigure(request: Request, team: str):
     """
@@ -1916,34 +1972,7 @@ async def refigure(request: Request, team: str):
         return b
     body = await request.json()
     with LOCK:
-        changed_min, changed_pub, n_set = [], 0, 0
-        for r in body.get("rows") or []:
-            key = normalize_name(str(r.get("player") or ""))
-            if not key:
-                continue
-            old = override_of(desk.overrides, key)
-            vals = {}
-            for k in ("minutes", "fppm", "fpts", "pub"):
-                if k in r:
-                    try:
-                        vals[k] = _num(r.get(k), k)
-                    except ValueError as e:
-                        desk.flash.append(str(e)); continue
-            if not vals:
-                continue
-            if "minutes" in vals and vals["minutes"] != old.get("minutes"):
-                changed_min.append(key)
-            if "pub" in vals and vals["pub"] != old.get("pub"):
-                changed_pub += 1
-            if any(vals.get(k) != old.get(k) for k in vals):
-                n_set += 1
-            desk.set_override(key, **vals)
-        if changed_min:
-            g = ROT.load_drawn(team)
-            if g is not None:
-                kept = [n for n in g.attrs.get("locked", []) if n not in changed_min]
-                if len(kept) != len(g.attrs.get("locked", [])):
-                    ROT.save_drawn(team, g, locked=kept, fingerprint=g.attrs.get("fingerprint"))
+        changed_min, changed_pub, n_set = _apply_pin_rows(team, body.get("rows") or [])
         desk.reproject(team)
         msg = f"{team}: {n_set} value(s) applied, the grid refigured" + (f" ({len(changed_min)} minutes changed)" if changed_min else "")
         if changed_pub:
@@ -2053,15 +2082,25 @@ def clear_team(request: Request, team: str):
 
 
 @app.post("/publish")
-def publish(request: Request):
-    """Write the pins, project every team at full sims, store projections + a capture row set."""
+def publish(request: Request, pins: str = Form("")):
+    """Write the pins (the values still typed into the grids first), project at full sims, store projections + a capture row set.
+    A consumer projects only the slate's teams it edited; the rest stays as published."""
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
+        typed = _apply_typed_pins(pins)
+        if typed:
+            desk.flash.append(f"{typed} typed value(s) applied before publishing")
         desk.write_local()
         try:
-            info = project_slate(desk.session, n_sims=2000, log=desk.flash.append)
-            desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
+            if CONSUMER:
+                r = consumer_publish(desk.session, n_sims=2000, log=desk.flash.append)
+                desk.flash.append(("published: the laptop's projection restored" if r["restored"] else "published")
+                                  + (f", {r['players']} players re-projected with your edits on {', '.join(sorted(r['teams']))}; the other teams exactly as published"
+                                     if r["teams"] else "; no pins or grids of your own on this slate, so the laptop's projection stands"))
+            else:
+                info = project_slate(desk.session, n_sims=2000, log=desk.flash.append)
+                desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
             autopilot.touch("publish")                       # the edits are published: the autopilot tick may run again
             _push_feed(desk.flash.append)
         except IngestError as e:
@@ -2476,10 +2515,17 @@ async def pipeline_run(request: Request, step: str):
                 desk.flash.append(f"heads up: {ms['n_mapped']} of {ms['n']} teams mapped and unchanged"
                                   + (f"; changed: {', '.join(ms['changed'])}" if ms["changed"] else "") + (f"; unmapped: {', '.join(ms['unmapped'])}" if ms["unmapped"] else ""))
             if step in ("generate", "sim", "lateswap", "all"):
+                typed = _apply_typed_pins(str(form.get("pins") or ""))
                 desk.write_local()
                 try:
-                    info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
-                    desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits, then queued {step}")
+                    if CONSUMER:
+                        r = consumer_publish(desk.session, n_sims=2000, log=lambda m: None)
+                        desk.flash.append((f"published: the laptop's projection with your edits on {', '.join(sorted(r['teams']))}" if r["teams"]
+                                           else "published: the laptop's projection as it stands (no pins or grids of your own on this slate)")
+                                          + (f" ({typed} typed values applied first)" if typed else "") + f", then queued {step}")
+                    else:
+                        info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
+                        desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits" + (f" ({typed} typed values applied first)" if typed else "") + f", then queued {step}")
                     autopilot.touch("publish")
                     _push_feed(desk.flash.append)
                 except IngestError as e:
@@ -2651,13 +2697,13 @@ def export_projections():
             desk.rebuild()
         rows = [list(("name", "dk_id", "team", "opponent", "position", "salary", "status", "starter", "minutes", "solve_minutes", "minutes_p10", "minutes_p90",
                       "fpts", "fpts_sd", "fppm", "public_fpts", "ownership", "pinned", "locked", "in_pool"))]
-        # a consumer exports the pool exactly as published for the teams it did not edit: the desk's own per-team re-simulation
-        # (600 worlds, its own seed) differs from the published 2000-world numbers by a few tenths, and the file he uploads must
-        # be the file the laptop published (2026-10-27: 71 of 78 players differed on teams he never touched)
-        own = locally_edited_teams(desk.session) if CONSUMER else None
+        # a consumer exports the pool: the laptop's projection as published, with this machine's own edits in it as of its last
+        # Publish (the generator reads the same pool, so the file and the lineups agree). The desk's own per-team re-simulation
+        # (600 worlds, its own seed) differs from the published 2000-world numbers by a few tenths and is never the file
+        # (2026-10-27: 71 of 78 players differed on teams he never touched). The producer exports its desk view, edits included.
         for team in desk.slate.teams():
             proj = desk.proj.get(team); rot = desk.rot.get(team) or {}
-            as_published = own is not None and team not in own
+            as_published = CONSUMER
             starters = desk.starters_of(team) or set(); locked = set((rot.get("grid").attrs.get("locked", []) if rot.get("grid") is not None else []))
             for p in desk.players(team):
                 n = normalize_name(p.name)

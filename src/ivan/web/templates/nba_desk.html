@@ -252,7 +252,7 @@
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
   <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
   {% endif %}
-  <form method="post" action="{{ root }}/publish"><button class="primary" title="write projections + edits for the sim and the capture loop">Publish</button></form>
+  <form method="post" action="{{ root }}/publish" onsubmit="this.pins.value = collectDirtyPins()"><input type="hidden" name="pins" value=""><button class="primary" title="write projections + edits for the sim and the capture loop; values typed into the grids but not yet refigured are applied first{% if consumer %}; only the teams you edited are re-projected, the rest stays as published{% endif %}">Publish</button></form>
   <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
 </div>
 
@@ -428,6 +428,24 @@
   }
   document.body.addEventListener("htmx:beforeSwap", e => { const t = e.detail.target; if (t && t.id && t.id.startsWith("card-")) stashPending(t); });
   document.body.addEventListener("htmx:afterSwap", e => { const t = e.detail.target; if (t && t.id && t.id.startsWith("card-")) { restorePending(t); delete pendingByTeam[t.id.replace("card-", "")]; } });
+  // every value typed into a grid and not yet refigured, as {team: [{player, minutes|fppm|fpts|pub}]}: Publish and the pipeline
+  // buttons send it along so a number typed and then published is what gets published (nothing typed is lost to the reload)
+  function collectDirtyPins() {
+    const out = {};
+    document.querySelectorAll("table.rot-grid input[data-pin].dirty").forEach(i => {
+      const tr = i.closest("tr"), rot = i.closest(".rot"); if (!tr || !tr.dataset.key || !rot || !rot.dataset.team) return;
+      const rows = out[rot.dataset.team] = out[rot.dataset.team] || {};
+      (rows[tr.dataset.key] = rows[tr.dataset.key] || {player: tr.dataset.key})[i.dataset.pin] = i.value;
+    });
+    for (const t in out) out[t] = Object.values(out[t]);
+    return Object.keys(out).length ? JSON.stringify(out) : "";
+  }
+  // a pipeline post took the typed values along: they are saved now, so the inputs stop reading as unsent
+  document.body.addEventListener("htmx:afterRequest", e => {
+    const f = e.detail.elt;
+    if (f && f.classList && f.classList.contains("pipe-form") && e.detail.successful)
+      document.querySelectorAll("table.rot-grid input[data-pin].dirty").forEach(i => i.classList.remove("dirty"));
+  });
   document.body.addEventListener("click", e => {
     const btn = e.target.closest("button.rot-refigure"); if (!btn) return;
     const rot = btn.closest(".rot"); const team = rot.dataset.team; const rows = {};

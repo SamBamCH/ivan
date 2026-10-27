@@ -1,5 +1,5 @@
 <div id="pipeline" class="pipe dash">
-  <form class="pipe-form dash-form" hx-post="{{ root }}/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML">
+  <form class="pipe-form dash-form" hx-post="{{ root }}/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML" hx-vals='js:{pins: collectDirtyPins()}'>
     <div class="pipe-row">
       <span class="brand-sm">Pipeline</span>
       {% if limited %}<span class="muted small" title="this desk is shared: settings above these are lowered, and a job running longer than {{ job_max_minutes }} minutes is stopped">limits: {{ limits.lineups }} lineups, {{ limits.jobs }} jobs, {{ limits.sims }} sims, field {{ limits.field_cap }}, {{ job_max_minutes }} min per job</span>{% endif %}
