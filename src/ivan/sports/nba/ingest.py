@@ -499,15 +499,17 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: int = 4000, log: Log = print) -> dict:
+               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None) -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
     replaced, projected and its public side refreshed in one transaction, so a desk serving the same database from another
     process never sees a half-written pool (it notices the new stamp and shows "new data"). When the pool moves to another
     draft group the old slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the
-    desk then shows an unprojected pool until something projects it.
+    desk then shows an unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the
+    autopilot tick attaches the game lines to it) is stored as given instead of fetching again.
     """
-    fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
+    if fetched is None:
+        fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
     current = session.query(NBAPlayer.draft_group_id).first()
     switching = bool(current and current[0] and int(current[0]) != int(draft_group_id))
     if switching:

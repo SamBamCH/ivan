@@ -33,8 +33,20 @@ player props (about 12 credits per game) and re-derives the market rates. Pins a
 survive a refresh; statuses and props change underneath them. Fetch props once the books have posted
 most of the slate (early evening for a 7pm lock) and again if the news moved.
 
+**Autopilot** (the header box; `scripts/nba/autopilot.py on|off|status`) is for a day you are not
+working the desk but the other desk still plays. With it on, `ivan-nba-capture.timer` runs
+`scripts/nba/capture.py` every 15 minutes: it refreshes the loaded slate (or the one that locks next)
+through the same one-transaction path as Refresh, fetches the props when the slate crosses 360, 180,
+90, 45 and 15 minutes before lock (about 12 credits per game each, at most 20 fetches a day), the
+game lines with them, projects with the pins and grids on file, and publishes + pushes the feed. It
+stands down while you are at the desk: an edit in the last 30 minutes not published since, or a
+running job (`autopilot.desk_hold`). The switch is `data/nba/autopilot.json`; the last tick's result
+shows next to the box and in the other desk's header. Off by default; turn it off when you play.
+`scripts/nba/autopilot.py tick --force` runs one tick from a terminal whatever the switch says.
+
 The contests and payout tables for the day are stored by the sim when it meets a contest it does
-not know (`contests.ensure_contest`); there is no separate contest step to run.
+not know (`contests.ensure_contest`), and by the autopilot tick for its slate; there is no separate
+contest step to run.
 
 ## 3. Work the teams
 
@@ -68,7 +80,9 @@ minutes provenance and flags for a team.
 **Publish** writes the desk's projection into the pool (`nba_player.minutes_proj`, `fpts_mean`,
 `fpts_std`, `fpts_quantiles`), records an `nba_projection_capture` row per player (source "ours"),
 writes a projections CSV artifact under `data/nba/output/projections/`, and runs `feed.publish` +
-`feed.push` so the server's desk gets it within five minutes. About 10 to 20 seconds.
+`feed.push` (with a producer note: desk, autopilot or nightly, and the autopilot state) so the server's
+desk gets it on its next pull: its timer every 5 minutes, or at once when its Refresh is pressed.
+About 10 to 20 seconds. Terminal: `scripts/nba/project.py` then `scripts/nba/feed.py publish && scripts/nba/feed.py push`.
 
 Generate, Sim and Late swap from the desk publish first (since 2026-10-25). Choose does not.
 The scripts run from a terminal do **not** publish: run them after a Publish, or use `news.py` /

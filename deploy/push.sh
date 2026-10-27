@@ -16,7 +16,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE_ROOT="${IVAN_REMOTE_ROOT:-/opt/ivan/app}"
 
 echo "== rsync -> $HOST:$REMOTE_ROOT"
-rsync -az --delete --info=stats1 --exclude /venv --exclude /data --exclude /.env "$ROOT/" "$HOST:$REMOTE_ROOT/"
+# .git and .claude stay home: the server runs the tree, not the repository (and a worktree's .git is a file, which would replace the directory there)
+rsync -az --delete --info=stats1 --exclude /venv --exclude /data --exclude /.env --exclude /.git --exclude /.claude "$ROOT/" "$HOST:$REMOTE_ROOT/"
 
 echo "== bootstrap + restart on $HOST"
 ssh "$HOST" bash -s "$REMOTE_ROOT" <<'REMOTE'

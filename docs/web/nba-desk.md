@@ -15,6 +15,11 @@ page is what is on the screen.
   single **Refresh** pulls the feed instead.
 - **Publish**: writes the projection into the pool, records a capture, publishes and pushes the feed.
 - **Check news** and the **auto** box (every 5 minutes while the desk runs).
+- **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
+  fetches props at the offsets and publishes + pushes every 15 minutes while nobody is editing here; the
+  last tick's time shows next to it ("held" when it stood down, "failed" in red). See
+  [../nba/game-day.md](../nba/game-day.md#2-refresh-through-the-day). On a consumer the same spot shows
+  the laptop's state instead: autopilot on/off, who published last (desk, autopilot, nightly) and when.
 - **new data · load** appears when the pool changed on disk since the page was built (a terminal
   ingest or project, a feed pull); it reloads without fetching.
 - The questions count: Q/GTD/D/P players with no call yet, by team.
@@ -95,11 +100,21 @@ for `--source raw`.
 
 ## Consumer mode (the server)
 
-Set by `IVAN_FEED_URL` in `.env`. The desk never fetches: Refresh pulls the feed, the slate shown is
-the one the producer published, the producer's pins and grids arrive as `data/nba/input/published/`
-and show as green placeholders; the consumer's own edits (amber) sit on top in its own files, a blank
-box falls back to the published value, Clear locks drops only its own layer, and a pull re-projects
-only the teams it edited. The card says "published" and counts "N of your own". No props button.
+Set by `IVAN_FEED_URL` in `.env`. The desk never fetches: Refresh pulls the feed (the same pull the
+`ivan-nba-pull.timer` makes every 5 minutes, at once), the slate shown is the one the producer
+published, the producer's pins and grids arrive as `data/nba/input/published/` and show as green
+placeholders; the consumer's own edits (amber) sit on top in its own files, a blank box falls back to
+the published value, Clear locks drops only its own layer, and a pull re-projects only the teams it
+edited. The card says "published" and counts "N of your own". No props button. Refresh can only
+bring what the laptop published: when nothing is new it says so with the time of the laptop's last
+publish and its autopilot state, and the freshness strip has a **published** entry (the bundle's
+time; hover for the last pull). The header badge "laptop autopilot on/off · desk|autopilot|nightly
+published HH:MM" reads the pull state (`data/feed-state/nba.json`, `feed.status`).
+
+To test this desk from the producer without a browser on the other machine:
+`scripts/nba/consumer_check.py` (see [../deployment.md](../deployment.md)) logs in with a cookie minted on
+the server, walks the pages and the CSV exports through the public hostname or the tailnet, presses
+Refresh and compares what the desk shows with the bundle the laptop published.
 
 ## Login and public access
 

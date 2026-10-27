@@ -64,7 +64,8 @@ def main() -> int:
             logging.warning(f"standings derive failed: {type(e).__name__}: {e}")
     try:
         from ivan.core import feed
-        feed.publish("nba", which="both", log=logging.info)
+        from ivan.sports.nba import autopilot
+        feed.publish("nba", which="both", log=logging.info, producer=autopilot.producer_info("nightly"))
         feed.push("nba", log=logging.info)
     except Exception as e:   # noqa: BLE001
         logging.warning(f"feed publish failed: {type(e).__name__}: {e}")

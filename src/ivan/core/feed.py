@@ -84,8 +84,10 @@ def dump_tables(db_path: Path, tables: List[str], out_gz: Path) -> int:
     return out_gz.stat().st_size
 
 
-def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log = print, db_path: Optional[Path] = None) -> dict:
-    """Write the sport's `which` bundle (live | reference | both) and refresh the manifest. Returns the manifest."""
+def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log = print, db_path: Optional[Path] = None,
+            producer: Optional[dict] = None) -> dict:
+    """Write the sport's `which` bundle (live | reference | both) and refresh the manifest. Returns the manifest.
+    `producer` is a note about who published (the desk, the autopilot tick, the nightly) that the consumer shows in its header."""
     spec = TABLES[sport]
     db_path = Path(db_path or PROJECT_ROOT / spec["db"])
     d = Path(out_dir) / sport; d.mkdir(parents=True, exist_ok=True)
@@ -122,6 +124,8 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
             (d / "files.json").write_text(json.dumps(listing, indent=0))
             manifest["files"] = {"stamp": stamp, "count": len(listing)}
     manifest["published_at"] = datetime.now().isoformat(timespec="seconds")
+    if producer is not None:
+        manifest["producer"] = producer
     (d / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return manifest
 
@@ -216,6 +220,10 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
     state = json.loads(state_p.read_text()) if state_p.exists() else {}
     tmp = state_dir / "tmp"; tmp.mkdir(exist_ok=True)
     manifest = json.loads(fetch(f"{base}/manifest.json", token, tmp / "manifest.json").read_text())
+    # what the producer last published and when this machine last looked, whether or not anything was new (the consumer's header)
+    state["manifest"] = {"published_at": manifest.get("published_at"), "producer": manifest.get("producer"),
+                         "live_stamp": (manifest.get("live") or {}).get("stamp")}
+    state["checked_at"] = datetime.now().isoformat(timespec="seconds")
     changed = {}
     parts = ["live", "reference"] if which == "both" else [which]
     for part in parts:
@@ -249,3 +257,16 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
             state["files"] = {"stamp": manifest["files"]["stamp"]}
     state_p.write_text(json.dumps(state, indent=1))
     return changed
+
+
+def status(sport: str, state_dir: Path = PROJECT_ROOT / "data" / "feed-state") -> dict:
+    """What a consumer knows about its feed, from the pull state: when it last checked, when the producer last published,
+    who published (the manifest's producer note), the stamps applied. {} on a machine that never pulled."""
+    p = Path(state_dir) / f"{sport}.json"
+    try:
+        st = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    m = st.get("manifest") or {}
+    return dict(checked_at=st.get("checked_at"), pulled_at=(st.get("live") or {}).get("pulled_at"), live_stamp=(st.get("live") or {}).get("stamp"),
+                published_at=m.get("published_at"), producer=m.get("producer") or {}, new=bool(m.get("live_stamp")) and m.get("live_stamp") != (st.get("live") or {}).get("stamp"))

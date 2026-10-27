@@ -1,6 +1,6 @@
 # NBA: timers and the overnight work
 
-Three user systemd timers on the producer, one on the consumer, and one job you run by hand.
+Three user systemd timers on the producer (plus the autopilot tick, which only acts when its switch is on), one on the consumer, and one job you run by hand.
 Units are in `deploy/`, installed by `deploy/install_nba_timers.sh` (rendered with this checkout's
 path into `~/.config/systemd/user/`). They are **user** units: they run as you, read `.env`, and keep
 running after logout only with `sudo loginctl enable-linger <user>`.
@@ -9,7 +9,7 @@ running after logout only with `sudo loginctl enable-linger <user>`.
 |---|---|---|---|
 | `ivan-nba-nightly.timer` | 06:45, 12:45, 18:45 (+ up to 5 min), `Persistent=true` so a missed slot runs at wake | `scripts/nba/nightly.py` | `data/nba/logs/nightly.log` |
 | `ivan-nba-archive.timer` | every 5 min, 09:00–23:59 | `scripts/nba/archive_at_lock.py` | `data/nba/logs/archive.log` |
-| `ivan-nba-capture.timer` | every 15 min, 09:00–23:45 — **disabled since 2026-10-23** | `scripts/nba/capture.py` | `data/nba/logs/capture.log` |
+| `ivan-nba-capture.timer` | every 15 min, 09:00–23:45; does nothing unless the **autopilot** switch is on (`scripts/nba/autopilot.py`, the desk header) | `scripts/nba/capture.py` (one slate through `ingest.run_ingest`, props at the offsets, feed publish + push) | `data/nba/logs/capture.log` |
 | `ivan-nba-pull.timer` (consumer) | every 5 min | `scripts/nba/feed.py pull` | `journalctl --user -u ivan-nba-pull` |
 
 ```bash

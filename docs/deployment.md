@@ -75,9 +75,12 @@ slates. The server runs whatever the laptop's working tree holds, committed or n
 `scripts/nfl/import_reference.sh` drop-and-replace per table, plus `data/nfl/models/` by rsync. Safe while
 someone is mid-slate on the server; if the import cannot get the lock in 30 s it fails loudly, re-run.
 
-**NBA** (`ivan.core.feed`): the live bundle on every desk Publish, the reference bundle every nightly;
-the consumer's pull timer applies them every 5 minutes. Table lists and the consumer's layering of its
-own edits are in [nba/overnight.md](nba/overnight.md). `ivan-feed.service` (`deploy/install_nba_timers.sh
+**NBA** (`ivan.core.feed`): the live bundle on every desk Publish and every autopilot tick, the reference
+bundle every nightly; the consumer's pull timer applies them every 5 minutes and its desk's Refresh
+pulls at once. The manifest carries a producer note (desk | autopilot | nightly, the autopilot switch,
+the last tick) that the consumer's header shows. Table lists and the consumer's layering of its
+own edits are in [nba/overnight.md](nba/overnight.md). `scripts/nba/consumer_check.py` drives the
+consumer's desk from the producer (through the tunnel or the tailnet) and checks the round trip. `ivan-feed.service` (`deploy/install_nba_timers.sh
 --feed`) serves the bundles over HTTP on the Tailscale address for a consumer that cannot receive rsync.
 
 ## Timers on the producer
@@ -87,7 +90,7 @@ own edits are in [nba/overnight.md](nba/overnight.md). `ivan-feed.service` (`dep
 | `ivan-nightly.timer` | NFL | 06:30, 12:30, 18:30, persistent | `deploy/install_nightly_timer.sh [--run-now]` |
 | `ivan-nba-nightly.timer` | NBA | 06:45, 12:45, 18:45, persistent | `deploy/install_nba_timers.sh` |
 | `ivan-nba-archive.timer` | NBA | every 5 min, 09:00–23:59 | same |
-| `ivan-nba-capture.timer` | NBA | disabled since 2026-10-23 | same (disables it) |
+| `ivan-nba-capture.timer` | NBA | every 15 min, 09:00–23:45; acts only with the autopilot switch on (`scripts/nba/autopilot.py`) | same |
 
 All are **user** units rendered with this checkout's path. The NFL nightly needs the desktop session's
 display for the DraftKings scrape (`PassEnvironment=DISPLAY ...`). Both nightly jobs are idempotent and

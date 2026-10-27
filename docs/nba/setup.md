@@ -51,15 +51,18 @@ A consumer gets all of this from the reference bundle of the feed instead (`scri
 ## Timers (user systemd units)
 
 ```bash
-deploy/install_nba_timers.sh          # producer: archive-at-tip (every 5 min, 09:00-23:59) + nightly (06:45, 12:45, 18:45)
+deploy/install_nba_timers.sh          # producer: archive-at-tip (every 5 min, 09:00-23:59) + nightly (06:45, 12:45, 18:45) + the autopilot tick (every 15 min)
 deploy/install_nba_timers.sh --pull   # consumer: the feed pull every 5 minutes instead
 deploy/install_nba_timers.sh --feed   # optional: serve the feed over HTTP on the Tailscale address (scripts/feed_server.py)
 systemctl --user list-timers | grep ivan-nba
+scripts/nba/autopilot.py status       # the autopilot switch, the last tick, whether a tick would run now
 ```
 
-The capture tick (`ivan-nba-capture.timer`, every 15 minutes) is installed but **disabled** since
-2026-10-23: the desk's Refresh is the only fetch on a slate day. Timers keep running after logout
-only with `sudo loginctl enable-linger <user>`. Details in [overnight.md](overnight.md).
+The autopilot tick (`ivan-nba-capture.timer`, every 15 minutes, 09:00–23:45) is installed and enabled
+but does nothing unless the autopilot switch is on (`scripts/nba/autopilot.py on`, or the desk header's
+box): with it off, the desk's Refresh is the only fetch on a slate day. Timers keep running after logout
+only with `sudo loginctl enable-linger <user>`. Details in [overnight.md](overnight.md) and
+[game-day.md](game-day.md#2-refresh-through-the-day).
 
 ## The desk
 

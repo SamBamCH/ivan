@@ -39,6 +39,7 @@ from dotenv import load_dotenv
 
 from ivan.core import feed
 from ivan.core.config import config_path
+from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
@@ -67,6 +68,23 @@ app = FastAPI(title="Ivan · NBA desk", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 auth.install(app, templates)                                  # a password when IVAN_DESK_PASSWORD is set; open otherwise
+NOT_AN_EDIT = ("/refresh", "/reload", "/news", "/autopilot", "/login", "/publish")
+
+
+@app.middleware("http")
+async def _desk_activity(request: Request, call_next):
+    """The producer's footprint for the autopilot tick (ivan.sports.nba.autopilot): every POST that works the slate is an
+    edit; the tick stands down for a while after one that was not published since. A consumer leaves no footprint."""
+    if request.method == "POST" and not CONSUMER:
+        path = request.url.path[len(auth.root_of(request)):] or "/"
+        if not path.startswith(NOT_AN_EDIT):
+            try:
+                autopilot.touch("edit")
+            except OSError:
+                pass
+    return await call_next(request)
+
+
 STATE_FILE = NBA_DATA_DIR / "capture_state.json"
 LOCK = threading.Lock()
 runner = JobRunner(log_dir=NBA_DATA_DIR / "jobs", cwd=PROJECT_ROOT, max_seconds=None)      # the limit is set below once LIMITED is known
@@ -1236,6 +1254,12 @@ class Desk:
                 ("DraftKings", dk, 30, "the DK pool: salaries, statuses, FPPG"),
                 ("starters", q("select max(fetched_at) from starting_lineups"), 30, "Rotowire lineups, last read"),
                 ("projected", q("select max(fpts_updated_at) from nba_player"), 30, "the projection, last calculated")]
+        if CONSUMER:                                                    # what the laptop last published, as pulled (the Refresh button pulls)
+            fs = feed.status("nba")
+            prod = fs.get("producer") or {}
+            rows.append(("published", fs.get("published_at"), 60,
+                         "the laptop's last publish of the feed" + (f" ({prod.get('source')}, autopilot {'on' if prod.get('autopilot') else 'off'})" if prod else "")
+                         + (f"; last pulled here {str(fs.get('pulled_at'))[11:16]}" if fs.get("pulled_at") else "")))
         out = []
         for label, t, warn, what in rows:
             t = pd.Timestamp(t).to_pydatetime() if t is not None else None
@@ -1276,7 +1300,8 @@ class Desk:
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
                     slates=slates, slate_days=self.slate_days(now, dg), props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
                     questions=self.questions_summary(now), news=self.news_status(now), team_states=self.team_states(now),
-                    overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)))
+                    overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)),
+                    autopilot=None if CONSUMER else autopilot.state(), feed=feed.status("nba") if CONSUMER else None)
 
 
 desk = Desk()
@@ -2037,6 +2062,7 @@ def publish(request: Request):
         try:
             info = project_slate(desk.session, n_sims=2000, log=desk.flash.append)
             desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
+            autopilot.touch("publish")                       # the edits are published: the autopilot tick may run again
             _push_feed(desk.flash.append)
         except IngestError as e:
             desk.flash.append(f"publish failed: {e}")
@@ -2049,7 +2075,7 @@ def _push_feed(log) -> None:
     if CONSUMER or not os.environ.get(feed.PUSH_ENV, "").strip():
         return
     try:
-        feed.publish("nba", which="live", log=lambda m: None)
+        feed.publish("nba", which="live", log=lambda m: None, producer=autopilot.producer_info("desk"))
         feed.push("nba", log=log)
     except Exception as e:   # noqa: BLE001 - the publish itself succeeded; the push is best effort
         log(f"feed push failed: {type(e).__name__}: {e}")
@@ -2085,6 +2111,20 @@ def news_auto(request: Request, on: str = Form("")):
     with LOCK:
         desk.news_auto = bool(on)
         desk.flash.append("news auto-check " + ("on: every 5 minutes while the desk runs" if desk.news_auto else "off"))
+    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+
+
+@app.post("/autopilot")
+def autopilot_toggle(request: Request, on: str = Form("")):
+    """The autopilot switch (ivan.sports.nba.autopilot; scripts/nba/autopilot.py on|off from a terminal): with it on, the
+    capture tick refreshes the loaded slate every 15 minutes, fetches props at the offsets and publishes + pushes the feed,
+    standing down while this desk is being worked. Nothing on a consumer."""
+    if CONSUMER:
+        return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    with LOCK:
+        st = autopilot.set_on(bool(on), by="desk")
+        desk.flash.append("autopilot " + ("on: the tick refreshes, fetches props at the offsets and publishes every 15 minutes while nobody is editing here"
+                                          if st["on"] else "off: only Publish sends projections to the other desk"))
     return RedirectResponse(auth.root_of(request) + "/", status_code=303)
 
 
@@ -2169,7 +2209,11 @@ def refresh(request: Request, what: str = Form("dk")):
                     else:
                         desk.flash.append("the published projection is in, as published")
                 else:
-                    desk.flash.append("feed unchanged since the last pull")
+                    fs = feed.status("nba")
+                    prod = fs.get("producer") or {}
+                    when = str(fs.get("published_at") or "")[11:16]
+                    desk.flash.append("nothing new: the laptop has not published since " + (when or "the last pull")
+                                      + (f" ({prod.get('source')}; autopilot {'on' if prod.get('autopilot') else 'off'})" if prod else ""))
             except Exception as e:   # noqa: BLE001
                 desk.flash.append(f"feed pull failed: {type(e).__name__}: {e}")
         elif dg is None:
@@ -2434,6 +2478,7 @@ async def pipeline_run(request: Request, step: str):
                 try:
                     info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
                     desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits, then queued {step}")
+                    autopilot.touch("publish")
                     _push_feed(desk.flash.append)
                 except IngestError as e:
                     desk.flash.append(f"publish failed: {e}")
