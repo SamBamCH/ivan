@@ -113,3 +113,17 @@ archive timer for two days in October 2026.
 CPU-bound and forking: `config/nfl.json → classic.lineup_generation.n_jobs`, the generate step's
 worker count, `sim` sizes. The NFL classic models are ~280 MB each and load per worker; 16 GB is
 comfortable. Jobs run under `nice`, so other services on the box stay responsive.
+
+## A sandbox consumer on the server
+
+`deploy/sandbox_server.sh up` puts a second copy of this tree at `/opt/ivan/sandbox/app` on the server in
+consumer mode (its own `data/`, `.env` with `IVAN_FEED_URL` pointing at the **same** `/opt/ivan/app/data/feed`
+the laptop pushes to, password `sandbox`, the consumer limits) and runs it as the `ivan` user's unit
+`ivan-sandbox` on `127.0.0.1:8002`, sharing the production venv (`PYTHONPATH=src` makes the sandbox's own
+code win over the editable install). Reach it over an ssh tunnel: `ssh -f -N -L 8002:127.0.0.1:8002 ivan-server`,
+then `http://127.0.0.1:8002/nba/`. Every route the brother's desk takes is real except the Cloudflare tunnel
+and his login: your Publish or the autopilot tick pushes by rsync, the sandbox's Refresh pulls from the
+server's disk, the same server-side code serves it under `/nba`. Break it freely; his desk and data are
+untouched. `status`, `pull` (what his 5-minute timer does), `reset` (wipe the sandbox's own edits and
+lineups) and `down` are the other actions; `scripts/nba/consumer_check.py --sandbox --refresh` checks it the
+way it checks his desk.

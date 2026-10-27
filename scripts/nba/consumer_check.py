@@ -77,7 +77,8 @@ def ssh(host: str, cmd: str, timeout: int = 30) -> str:
 
 
 def mint_cookie(host: str, root: str) -> str:
-    return ssh(host, f"cd {root} && venv/bin/python -c 'from ivan.web import auth; print(auth.token())'")
+    # PYTHONPATH=src: that tree's own code and data root, even where the venv's editable install points at another checkout (the sandbox)
+    return ssh(host, f"cd {root} && PYTHONPATH={root}/src venv/bin/python -c 'from ivan.web import auth; print(auth.token())'")
 
 
 class Client:
@@ -248,7 +249,11 @@ def main() -> int:
     ap.add_argument("--remote-root", default="/opt/ivan/app")
     ap.add_argument("--cookie", default=None, help="a login cookie value; default: minted over ssh")
     ap.add_argument("--refresh", action="store_true", help="press Refresh on the consumer and report what it said")
+    ap.add_argument("--sandbox", action="store_true", help="the sandbox consumer on the server (deploy/sandbox_server.sh) through the ssh tunnel at 127.0.0.1:8002")
     args = ap.parse_args()
+    if args.sandbox:
+        args.url = args.url or "http://127.0.0.1:8002/nba"
+        args.remote_root = "/opt/ivan/sandbox/app" if args.remote_root == "/opt/ivan/app" else args.remote_root
     base = args.url or (TAILNET if args.tailnet else PUBLIC)
     rep = Report()
     print(f"consumer desk: {base}")

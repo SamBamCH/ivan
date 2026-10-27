@@ -116,7 +116,10 @@ publish and its autopilot state, and the freshness strip has a **published** ent
 time; hover for the last pull). The header badge "laptop autopilot on/off · desk|autopilot|nightly
 published HH:MM" reads the pull state (`data/feed-state/nba.json`, `feed.status`).
 
-To test this desk from the producer without a browser on the other machine:
+To try to break a consumer desk without touching his: `deploy/sandbox_server.sh up` runs a second consumer
+on the server, fed by the same pushed directory, reached over an ssh tunnel at `http://127.0.0.1:8002/nba/`
+(see [../deployment.md](../deployment.md#a-sandbox-consumer-on-the-server)). To test this desk from the
+producer without a browser on the other machine:
 `scripts/nba/consumer_check.py` (see [../deployment.md](../deployment.md)) logs in with a cookie minted on
 the server, walks the pages and the CSV exports through the public hostname or the tailnet, presses
 Refresh and compares what the desk shows with the bundle the laptop published.
