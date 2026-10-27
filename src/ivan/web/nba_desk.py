@@ -2651,12 +2651,22 @@ def export_projections():
             desk.rebuild()
         rows = [list(("name", "dk_id", "team", "opponent", "position", "salary", "status", "starter", "minutes", "solve_minutes", "minutes_p10", "minutes_p90",
                       "fpts", "fpts_sd", "fppm", "public_fpts", "ownership", "pinned", "locked", "in_pool"))]
+        # a consumer exports the pool exactly as published for the teams it did not edit: the desk's own per-team re-simulation
+        # (600 worlds, its own seed) differs from the published 2000-world numbers by a few tenths, and the file he uploads must
+        # be the file the laptop published (2026-10-27: 71 of 78 players differed on teams he never touched)
+        own = locally_edited_teams(desk.session) if CONSUMER else None
         for team in desk.slate.teams():
             proj = desk.proj.get(team); rot = desk.rot.get(team) or {}
+            as_published = own is not None and team not in own
             starters = desk.starters_of(team) or set(); locked = set((rot.get("grid").attrs.get("locked", []) if rot.get("grid") is not None else []))
             for p in desk.players(team):
                 n = normalize_name(p.name)
-                r = proj.loc[n] if proj is not None and n in proj.index else None
+                if as_published:
+                    mp = p.minutes_proj
+                    r = None if mp is None or p.fpts_mean is None else {"minutes": float(mp), "fpts_mean": float(p.fpts_mean), "fpts_std": float(p.fpts_std or 0.0),
+                                                                        "fpm": (float(p.fpts_mean) / float(mp)) if mp else None, "minutes_p10": None, "minutes_p90": None}
+                else:
+                    r = proj.loc[n] if proj is not None and n in proj.index else None
                 ov = override_of(desk.overrides, n)
                 def f(x, nd=1):
                     return "" if x is None or (isinstance(x, float) and np.isnan(x)) else round(float(x), nd)

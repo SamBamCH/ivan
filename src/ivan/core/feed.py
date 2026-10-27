@@ -126,6 +126,8 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
     manifest["published_at"] = datetime.now().isoformat(timespec="seconds")
     if producer is not None:
         manifest["producer"] = producer
+    else:
+        manifest.pop("producer", None)                 # a publisher that says nothing must not leave the previous publisher's note standing
     (d / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return manifest
 

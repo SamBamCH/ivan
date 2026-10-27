@@ -62,6 +62,9 @@ def test_producer_note_travels_in_the_manifest_and_the_pull_state(tmp_path, monk
     assert note["source"] == "autopilot" and note["autopilot"] is True and note["host"]
     m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, producer=note)
     assert m["producer"]["source"] == "autopilot"
+    m2 = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src)
+    assert "producer" not in m2                                                        # a silent publisher leaves no stale note
+    m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, producer=note)
     dst = tmp_path / "c.sqlite"
     feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None)
     st = feed.status("nba", state_dir=tmp_path / "state")

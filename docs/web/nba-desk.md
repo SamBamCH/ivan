@@ -94,7 +94,10 @@ for `--source raw`.
 ## Exports and downloads
 
 - `/export/projections.csv`: the pool's projection (name, team, position, salary, minutes, proj, sd, pub,
-  ownership, status). Rebuilt when the desk is stale; sent with `Cache-Control: no-store`.
+  ownership, status). Rebuilt when the desk is stale; sent with `Cache-Control: no-store`. On a consumer the
+  teams it did not edit are written exactly as published (the pool's numbers, not the desk's own 600-world
+  re-simulation, which differs by a few tenths); its edited teams carry its own re-projection. The filename's
+  stamp is the pool's projection time. `scripts/nba/consumer_check.py` compares the file with the producer's pool.
 - `/export/lineups.csv`: the loaded slate's generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`;
   when the loaded slate has no lineups the file is one explanatory line, never another slate's lineups (that happened
   on the server on 2026-10-27); `?draft_group=` exports a named slate explicitly. The filename carries the slate id.
