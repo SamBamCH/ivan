@@ -42,7 +42,7 @@ from ivan.core.config import config_path
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.ingest import after_pull, ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
@@ -1258,8 +1258,8 @@ class Desk:
             fs = feed.status("nba")
             prod = fs.get("producer") or {}
             rows.append(("published", fs.get("published_at"), 60,
-                         "the laptop's last publish of the feed" + (f" ({prod.get('source')}, autopilot {'on' if prod.get('autopilot') else 'off'})" if prod else "")
-                         + (f"; last pulled here {str(fs.get('pulled_at'))[11:16]}" if fs.get("pulled_at") else "")))
+                         "the laptop's last publish of the feed (" + (f"{prod.get('source')}, autopilot {'on' if prod.get('autopilot') else 'off'}; " if prod else "")
+                         + (f"pulled here {str(fs.get('pulled_at'))[11:16]}" if fs.get("pulled_at") else "not pulled yet") + ")"))
         out = []
         for label, t, warn, what in rows:
             t = pd.Timestamp(t).to_pydatetime() if t is not None else None
@@ -2202,10 +2202,12 @@ def refresh(request: Request, what: str = Form("dk")):
                 from ivan.core import feed
                 changed = feed.pull(feed_url, os.environ.get("IVAN_FEED_TOKEN"), "nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
                 if changed:
-                    mine = locally_edited_teams(desk.session)
-                    if mine:
-                        project_slate(desk.session, n_sims=2000, log=desk.flash.append, teams=mine)
-                        desk.flash.append(f"the published projection is in; your own edits re-projected on top for {', '.join(sorted(mine))}")
+                    desk.session.expire_all()                        # the pool was replaced underneath this session
+                    r = after_pull(desk.session, dg, n_sims=2000, log=desk.flash.append)
+                    if r["moved"]:
+                        desk.flash.append(f"the laptop moved to slate {r['draft_group']}: your edits of the previous slate are filed, this slate's are back, the previous slate's lineups cleared")
+                    if r["teams"]:
+                        desk.flash.append(f"the published projection is in; your own edits re-projected on top for {', '.join(sorted(r['teams']))}")
                     else:
                         desk.flash.append("the published projection is in, as published")
                 else:
@@ -2755,9 +2757,9 @@ def lineup_names(session, draft_group: int) -> dict[int, dict]:
 def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
     """
     The generated lineups of one slate, one row each, the eight players in DraftKings roster order (PG SG SF PF C G F
-    UTIL) and nothing else: names, or DraftKings ids with ?ids=1. The slate is ?draft_group=, else the loaded slate when
-    it has lineups, else the newest slate with lineups. Names and positions come from the pool snapshot written at
-    generation, so the laptop moving the live pool to another slate cannot empty this.
+    UTIL) and nothing else: names, or DraftKings ids with ?ids=1. The slate is ?draft_group=, else the loaded slate; when
+    that slate has no lineups the file is one explanatory line, never another slate's lineups. Names and positions come
+    from the pool snapshot written at generation, so the laptop moving the live pool to another slate cannot empty this.
     """
     from types import SimpleNamespace
     from ivan.sports.nba.lineup_export import assign_player_order_classic
@@ -2768,10 +2770,13 @@ def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
         slates = lineup_slates(desk.session)
         current = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
         have = [r["draft_group"] for r in slates if r["draft_group"] is not None]
-        dg = draft_group if draft_group is not None else (current if current in have else (have[0] if have else None))
-        if dg is None:
-            body = _csv_line(["no generated lineups in the pool table: run generate first"])
-            return _csv_response(iter([body]), "nba_lineups_none.csv")
+        dg = draft_group if draft_group is not None else current
+        if dg is None or dg not in have:
+            # never another slate's lineups under a plausible name (2026-10-27: the server handed out Sunday's 9,844 lineups for
+            # Tuesday's slate because nothing had been generated for it); ?draft_group= asks for a specific slate explicitly
+            others = ", ".join(str(d) for d in have) if have else "none"
+            body = _csv_line([f"no generated lineups for the loaded slate {dg}: run generate first (slates with lineups: {others}; ?draft_group=<id> exports one of them)"])
+            return _csv_response(iter([body]), f"nba_lineups_{dg or 'none'}_none.csv")
         lookup = lineup_names(desk.session, int(dg))
         lineups = desk.session.query(Lineup.id, Lineup.player_ids_list).filter(Lineup.draft_group_id == int(dg)).all()
         stamp = datetime.now().strftime("%Y%m%d-%H%M")

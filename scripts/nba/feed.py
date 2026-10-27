@@ -40,21 +40,28 @@ def do_pull(a) -> dict:
     url = a.url or os.environ.get("IVAN_FEED_URL"); token = a.token or os.environ.get("IVAN_FEED_TOKEN")
     if not url:
         raise SystemExit("give --url or set IVAN_FEED_URL in .env")
+    from ivan.database.session import get_session, init_db
+    from ivan.sports.nba.ingest import after_pull, ensure_schema
+    from ivan.sports.nba.models import NBAPlayer
+    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    row = session.query(NBAPlayer.draft_group_id).first()
+    previous = int(row[0]) if row and row[0] else None                 # the slate held before the pull: its edits are filed if the slate moves
+    session.close()
     changed = feed.pull(url, token, "nba", PROJECT_ROOT / "data" / "feed-state", which=a.which, log=print)
     if changed and not a.no_project and "live" in changed:
-        # the published projection stands as pulled; only the teams this machine edited (its own pins or grids) are re-projected on top
-        from ivan.database.session import get_session, init_db
-        from ivan.sports.nba.ingest import ensure_schema, locally_edited_teams, project_slate
-        engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+        # the published projection stands as pulled; this machine's own edits of the old slate are filed if the slate moved, and only
+        # the slate's teams it edited (its own pins or grids) are re-projected on top (ingest.after_pull)
+        session = get_session(engine)
         try:
-            mine = locally_edited_teams(session)
-            if mine:
-                info = project_slate(session, n_sims=2000, write_capture=False, write_csv=False, log=print, teams=mine)
-                print(f"re-projected {info.players} players of {len(mine)} team(s) with this machine's own edits on top of the published projection")
+            r = after_pull(session, previous, n_sims=2000, log=print)
+            if r["teams"]:
+                print(f"re-projected {r['players']} players of {len(r['teams'])} team(s) with this machine's own edits on top of the published projection")
             else:
-                print("the published projection stands (no edits of this machine's own)")
+                print("the published projection stands (no edits of this machine's own on this slate)")
         except Exception as e:   # noqa: BLE001
             print(f"re-projection skipped: {type(e).__name__}: {e}")
+        finally:
+            session.close()
 
 
 def main() -> int:

@@ -287,6 +287,31 @@ def locally_edited_teams(session: Session) -> set:
     return teams
 
 
+def after_pull(session: Session, previous_draft_group: Optional[int], *, n_sims: int = 2000, log: Log = print) -> dict:
+    """
+    A consumer, after feed.pull replaced the pool. When the published slate moved to another draft group, this machine's own
+    edits of the old slate are filed and the new slate's come back (retire_edits: a pin on a name must not follow him onto
+    another slate, 2026-10-27: the server still held Sunday's pins when Tuesday's slate arrived) and the other slate's lineups
+    and sims are cleared (isolate_slate), exactly as the producer does on a slate switch. Then only the teams this machine
+    edited, among the slate's teams, are re-projected on top of the published projection; the rest stands as published.
+    Returns {moved, teams, players}.
+    """
+    row = session.query(NBAPlayer.draft_group_id).first()
+    current = int(row[0]) if row and row[0] else None
+    moved = previous_draft_group is not None and current is not None and int(previous_draft_group) != current
+    if moved:
+        log(f"the published slate moved from {previous_draft_group} to {current}")
+        retire_edits(int(previous_draft_group), log=log, new_draft_group=current)
+        isolate_slate(session, current, log=log)
+    slate_teams = {t for (t,) in session.query(NBAPlayer.team).distinct().all() if t}
+    mine = locally_edited_teams(session) & slate_teams
+    players = 0
+    if mine:
+        info = project_slate(session, n_sims=n_sims, write_capture=False, write_csv=False, log=log, teams=mine)
+        players = info.players
+    return dict(moved=moved, teams=mine, players=players, draft_group=current)
+
+
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
                  log: Log = print) -> tuple:
     """
@@ -421,6 +446,9 @@ def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool =
         proj = proj.copy(); proj["team"] = team
         frames.append(proj)
     session.commit()
+    if not frames:                                          # the requested teams are not on this slate: nothing to project, nothing changed
+        log(f"no team of the slate among {sorted(only) if only else 'none'}; the projection stands")
+        return info
     allp = pd.concat(frames)
     info.players = int(len(allp)); info.priced = int(allp["priced"].sum()) if "priced" in allp else 0
     by_name = {normalize_name(p.name): p for p in slate.players}

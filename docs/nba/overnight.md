@@ -98,8 +98,13 @@ venv/bin/python scripts/nba/feed.py pull [--url file:///opt/ivan/app/data/feed] 
 venv/bin/python scripts/nba/feed.py apply <dir>                              # apply bundles already on disk
 ```
 
-On the consumer a pull re-projects only the teams it has edited itself (its edits on top of the
-published projection) and leaves the rest exactly as published. State in `data/feed-state/`.
+On the consumer a pull (the timer's, or the desk's Refresh) ends in `ingest.after_pull`: when the
+published slate moved to another draft group, this machine's own edits of the old slate are filed under
+`data/nba/input/edits/<draft group>/` and the new slate's come back (`retire_edits`), and the other
+slate's lineups and sims are cleared (`isolate_slate`), as on the producer; then only the slate's teams
+it edited itself are re-projected (its edits on top of the published projection) and the rest stays
+exactly as published. State in `data/feed-state/` (`nba.json`: stamps, the last check, the producer's
+note from the manifest).
 `scripts/feed_server.py` (unit `ivan-feed`) serves the bundles over HTTP with a bearer token for a
 consumer that cannot receive rsync.
 

@@ -95,7 +95,9 @@ for `--source raw`.
 
 - `/export/projections.csv`: the pool's projection (name, team, position, salary, minutes, proj, sd, pub,
   ownership, status). Rebuilt when the desk is stale; sent with `Cache-Control: no-store`.
-- `/export/lineups.csv`: the whole generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`; `?draft_group=` picks a slate other than the loaded one.
+- `/export/lineups.csv`: the loaded slate's generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`;
+  when the loaded slate has no lineups the file is one explanatory line, never another slate's lineups (that happened
+  on the server on 2026-10-27); `?draft_group=` exports a named slate explicitly. The filename carries the slate id.
 - `/download/<name>`: files from `data/nba/output/` (the chooser's CSVs, the late swap CSV).
 
 ## Consumer mode (the server)
