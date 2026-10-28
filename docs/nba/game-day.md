@@ -33,6 +33,14 @@ player props (about 12 credits per game) and re-derives the market rates. Pins a
 survive a refresh; statuses and props change underneath them. Fetch props once the books have posted
 most of the slate (early evening for a 7pm lock) and again if the news moved.
 
+A refresh takes about 10 seconds to a usable pool: the fetch, the market means (the props de-vigged
+in one vectorised pass, `projection/market.py`), the pool, the projection and the public projection
+land in one transaction. The public field and the ownership column are built afterwards
+(`ingest.refresh_field`: about 45 seconds at 3,000 entries when a public number moved, at once
+otherwise; `config/nba.json → field.ownership_entries` sets the size); the desk works meanwhile and
+says "public field and ownership rebuilt" when they land. From a terminal `ingest.py` does the same
+in sequence.
+
 **Autopilot** (the header box; `scripts/nba/autopilot.py on|off|status`) is for a day you are not
 working the desk but the other desk still plays. With it on, `ivan-nba-capture.timer` runs
 `scripts/nba/capture.py` every 15 minutes: it refreshes the loaded slate (or the one that locks next)
@@ -114,19 +122,41 @@ slate lock. These `at_tip` captures are what the scorecard and the backtests com
 
 ## 7. After lock: the late swap
 
+Two steps, apart: the **standings fetch** and the **swap**.
+
 ```bash
-venv/bin/python scripts/nba/lateswap.py                    # standings export through the logged-in Chrome profile
-venv/bin/python scripts/nba/lateswap.py --source raw       # the newest stored export per contest, no Chrome
+venv/bin/python scripts/nba/fetch_standings.py             # every contest's standings export, stored (Chrome login)
+venv/bin/python scripts/nba/lateswap.py                    # the swap on the stored exports while they are current
 venv/bin/python scripts/nba/lateswap.py --live             # started games score from the live box score
+venv/bin/python scripts/nba/lateswap.py --source draftkings   # always download first (the old default)
+venv/bin/python scripts/nba/lateswap.py --source raw       # the newest stored export per contest, never Chrome
+venv/bin/python scripts/nba/lateswap.py --field each       # each contest against its own export (default: one shared)
 venv/bin/python scripts/nba/lateswap.py --contest 197015856 --candidates 20 --sims 2000
 ```
 
-For every contest in the entries file it downloads the live standings (the field's locked players),
-completes the field's open slots with the optimiser, re-optimises our entries' open slots in sampled
-worlds and keeps the candidate with the best expected payout. Output:
+**Fetch standings** (the desk's button on the late swap tab, or `fetch_standings.py`) downloads the
+live standings export of every contest in the entries file through the logged-in Chrome profile and
+keeps it under raw `dk/standings/<contest id>/`. The export shows which players are locked, and that
+changes only at a tip: so press it a minute after a game tips, and the swap can be re-run as often as
+the projections move until the next tip without fetching again. The desk lists each contest's
+export with its time, green while no game has tipped since it was taken, amber ("before the last
+tip") once one has.
+
+**Run late swap** with standings "stored while current" (`--source auto`, the default): a contest's
+stored export is used while it is current; when a game has tipped since it was taken the swap
+downloads a fresh one (opening Chrome only then), and without a login it falls back to the stored
+one with a warning in the log. "DraftKings live" always downloads; "stored export" never does.
+
+The field: with **one for all contests** (`--field shared`, the default) the biggest contest's export
+is completed once (its open slots filled by the optimiser in sampled worlds, its %Drafted as the
+targets) and every contest is scored against a sample of it at its own size, its payout table scaled
+to that; one fetch of one export is then enough. **Each contest's own** (`--field each`) completes
+every contest's export as before. Then, per contest, our entries' open slots are re-optimised in
+sampled worlds and the candidate with the best expected payout is kept. Output:
 `data/nba/output/lateswap.<stamp>.csv` (the entries export with the swapped lineups, ready to upload)
-and `.json` (the desk's late swap view). The desk's late swap tab runs the same script and has an
-upload box for standings CSVs exported by hand (`/lateswap/standings`), which `--source raw` then reads.
+and `.json` (the desk's late swap view, which names the export each field came from). The desk's
+late swap tab runs the same script and has an upload box for standings CSVs exported by hand
+(`/lateswap/standings`), which the stored sources then read.
 
 `--live` uses NBA's public live feed (`post_lock/live.py`) and the in-game update
 (`post_lock/ingame.py`): banked points plus a draw of the rest of the game under the live score.
@@ -146,6 +176,7 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 | Refresh dk / props, pick a slate | yes | yes |
 | Generate / Sim / Late swap / All from the desk | no | yes (publish first) |
 | Choose from the desk | no | no |
+| Fetch standings | yes (DraftKings standings) | no |
 | `news.py`, `project.py`, `ingest.py --project-only` | no | yes |
 | archive at tip | no | no (records it) |
 

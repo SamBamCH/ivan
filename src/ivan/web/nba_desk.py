@@ -42,7 +42,7 @@ from ivan.core.config import config_path
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, refresh_field, refresh_ownership, refresh_pool, store_slate, IngestError
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
@@ -114,7 +114,7 @@ def _pipeline_defaults() -> dict:
             "max_salary": fmt(c.get("max_salary", 50000)), "min_salary": fmt(c.get("min_salary", 49000)), "max_salary_per_team": fmt(c.get("max_salary_per_team", 30000)),
             "cash_pct": fmt(ch.get("cash_pct", 0.5)), "avg_roi_win": fmt(ch.get("avg_roi_win", 0.5)), "diversity_lambda": fmt(ch.get("diversity_lambda", 0.1)),
             "bankroll": fmt(ch.get("bankroll", 3.0)), "jam": "",
-            "ls_candidates": "10", "ls_field_cap": "5000", "ls_sims": "1000", "ls_source": "draftkings", "ls_live": ""}
+            "ls_candidates": "10", "ls_field_cap": "5000", "ls_sims": "1000", "ls_source": "auto", "ls_field": "shared", "ls_live": ""}
 
 
 if LIMITED:
@@ -1823,22 +1823,32 @@ def _start_restore(draft_group: int) -> None:
 
 
 def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
-    """Fetch, store, project and refresh the public side in a background thread with its own session (one transaction);
-    the board shows `what` until it is done, then the desk rebuilds from the new pool."""
+    """Fetch, store, project and write the public projection in a background thread with its own session (one transaction);
+    the board shows `what` until it is done, then the desk rebuilds from the new pool. The public field and ownership are
+    built afterwards in the same thread (refresh_field: about a minute when a public number moved, at once otherwise), the
+    desk working meanwhile; the ownership column and the field are rebuilt into the page when they land."""
     def run():
         log = []
         sess = get_session(engine)
+        ok = False
         try:
-            refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
-            msg = f"{what}: done"
+            refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append, field=False)
+            msg = f"{what}: done; the public field and ownership are rebuilding"; ok = True
         except IngestError as e:
             msg = f"{what} failed: {e}"
         except Exception as e:   # noqa: BLE001 - the transaction rolled back: the old pool stands
             msg = f"{what} failed, the previous pool is unchanged: {type(e).__name__}: {e}"
-        finally:
-            sess.close()
         with LOCK:
             desk.rebuild(); desk.busy = None; desk.flash.append(msg)
+        if ok:
+            try:
+                r = refresh_field(sess, log=log.append)
+                msg = f"public field and ownership rebuilt in {r.get('seconds', 0):.0f}s" if r else "the public field did not rebuild: " + (log[-1] if log else "")
+            except Exception as e:   # noqa: BLE001
+                msg = f"the public field did not rebuild: {type(e).__name__}: {e}"
+            with LOCK:
+                desk.rebuild(); desk.flash.append(msg)
+        sess.close()
     desk.busy = what
     threading.Thread(target=run, name="ivan-refresh", daemon=True).start()
 
@@ -2351,6 +2361,7 @@ def _lateswap_ctx(now: datetime) -> dict:
             proj[name] = float(r["fpts_mean"])
     tips = sorted({p.gametime for p in desk.slate.players if p.gametime})
     out = dict(games_started=sum(1 for t in tips if t <= now), games_total=len(tips), next_tip=next((t for t in tips if t > now), None),
+               last_tip=max((t for t in tips if t <= now), default=None),
                open_players=sum(1 for p in byid.values() if p.gametime and p.gametime > now), contests=[], report=LS.latest_report(),
                has_display=bool(os.environ.get("DISPLAY")), entries_path=_entries_info().get("path"))
     p = _entries_path()
@@ -2378,7 +2389,8 @@ def _lateswap_ctx(now: datetime) -> dict:
                 from ivan.core import raw as _raw
                 art = _raw.latest("nba", "dk/standings", int(cid))
                 out["contests"].append(dict(contest_id=int(cid), name=cname, entries=rows,
-                                            standings=None if art is None else datetime.strptime(art.stamp[:15], "%Y%m%d-%H%M%S")))
+                                            standings=None if art is None else LS.stamp_time(art.stamp),
+                                            standings_current=bool(art is not None and LS.export_is_current(art.stamp, tips, now))))
     rep = out["report"]
     if rep:
         for c in rep.get("contests", []):
@@ -2463,12 +2475,15 @@ def _submit(step: str, form: dict) -> list:
     if step in ("sim", "all"):
         jobs.append(runner.submit("sim", [py, str(SCRIPTS / "sim.py"), "--config", str(cfg), "-n", str(int(form["sims"])), "-c", str(int(form["field_cap"]))], meta=dict(step="sim")))
     if step == "lateswap":
-        source = "raw" if LIMITED else str(form.get("ls_source") or "draftkings")     # no DraftKings login here: the uploaded standings
-        cmd = [py, str(SCRIPTS / "lateswap.py"), "--source", source,
+        source = "raw" if LIMITED else str(form.get("ls_source") or "auto")     # no DraftKings login here: the uploaded standings
+        field = "each" if str(form.get("ls_field") or "shared") == "each" else "shared"
+        cmd = [py, str(SCRIPTS / "lateswap.py"), "--source", source, "--field", field,
                "--candidates", str(int(_field(form.get("ls_candidates"), "candidates", int) or 10)),
                "--field-cap", str(int(_field(form.get("ls_field_cap"), "field cap", int) or 5000)),
                "--sims", str(int(_field(form.get("ls_sims"), "sims", int) or 1000))] + (["--live"] if form.get("ls_live") else [])
         jobs.append(runner.submit("lateswap", cmd, meta=dict(step="lateswap")))
+    if step == "fetch_standings":
+        jobs.append(runner.submit("fetch_standings", [py, str(SCRIPTS / "fetch_standings.py")], meta=dict(step="fetch_standings")))
     if step in ("choose", "all"):
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
@@ -2534,6 +2549,23 @@ async def pipeline_run(request: Request, step: str):
                 _submit(step, pipeline_form)
             except (TypeError, ValueError) as e:
                 desk.flash.append(f"bad setting: {e}")
+        return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+
+
+@app.post("/lateswap/fetch", response_class=HTMLResponse)
+def lateswap_fetch(request: Request):
+    """Download every entries contest's standings export now and keep it (scripts/nba/fetch_standings.py as a job): the late
+    swap's fetch step, pressed a minute after a tip; the swap then re-runs on the stored exports until the next tip."""
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        if LIMITED:
+            desk.flash.append("no DraftKings login on this desk: upload the standings export instead")
+        elif runner.active():
+            desk.flash.append("a job is already running; wait for it or cancel it")
+        else:
+            _submit("fetch_standings", pipeline_form)
+            desk.flash.append("fetching the standings of every contest in the entries file")
         return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
 
 

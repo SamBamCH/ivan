@@ -34,7 +34,9 @@ For each (book, line) pair of points, rebounds, assists, threes, steals, blocks 
 over/under prices are de-vigged into P(stat > line) (a one-sided quote gets a 0.955 haircut), and a
 negative binomial with the stat's calibrated dispersion is solved for the mean that reproduces it.
 The player's market mean is the median over pairs once at least two exist. Turnovers are never
-priced and stay on history.
+priced and stay on history. The solve is one vectorised bisection over every pair's distinct
+(line, probability, dispersion) triple (`market.means_from_tails`), a slate's props in well under a
+second.
 
 ### 2. Market means to per-minute rates (`market.py`, `live.py`)
 

@@ -42,6 +42,14 @@ to our numbers cannot move it. Every candidate in our pool is scored against it.
 last season's contest bins) draws entries from **our** pool by normalised projection. `field.cap`
 10000 is the largest field size simulated; bigger contests are sampled down and the payout table scaled.
 
+The two-group field is cached on disk by its key (`data/nba/derived/field_cache/<key>.json`) and any
+smaller size is served from a bigger cached field. The pool refresh builds it at
+`field.ownership_entries` (default 3,000) once the pool is committed (`ingest.refresh_field`, the
+ownership column comes from it); the generate step builds it at `field.cap` for its ownership, and a
+sim builds it once, at the largest size any contest in the run needs
+(`simulate_contest.prebuild_field`), every contest slicing it. A build is an ILP per lineup: about
+45 seconds for 3,000 entries, 160 for 10,000, on eight workers (2026-10-28).
+
 `field_model.py` is the ownership model fitted on real contests only (`scripts/nba/field_model.py
 validate | fit | check`): a softmax inside each contest scaled to 800% (eight slots) over public
 features (salary, position, DK FPPG, status, Rotowire starters, the props-based public projection,
@@ -58,7 +66,8 @@ venv/bin/python scripts/nba/sim.py [--entries data/nba/input/entries.csv] [-n 10
 ```
 
 For every contest in the entries file (fetching contest and payout rows it lacks through
-`contests.ensure_contest`): the field is drawn at `field_cap` entries, the payout table scaled to it
+`contests.ensure_contest`): the field is drawn at `field_cap` entries (the two-group field: a slice of the
+one field built up front for the run), the payout table scaled to it
 (`ivan.sports.common.payouts.scale_payouts_correctly`), then `n_sims` correlated draws score every
 player on the field, lineups are ranked, ties share the pooled payout. Per unique lineup the result is
 fpts / payout / ROI / rank in every simulation as `lineup_simulation_results` rows (the contest's
@@ -107,8 +116,10 @@ Downloads list serves the CSVs; `/export/lineups.csv` streams the whole generate
 
 ## Late swap
 
-After lock the same field machinery is used against the **real** field: see
-[game-day.md](game-day.md) step 7 and `src/ivan/sports/nba/post_lock/`.
+After lock the swap plays against the **real** field: the contest's standings export (fetched as a step of
+its own, reused until the next tip), its open slots completed by the optimiser; by default one export,
+the biggest contest's, completed once and sampled at every contest's size. See
+[game-day.md](game-day.md) step 7 and `src/ivan/sports/nba/post_lock/lateswap.py`.
 
 ## Reading a sim report
 

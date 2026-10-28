@@ -7,10 +7,16 @@
       <label title="re-optimised lineups per entry">candidates <input name="ls_candidates" value="{{ form.ls_candidates }}" size="3"></label>
       <label title="field entries completed and scored; bigger contests are sampled down to this">field cap <input name="ls_field_cap" value="{{ form.ls_field_cap }}" size="5"></label>
       <label>sims <input name="ls_sims" value="{{ form.ls_sims }}" size="5"></label>
-      <label title="draftkings: download the live standings through the logged-in Chrome profile (the laptop); raw: the newest stored export per contest">field <select name="ls_source"><option value="draftkings" {% if form.ls_source == 'draftkings' %}selected{% endif %}>DraftKings live</option><option value="raw" {% if form.ls_source == 'raw' %}selected{% endif %}>stored export</option></select></label>
+      <label title="auto: the stored export while no game has tipped since it was taken, a download (logged-in Chrome) otherwise; DraftKings: always download; stored: the newest stored export only">standings <select name="ls_source"><option value="auto" {% if form.ls_source == 'auto' %}selected{% endif %}>stored while current</option><option value="draftkings" {% if form.ls_source == 'draftkings' %}selected{% endif %}>DraftKings live</option><option value="raw" {% if form.ls_source == 'raw' %}selected{% endif %}>stored export</option></select></label>
+      <label title="one: the biggest contest's export completed once, every contest scored against a sample of it at its own size; each: every contest's own export completed">field <select name="ls_field"><option value="shared" {% if form.ls_field != 'each' %}selected{% endif %}>one for all contests</option><option value="each" {% if form.ls_field == 'each' %}selected{% endif %}>each contest's own</option></select></label>
       <label title="score started games from NBA's live box scores: the points each player has banked plus the rest of his game under the live score (in-game update, validated on held-out games)"><input type="checkbox" name="ls_live" {% if form.ls_live %}checked{% endif %}> live scoring</label>
-      <button type="submit" class="primary" {% if not lateswap.contests %}disabled{% endif %} title="download each contest's standings, complete the field, re-optimise the open slots of every entry, write the upload CSV">Run late swap</button>
+      <button type="submit" class="primary" {% if not lateswap.contests %}disabled{% endif %} title="take the standings (stored or downloaded), complete the field, re-optimise the open slots of every entry, write the upload CSV">Run late swap</button>
     </form>
+    {% if not limited and not consumer %}
+    <form class="pipe-form" style="width:auto" hx-post="{{ root }}/lateswap/fetch" hx-target="#pipeline" hx-swap="outerHTML">
+      <button type="submit" {% if not lateswap.contests %}disabled{% endif %} title="download every contest's standings export now through the logged-in Chrome profile and keep it; press it a minute after a tip, then run the swap as often as you like until the next tip (scripts/nba/fetch_standings.py)">Fetch standings</button>
+    </form>
+    {% endif %}
   </div>
   {% if limited or consumer %}
   <div class="pipe-row" style="margin:6px 0 10px">
@@ -71,7 +77,7 @@
 
   {% for c in lateswap.contests %}
   <h2 style="font-size:14px;margin:12px 0 2px">{{ c.name }} <span class="muted" style="font-weight:400;font-size:12px">· {{ c.contest_id }} · {{ c.entries|length }} entries ·
-    {% if c.standings %}<span style="color:var(--ok)">standings from {{ c.standings.strftime('%a %H:%M') }}</span>{% else %}<span class="bad">no standings yet</span>{% endif %}</span></h2>
+    {% if c.standings %}<span style="color:{% if c.standings_current %}var(--ok){% else %}var(--warn, #c80)){% endif %}" title="{% if c.standings_current %}no game has tipped since this export: the swap uses it as it is{% else %}a game has tipped since this export: the swap downloads a new one (standings: stored while current){% endif %}">standings from {{ c.standings.strftime('%a %H:%M') }}{% if not c.standings_current %} · before the last tip{% endif %}</span>{% else %}<span class="bad">no standings yet</span>{% endif %}</span></h2>
   <table class="mini">
     <tr><th>entry</th><th>lineup <span class="muted" style="text-transform:none">(grey = game started, red = not on the slate)</span></th><th class="n">locked</th><th class="n">proj</th></tr>
     {% for e in c.entries %}

@@ -59,3 +59,9 @@ def test_pay_against_the_field_with_copies():
     # our lineup is in the field twice (the 300 entry and one more copy): we tie for first with them and split 1st + 2nd + 3rd
     field2 = np.array([100.0, 300.0, 300.0]); p, r = pay_against(field2, np.array([300.0]), np.array([2]), csum)
     assert r[0] == 1 and abs(p[0] - 15.0 / 3) < 1e-9
+
+
+def test_field_sizes_cap_less_our_entry():
+    from ivan.sports.nba.simulate_contest import field_sizes
+    assert field_sizes([14268, 71343, 2971, 1], 25000) == [14267, 24999, 2970, 1]
+    assert field_sizes([500], 10000) == [499]

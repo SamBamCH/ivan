@@ -391,6 +391,9 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
     log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}" + (f"; run artifacts -> {art}" if art else ""))
     out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}}
     biggest: dict = {}
+    cfg0 = json.load(open(config_path, encoding="utf-8"))
+    if str(_cfg(cfg0, "field.sampler", "projection_model")) == "two_group":
+        prebuild_field(session, contests["Contest ID"], field_cap, log=log)
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         log(f"--- {i}/{len(contests)} ---")
         try:
@@ -416,6 +419,36 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
         log(f"ownership written for {n} players from the largest contest's field ({biggest['total_entries']:,} entries)")
     log(f"Done: {out['simulated']} contest(s) simulated" + (f", {len(out['failed'])} failed" if out["failed"] else ""))
     return out
+
+
+def field_sizes(total_entries: List[int], field_cap: int) -> List[int]:
+    """The field each contest is simulated against: min(cap, entries) less one (our entry), at least one."""
+    return [max(1, min(int(field_cap or 10000), int(n)) - 1) for n in total_entries]
+
+
+def prebuild_field(session: Session, contest_ids, field_cap: int, log: Log = print) -> int:
+    """
+    Build the public field ONCE at the largest size any contest in the run needs, so every contest slices the same cached
+    field (slate_field caches by key and serves any smaller size from it). Before this (2026-10-27) a run built the field
+    at the first contest's size and again, from scratch, when a bigger contest came (89s + 142s of a 403s sim).
+    Returns the size built, 0 when nothing could be sized (the contests then build their own).
+    """
+    sizes = []
+    for cid in contest_ids:
+        try:
+            c = C.ensure_contest(session, int(cid), log=log)
+        except Exception as e:   # noqa: BLE001 - the contest's own simulation reports the failure
+            log(f"{cid}: could not size the field ({type(e).__name__}: {e})"); c = None
+        if c is not None:
+            sizes.append(field_sizes([int(c.total_entries)], field_cap)[0])
+    if not sizes:
+        return 0
+    n = max(sizes)
+    try:
+        slate_field(session, n, log=log)
+    except Exception as e:   # noqa: BLE001
+        log(f"public field not prebuilt at {n:,}: {type(e).__name__}: {e}"); return 0
+    return n
 
 
 # ----------------------------------------------------------------------------- the two-group field (field.sampler = two_group)
@@ -460,7 +493,7 @@ def simulate_vs_field(session: Session, contest_id: int, contest_name: str, fiel
     if not tiers:
         raise ValueError(f"no payouts for contest {contest_id}")
     field_sz = int(contest.total_entries); entry_fee = float(contest.entry_fee)
-    n = max(1, min(int(field_cap or 10000), field_sz) - 1)                         # the field around one of our entries
+    n = field_sizes([field_sz], field_cap)[0]                                       # the field around one of our entries
     field = slate_field(session, n, log=log)[:n]
     n = len(field)
     cands = [(int(lid), coerce_player_ids(raw)) for lid, raw in session.query(Lineup.id, Lineup.player_ids_list).all()]

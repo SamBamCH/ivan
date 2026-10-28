@@ -11,8 +11,10 @@ page is what is on the screen.
 
 - **Slate picker**: a day, then that day's classic draft groups (from the DK lobby for today and
   tomorrow, from the archive for past days; the loaded slate is always listed). **Load** switches.
-- **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). On a consumer a
-  single **Refresh** pulls the feed instead.
+- **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). The board shows the
+  state until the new pool is projected (about 10 seconds); the public field and the ownership column are rebuilt
+  afterwards in the same background thread (about a minute when a public number moved) and announced when they
+  land, the desk working meanwhile. On a consumer a single **Refresh** pulls the feed instead.
 - **Publish**: applies any values still typed into the grids (not yet refigured) first, writes the projection into
   the pool, records a capture, publishes and pushes the feed. On a consumer (`ingest.consumer_publish`) the live
   bundle last pulled is applied again and only the slate's teams it edited are projected on top: the other teams
@@ -77,8 +79,9 @@ value, flags.
 
 Fields: lineups, jobs, sims, field cap, fresh pool, the chooser's weights (from `config/nba.json`),
 and for the late swap: live scoring (`ls_live`) and jam. Buttons **Generate**, **Sim**, **Choose**,
-**All**, **Late swap**; generate, sim, late swap and all publish first. The desk warns when a team's
-mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
+**All**, **Late swap**; generate, sim, late swap and all publish first. The sim builds the public field
+once, at the largest size any contest in the run needs, and every contest slices it. The desk warns
+when a team's mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
 `/pipeline/status`, cancel at `/pipeline/cancel/<job id>`, logs under `data/nba/jobs/`. An entries
 upload box (`/entries`) replaces `data/nba/input/entries.csv`.
 
@@ -90,10 +93,20 @@ pub, status (OUT struck in red), value; team totals; sortable.
 
 ## Late swap (view `lateswap`, `_nba_lateswap.html`)
 
-The report of the newest `lateswap.<stamp>.json`: per contest and entry, the original and the swapped
+Two buttons. **Fetch standings** (`/lateswap/fetch`, job `fetch_standings` = `scripts/nba/fetch_standings.py`;
+producer only) downloads every entries contest's standings export through the logged-in Chrome profile
+and keeps it under raw `dk/standings/<contest id>/`: press it a minute after a tip. **Run late swap**
+(`/pipeline/lateswap` = `scripts/nba/lateswap.py`) with: candidates, field cap, sims; **standings**
+(`ls_source`: "stored while current" = `--source auto`, the stored export while no game has tipped since it
+was taken, a download otherwise; "DraftKings live"; "stored export"); **field** (`ls_field`: "one for all
+contests" = `--field shared`, the biggest contest's export completed once and sampled per contest; "each
+contest's own"); live scoring (`ls_live`). Each contest's heading shows its export's time, green while
+current, amber "before the last tip" once a game has tipped since.
+
+Below, the report of the newest `lateswap.<stamp>.json`: per contest and entry, the original and the swapped
 lineup with the expected payout of each, and the exposure table before and after. The upload box
-(`/lateswap/standings`) stores standings CSVs exported by hand under raw `dk/standings/<contest id>/`
-for `--source raw`.
+(`/lateswap/standings`; the only way on a consumer or limited desk, which runs `--source raw`) stores
+standings CSVs exported by hand under the same raw path.
 
 ## Exports and downloads
 

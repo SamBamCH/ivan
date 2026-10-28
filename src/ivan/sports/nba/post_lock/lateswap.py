@@ -5,8 +5,12 @@ games have not tipped yet, against the contest's real field.
 
 lock_status(session, now)        every slate player: locked (his game has started) or open
 our_entries(session, entries)    the DraftKings entries export -> OriginalEntry per contest
-field_export(session, cid, ...)  the contest's standings export (DraftKings, through the
-                                 logged-in Chrome profile; or the newest stored raw export)
+fetch_standings(session, entries, http)   download every entries contest's standings export now and keep it
+                                 (raw dk/standings): the fetch step, run a minute after a tip
+field_export(session, cid, ...)  the contest's standings export: "auto" takes the stored one while no game
+                                 has tipped since it was taken (export_is_current) and downloads otherwise
+                                 (DraftKings, through the logged-in Chrome profile, opened only then);
+                                 "draftkings" always downloads; "raw" always takes the newest stored
 complete_field(...)              each field entry's eight players: the LOCKED names are
                                  known, the open slots are filled by the optimiser in a
                                  sampled world (what that entrant will most likely hold)
@@ -18,6 +22,11 @@ evaluate(...)                    expected payout of every candidate against the 
 lateswap_contest / lateswap_entries   the whole thing; write_outputs writes the upload CSV
                                  (the entries export with swapped lineups) and a json report
                                  the desk reads: data/nba/output/lateswap.<stamp>.{csv,json}
+shared field (lateswap_entries shared_field=True, the default): the entries contest with the
+                                 most entrants supplies ONE export, completed once at the field cap;
+                                 every contest is scored against a sample of it at its own size
+                                 (its payout table scaled to that). shared_field=False completes
+                                 each contest's own export, as before 2026-10-28.
 
 With use_live (--live), players in started games score from ingame.update: the points they
 have banked (NBA's live box score, live.py) plus a draw of the rest of their game under that
@@ -48,7 +57,7 @@ from ivan.sports.nba.paths import OUTPUT_DIR
 from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
 from ivan.sports.nba.pre_lock.lineup_generation import SLOT_NAMES, FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.pre_lock.player import generate_player_samples
-from ivan.sports.nba.simulate_contest import payout_tiers, player_samples_matrix, scale_payouts
+from ivan.sports.nba.simulate_contest import contests_in_entries, payout_tiers, player_samples_matrix, scale_payouts
 from ivan.sports.nba.standings import parse_export
 from ivan.sports.nba.utils import _coerce_positions
 
@@ -120,25 +129,132 @@ def our_entries(session: Session, entries_csv) -> Dict[int, List[OriginalEntry]]
 
 
 # ----------------------------------------------------------------------------- the field
-def field_export(session: Session, contest_id: int, source: str = "draftkings", http_sess=None, log: Log = print) -> Optional[pd.DataFrame]:
+SOURCES = ("auto", "draftkings", "raw")
+
+
+class LazyHttp:
+    """A DraftKings session opened on first use (Chrome on the logged-in profile takes a few seconds and is not needed
+    when every export on file is current). `factory` returns a requests.Session or raises RuntimeError (no login)."""
+    def __init__(self, factory: Callable[[], object], log: Log = print):
+        self._factory = factory; self._log = log; self._sess = None; self._tried = False
+
+    def session(self):
+        if not self._tried:
+            self._tried = True
+            try:
+                self._sess = self._factory()
+            except Exception as e:   # noqa: BLE001 - no DraftKings session: the stored exports are what there is
+                self._log(f"no DraftKings session ({type(e).__name__}: {e}); stored exports only")
+                self._sess = None
+        return self._sess
+
+
+def _http(http_sess):
+    return http_sess.session() if isinstance(http_sess, LazyHttp) else http_sess
+
+
+def stamp_time(stamp: str) -> Optional[datetime]:
+    """A raw artifact stamp (YYYYMMDD-HHMMSS, local time) as a datetime."""
+    try:
+        return datetime.strptime(str(stamp)[:15], "%Y%m%d-%H%M%S")
+    except ValueError:
+        return None
+
+
+def export_is_current(stamp: str, tips: Sequence[datetime], now: datetime) -> bool:
     """
-    The contest's standings export as a DataFrame. source: "draftkings" downloads it now
-    (http_sess from ivan.sports.common.draftkings.build_requests_session_from_chrome; the
-    export is also kept raw under dk/standings); "raw" takes the newest stored export.
+    A stored standings export still shows the field as it stands: it was taken at or after the last tip at or before
+    `now`. The locked players of a field change only at a tip, so between two tips one export serves every swap
+    (2026-10-28: the fetch is a step of its own, the swap re-runs on it). Before the first tip any export is current.
     """
-    if source == "draftkings" and http_sess is not None:
-        from ivan.sports.common.draftkings import download_contest_dataframe
-        df = download_contest_dataframe(http_sess, int(contest_id), raw_sport=SPORT)
-        if df is not None and not df.empty:
-            return df
-        log(f"{contest_id}: DraftKings returned no export; trying the newest stored one")
+    taken = stamp_time(stamp)
+    if taken is None:
+        return False
+    started = [t for t in tips if t <= now]
+    return taken >= max(started) if started else True
+
+
+def _read_export_text(text: str) -> pd.DataFrame:
+    import io
+    return pd.read_csv(io.StringIO(str(text).lstrip("\ufeff")), dtype=str, keep_default_na=False, low_memory=False)
+
+
+def stored_export(contest_id: int) -> Optional[dict]:
+    """The newest stored standings export of a contest: {df, stamp, origin: "stored"}; None when there is none."""
     art = raw.latest(SPORT, "dk/standings", contest_id)
     if art is None:
         return None
-    text = raw.load(art.path, SPORT)
-    import io
-    log(f"{contest_id}: stored export {art.stamp}")
-    return pd.read_csv(io.StringIO(str(text).lstrip("﻿")), dtype=str, keep_default_na=False, low_memory=False)
+    return dict(df=_read_export_text(raw.load(art.path, SPORT)), stamp=art.stamp, origin="stored")
+
+
+def download_export(http_sess, contest_id: int, log: Log = print) -> Optional[dict]:
+    """Download the contest's standings export now (kept raw under dk/standings): {df, stamp, origin: "downloaded"}."""
+    sess = _http(http_sess)
+    if sess is None:
+        return None
+    from ivan.sports.common.draftkings import download_contest_dataframe
+    df = download_contest_dataframe(sess, int(contest_id), raw_sport=SPORT)
+    if df is None or df.empty:
+        log(f"{contest_id}: DraftKings returned no export"); return None
+    art = raw.latest(SPORT, "dk/standings", contest_id)
+    return dict(df=df, stamp=art.stamp if art is not None else datetime.now().strftime("%Y%m%d-%H%M%S"), origin="downloaded")
+
+
+def field_export(session: Session, contest_id: int, source: str = "auto", http_sess=None, log: Log = print,
+                 now: Optional[datetime] = None, tips: Optional[Sequence[datetime]] = None) -> Optional[dict]:
+    """
+    The contest's standings export: {df, stamp, origin}. source "auto": the stored export while it is current
+    (export_is_current against the slate's tips), a download otherwise (http_sess: a requests.Session from
+    ivan.sports.common.draftkings.build_requests_session_from_chrome, or a LazyHttp opened only now), the stored one
+    with a warning when no download is possible. "draftkings": download, the stored one when DraftKings gives nothing.
+    "raw": the newest stored export, nothing else.
+    """
+    if source not in SOURCES:
+        raise ValueError(f"source {source!r}; expected one of {SOURCES}")
+    now = now or datetime.now()
+    stored = stored_export(int(contest_id))
+    if source == "raw":
+        if stored is not None:
+            log(f"{contest_id}: stored export {stored['stamp']}")
+        return stored
+    if source == "auto" and stored is not None and tips is not None and export_is_current(stored["stamp"], tips, now):
+        log(f"{contest_id}: stored export {stored['stamp']} is current (no tip since it was taken)")
+        return stored
+    got = download_export(http_sess, int(contest_id), log=log) if http_sess is not None else None
+    if got is not None:
+        log(f"{contest_id}: standings downloaded ({got['stamp']})")
+        return got
+    if stored is not None:
+        when = stamp_time(stored["stamp"])
+        log(f"{contest_id}: no download; the stored export {stored['stamp']} is used"
+            + (" although a game has tipped since it was taken" if tips is not None and not export_is_current(stored["stamp"], tips, now) else ""))
+    return stored
+
+
+def fetch_standings(session: Session, entries_csv, http_sess, only: Optional[Sequence[int]] = None, log: Log = print,
+                    now: Optional[datetime] = None) -> List[dict]:
+    """
+    Download the standings export of every contest in the entries file now (the fetch step: run it a minute after a
+    tip, the swap then re-runs on the stored exports until the next tip). Returns one {contest_id, name, entries,
+    stamp} per export fetched; a contest that gives none is logged and skipped.
+    """
+    now = now or datetime.now()
+    status = lock_status(session, now)
+    log(f"{status['games_started']} of {status['games_total']} games started at {now:%H:%M}" + (f"; next tip {status['next_tip']:%H:%M}" if status["next_tip"] else ""))
+    out = []
+    listed = contests_in_entries(entries_csv)                  # the contest ids as the file lists them: no pool lookup, so it works whatever slate is loaded
+    for cid, cname in zip(listed["Contest ID"], listed["Contest Name"]):
+        if only and int(cid) not in {int(x) for x in only}:
+            continue
+        contest = C.ensure_contest(session, int(cid), log=log)
+        got = download_export(http_sess, int(cid), log=log)
+        if got is None:
+            log(f"{cid}: no export"); continue
+        name = contest.name if contest is not None else str(cname)
+        ent, _ = parse_export(got["df"].to_csv(index=False))
+        log(f"{cid} {name}: {len(ent):,} entries exported at {got['stamp']}")
+        out.append(dict(contest_id=int(cid), name=name, entries=int(len(ent)), stamp=got["stamp"]))
+    return out
 
 
 def _resolve(names: Dict[str, int], label: Optional[str]) -> Optional[int]:
@@ -370,20 +486,65 @@ def evaluate(session: Session, contest, field: List[List[int]], cands_by_entry: 
 
 
 # ----------------------------------------------------------------------------- the run
+def shared_field_for(session: Session, contest_ids: Sequence[int], fps: Dict[int, FieldPlayer], names: Dict[str, int], now: datetime,
+                 source: str = "auto", http_sess=None, field_cap: int = 5000, log: Log = print,
+                 tips: Optional[Sequence[datetime]] = None) -> Optional[dict]:
+    """
+    One field for every contest: the entries contest with the most entrants supplies the export, completed once at
+    field_cap (its %Drafted as the open players' targets). Returns {contest_id, name, total_entries, stamp, origin,
+    field, meta, own}; None when no contest has an export. Each contest then samples it at its own size (sample_shared).
+    """
+    sized = []
+    for cid in contest_ids:
+        c = C.ensure_contest(session, int(cid), log=log)
+        if c is not None:
+            sized.append((int(c.total_entries), int(cid), c))
+    for total, cid, c in sorted(sized, reverse=True):          # the biggest contest first; the next one when it has no export
+        export = field_export(session, cid, source=source, http_sess=http_sess, log=log, now=now, tips=tips)
+        if export is None or export["df"].empty:
+            log(f"{cid} {c.name}: no standings export for the shared field; trying the next contest"); continue
+        own = actual_ownership(export["df"], names)
+        field, meta = complete_field(session, export["df"], fps, names, now, cap=field_cap, seed=seed_for(f"lateswap/field/{cid}"), log=log, target_own=own)
+        if not field:
+            log(f"{cid} {c.name}: the shared field could not be completed; trying the next contest"); continue
+        log(f"one field for every contest: {c.name} ({total:,} entries; export {export['origin']} {export['stamp']}), {len(field):,} completed")
+        return dict(contest_id=cid, name=c.name, total_entries=total, stamp=export["stamp"], origin=export["origin"], field=field, meta=meta, own=own)
+    return None
+
+
+def sample_shared(shared: dict, size: int, seed: Optional[int]) -> List[List[int]]:
+    """The shared field at a contest's size: a sample without replacement when it is bigger, all of it otherwise."""
+    field = shared["field"]
+    if len(field) <= size:
+        return list(field)
+    rng = np.random.default_rng(seed)
+    return [field[i] for i in rng.choice(len(field), size=int(size), replace=False)]
+
+
 def lateswap_contest(session: Session, contest_id: int, entries: List[OriginalEntry], fps: Dict[int, FieldPlayer], names: Dict[str, int],
-                     now: datetime, source: str = "draftkings", http_sess=None, n_candidates: int = 10, field_cap: int = 5000,
-                     num_sims: int = 1000, log: Log = print, live: Optional[pd.DataFrame] = None) -> Optional[dict]:
+                     now: datetime, source: str = "auto", http_sess=None, n_candidates: int = 10, field_cap: int = 5000,
+                     num_sims: int = 1000, log: Log = print, live: Optional[pd.DataFrame] = None, shared: Optional[dict] = None,
+                     tips: Optional[Sequence[datetime]] = None) -> Optional[dict]:
     contest = C.ensure_contest(session, int(contest_id), log=log)
     if contest is None:
         log(f"{contest_id}: not in the database and DraftKings has nothing for it"); return None
     if not payout_tiers(session, int(contest_id)):
         C.fetch_payouts(session, [int(contest_id)], log=log)
-    export = field_export(session, int(contest_id), source=source, http_sess=http_sess, log=log)
-    if export is None or export.empty:
-        log(f"{contest_id}: no standings export (log in to DraftKings, or scrape it first)"); return None
     seed = seed_for(f"lateswap/{contest_id}")
-    own = actual_ownership(export, names)
-    field, fmeta = complete_field(session, export, fps, names, now, cap=field_cap, seed=seed, log=log, target_own=own)
+    if shared is not None:
+        size = max(1, min(int(field_cap), int(contest.total_entries)))
+        field = sample_shared(shared, size, seed)
+        own = shared["own"]
+        fmeta = dict(shared["meta"], used=len(field), completed=len(field), shared_from=int(shared["contest_id"]),
+                     export=dict(contest_id=int(shared["contest_id"]), stamp=shared["stamp"], origin=shared["origin"]))
+        log(f"{contest_id}: field {len(field):,} of the shared {len(shared['field']):,}")
+    else:
+        export = field_export(session, int(contest_id), source=source, http_sess=http_sess, log=log, now=now, tips=tips)
+        if export is None or export["df"].empty:
+            log(f"{contest_id}: no standings export (fetch the standings, log in to DraftKings, or upload one)"); return None
+        own = actual_ownership(export["df"], names)
+        field, fmeta = complete_field(session, export["df"], fps, names, now, cap=field_cap, seed=seed, log=log, target_own=own)
+        fmeta["export"] = dict(contest_id=int(contest_id), stamp=export["stamp"], origin=export["origin"])
     fmeta["ownership"] = {str(pid): round(v, 2) for pid, v in own.items()}
     if not field:
         log(f"{contest_id}: the field could not be completed"); return None
@@ -414,16 +575,31 @@ def lateswap_contest(session: Session, contest_id: int, entries: List[OriginalEn
                 field=fmeta, entries=rows)
 
 
-def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = None, source: str = "draftkings", http_sess=None,
+def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = None, source: str = "auto", http_sess=None,
                      n_candidates: int = 10, field_cap: int = 5000, num_sims: int = 1000, only: Optional[Sequence[int]] = None,
-                     log: Log = print, use_live: bool = False) -> dict:
+                     log: Log = print, use_live: bool = False, shared_field: bool = True) -> dict:
     now = now or datetime.now()
     fps = slate_players(session); names = name_map(session)
     by_contest = our_entries(session, entries_csv)
     status = lock_status(session, now)
+    tips = sorted({fp.gametime for fp in fps.values() if fp.gametime is not None})
     log(f"{status['games_started']} of {status['games_total']} games started at {now:%H:%M}" + (f"; next tip {status['next_tip']:%H:%M}" if status["next_tip"] else ""))
     out = dict(when=now.isoformat(timespec="seconds"), games_started=status["games_started"], games_total=status["games_total"], source=source,
-               settings=dict(candidates=n_candidates, field_cap=field_cap, sims=num_sims, live=use_live), contests=[], failed=[])
+               settings=dict(candidates=n_candidates, field_cap=field_cap, sims=num_sims, live=use_live, shared_field=shared_field),
+               contests=[], failed=[], field_source=None)
+    wanted = [int(cid) for cid in by_contest if not only or int(cid) in {int(x) for x in only}]
+    shared = None
+    if shared_field and wanted:
+        try:
+            shared = shared_field_for(session, wanted, fps, names, now, source=source, http_sess=http_sess, field_cap=field_cap, log=log, tips=tips)
+        except Exception as e:   # noqa: BLE001 - every contest then completes its own export
+            import traceback
+            session.rollback(); log(f"shared field failed, each contest completes its own export: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        if shared is not None:
+            out["field_source"] = dict(shared=True, contest_id=shared["contest_id"], name=shared["name"], total_entries=shared["total_entries"],
+                                       stamp=shared["stamp"], origin=shared["origin"], completed=len(shared["field"]))
+        else:
+            log("no shared field: each contest completes its own export")
     live = None
     if use_live:
         from ivan.sports.nba.post_lock import live as LIVE
@@ -437,7 +613,7 @@ def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = No
             continue
         try:
             r = lateswap_contest(session, int(cid), group, fps, names, now, source=source, http_sess=http_sess,
-                                 n_candidates=n_candidates, field_cap=field_cap, num_sims=num_sims, log=log, live=live)
+                                 n_candidates=n_candidates, field_cap=field_cap, num_sims=num_sims, log=log, live=live, shared=shared, tips=tips)
         except Exception as e:   # noqa: BLE001 - one contest failing must not lose the others
             import traceback
             session.rollback()

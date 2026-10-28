@@ -340,14 +340,15 @@ def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) 
 
 
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
-                 log: Log = print) -> tuple:
+                 log: Log = print, field: bool = True) -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
-    and refresh its public side in ONE transaction. Nothing downstream can see a half-written or unprojected pool
-    (2026-10-23: a sim started during a rewrite found no point guard). Returns (StoreInfo, ProjectInfo).
+    and write its public projection in ONE transaction. Nothing downstream can see a half-written or unprojected pool
+    (2026-10-23: a sim started during a rewrite found no point guard). The public field and ownership follow the commit
+    (refresh_field; the desk runs that itself after it has shown the new pool, field=False). Returns (StoreInfo, ProjectInfo).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
-    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log)
+    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field)
     return out["stored"], out["projected"]
 
 
@@ -382,7 +383,7 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
             slate = LiveSlate(session, use_market=False)
             basis = basis_minutes_for_market(slate, read_overrides_full(), set())
             info.market_rates = store_market_rates(session, means, basis)
-    refresh_ownership(session, log=log)                     # the public projection, the field and ownership: the pool or props changed
+    refresh_public_projection(session, log=log)             # the public projection: the pool or props changed (the field follows the commit)
     # archive capture: players carry their starter flag so a replay can restore it
     starters = {}
     for r in session.query(StartingLineups).all():
@@ -439,6 +440,26 @@ def market_fpts_by_player(session: Session) -> dict[str, float]:
     for r in session.query(NBAMarketRate).all():
         out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
     return out
+
+
+def refresh_public_projection(session: Session, log: Log = print) -> dict:
+    """The public projection alone (public_field.refresh_public_projection), a second or two; the field is not touched."""
+    try:
+        from ivan.sports.nba.public_field import refresh_public_projection as _refresh
+        slate = LiveSlate(session, use_starters=False, use_market=False)
+        return _refresh(session, slate.hist, log=log)
+    except Exception as e:   # noqa: BLE001 - the public side is a by-product; the pool and the projection stand
+        session.rollback(); log(f"public projection failed: {type(e).__name__}: {e}"); return {}
+
+
+def refresh_field(session: Session, log: Log = print) -> dict:
+    """The public field and ownership on the stored public projection (public_field.refresh_field_ownership): about a
+    minute when a public number moved since the cached field, at once otherwise. Run after the pool is committed."""
+    try:
+        from ivan.sports.nba.public_field import refresh_field_ownership
+        return refresh_field_ownership(session, log=log)
+    except Exception as e:   # noqa: BLE001
+        session.rollback(); log(f"field refresh failed: {type(e).__name__}: {e}"); return {}
 
 
 def refresh_ownership(session: Session, log: Log = print) -> dict:
@@ -554,14 +575,16 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None) -> dict:
+               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = True) -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
-    replaced, projected and its public side refreshed in one transaction, so a desk serving the same database from another
-    process never sees a half-written pool (it notices the new stamp and shows "new data"). When the pool moves to another
-    draft group the old slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the
-    desk then shows an unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the
-    autopilot tick attaches the game lines to it) is stored as given instead of fetching again.
+    replaced, projected and its public projection written in one transaction, so a desk serving the same database from
+    another process never sees a half-written pool (it notices the new stamp and shows "new data"). The public field and
+    ownership are built after the commit (refresh_field: about a minute when a public number moved; field=False leaves
+    that to the caller, which is how the desk shows the pool first). When the pool moves to another draft group the old
+    slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the desk then shows an
+    unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the autopilot tick
+    attaches the game lines to it) is stored as given instead of fetching again.
     """
     if fetched is None:
         fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
@@ -579,7 +602,8 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
         raise
     if switching:
         isolate_slate(session, int(draft_group_id), log=log)
-    return {"fetched": fetched, "stored": stored, "projected": projected}
+    ownership = refresh_field(session, log=log) if field else None
+    return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership}
 
 
 def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: int = 1000, log: Log = print) -> dict:

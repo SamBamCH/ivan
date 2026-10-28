@@ -39,7 +39,7 @@ Read in this order:
                        choose.py            ─► chosen_entries.*.csv (DK upload)
                                                               │
  lock ───► archive_at_lock.py (timer) records the pool at each tip
- after lock ───► lateswap.py re-optimises the open slots of our entries
+ after lock ───► fetch_standings.py (a minute after a tip) ─► lateswap.py re-optimises the open slots of our entries
  next morning ───► nightly.py: box scores, scorecards, stints, standings derive, feed push
                    standings.py scrape: the real fields (by hand, needs the DK Chrome login)
 ```

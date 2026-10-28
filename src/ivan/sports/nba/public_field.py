@@ -128,10 +128,22 @@ def field_ownership(session: Session, size: int = OWNERSHIP_FIELD, log: Log = pr
 
 
 # ----------------------------------------------------------------------------- refresh
-def refresh_public(session: Session, history, log: Log = print, on: Optional[datetime] = None) -> dict:
+def ownership_field_size() -> int:
+    """Entries in the field ownership is read from after a refresh: config field.ownership_entries, default OWNERSHIP_FIELD
+    (3,000: about 45s on eight workers; 10,000 took 159s on 2026-10-28, too much to rebuild after every refresh). Set it to
+    the sim's cap to have the generate step and the sim find their field cached."""
+    try:
+        from ivan.core.config import load_config
+        return max(500, int(load_config("nba").get("field", {}).get("ownership_entries", OWNERSHIP_FIELD)))
+    except Exception:   # noqa: BLE001
+        return OWNERSHIP_FIELD
+
+
+def refresh_public_projection(session: Session, history, log: Log = print, on: Optional[datetime] = None) -> dict:
     """
-    The public projection, the field and ownership, from the pool and props as stored. Returns {players, priced_like, owned}.
-    Safe to call often: the field is rebuilt only when its key changes.
+    The public projection from the pool and props as stored, written to nba_player.pub_fpts (a second or two). The
+    field and ownership are built on it by refresh_field_ownership, which the callers run once the pool is committed.
+    Returns {players, projected}.
     """
     pub = public_projection(session, history, on)
     # a hand override of the public number (the desk's pub column) replaces the replica's for that player: the field and
@@ -152,14 +164,36 @@ def refresh_public(session: Session, history, log: Log = print, on: Optional[dat
     if n_ov:
         log(f"public projection: {n_ov} hand override(s) applied")
     session.commit()
+    n_pub = sum(1 for v in pub.values() if v > 0)
+    log(f"public projection for {n_pub} players")
+    return dict(players=len(pub), projected=n_pub)
+
+
+def refresh_field_ownership(session: Session, log: Log = print, size: Optional[int] = None) -> dict:
+    """
+    The two-group field on the stored public projection (cached by its key: a rebuild only when a public number moved,
+    about a minute at ownership_field_size entries) and every player's ownership from it, written to nba_player.ownership.
+    Returns {owned, seconds}.
+    """
+    t0 = time.time()
     try:
-        own = field_ownership(session, log=log)
+        own = field_ownership(session, int(size or ownership_field_size()), log=log)
     except Exception as e:   # noqa: BLE001 - ownership is a by-product of the public projection
         session.rollback(); log(f"ownership not refreshed: {type(e).__name__}: {e}"); own = {}
     if own:
         for p in session.query(NBAPlayer).all():
             p.ownership = float(own.get(int(p.id), 0.0))
         session.commit()
-    n_pub = sum(1 for v in pub.values() if v > 0)
-    log(f"public projection for {n_pub} players; ownership for {len(own)}")
-    return dict(players=len(pub), projected=n_pub, owned=len(own))
+    log(f"ownership for {len(own)} players")
+    return dict(owned=len(own), seconds=round(time.time() - t0, 1))
+
+
+def refresh_public(session: Session, history, log: Log = print, on: Optional[datetime] = None) -> dict:
+    """
+    The public projection, the field and ownership, from the pool and props as stored. Returns {players, projected, owned}.
+    Safe to call often: the field is rebuilt only when its key changes. The pool refresh runs the two halves apart
+    (ingest.run_ingest: the projection inside the pool's transaction, the field once it is committed).
+    """
+    out = refresh_public_projection(session, history, log=log, on=on)
+    own = refresh_field_ownership(session, log=log)
+    return dict(players=out["players"], projected=out["projected"], owned=own["owned"])

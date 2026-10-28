@@ -82,3 +82,56 @@ def test_exposure_before_and_after_the_swap():
     assert "a" in txt.splitlines()[2] and "(100.0%)" in txt.splitlines()[2] and "-1" in txt and "+1" in txt
     assert len(LS.format_exposure(LS.exposure(rep), 2, changed_only=True).splitlines()) == 2 + 2 + 1   # head, rule, c and z (d stays at 1), footer
     assert LS.format_exposure([], 0) == "exposure: no entries"
+
+
+# ----------------------------------------------------------------------------- the fetch apart from the swap (2026-10-28)
+def test_export_is_current_until_the_next_tip():
+    from datetime import datetime
+    tips = [datetime(2026, 10, 27, 19, 0), datetime(2026, 10, 27, 20, 0), datetime(2026, 10, 27, 22, 0)]
+    assert LS.export_is_current("20261027-190100", tips, datetime(2026, 10, 27, 19, 30))        # taken after the first tip, no tip since
+    assert LS.export_is_current("20261027-190100", tips, datetime(2026, 10, 27, 19, 59))
+    assert not LS.export_is_current("20261027-190100", tips, datetime(2026, 10, 27, 20, 1))     # the 20:00 game tipped since
+    assert LS.export_is_current("20261027-200030", tips, datetime(2026, 10, 27, 21, 0))
+    assert LS.export_is_current("20261027-120000", tips, datetime(2026, 10, 27, 18, 0))         # before the first tip any export is current
+    assert not LS.export_is_current("garbage", tips, datetime(2026, 10, 27, 18, 0))
+    assert LS.stamp_time("20261027-190100") == datetime(2026, 10, 27, 19, 1)
+
+
+def test_field_export_auto_keeps_a_current_export_and_downloads_otherwise(monkeypatch):
+    from datetime import datetime
+    import pandas as pd
+    stored = dict(df=pd.DataFrame({"a": [1]}), stamp="20261027-190100", origin="stored")
+    downloads = []
+    monkeypatch.setattr(LS, "stored_export", lambda cid: stored)
+    monkeypatch.setattr(LS, "download_export", lambda http, cid, log=print: downloads.append(cid) or dict(df=pd.DataFrame({"a": [2]}), stamp="20261027-200100", origin="downloaded"))
+    tips = [datetime(2026, 10, 27, 19, 0), datetime(2026, 10, 27, 20, 0)]
+    got = LS.field_export(None, 1, source="auto", http_sess=object(), log=lambda m: None, now=datetime(2026, 10, 27, 19, 30), tips=tips)
+    assert got["origin"] == "stored" and not downloads
+    got = LS.field_export(None, 1, source="auto", http_sess=object(), log=lambda m: None, now=datetime(2026, 10, 27, 20, 30), tips=tips)
+    assert got["origin"] == "downloaded" and downloads == [1]
+    got = LS.field_export(None, 1, source="raw", http_sess=object(), log=lambda m: None, now=datetime(2026, 10, 27, 20, 30), tips=tips)
+    assert got["origin"] == "stored" and downloads == [1]
+    got = LS.field_export(None, 1, source="draftkings", http_sess=object(), log=lambda m: None, now=datetime(2026, 10, 27, 19, 30), tips=tips)
+    assert got["origin"] == "downloaded" and downloads == [1, 1]
+    got = LS.field_export(None, 1, source="auto", http_sess=None, log=lambda m: None, now=datetime(2026, 10, 27, 20, 30), tips=tips)
+    assert got["origin"] == "stored"                                                           # no way to download: the stale one, with a warning
+
+
+def test_lazy_http_opens_once_and_swallows_a_missing_login():
+    calls = []
+    def factory():
+        calls.append(1); raise RuntimeError("DraftKings login needed")
+    msgs = []
+    h = LS.LazyHttp(factory, log=msgs.append)
+    assert h.session() is None and h.session() is None and len(calls) == 1 and "login" in msgs[0]
+    ok = LS.LazyHttp(lambda: "sess")
+    assert ok.session() == "sess" and LS._http(ok) == "sess" and LS._http("plain") == "plain"
+
+
+def test_sample_shared_takes_the_contest_size():
+    field = [[i] * 8 for i in range(100)]
+    shared = dict(field=field)
+    s = LS.sample_shared(shared, 30, seed=1)
+    assert len(s) == 30 and len({tuple(x) for x in s}) == 30 and all(x in field for x in s)
+    assert LS.sample_shared(shared, 500, seed=1) == field
+    assert LS.sample_shared(shared, 30, seed=1) == s                                           # seeded: the same sample for the same contest
