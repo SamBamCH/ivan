@@ -79,8 +79,9 @@ value, flags.
 
 Fields: lineups, jobs, sims, field cap, fresh pool, the chooser's weights (from `config/nba.json`),
 and for the late swap: live scoring (`ls_live`) and jam. Buttons **Generate**, **Sim**, **Choose**,
-**All**, **Late swap**; generate, sim, late swap and all publish first. The sim builds the public field
-once, at the largest size any contest in the run needs, and every contest slices it. The desk warns
+**All**, **Late swap**; generate, sim, late swap and all publish first. Generate's ownership comes from the
+field the refresh cached (no build); the sim builds the public field once, at the largest size any
+contest in the run needs, and every contest slices it. The desk warns
 when a team's mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
 `/pipeline/status`, cancel at `/pipeline/cancel/<job id>`, logs under `data/nba/jobs/`. An entries
 upload box (`/entries`) replaces `data/nba/input/entries.csv`.

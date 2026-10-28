@@ -45,9 +45,9 @@ last season's contest bins) draws entries from **our** pool by normalised projec
 The two-group field is cached on disk by its key (`data/nba/derived/field_cache/<key>.json`) and any
 smaller size is served from a bigger cached field. The pool refresh builds it at
 `field.ownership_entries` (default 3,000) once the pool is committed (`ingest.refresh_field`, the
-ownership column comes from it); the generate step builds it at `field.cap` for its ownership, and a
-sim builds it once, at the largest size any contest in the run needs
-(`simulate_contest.prebuild_field`), every contest slicing it. A build is an ILP per lineup: about
+ownership column comes from it); the generate step reads its ownership from that same cached field
+(no build after a refresh), and a sim builds it once, at the largest size any contest in the run
+needs (`simulate_contest.prebuild_field`), every contest slicing it. A build is an ILP per lineup: about
 45 seconds for 3,000 entries, 160 for 10,000, on eight workers (2026-10-28).
 
 `field_model.py` is the ownership model fitted on real contests only (`scripts/nba/field_model.py

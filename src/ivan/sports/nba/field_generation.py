@@ -292,10 +292,20 @@ def pool_report(session: Session, config: dict, log: Log = print) -> dict:
 
 
 def write_field_ownership(session: Session, config: dict, log: Log = print) -> dict:
-    """Sample a generic field from the pool (field.cap entries) and store its exposure as every player's ownership."""
+    """
+    Store a generic field's exposure as every player's ownership. With the two-group sampler the field is the public one
+    at the size the pool refresh caches (public_field.ownership_field_size, 3,000: a cache hit after a refresh, at once;
+    before 2026-10-28 this asked for field.cap and rebuilt 10,000 lineups, 147s, after every generate); the sim then
+    overwrites the column with the largest contest's field. The projection_model sampler draws field.cap entries from the pool.
+    """
     from ivan.sports.nba.sample_field import DEFAULT_CONTEST, field_ownership, write_ownership
     try:
-        own = field_ownership(session, config, int(_cfg(config, "field.cap", 10000)), DEFAULT_CONTEST, rng=np.random.default_rng(seed_for("ownership")))
+        if str(_cfg(config, "field.sampler", "projection_model")) == "two_group":
+            from ivan.sports.nba.public_field import ownership_field_size
+            size = ownership_field_size()
+        else:
+            size = int(_cfg(config, "field.cap", 10000))
+        own = field_ownership(session, config, size, DEFAULT_CONTEST, rng=np.random.default_rng(seed_for("ownership")))
     except Exception as e:   # noqa: BLE001 - ownership is a by-product; the pool is the step
         log(f"ownership not written: {type(e).__name__}: {e}")
         return {}
