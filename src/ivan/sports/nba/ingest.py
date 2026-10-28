@@ -340,12 +340,13 @@ def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) 
 
 
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
-                 log: Log = print, field: bool = True) -> tuple:
+                 log: Log = print, field: bool = False) -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
     and write its public projection in ONE transaction. Nothing downstream can see a half-written or unprojected pool
-    (2026-10-23: a sim started during a rewrite found no point guard). The public field and ownership follow the commit
-    (refresh_field; the desk runs that itself after it has shown the new pool, field=False). Returns (StoreInfo, ProjectInfo).
+    (2026-10-23: a sim started during a rewrite found no point guard). The public field and ownership are NOT built here
+    (field=True does, after the commit): the sim builds the field it needs, the desk's "Field + ownership" button /
+    scripts/nba/field_ownership.py builds it on demand (2026-10-28: thin wiring). Returns (StoreInfo, ProjectInfo).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
     out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field)
@@ -575,13 +576,13 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = True) -> dict:
+               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False) -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
     replaced, projected and its public projection written in one transaction, so a desk serving the same database from
     another process never sees a half-written pool (it notices the new stamp and shows "new data"). The public field and
-    ownership are built after the commit (refresh_field: about a minute when a public number moved; field=False leaves
-    that to the caller, which is how the desk shows the pool first). When the pool moves to another draft group the old
+    ownership are not built unless field=True (refresh_field after the commit, about 45s at 3,000 entries): the sim
+    builds the field it needs and the desk's "Field + ownership" button builds it on demand. When the pool moves to another draft group the old
     slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the desk then shows an
     unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the autopilot tick
     attaches the game lines to it) is stored as given instead of fetching again.
@@ -675,7 +676,7 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
                 slate = LiveSlate(session, use_market=False)
                 basis = basis_minutes_for_market(slate, read_overrides_full(), set())
                 store_market_rates(session, means, basis)
-            refresh_ownership(session, log=log)
+            refresh_public_projection(session, log=log)        # the field and ownership: the sim or the Field + ownership button
             info = project_slate(session, n_sims=n_sims, log=log, write_capture=False)
     except BaseException:
         if switching:

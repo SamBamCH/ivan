@@ -29,8 +29,7 @@ the worlds around the mean), `jitter` 0.05, `min_fpts` or `min_fpts_frac` 0.9 of
 
 `--fresh` (the desk's "fresh pool" box, on by default) empties the lineup and sim tables first;
 without it a second run adds to the pool, which is how two scenarios' lineups sit side by side
-before lock. The generate step also writes a generic field's ownership to `nba_player.ownership`;
-the sim overwrites it with the largest contest's.
+before lock. The generate step writes nothing else (no field, no ownership, since 2026-10-28).
 
 ## The field (`field_model.py`, `public_field.py`, `sample_field.py`)
 
@@ -43,12 +42,12 @@ last season's contest bins) draws entries from **our** pool by normalised projec
 10000 is the largest field size simulated; bigger contests are sampled down and the payout table scaled.
 
 The two-group field is cached on disk by its key (`data/nba/derived/field_cache/<key>.json`) and any
-smaller size is served from a bigger cached field. The pool refresh builds it at
-`field.ownership_entries` (default 3,000) once the pool is committed (`ingest.refresh_field`, the
-ownership column comes from it); the generate step reads its ownership from that same cached field
-(no build after a refresh), and a sim builds it once, at the largest size any contest in the run
-needs (`simulate_contest.prebuild_field`), every contest slicing it. A build is an ILP per lineup: about
-45 seconds for 3,000 entries, 160 for 10,000, on eight workers (2026-10-28).
+smaller size is served from a bigger cached field. Only two things build it: the sim, once per run at
+the largest size any contest needs (`simulate_contest.prebuild_field`, every contest slicing it; the
+largest contest's field is written as `nba_player.ownership`), and the desk's **Field + ownership**
+button / `scripts/nba/field_ownership.py` (`ingest.refresh_field`, `field.ownership_entries` =
+3,000 by default), on demand. A refresh, a generate and a pub edit never build it (2026-10-28). A
+build is an ILP per lineup: about 45 seconds for 3,000 entries, 160 for 10,000, on eight workers.
 
 `field_model.py` is the ownership model fitted on real contests only (`scripts/nba/field_model.py
 validate | fit | check`): a softmax inside each contest scaled to 800% (eight slots) over public

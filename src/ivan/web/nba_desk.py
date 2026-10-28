@@ -42,7 +42,7 @@ from ivan.core.config import config_path
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, refresh_field, refresh_ownership, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, refresh_public_projection, refresh_pool, store_slate, IngestError
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
@@ -1545,7 +1545,7 @@ HIST_COLORS = {"field": "#2a78d6", "pool": "#eb6834", "entries": "#1baf7a"}   # 
 
 
 def _field_sample() -> Optional[list]:
-    """The sampled public field for the loaded pool, from its cache (refresh_ownership writes it with every pool refresh); None when absent."""
+    """The sampled public field for the loaded pool, from its cache (written by the sim or the Field + ownership button); None when absent."""
     from ivan.sports.nba import public_field as PF
     try:
         path = PF.FIELD_CACHE_DIR / f"{PF.field_key(desk.session)}.json"
@@ -1824,31 +1824,22 @@ def _start_restore(draft_group: int) -> None:
 
 def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
     """Fetch, store, project and write the public projection in a background thread with its own session (one transaction);
-    the board shows `what` until it is done, then the desk rebuilds from the new pool. The public field and ownership are
-    built afterwards in the same thread (refresh_field: about a minute when a public number moved, at once otherwise), the
-    desk working meanwhile; the ownership column and the field are rebuilt into the page when they land."""
+    the board shows `what` until it is done, then the desk rebuilds from the new pool. No field build: the sim builds the
+    field it needs, the Field + ownership button builds it on demand."""
     def run():
         log = []
         sess = get_session(engine)
-        ok = False
         try:
-            refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append, field=False)
-            msg = f"{what}: done; the public field and ownership are rebuilding"; ok = True
+            refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
+            msg = f"{what}: done"
         except IngestError as e:
             msg = f"{what} failed: {e}"
         except Exception as e:   # noqa: BLE001 - the transaction rolled back: the old pool stands
             msg = f"{what} failed, the previous pool is unchanged: {type(e).__name__}: {e}"
+        finally:
+            sess.close()
         with LOCK:
             desk.rebuild(); desk.busy = None; desk.flash.append(msg)
-        if ok:
-            try:
-                r = refresh_field(sess, log=log.append)
-                msg = f"public field and ownership rebuilt in {r.get('seconds', 0):.0f}s" if r else "the public field did not rebuild: " + (log[-1] if log else "")
-            except Exception as e:   # noqa: BLE001
-                msg = f"the public field did not rebuild: {type(e).__name__}: {e}"
-            with LOCK:
-                desk.rebuild(); desk.flash.append(msg)
-        sess.close()
     desk.busy = what
     threading.Thread(target=run, name="ivan-refresh", daemon=True).start()
 
@@ -1904,13 +1895,13 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub)
         desk.reproject(team)                                  # the solve re-balances the team around the edit; the grid is rebuilt to the pins
         if new_pub != old.get("pub"):
-            # the public number moved: the field and ownership are built on it, so they are rebuilt now (a few seconds)
+            # the public number moved: the stored public projection follows at once; the field built on it waits for the next
+            # sim or the Field + ownership button (2026-10-28: no field build on an edit)
             try:
-                t0 = time.time()
-                refresh_ownership(desk.session, log=lambda m: None)
-                desk.flash.append(f"{key}: public projection {'set to %g' % new_pub if new_pub is not None else 'back to the replica'}; field and ownership rebuilt in {time.time() - t0:.0f}s")
+                refresh_public_projection(desk.session, log=lambda m: None)
+                desk.flash.append(f"{key}: public projection {'set to %g' % new_pub if new_pub is not None else 'back to the replica'}; the field follows on the next sim or Field + ownership")
             except Exception as e:   # noqa: BLE001
-                desk.flash.append(f"{key}: public projection saved, but the field did not rebuild: {type(e).__name__}: {e}")
+                desk.flash.append(f"{key}: public projection saved, but not written to the pool: {type(e).__name__}: {e}")
             desk.rebuild()
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
@@ -1987,10 +1978,10 @@ async def refigure(request: Request, team: str):
         msg = f"{team}: {n_set} value(s) applied, the grid refigured" + (f" ({len(changed_min)} minutes changed)" if changed_min else "")
         if changed_pub:
             try:
-                t0 = time.time(); refresh_ownership(desk.session, log=lambda m: None)
-                msg += f"; {changed_pub} public number(s) changed: field and ownership rebuilt in {time.time() - t0:.0f}s"
+                refresh_public_projection(desk.session, log=lambda m: None)
+                msg += f"; {changed_pub} public number(s) changed: the field follows on the next sim or Field + ownership"
             except Exception as e:   # noqa: BLE001
-                msg += f"; the field did not rebuild: {type(e).__name__}: {e}"
+                msg += f"; the public projection was not written to the pool: {type(e).__name__}: {e}"
             desk.rebuild()
         desk.flash.append(msg)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
@@ -2484,6 +2475,8 @@ def _submit(step: str, form: dict) -> list:
         jobs.append(runner.submit("lateswap", cmd, meta=dict(step="lateswap")))
     if step == "fetch_standings":
         jobs.append(runner.submit("fetch_standings", [py, str(SCRIPTS / "fetch_standings.py")], meta=dict(step="fetch_standings")))
+    if step == "field":
+        jobs.append(runner.submit("field", [py, str(SCRIPTS / "field_ownership.py")], meta=dict(step="field")))
     if step in ("choose", "all"):
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
@@ -2507,8 +2500,9 @@ def pipeline(request: Request):
 
 @app.post("/pipeline/{step}", response_class=HTMLResponse)
 async def pipeline_run(request: Request, step: str):
-    """generate | sim | choose | all | lateswap. Every job but choose publishes the desk's projections first, so the pool is what
-    you see on the grid (2026-10-25: a sim run on a stale pool after a repaint was the late-swap mess)."""
+    """generate | sim | choose | all | lateswap | field. Generate, sim, late swap and all publish the desk's projections first, so
+    the pool is what you see on the grid (2026-10-25: a sim run on a stale pool after a repaint was the late-swap mess); choose
+    and field (the public field + ownership, scripts/nba/field_ownership.py) do not."""
     form = await request.form()
     if (b := _busy(request)) is not None:
         return b
@@ -2520,7 +2514,7 @@ async def pipeline_run(request: Request, step: str):
         pipeline_form["jam"] = "on" if form.get("jam") else ""
         if step == "lateswap":
             pipeline_form["ls_live"] = "on" if form.get("ls_live") else ""
-        if step not in ("generate", "sim", "choose", "all", "lateswap"):
+        if step not in ("generate", "sim", "choose", "all", "lateswap", "field"):
             desk.flash.append(f"unknown step {step}")
         elif runner.active():
             desk.flash.append("a job is already running; wait for it or cancel it")

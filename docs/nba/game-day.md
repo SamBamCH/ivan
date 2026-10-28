@@ -8,7 +8,7 @@ pipeline reads the pool (`nba_player`), and only Publish moves the first into th
 
 Desk: the slate picker (top of the page) lists a day, then that day's classic draft groups from the
 DraftKings lobby. Picking one fetches the pool and the Rotowire starters, stores them, projects and
-runs the public side (ownership, the field's projection). A past day restores the slate from its
+writes the public projection (the field's numbers). A past day restores the slate from its
 archive capture instead (no fetch, nothing recorded). Switching files the slate you leave (its pins and
 grids) under `data/nba/input/edits/<draft group>/` and brings back the new slate's own.
 
@@ -33,13 +33,13 @@ player props (about 12 credits per game) and re-derives the market rates. Pins a
 survive a refresh; statuses and props change underneath them. Fetch props once the books have posted
 most of the slate (early evening for a 7pm lock) and again if the news moved.
 
-A refresh takes about 10 seconds to a usable pool: the fetch, the market means (the props de-vigged
-in one vectorised pass, `projection/market.py`), the pool, the projection and the public projection
-land in one transaction. The public field and the ownership column are built afterwards
-(`ingest.refresh_field`: about 45 seconds at 3,000 entries when a public number moved, at once
-otherwise; `config/nba.json → field.ownership_entries` sets the size); the desk works meanwhile and
-says "public field and ownership rebuilt" when they land. From a terminal `ingest.py` does the same
-in sequence.
+A refresh takes about 10 seconds: the fetch, the market means (the props de-vigged in one
+vectorised pass, `projection/market.py`), the pool, the projection and the public projection land
+in one transaction. Nothing else runs: the public field and the ownership column are **not** rebuilt
+by a refresh, a generate or an edit (since 2026-10-28). The sim builds the field it needs and writes
+ownership from the largest contest's field; the pipeline panel's **Field + ownership** button
+(`scripts/nba/field_ownership.py`, about 45 seconds at `field.ownership_entries` = 3,000) builds it
+on demand when you want the column fresh before a sim. `ingest.py --field` does both in one go.
 
 **Autopilot** (the header box; `scripts/nba/autopilot.py on|off|status`) is for a day you are not
 working the desk but the other desk still plays. With it on, `ivan-nba-capture.timer` runs

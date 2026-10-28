@@ -293,10 +293,9 @@ def pool_report(session: Session, config: dict, log: Log = print) -> dict:
 
 def write_field_ownership(session: Session, config: dict, log: Log = print) -> dict:
     """
-    Store a generic field's exposure as every player's ownership. With the two-group sampler the field is the public one
-    at the size the pool refresh caches (public_field.ownership_field_size, 3,000: a cache hit after a refresh, at once;
-    before 2026-10-28 this asked for field.cap and rebuilt 10,000 lineups, 147s, after every generate); the sim then
-    overwrites the column with the largest contest's field. The projection_model sampler draws field.cap entries from the pool.
+    Store a generic field's exposure as every player's ownership (not part of the generate step since 2026-10-28: it cost
+    a public-field build after every generate). With the two-group sampler the field is the public one at
+    public_field.ownership_field_size entries; the projection_model sampler draws field.cap entries from the pool.
     """
     from ivan.sports.nba.sample_field import DEFAULT_CONTEST, field_ownership, write_ownership
     try:
@@ -318,7 +317,7 @@ def write_field_ownership(session: Session, config: dict, log: Log = print) -> d
 
 def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log = print, progress: bool = True,
                    min_fpts: Optional[float] = None, session: Optional[Session] = None, randomness: Optional[float] = None) -> dict:
-    """The whole generate step: workers, dedupe, the pool report. `session` (opened from the environment when None) is used for the dedupe. Returns counts."""
+    """The whole generate step: workers, dedupe, the pool report (no field, no ownership). `session` (opened from the environment when None) is used for the dedupe. Returns counts."""
     own = session is None
     session = session or get_session(init_db("nba"))
     try:
@@ -332,8 +331,9 @@ def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log 
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         rep = pool_report(session, config, log)
-        own = write_field_ownership(session, config, log)
-        return {"requested": int(n_lineups), "created": int(created), "removed": int(removed), "unique": int(kept), "pool": rep, "ownership": own}
+        # no ownership write here (2026-10-28): it cost a public-field build after every generate; the sim writes the
+        # column from the largest contest's field, the desk's Field + ownership button builds it on demand
+        return {"requested": int(n_lineups), "created": int(created), "removed": int(removed), "unique": int(kept), "pool": rep}
     finally:
         if own:
             session.close()

@@ -12,9 +12,9 @@ page is what is on the screen.
 - **Slate picker**: a day, then that day's classic draft groups (from the DK lobby for today and
   tomorrow, from the archive for past days; the loaded slate is always listed). **Load** switches.
 - **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). The board shows the
-  state until the new pool is projected (about 10 seconds); the public field and the ownership column are rebuilt
-  afterwards in the same background thread (about a minute when a public number moved) and announced when they
-  land, the desk working meanwhile. On a consumer a single **Refresh** pulls the feed instead.
+  state until the new pool is projected (about 10 seconds). The public field and the ownership column are not
+  rebuilt by a refresh: the sim does that, or the pipeline panel's **Field + ownership** button. On a consumer a
+  single **Refresh** pulls the feed instead.
 - **Publish**: applies any values still typed into the grids (not yet refigured) first, writes the projection into
   the pool, records a capture, publishes and pushes the feed. On a consumer (`ingest.consumer_publish`) the live
   bundle last pulled is applied again and only the slate's teams it edited are projected on top: the other teams
@@ -79,9 +79,11 @@ value, flags.
 
 Fields: lineups, jobs, sims, field cap, fresh pool, the chooser's weights (from `config/nba.json`),
 and for the late swap: live scoring (`ls_live`) and jam. Buttons **Generate**, **Sim**, **Choose**,
-**All**, **Late swap**; generate, sim, late swap and all publish first. Generate's ownership comes from the
-field the refresh cached (no build); the sim builds the public field once, at the largest size any
-contest in the run needs, and every contest slices it. The desk warns
+**All**, **Late swap**, **Field + ownership**; generate, sim, late swap and all publish first. Generate
+writes no ownership; the sim builds the public field once, at the largest size any contest in the run
+needs, every contest slices it, and the largest contest's field becomes the ownership column.
+**Field + ownership** (`/pipeline/field` = `scripts/nba/field_ownership.py`, about 45s) builds the field on
+the stored public projection and writes ownership from it, on demand; nothing else does on a slate day. The desk warns
 when a team's mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
 `/pipeline/status`, cancel at `/pipeline/cancel/<job id>`, logs under `data/nba/jobs/`. An entries
 upload box (`/entries`) replaces `data/nba/input/entries.csv`.
