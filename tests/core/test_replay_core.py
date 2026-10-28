@@ -173,3 +173,15 @@ def test_run_replay_repeats_and_resume(tmp_path):
     assert ms[0]["status"] == "ok" and "choose" in ms[0]["stages"] and list(d2.glob("chosen_entries.lineups.*.csv"))
     assert ("generate", None) in ad.calls and rp.repeat_dirs([d2]) == {0: [d2]}
     assert ms[0]["stages"]["generate"]["unique"] == rp.ReplayOptions().n_lineups     # a stage's dict lands in the manifest
+
+
+def test_remove_clones_takes_sidecars_and_reports_bytes(tmp_path):
+    from ivan.core.replay import remove_clones
+    base = tmp_path / "replay.sqlite"
+    base.write_bytes(b"base")
+    c0 = tmp_path / "replay.w0.sqlite"
+    c0.write_bytes(b"x" * 100)
+    (tmp_path / "replay.w0.sqlite-wal").write_bytes(b"y" * 10)
+    c1 = tmp_path / "replay.w1.sqlite"
+    assert remove_clones([c0, c1]) == 110            # a clone that never existed is skipped
+    assert base.exists() and not c0.exists() and not (tmp_path / "replay.w0.sqlite-wal").exists()

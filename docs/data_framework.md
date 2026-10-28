@@ -97,6 +97,16 @@ The overfitting worry resolves itself the same way: the test is always
 "would this have worked on slates the fit never saw", on as many slates as
 we have kept.
 
+## What is kept and what is let go
+
+The raw inputs and outcomes above, the derived tables and the model versions are kept for good: they
+are what every future replay runs on. A backtest run's output is a function of them and of the code at
+a commit, so a run is kept only as its record (manifests with the commit, the small csv, the report)
+and its heavy files (repeats, database copies, validation csvs) are let go of 30 days after the run,
+unless pinned. The per-slate run index reads only the record, so every build of a slate stays visible
+after the sweep. Rules and the sweep: `scripts/nfl/retention.py`
+([nfl/backtest-and-validation.md](nfl/backtest-and-validation.md)).
+
 ## Two numbers per backtest: the result and the confidence
 
 A backtest answers two questions, and they must be shown together:

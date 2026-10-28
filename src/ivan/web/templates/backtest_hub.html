@@ -40,6 +40,16 @@
     </form>
   </div>
   <p class="muted small" style="margin:8px 0 0">A run is one backtest: a window of slates, the contests you choose on them, the parameters, and the results. Starting one checks what data the window still needs before anything is fetched.</p>
+  {% if slates_index %}
+  <details style="margin-top:10px"><summary class="small muted">Previous builds by slate ({{ slates_index|length }} slates replayed)</summary>
+    <table class="compact">
+      <tr><th>Lock</th><th>Mode</th><th>Slate</th><th class="num">Runs</th><th class="num">ok</th><th>Last</th></tr>
+      {% for s in slates_index %}<tr><td>{{ s.lock[:16]|replace('T', ' ') }}</td><td>{{ s.mode }}</td><td><a href="/backtest/slate/{{ s.slate_key }}">{{ s.slate_key }}</a></td>
+        <td class="num">{{ s.runs }}</td><td class="num">{{ s.ok }}</td><td class="small muted">{{ s.last[:16]|replace('T', ' ') }}</td></tr>{% endfor %}
+    </table>
+    <p class="muted small">Every run that replayed a slate (hub runs, Models page runs, lab replays), with its commit, parameters and result. Runs older than 30 days lose their repeats and database copy, not these rows (<code>scripts/nfl/retention.py</code>).</p>
+  </details>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -88,7 +98,7 @@
   <details style="margin-top:10px"><summary class="small muted">Slates in the window ({{ data.slates|length }})</summary>
     <table class="compact">
       <tr><th>Lock</th><th>Slate</th><th>Mode</th><th>Capture</th><th class="num">Pool</th><th class="num">Scraped</th><th class="num">Ours</th><th>Box scores</th><th>Status</th></tr>
-      {% for s in data.slates %}<tr><td>{{ s.lock.strftime('%Y-%m-%d %H:%M') }}</td><td>{{ s.slate_key }}</td><td>{{ s.mode }}</td>
+      {% for s in data.slates %}<tr><td>{{ s.lock.strftime('%Y-%m-%d %H:%M') }}</td><td><a href="/backtest/slate/{{ s.slate_key }}" title="every run that replayed this slate">{{ s.slate_key }}</a></td><td>{{ s.mode }}</td>
         <td class="small">{% if s.captures %}{{ s.capture_source }}, {{ s.capture_minutes_before_lock|round|int }} min before lock{% else %}<span class="neg">none</span>{% endif %}</td>
         <td class="num">{{ s.picks|length }}</td><td class="num">{{ s.scraped_picks }}</td><td class="num">{{ s.our_entries }}</td>
         <td class="{{ '' if s.box_scores else 'neg' }}">{{ 'yes' if s.box_scores else 'no' }}</td>
@@ -190,7 +200,7 @@
   <table class="compact">
     <tr><th>Lock</th><th>Slate</th><th>Status</th><th>Stages</th><th class="num">Repeats</th><th class="num">s</th><th>Last line</th></tr>
     {% for s in progress.slates %}<tr>
-      <td>{{ s.lock }}</td><td>{{ s.key }} <span class="muted small">{{ s.mode }} · {{ s.contests }} contests</span></td>
+      <td>{{ s.lock }}</td><td><a href="/backtest/slate/{{ s.key }}">{{ s.key }}</a> <span class="muted small">{{ s.mode }} · {{ s.contests }} contests</span></td>
       <td><span class="status {{ 'ready' if s.status == 'ok' else ('no' if s.status == 'error' else 'unsettled') }}">{{ s.status }}</span></td>
       <td class="small">{{ s.stages|join(' → ') }}{% if s.next %} → <i>{{ s.next }}…</i>{% endif %}</td>
       <td class="num">{{ s.repeats_ok }}/{{ s.repeats_wanted }}</td><td class="num">{{ s.seconds or '' }}</td>
@@ -214,7 +224,11 @@
 </div>
 {% endif %}
 <div class="card">
-  <h2>{{ run.name }} <span class="muted small">{{ run.since }} .. {{ run.until }} · {{ view.slates_ok }}/{{ view.slates_total }} slates · {{ view.repeats }} repeats · chooser {{ (run.params or {}).method or 'greedy' }} · models {{ view.models|join(', ') or '-' }}{% if view.progress and view.progress.running %} · running{% endif %}</span></h2>
+  <h2>{{ run.name }} <span class="muted small">{{ run.since }} .. {{ run.until }} · {{ view.slates_ok }}/{{ view.slates_total }} slates · {{ view.repeats }} repeats · chooser {{ (run.params or {}).method or 'greedy' }} · models {{ view.models|join(', ') or '-' }}{% if run.git and run.git.commit %} · commit {{ run.git.commit }}{% if run.git.dirty %}*{% endif %}{% endif %}{% if view.progress and view.progress.running %} · running{% endif %}</span></h2>
+  <p class="small muted" style="margin:0 0 8px">
+    {% if run.purged_at %}<span class="neg">Repeats, validation csvs and the database copy were removed on {{ run.purged_at[:10] }} (30-day retention); the report and the manifests below are what remains.</span>{% elif run.pinned %}Pinned: this run's repeats and database copy are kept past the 30-day retention window.{% else %}The repeats, validation csvs and database copy go 30 days after the last write; the report, manifests and projections stay.{% endif %}
+    <form method="post" action="/backtest/{{ run.name }}/pin" style="display:inline"><input type="hidden" name="pinned" value="{{ '0' if run.pinned else '1' }}"><button class="small">{{ 'Unpin' if run.pinned else 'Pin' }}</button></form>
+  </p>
   {% if view.failed %}<p class="neg small">{% for f in view.failed %}{{ f.lock }} {{ f.slate }}: {{ f.error }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
   {% set C = V.summary.confidence if V and V.summary.confidence else None %}
   <div style="display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; margin:6px 0 10px">
@@ -255,7 +269,7 @@
 </div>
 {% for s in view.slates %}
 <div class="card">
-  <h2>{{ s.slate }} <span class="muted small">{{ s.contests|length }} contests · fees {{ s.fees|money }} · sim {{ s.sim|money }} · actual <span class="{{ s.actual|scss }}">{{ s.actual|money }}</span></span></h2>
+  <h2>{{ s.slate }} <span class="muted small">{{ s.contests|length }} contests · fees {{ s.fees|money }} · sim {{ s.sim|money }} · actual <span class="{{ s.actual|scss }}">{{ s.actual|money }}</span>{% if s.key %} · <a href="/backtest/slate/{{ s.key }}">other builds of this slate</a>{% endif %}</span></h2>
   <table class="compact contests">
     <tr><th>Contest</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Sim profit</th><th class="num">Sim cash</th><th class="num">Actual profit</th><th class="num">Actual cash</th>
       {% if view.repeats > 1 %}<th class="num">Mean over {{ view.repeats }}</th><th class="num">p10</th><th class="num">p90</th><th class="num">&gt; 0</th>{% endif %}

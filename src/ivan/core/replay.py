@@ -40,6 +40,7 @@ from typing import Callable, Dict, List, Optional, Protocol, Sequence
 from sqlalchemy import text
 
 from ivan.core import archive, artifacts, clock, seed as seedmod
+from ivan.core.gitinfo import git_state
 from ivan.database.session import get_session, init_db, add_missing_columns
 
 MANIFEST = "replay.json"
@@ -169,6 +170,18 @@ def clone_replay_db(replay_db: Path, clone: Path, log=print) -> None:
             p.unlink()
     shutil.copyfile(replay_db, clone)
     log(f"cloned {Path(replay_db).name} -> {clone.name}")
+
+
+def remove_clones(clones: Sequence[Path]) -> int:
+    """Delete worker clones (and their -wal/-shm/-journal files) once the workers are gone. Returns the bytes freed."""
+    freed = 0
+    for clone in clones:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            p = Path(str(clone) + suffix)
+            if p.exists():
+                freed += p.stat().st_size
+                p.unlink()
+    return freed
 
 
 def clear_working_tables(session, working_tables: Sequence[str]) -> None:
@@ -339,7 +352,7 @@ def run_replay(adapter: SportAdapter, live_db: Path, replay_db: Path, out_root: 
         m = {"sport": adapter.sport, "capture_id": cap.id, "slate_key": cap.slate_key, "mode": cap.mode,
              "lock": cap.lock.isoformat(), "source": cap.source, "started_at": datetime.now().isoformat(timespec="seconds"),
              "options": {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in opts.__dict__.items()},
-             "through": opts.through, "status": "running", "stages": {}, "repeats": done}
+             "through": opts.through, "git": git_state(), "status": "running", "stages": {}, "repeats": done}
         mpath.write_text(json.dumps(m, indent=2))
         as_of = cap.lock - timedelta(minutes=1)
         project_seed = repeat_seed(opts, 0)

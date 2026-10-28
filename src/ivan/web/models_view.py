@@ -20,12 +20,12 @@ validation do.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from ivan.core.gitinfo import git_state  # noqa: F401 - the page's runs are labelled with the commit
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.web import validate_view as vv
@@ -82,17 +82,6 @@ def component(key: Optional[str]) -> dict:
 # --------------------------------------------------------------------------- runs
 def run_root(key: str, stamp: str) -> Path:
     return MODELS_OUT / key / stamp
-
-
-def git_state() -> dict:
-    """The commit the code is at, and whether the tree has uncommitted changes (the scoreboard labels a run with it)."""
-    try:
-        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=5).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=5).stdout.strip())
-        subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=5).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return {"commit": "", "dirty": False, "subject": ""}
-    return {"commit": commit, "dirty": dirty, "subject": subject}
 
 
 def new_run(key: str, since: str, until: str, params: dict, label: str = "") -> dict:

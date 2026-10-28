@@ -23,8 +23,10 @@ again with a larger --repeats only adds the missing ones; --report-only
 re-reads what is there without replaying.
 
 --workers W splits the slates over W replay processes, each on its own copy
-of the replay database (<sport>_replay.w<i>.sqlite). Each worker's generate
-stage uses --jobs processes, so keep workers x jobs near the core count.
+of the replay database (<sport>_replay.w<i>.sqlite), deleted when the workers
+finish unless --keep-db (they hold only working tables and grow to gigabytes).
+Each worker's generate stage uses --jobs processes, so keep workers x jobs
+near the core count.
 
 --through STAGE stops after that stage, for testing one model without the
 rest of the pipeline: "project" fits and writes the projections (seconds per
@@ -90,6 +92,8 @@ def parse_args(argv=None):
                     help="stop after this stage (default choose, the whole pipeline)")
     ap.add_argument("--rebuild-db", action="store_true", help="recreate the replay database from the live one")
     ap.add_argument("--replay-db", default=None)
+    ap.add_argument("--keep-db", action="store_true", help="keep the workers' clones of the replay database (replay.w*.sqlite) when they finish; "
+                    "by default they are deleted, since they only hold working tables (compare_choosers.py --db-url reads one)")
     ap.add_argument("--out", default=None, help="output root (default data/<sport>/output/replay)")
     ap.add_argument("--slates", default=None, help="comma-separated slate keys to replay (default all in window)")
     ap.add_argument("--redo", action="store_true", help="replay slates (and repeats) that already finished")
@@ -120,9 +124,11 @@ def run_workers(a, sport: str, live_db: Path, replay_db: Path, out_root: Path, a
     groups = [g for g in groups if g]
     print(f"{len(caps)} slate(s) over {len(groups)} worker(s)")
     procs = []
+    clones = []
     for i, keys in enumerate(groups):
         clone = replay_db.with_name(f"{replay_db.stem}.w{i}{replay_db.suffix}")
         rp.clone_replay_db(replay_db, clone)
+        clones.append(clone)
         log = out_root / sport / f"worker_{i}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, "-u", str(Path(__file__).resolve()), "--sport", sport, "--since", a.since, "--until", a.until,
@@ -167,6 +173,9 @@ def run_workers(a, sport: str, live_db: Path, replay_db: Path, out_root: Path, a
                     except (ProcessLookupError, OSError):
                         pass
             fh.close()
+        if not a.keep_db:            # the clones hold nothing but working tables, and grow to gigabytes per worker
+            freed = rp.remove_clones(clones)
+            print(f"removed {len(clones)} worker database clone(s), {freed / 1e9:.1f} GB")
     dirs = [d for d in rp.replayed_dirs(out_root, sport) if since <= _lock_of(d) <= until]
     return [json.loads((d / rp.MANIFEST).read_text()) for d in dirs]
 

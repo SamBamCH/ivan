@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Slate {{ view.slate_key }} · Ivan{% endblock %}
+{% block content %}
+{% macro n(x, p=2) %}{{ x|num(p) if (x is defined and x is not none) else '' }}{% endmacro %}
+<style>
+  .status { padding:1px 6px; border-radius:3px; font-size:12px } .status.ready { background:#e3f3e6; color:#1b5e20 } .status.unsettled { background:#fff4d6; color:#7a5200 } .status.no { background:#fbe3e1; color:#8a1c12 }
+  .kv { display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:13px } .kv b { font-weight:500; color:#444 }
+  table.runs td, table.runs th { font-size:12px; white-space:nowrap } table.runs td.wrap { white-space:normal }
+</style>
+<h1>Slate {{ view.slate_key }} <span class="muted small">{{ view.mode }} · lock {{ view.lock.strftime('%Y-%m-%d %H:%M') }} · <a href="/backtest">runs</a></span></h1>
+
+<div class="card">
+  <h2>What the archive holds <span class="muted small">the inputs every build of this slate replays from; kept for good</span></h2>
+  {% set r = view.ready %}
+  {% if r %}
+  <div class="kv">
+    <b>Capture</b><span>{% if r.captures %}{{ r.capture_source }}, {{ r.capture_minutes_before_lock|round|int }} min before lock · {{ r.capture_players }} players, {{ r.capture_odds }} odds rows{% else %}<span class="neg">none</span>{% endif %}</span>
+    <b>Contests</b><span>{{ r.contests_at_lock }} at lock · {{ r.picks|length }} in the default pool, {{ r.scraped_picks }} scraped · {{ r.our_entries }} of our entries recorded</span>
+    <b>Box scores</b><span class="{{ '' if r.box_scores else 'neg' }}">{{ 'yes' if r.box_scores else 'no' }}{% if r.season_week %} ({{ r.season_week[0] }} wk {{ r.season_week[1] }}){% endif %}</span>
+    <b>Models</b><span>{{ r.models_label }}</span>
+    <b>Settle</b><span>{% if r.settle %}{{ r.settle.status }}{% if r.settle.settled_at %} · {{ (r.settle.settled_at|string)[:16]|replace('T', ' ') }}{% endif %}{% if r.settle.missing %} · {{ r.settle.missing|join(', ') }}{% endif %}{% else %}no status row (the nightly job has not seen this slate){% endif %}</span>
+    <b>Status</b><span><span class="status {{ 'ready' if r.status.startswith('ready') else ('unsettled' if 'unsettled' in r.status else 'no') }}">{{ r.status }}</span>{% if r.missing %} <span class="muted">{{ r.missing|join(' · ') }}</span>{% endif %}</span>
+  </div>
+  {% else %}<p class="muted">The archive has no capture for this slate on this machine (the runs below replayed it elsewhere, or the capture was removed).</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Builds <span class="muted small">{{ view.runs|length }} runs replayed this slate, {{ view.n_ok }} ok{% if view.commits %} · commits {{ view.commits|join(', ') }}{% endif %}</span></h2>
+  <table class="compact runs">
+    <tr><th>Started</th><th>Run</th><th>Commit</th><th>Through</th><th>Status</th><th class="num">Repeats</th><th>Models</th><th class="num">Lineups</th><th class="num">Sims</th><th class="num">Field cap</th><th>Chooser</th>
+      <th class="num">Contests</th><th class="num">Entries</th><th class="num">Fees</th><th class="num">Sim</th><th class="num">Actual</th><th class="num">Mean over repeats</th><th class="num">&gt; 0</th><th>Files</th></tr>
+    {% for r in view.runs %}<tr>
+      <td>{{ r.started_at[:16]|replace('T', ' ') }}</td>
+      <td class="wrap">{% if r.link %}<a href="{{ r.link }}">{{ r.run }}</a>{% else %}{{ r.run }}{% endif %} <span class="muted small">{{ r.kind }}{% if r.label %} · {{ r.label }}{% endif %}</span></td>
+      <td title="{{ r.subject }}">{{ r.commit or '-' }}{% if r.dirty %}<span class="muted" title="uncommitted changes">*</span>{% endif %}</td>
+      <td>{{ r.through }}</td>
+      <td><span class="status {{ 'ready' if r.status == 'ok' else ('no' if r.status == 'error' else 'unsettled') }}">{{ r.status }}</span>{% if r.error %} <span class="muted small" title="{{ r.error }}">{{ r.error[:40] }}</span>{% endif %}</td>
+      <td class="num">{{ r.repeats_ok }}/{{ r.repeats_wanted }}</td>
+      <td>{{ r.models or '-' }}</td>
+      <td class="num">{{ r.options.n_lineups or '' }}</td><td class="num">{{ r.options.n_sims or '' }}</td><td class="num">{{ r.options.field_cap or '' }}</td>
+      <td>{{ r.method or '' }}</td>
+      <td class="num">{{ r.contests }}</td><td class="num">{{ r.entries }}</td>
+      <td class="num">{{ r.fees|money if r.fees is not none else '' }}</td>
+      <td class="num">{{ r.sim|money if r.sim is not none else '' }}</td>
+      <td class="num {{ r.actual|scss if r.actual is not none else '' }}">{{ r.actual|money if r.actual is not none else '' }}</td>
+      <td class="num {{ r.repeat_mean|scss if r.repeat_mean is not none else '' }}">{{ r.repeat_mean|money if r.repeat_mean is not none else '' }}</td>
+      <td class="num">{{ r.p_profit|pct1 if r.p_profit is not none else '' }}</td>
+      <td class="small muted">{% if r.purged_at %}purged {{ r.purged_at[:10] }}{% elif r.pinned %}pinned{% else %}full{% endif %}</td>
+    </tr>{% endfor %}
+  </table>
+  <p class="muted small">Sim and actual are this slate's contests in the run's report (the run page has the per-contest rows). A commit with * ran with uncommitted changes. "purged" runs kept their manifests, projections and report; the repeats and the database copy went in the 30-day sweep. Terminal: <code>scripts/nfl/slate_runs.py {{ view.slate_key }}</code>.</p>
+</div>
+{% endblock %}

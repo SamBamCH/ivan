@@ -164,7 +164,7 @@ def _ctx(request: Request, **extra) -> dict:
 
 def _redirect(to: str, msg: Optional[str] = None) -> RedirectResponse:
     from urllib.parse import quote
-    return RedirectResponse(f"{to}?msg={quote(msg)}" if msg else to, status_code=303)
+    return RedirectResponse(f"{to}{'&' if '?' in to else '?'}msg={quote(msg)}" if msg else to, status_code=303)
 
 
 _outputs = output_files
@@ -348,7 +348,7 @@ def choose_page(request: Request, run: Optional[str] = None, contest: Optional[s
 def backtest_page(request: Request):
     today = datetime.now().date()
     return templates.TemplateResponse(request, "backtest_hub.html", _ctx(
-        request, run=None, runs=hub.runs(), default_since=(today - timedelta(days=7)).isoformat(), default_until=today.isoformat(),
+        request, run=None, runs=hub.runs(), slates_index=hub.slate_index(), default_since=(today - timedelta(days=7)).isoformat(), default_until=today.isoformat(),
         msg=request.query_params.get("msg")))
 
 
@@ -383,6 +383,28 @@ def _run_jobs(name: str, tail: int = 14) -> list[dict]:
                     "started": datetime.fromtimestamp(j.started).strftime("%H:%M:%S") if j.started else "",
                     "duration": int(j.duration) if j.duration else None, "returncode": j.returncode, "tail": lines})
     return out[:12]
+
+
+@app.get("/backtest/slate/{key}", response_class=HTMLResponse)
+def backtest_slate_page(request: Request, key: str):
+    """One slate's history: every run that replayed it, with the commit, the parameters and the result (scripts/nfl/slate_runs.py)."""
+    with _session() as session:
+        view = hub.slate_view(session, key)
+    if view is None:
+        return _redirect("/backtest", f"No run has replayed slate {key}.")
+    return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, view=view))
+
+
+@app.post("/backtest/{name}/pin")
+async def backtest_pin(request: Request, name: str):
+    """Keep (or stop keeping) the run's heavy files past the retention window (scripts/nfl/retention.py --pin / --unpin)."""
+    run = hub.load_run(name)
+    if run is None:
+        return _redirect("/backtest", f"No run named {name!r}.")
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    pinned = form.get("pinned") == "1"
+    hub.set_pinned(run, pinned)
+    return _redirect(f"/backtest/{name}?step=results", f"{name} {'pinned: its repeats and database copy are kept' if pinned else 'unpinned: the sweep takes its heavy files 30 days after its last write'}.")
 
 
 @app.get("/backtest/{name}", response_class=HTMLResponse)
@@ -498,6 +520,7 @@ async def backtest_rerun(request: Request, name: str):
     form = {k: str(v) for k, v in (await request.form()).items()}
     resume = form.get("mode") == "resume"
     hub.write_selection(run)
+    hub.mark_launched(run)
     j1 = runner.submit(f"{name}: {'resume' if resume else 'replay'} {len(run['picks'])} contests x {run['params']['repeats']}",
                        hub.replay_command(run, redo=not resume), meta={"step": "replay", "run": name})
     j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
@@ -547,6 +570,7 @@ async def backtest_run(request: Request, name: str):
         return _redirect(f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
     run["params"] = params
     hub.write_selection(run)
+    hub.mark_launched(run)
     j1 = runner.submit(f"{name}: replay {len(run['picks'])} contests x {params['repeats']}", hub.replay_command(run), meta={"step": "replay", "run": name})
     j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
     run.setdefault("jobs", []).extend([{"id": j1.id, "name": "replay", "at": datetime.now().isoformat(timespec="seconds")},

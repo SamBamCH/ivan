@@ -13,7 +13,7 @@ UI in `src/ivan/web/` ([../web/nfl-app.md](../web/nfl-app.md)).
 | [ownership-and-dupes.md](ownership-and-dupes.md) | How ownership is projected and corrected, and how many copies of a lineup the field holds. |
 | [simulation.md](simulation.md) | The field sampler, the Monte Carlo contest sim (live), the conditioned closed-form sim (lab), the sim report. |
 | [chooser.md](chooser.md) | greedy, portfolio and slate; the shrinkage; honest ROI by cross-fit; comparing choosers on a slate. |
-| [backtest-and-validation.md](backtest-and-validation.md) | Replay, repeats, as-of models, the Backtest hub, validation per component, the models scoreboard, settle and the after-tax report. |
+| [backtest-and-validation.md](backtest-and-validation.md) | Replay, repeats, as-of models, the Backtest hub and the per-slate builds page, what retention keeps and lets go, validation per component, the models scoreboard, settle and the after-tax report. |
 | [overnight.md](overnight.md) | The nightly timer, the manual overnight reset, settle, the scrapes, model builds, the sync to the server. |
 | [data.md](data.md) | Config keys, tables, the data directory, the models directory. |
 | [notes/](notes/) | Dated plans: the slate chooser. |

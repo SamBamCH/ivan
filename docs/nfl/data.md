@@ -36,7 +36,7 @@ contest's max; `max_fee` 5; `weights`; optional `mode` per item; `picks` written
 ```
 data/nfl/
 ├── nfl_history.sqlite              reference + this machine's working tables
-├── replay/nfl_replay.sqlite        the replay's copy (and per-worker copies)
+├── replay/nfl_replay.sqlite        the replay's copy (per-worker clones .w<i>. are deleted when a replay ends)
 ├── input/entries.csv, input/web/   the entries file; web uploads + weights.json
 ├── raw/{dk,odds}/, index.jsonl     every payload as received
 ├── derived/contests/<id>/          lineups.parquet, scores.npy from settle
@@ -46,9 +46,11 @@ data/nfl/
 │   ├── projections/, sim/<stamp>/  the ingest's and the sim's artifacts
 │   ├── validation/<stamp>/         validate.py reports (usage_<stamp>/ from backtest_usage)
 │   ├── backtest/<stamp>/           backtest_tax reports
-│   ├── backtests/<name>/           the hub's runs
+│   ├── backtests/<name>/           the hub's runs: run.json, selection.json, nfl/<slate>/ (replay.json + csv, rep_*/), nfl/report_*/, nfl/validation/
 │   ├── replay*/                    replay roots (replay, replay_repeats, replay_artifacts, ...)
 │   └── models/, chooser_ab/        the models scoreboard, compare_choosers
+│       (backtests/, models/, replay*/: rep_*/, validation csvs, replay.sqlite and logs go 30 days after the
+│        run's last write unless pinned; manifests, csv, reports stay: scripts/nfl/retention.py)
 ├── diagnostics/contest_<id>_<name>/report.json
 ├── jobs/                           web job logs
 └── logs/nightly.log

@@ -11,9 +11,13 @@ tail -f data/nfl/logs/nightly.log
 06:30, 12:30 and 18:30 (+ up to 5 minutes), `Persistent=true`: a slot missed while the laptop slept runs
 at wake. It runs `scripts/nfl/nightly.py --days 13`: nflverse schedules and box scores, the DST table,
 then `settle()` over the last 13 days (DraftKings purges contest data after 14) with `IVAN_DK_USERNAME`
-and the desktop's display passed through for the scrape; `--no-scrape` and `--headless` exist. It
-**deletes nothing**. When a slate stays waiting, login_needed or no_contests it raises a desktop
-notification (`--no-notify` to silence). An expired DraftKings login marks the slate `login_needed`:
+and the desktop's display passed through for the scrape; `--no-scrape` and `--headless` exist. Last it
+runs the retention sweep (`scripts/nfl/retention.py`, `--no-retention` skips it): leftover worker
+clones of the replay database, and the repeats, validation csvs and database copy of runs not written
+to for 30 days. It deletes nothing else; never an input, a manifest or a report
+([backtest-and-validation.md](backtest-and-validation.md#retention-what-is-kept-what-is-let-go-scriptsnflretentionpy-ivansportsnflretention)).
+When a slate stays waiting, login_needed or no_contests it raises a desktop notification (`--no-notify`
+to silence). An expired DraftKings login marks the slate `login_needed`:
 log in once in the scraper's Chrome window (it waits up to ten minutes) and the next run continues.
 
 ## The manual reset (`scripts/nfl/overnight.py`)

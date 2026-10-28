@@ -27,8 +27,10 @@ from pathlib import Path
 from typing import Optional
 
 from ivan.core import model_store
+from ivan.core.gitinfo import git_state
 from ivan.core.replay import Menu
 from ivan.core.utils import PROJECT_ROOT
+from ivan.sports.nfl import retention, run_index
 from ivan.sports.nfl.paths import MODELS_DIR, OUTPUT_DIR
 from ivan.web import backtest_view as bv
 from ivan.web import validate_view as vv
@@ -93,6 +95,55 @@ def runs() -> list[dict]:
                         conf = None
                 out.append({**r, "step": STATUS_STEP.get(r.get("status", "new"), "data"), "progress": bv.run_progress(d), "confidence": conf})
     return sorted(out, key=lambda r: r.get("created_at", ""), reverse=True)
+
+
+def mark_launched(run: dict) -> dict:
+    """The commit the replay is about to run at (the slate page lists a slate's builds by it)."""
+    run["git"] = git_state()
+    return run
+
+
+def set_pinned(run: dict, pinned: bool) -> dict:
+    """A pinned run keeps its heavy files past the retention window (ivan.sports.nfl.retention)."""
+    retention.set_pinned(run_root(run["name"]), pinned)
+    run["pinned"] = bool(pinned)
+    return run
+
+
+def slate_view(session, slate_key: str) -> Optional[dict]:
+    """One slate: what the archive holds for it, and every run that replayed it, newest first (run_index)."""
+    from ivan.sports.nfl.readiness import backtest_plan
+    rows = run_index.slate_runs(slate_key)
+    if not rows:
+        return None
+    r0 = rows[0]
+    lock = datetime.fromisoformat(r0.lock)
+    menu = Menu.load(MENU_PATH) if MENU_PATH.exists() else Menu(items=[])
+    ready = None
+    try:
+        for s in backtest_plan(session, lock - timedelta(hours=1), lock + timedelta(hours=1), menu)["slates"]:
+            if str(s.slate_key) == str(slate_key):
+                ready = s
+                break
+    except Exception:          # noqa: BLE001 - the archive's state is a courtesy here; the runs are the page
+        ready = None
+    links = []
+    for r in rows:
+        if r.kind == "backtest":
+            link = f"/backtest/{r.run}?step=results"
+        elif r.kind.startswith("models/"):
+            link = f"/models?c={r.kind.split('/', 1)[1]}&r={r.run}"
+        else:
+            link = f"/backtest/tax?r={r.report_id}" if r.report_id else (f"/validate?r={r.validation_id}" if r.validation_id else None)
+        links.append({**r.as_dict(), "link": link})
+    commits = sorted({r.commit for r in rows if r.commit})
+    return {"slate_key": str(slate_key), "lock": lock, "mode": r0.mode, "runs": links, "ready": ready, "commits": commits,
+            "n_ok": sum(1 for r in rows if r.status == "ok")}
+
+
+def slate_index() -> list[dict]:
+    """Every slate any run replayed (the hub's landing page links each to its slate page)."""
+    return run_index.slates()
 
 
 def step_for(run: dict, requested: Optional[str]) -> str:
@@ -349,6 +400,13 @@ def run_view(run: dict) -> dict:
             "report": bv.report_view(report_dir) if report_dir else None,
             "validation": vv.report_view(validation) if (validation / "summary.json").is_file() else None,
             "failed": [{"slate": m.get("slate_key"), "lock": m.get("lock"), "error": m.get("error")} for m in manifests if m.get("status") == "error"]}
+    key_of_contest: dict[int, str] = {}
+    for m in manifests:
+        for c in m.get("contests") or []:
+            try:
+                key_of_contest[int(c["contest_id"])] = str(m.get("slate_key"))
+            except (KeyError, TypeError, ValueError):
+                continue
     sva = view["report"]["sim_vs_actual"] if view["report"] else []
     field_rows = {int(r["contest_id"]): r for r in ((view["validation"] or {}).get("field") or {}).get("rows", []) if r.get("contest_id") is not None}
     # our entries placed in the real field (the report's entries.csv) and the field's exposures vs actual ownership (validation players.csv)
@@ -374,7 +432,8 @@ def run_view(run: dict) -> dict:
         cid = int(row["contest_id"])
         profits = [float(x["actual_profit"]) for x in dist.get(cid, []) if x.get("actual_profit") not in (None, "")]
         sims = [float(x["sim_expected_profit"]) for x in dist.get(cid, []) if x.get("sim_expected_profit") not in (None, "")]
-        sl = slates.setdefault(str(row["slate"]), {"slate": str(row["slate"]), "contests": [], "fees": 0.0, "sim": 0.0, "actual": 0.0})
+        sl = slates.setdefault(str(row["slate"]), {"slate": str(row["slate"]), "key": key_of_contest.get(cid), "contests": [], "fees": 0.0, "sim": 0.0, "actual": 0.0})
+        sl["key"] = sl["key"] or key_of_contest.get(cid)
         fr = field_rows.get(cid, {})
         ours = sorted(entries.get(cid, []), key=lambda e: (float(e.get("rank") or 1e9)))
         exp = sorted(exposures.get(cid, []), key=lambda r: -float(r.get("actual_own") or 0))[:12]

@@ -42,7 +42,10 @@ window's profit as a distribution (`repeats.csv`, `repeats_by_slate.csv`, `repea
 `repeats_summary.json`, `repeats.png`: mean, percentiles, share of repeats in profit, pre and after tax,
 slates bootstrapped, without the best slate). Profit that shows only in some repeats is luck, not
 edge. A slate-repeat is about 60 s; `--workers` splits slates over processes with their own database
-copy. `--through STAGE` stops early for the component scoreboard. Slates that predate the archive are
+copy (`replay.w<i>.sqlite`, deleted when the workers finish unless `--keep-db`: they hold only working
+tables and grew to 12 GB each before 2026-10-28). Each slate's `replay.json` records the commit the
+code was at (`git`: commit, dirty, subject), so a slate's builds can be told apart. `--through STAGE`
+stops early for the component scoreboard. Slates that predate the archive are
 rebuilt with `scripts/nfl/backfill_archive.py --since ... --until ... --odds` (about 210 credits per
 showdown game).
 
@@ -61,10 +64,41 @@ scores, pre-lock captures from odds-api history at about 230 credits per game, u
 the Chrome profile, a model version as of the window start; nothing fetched until ticked), **Contests**
 (tick what to enter and how many), **Parameters** (repeats, workers, lineups, sims, field cap, seed),
 **Results** (the sim's claim vs the actual outcome and after tax, the repeats distribution, the
-assumption checks, every slate and contest). `/backtest/plan` is the readiness per slate (captures, pool
-contests scraped, our entries, box scores, model version). The 2026-10-19 backtest of the live config
+assumption checks, every slate and contest; **Pin** keeps the run's heavy files past the retention
+window, see below). `/backtest/plan` is the readiness per slate (captures, pool contests scraped, our
+entries, box scores, model version).
+
+**One slate's builds** (`/backtest/slate/<key>` = `scripts/nfl/slate_runs.py <key>`,
+`ivan.sports.nfl.run_index`): what the archive holds for the slate (capture, contests scraped, box
+scores, model version, settle status) and every run that replayed it, newest first, across the hub's
+runs, the Models page's runs and the lab replay roots: when, the commit, the stage it ran through, the
+parameters, the models version, the chooser, and for the slate's contests the fees, the sim's claim,
+the actual profit and the mean over repeats. Linked from every slate on the hub's data step, progress
+table and results, and from the hub's landing page (`slate_runs.py --list`). The index reads only the
+files retention keeps, so a purged run still shows what it claimed and what happened. The 2026-10-19 backtest of the live config
 over 10-11..10-19: +1.9% actual, the luck test passes; a 20-repeat run +14% mean ROI per repeat, 18 of 20
 profitable, sd 16%; classic slates lose in every seed.
+
+## Retention: what is kept, what is let go (`scripts/nfl/retention.py`, `ivan.sports.nfl.retention`)
+
+Kept for good, because a model build or a backtest needs it and nothing recomputes it: the live
+database with the slate archive (captures, raw artifacts, contests, standings, box scores, our
+finishes), `data/nfl/raw`, `data/nfl/derived`, `data/nfl/models` (live, `asof/`, `archive/`),
+`data/nfl/input`. Kept for good because it is small and it is the record: every run's `run.json`
+and `selection.json`, each replayed slate's `replay.json` with its `projections` / `entries` /
+`environment` / `usage` csv, the `report_*` directories and the validation `summary.json`.
+
+Let go of, because running the replay again rebuilds it: worker clones of the replay database a day
+after their last write (`scripts/replay.py` deletes its own when the workers finish; the sweep takes
+what a crash or a cancel left, in the runs and in `data/nfl/replay/`), and 30 days after a run's last
+write its heavy files: `rep_*/` (or the chooser files, simroi npz and `sim/` of a flat single-repeat
+slate), the validation csvs, the run's `replay.sqlite` and the logs. The sweep writes `purged_at` into
+`run.json`, which the run page and the slate page show. A run with `"pinned": true` (the Pin button, or
+`retention.py --pin NAME`) keeps its heavy files; a run with a slate still running and written to in
+the last day is not touched. Roots: `output/backtests/<name>`, `output/models/<component>/<stamp>`,
+`output/replay*`. The nightly job runs the sweep last (`nightly.py --no-retention` skips it);
+`retention.py --dry-run` lists what would go, `--days N` changes the window for a manual run.
+On 2026-10-28 the first sweep removed 108 GB of leftover clones.
 
 ## The Models page: a scoreboard over code iterations (`/models`, `models_view.py`)
 

@@ -6,11 +6,13 @@ The data job that keeps every played slate backtestable: schedules (scores and
 closing lines) and box scores from nflverse, the DST game table, then the
 settle job for the slates locked in the last days (standings of the contests
 we entered and the slate's largest public contests, derived field files, a
-status row per slate). It writes nothing else and deletes nothing, so it is
-safe on a timer; settle is idempotent, so running it several times a day only
-fetches what is still missing.
+status row per slate), then the retention sweep (scripts/nfl/retention.py:
+worker clones of the replay database a day after their last write, a run's
+repeats, validation csvs and database copy 30 days after its last write;
+never an input, a manifest or a report). Settle is idempotent, so running it
+several times a day only fetches what is still missing.
 
-    nightly.py [--days 13] [--no-scrape] [--headless] [--no-notify]
+    nightly.py [--days 13] [--no-scrape] [--headless] [--no-notify] [--no-retention]
 
 The DraftKings scrape uses the saved Chrome profile (chrome-selenium/dk-profile)
 and IVAN_DK_USERNAME from .env so our finishes are recorded. With a display it
@@ -34,6 +36,7 @@ from datetime import datetime, timedelta
 from ivan.database.session import get_session, init_db
 from ivan.sports.nfl.dst_scoring import build_dst_game_table
 from ivan.sports.nfl.refactor.historical.data_fetch import fetch_boxscores, fetch_schedules, seasons_to_fetch
+from ivan.sports.nfl import retention
 from ivan.sports.nfl.settle import settle
 
 
@@ -48,6 +51,7 @@ def main() -> int:
     ap.add_argument("--no-scrape", action="store_true", help="box scores and status only; no DraftKings scrape")
     ap.add_argument("--headless", action="store_true", help="force headless Chrome (the default when there is no display)")
     ap.add_argument("--public", type=int, default=3, help="largest public contests per slate to settle as well (default 3)")
+    ap.add_argument("--no-retention", action="store_true", help="skip the retention sweep of replay clones and old runs' heavy files")
     a = ap.parse_args()
     session = get_session(init_db("nfl"))
     rc = 0
@@ -81,6 +85,12 @@ def main() -> int:
     pending = [s for s in items if s.status in ("waiting", "login_needed", "no_contests")]
     if pending:
         log(f"{len(pending)} slate(s) still {', '.join(sorted({s.status for s in pending}))}")
+    if not a.no_retention:
+        try:
+            sw = retention.sweep(log=log)
+            log(f"retention freed {sw.freed / 1e9:.1f} GB")
+        except Exception as e:   # noqa: BLE001 - housekeeping must not turn a settled night into a failure
+            log(f"retention sweep FAILED: {type(e).__name__}: {e}")
     if (pending or rc) and not a.no_notify:
         notify(pending, rc)
     log("done" if rc == 0 and not pending else "done with issues")
