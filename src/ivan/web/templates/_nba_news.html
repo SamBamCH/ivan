@@ -1,0 +1,38 @@
+{# the slate's news table (nba_desk.news_table = newsfeed.slate_news; terminal: scripts/nba/newsfeed.py slate): the open questions
+   first, then the players OUT tonight who played their team's last game, then the standing outs (collapsed). One row per
+   player with the latest headline on file; the player's name opens his team's card. #}
+{% macro news_rows(rows, kind) %}
+<table class="players news-table">
+  <thead><tr>
+    <th>player</th><th>team</th><th>game</th><th>status</th><th class="n">sal</th>
+    <th class="n" title="his usual minutes: the history state's trailing minutes × his play rate">usual</th>
+    {% if kind == 'q' %}<th class="n" title="the model's minutes for him now, and your call when you made one (a pin or a starter call)">now</th>{% else %}<th title="his team's last game: the date and his minutes in it">last game</th>{% endif %}
+    <th>news</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="{% if kind == 'q' %}qrow{% else %}out{% endif %} {% if r.call %}answered{% endif %}">
+      <td><a class="plink" hx-get="{{ root }}/board?view=games&team={{ r.team }}" hx-target="#board" hx-swap="innerHTML" title="open {{ r.team }}">{% if r.starter %}<b>{{ r.raw }}</b>{% else %}{{ r.raw }}{% endif %}</a> <span class="muted small">{{ r.pos }}</span>{% if r.starter %} <span class="st" title="in the expected lineup">S</span>{% endif %}</td>
+      <td>{{ r.team }}</td>
+      <td class="muted small">{% if r.opp %}{{ r.opp }} · {% endif %}{{ r.tip.strftime('%H:%M') if r.tip else '' }}</td>
+      <td><span class="status {% if kind == 'q' %}q{% endif %}">{{ r.status }}</span></td>
+      <td class="n">{{ r.salary }}</td>
+      <td class="n">{% if r.hist is not none %}{{ '%.0f'|format(r.hist) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      {% if kind == 'q' %}<td class="n">{% if r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% else %}0{% endif %}{% if r.call %} <i class="muted small">{{ r.call }}</i>{% else %} <i class="muted small nocall">no call</i>{% endif %}</td>
+      {% else %}<td class="small">{% if r.last_date %}{{ r.last_date[5:] }} · {% if r.played_last %}{{ '%.0f'|format(r.last_min) }} min{% else %}did not play{% endif %}{% else %}<span class="muted">no game on file</span>{% endif %}</td>{% endif %}
+      <td class="newscell">{% if r.news %}<a href="{{ r.news.url }}" target="_blank" title="{{ r.news.text }}">{{ r.news.headline }}</a>{% if r.news.injury %} <span class="muted">({{ r.news.injury }})</span>{% endif %} <span class="muted small">{{ r.news.age }}{% if r.news.n > 1 %} · {{ r.news.n }} items{% endif %}</span>{% if r.news.new %} <b class="warn">new</b>{% endif %}{% else %}<span class="muted small">no news on file</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+<div class="newsbox">
+  <h3>Questions <span class="muted">{{ nt.questionable|length }} questionable{% set open_q = nt.questionable|rejectattr('call')|list %}{% if open_q %} · <b>{{ open_q|length }} with no call</b>{% endif %}</span></h3>
+  {% if nt.questionable %}{{ news_rows(nt.questionable, 'q') }}{% else %}<p class="muted small">no questionable player on the slate</p>{% endif %}
+  <h3>Out tonight, played last game <span class="muted">{{ nt.new_out|length }} · their minutes move around the rotation tonight</span></h3>
+  {% if nt.new_out %}{{ news_rows(nt.new_out, 'new') }}{% else %}<p class="muted small">nobody new is out</p>{% endif %}
+  <details class="hist-box news-out">
+    <summary>Already out <span class="muted">{{ nt.out|length }} · out of their team's last game too (or never seen): the rotation has absorbed them</span></summary>
+    {% if nt.out %}{{ news_rows(nt.out, 'old') }}{% else %}<p class="muted small">nobody</p>{% endif %}
+  </details>
+</div>

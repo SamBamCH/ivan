@@ -148,7 +148,7 @@ DESK_CONFIG = NBA_DATA_DIR / "jobs" / "desk_config.json"           # config/nba.
 
 MAX_UPLOAD = 5 * 1024 * 1024   # the DK entries export is tens of KB
 ROTATION_MIN = 15.0        # a scratch/questionable above this baseline is news
-QUESTION_STATUSES = {"Q", "GTD", "D", "P"}   # DK statuses that leave the player's night open
+QUESTION_STATUSES = NF.QUESTION_STATUSES     # DK statuses that leave the player's night open (Q / GTD / D / P)
 NEWS_AUTO_SECONDS = 300    # the desk's auto-check interval while it is on
 NEAR_TIP_MIN = 75          # minutes before tip when an unconfirmed lineup becomes a warning
 MINUTES_DEV = 8.0          # model minutes this far from history is a role change
@@ -843,6 +843,31 @@ class Desk:
         qs.sort(key=lambda q: (q["answered"], -(q["hist"] or 0)))
         return qs
 
+    def news_table(self, now: Optional[datetime] = None) -> dict:
+        """
+        The slate's news table (newsfeed.slate_news, the same lists scripts/nba/newsfeed.py slate prints): the open
+        questions, the players OUT tonight who played their team's last game, and the standing outs, each with the latest
+        headline on file; this desk adds its calls (a pin or a starter call), the model's minutes and each team's mapped time.
+        """
+        now = now or datetime.now()
+        calls, minutes, mapped = {}, {}, {}
+        for t in self.slate.teams():
+            ms = self.mapped_state(t)
+            if ms.get("state") in ("mapped", "changed") and ms.get("saved_at"):
+                try:
+                    mapped[t] = datetime.fromisoformat(str(ms["saved_at"]))
+                except ValueError:
+                    pass
+            proj = self.proj.get(t)
+            if proj is not None and "minutes" in proj:
+                minutes.update({str(n): float(v) for n, v in proj["minutes"].items()})
+        for n, ov in self.overrides.items():
+            if ov.get("minutes") is not None:
+                calls[n] = "scratched" if ov["minutes"] <= 0 else f"pinned {ov['minutes']:g} min"
+            elif ov.get("starter") is not None:
+                calls[n] = "starts" if ov["starter"] > 0 else "benched"
+        return NF.slate_news(self.session, self.slate, now=now, calls=calls, minutes=minutes, mapped_at=mapped)
+
     def questions_summary(self, now: Optional[datetime] = None) -> dict:
         now = now or datetime.now()
         teams = sorted({p.team for p in self.slate.players if p.team})
@@ -1432,6 +1457,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
             open_team = next((c["team"] for grp in menu for g in grp["games"] for c in g["teams"]), teams[0] if teams else None)
             desk.open_team = open_team
         card = desk.team_card(open_team, now) if (view == "games" and open_team) else None
+        news_table = desk.news_table(now) if view == "games" else None
         game = next((g for grp in menu for g in grp["games"] if any(c["team"] == open_team for c in g["teams"])), None)
         cards = [desk.team_card(t, now) for t in teams] if view == "players" else []
         games = []
@@ -1444,7 +1470,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
         return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
-                       card=card, game=game, open_team=open_team, **_pipeline_ctx())
+                       card=card, game=game, open_team=open_team, news_table=news_table, **_pipeline_ctx())
 
 
 def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:

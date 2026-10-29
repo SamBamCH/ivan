@@ -43,6 +43,26 @@ A games strip with tips, then team cards sorted by an alert score (bad 10, warn 
 
 The flags come from `ivan.sports.nba.validation.review_team`, the same ones `scripts/nba/validate.py review` prints.
 
+### The news table
+
+Under the games strip, before the open team's card (`_nba_news.html`, `Desk.news_table` =
+`ivan.sports.nba.newsfeed.slate_news`; terminal: `scripts/nba/newsfeed.py slate`). The slate's players whose
+night is news, one row per player, in three lists:
+
+1. **Questions**: DK status Q / GTD / D / P, not ruled out. Columns: player (bold when in the expected lineup;
+   the name opens his team's card), team, opponent and tip, status, salary, usual minutes (the history state),
+   the model's minutes now with your call ("no call" in amber until a pin or a starter call answers it), the
+   latest headline on file.
+2. **Out tonight, played last game**: DK OUT / O / IR / SUSP and on the floor in his team's last box score. These are
+   the outs the rotation has not absorbed yet: the column shows the last game's date and his minutes in it.
+3. **Already out** (collapsed): OUT and out of the team's last game too, or never in a box score ("did not play").
+
+Each list is ordered earliest tip first, then the most usual minutes. The headline is the newest `nba_news`
+row for the player within 7 days (its source link; hover for the text), with its age, the item count and
+**new** when it arrived after the team was mapped (within 3 hours when the team is unmapped). "No news on
+file" means nothing stored: press **Check news**. The team's last game is the newest box score on file, so
+until the nightly brings last night's game the "last game" is the one before it.
+
 ## A team card (`/team/<TEAM>`)
 
 Rows: starters first, then the players who are out, then the bench, minutes descending. Per player:

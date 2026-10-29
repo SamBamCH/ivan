@@ -22,6 +22,7 @@
   </div>
   {% endfor %}
 </nav>{% endif %}
+  {% if view == 'games' and news_table %}{% with nt = news_table %}{% include "_nba_news.html" %}{% endwith %}{% endif %}
   {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% endif %}
   {% if view == 'exposures' %}{% set ex = exposures %}
   <div class="exposures">
