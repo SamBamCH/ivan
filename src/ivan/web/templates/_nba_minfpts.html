@@ -1,0 +1,4 @@
+{# the fpts filter: hides the rows (tr[data-fpts]) projected below it, on the game card and the players table alike; one value
+   for both, remembered in this browser (nba_desk.html applyFilter) #}
+<label class="minfpts-lab" title="hide players projected below this many fantasy points (the game card and the players table)">show ≥
+  <select class="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select></label>

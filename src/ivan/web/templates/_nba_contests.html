@@ -7,8 +7,15 @@
     <span class="muted small">the DraftKings entries export{% if cx.entries.exists %} · on file: {{ cx.entries.path }}{% if cx.entries.modified %}, {{ cx.entries.modified.strftime('%a %H:%M') }}{% endif %}{% endif %}</span>
     {% if cx.entries.error %}<span class="bad small">{{ cx.entries.error }}</span>{% endif %}
   </div>
-  {% if cx.contests %}<table class="players contests"><thead><tr><th>contest</th><th class="n">fee</th><th class="n">field</th><th class="n">our entries</th><th>slate</th></tr></thead>
+  {% if cx.contests %}<table class="players contests"><thead><tr><th>contest</th><th class="n">fee</th><th class="n">field</th><th class="n">our entries</th><th>slate</th><th title="the chooser's knobs for this contest (blank = the config panel's value, shown greyed); saved as you type (data/nba/input/contest_weights.json, scripts/nba/contest_weights.py)">choose</th></tr></thead>
     <tbody>{% for r in cx.contests %}<tr class="{{ r.match }}"><td>{{ r.name }} <span class="muted small">{{ r.contest_id }}</span></td><td class="n">{{ '$%g'|format(r.fee) if r.fee is not none else '' }}</td><td class="n">{{ r.field or '' }}</td><td class="n">{{ r.entries }}</td>
-      <td>{% if r.match == 'ok' %}<span class="ok">✓ the loaded slate</span>{% elif r.match == 'other' %}<b class="bad">slate {{ r.draft_group }}: not the loaded {{ cx.draft_group }}, the sim skips it</b>{% else %}<span class="muted">not stored yet: checked when the sim starts</span>{% endif %}</td></tr>{% endfor %}</tbody></table>{% endif %}
+      <td>{% if r.match == 'ok' %}<span class="ok">✓ the loaded slate</span>{% elif r.match == 'other' %}<b class="bad">slate {{ r.draft_group }}: not the loaded {{ cx.draft_group }}, the sim skips it</b>{% else %}<span class="muted">not stored yet: checked when the sim starts</span>{% endif %}</td>
+      {% set w = r.weights %}<td class="cw"><form class="inline cw-form" hx-post="{{ root }}/contest/{{ r.contest_id }}/weights" hx-trigger="change" hx-target="find .cw-saved" hx-swap="innerHTML">
+        <select name="method" title="greedy or portfolio; blank = the panel's ({{ form.method }})"><option value="">panel ({{ form.method }})</option>{% for m in ('greedy', 'portfolio') %}<option value="{{ m }}" {% if w.method == m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select>
+        <label title="greedy: weight on cash rate">cash <input name="cash_pct" value="{{ '%g'|format(w.cash_pct) if w.cash_pct is defined else '' }}" placeholder="{{ form.cash_pct }}" size="3"></label>
+        <label title="greedy: weight on mean ROI">roi <input name="avg_roi_win" value="{{ '%g'|format(w.avg_roi_win) if w.avg_roi_win is defined else '' }}" placeholder="{{ form.avg_roi_win }}" size="3"></label>
+        <label title="greedy: diversity bonus (0 = jam the best)">div <input name="diversity_lambda" value="{{ '%g'|format(w.diversity_lambda) if w.diversity_lambda is defined else '' }}" placeholder="{{ form.diversity_lambda }}" size="3"></label>
+        <label title="portfolio: utility scale in multiples of the entry fees">bankroll <input name="bankroll" value="{{ '%g'|format(w.bankroll) if w.bankroll is defined else '' }}" placeholder="{{ form.bankroll }}" size="3"></label>
+        <span class="cw-saved small">{% if w %}<span class="ok">own knobs</span>{% endif %}</span></form></td></tr>{% endfor %}</tbody></table>{% endif %}
   {% with oob=False %}{% include "_nba_pipeline_side.html" %}{% endwith %}
 </details>

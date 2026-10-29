@@ -6,7 +6,7 @@
       <form class="inline" hx-post="{{ root }}/pipeline/exposures" hx-vals='{"mode": "pool"}' hx-target="#pipe-side" hx-swap="outerHTML"><button type="submit" class="{% if side.mode == 'pool' %}on{% endif %}" title="the generated candidate pool: share of the lineups holding each player">pool</button></form>
       <form class="inline" hx-post="{{ root }}/pipeline/exposures" hx-vals='{"mode": "entries"}' hx-target="#pipe-side" hx-swap="outerHTML"><button type="submit" class="{% if side.mode == 'entries' %}on{% endif %}" title="the lineups chosen for the entries: share of the entries holding each player">entries</button></form>
     </span>
-    <a class="muted small" href="{{ root }}/?view=exposures" title="the full exposures table">full table</a>
+    <a class="muted small" href="#exposures-sec" onclick="document.getElementById('exposures-sec').open = true" title="the full exposures table: the Exposures section below">full table</a>
   </div>
   {% if side.mode == 'pool' %}
     {% if not side.pool %}<p class="muted small">no lineups in the pool yet: Publish + Generate</p>{% else %}

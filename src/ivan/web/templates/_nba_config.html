@@ -1,6 +1,6 @@
-{# the config section: every knob the pipeline buttons send (#pipe-config; hx-include on the actions bar). Seeded from
+{# the config tile (beside the games strip): every knob the pipeline buttons send (#pipe-config; hx-include on the actions bar). Seeded from
    config/nba.json, kept for the desk in data/nba/jobs/desk_config.json by the jobs. #}
-<details class="hist-box cfg-box" id="config"><summary>Config <span class="muted">generate · sim · choose knobs, sent with every action</span></summary>
+<section class="cfg-tile" id="config" title="generate · sim · choose knobs, sent with every action; a contest's own choose knobs (the contests section) win over these for it"><div class="cfg-title">Config</div>
   <form id="pipe-config" class="pipe-form" onsubmit="return false">
     <input type="hidden" name="cfg" value="1">
     <div class="pipe-row pipe-sec {% if not ready.generate %}off{% endif %}" title="{% if not ready.generate %}opens once a slate is loaded and projected{% endif %}">
@@ -29,4 +29,4 @@
       <label class="only-portfolio" {% if form.method != 'portfolio' %}style="display:none"{% endif %} title="utility scale in multiples of the entry fees: lower = more risk-averse picks">bankroll <input name="bankroll" value="{{ form.bankroll }}" size="3"></label>
     </div>
   </form>
-</details>
+</section>

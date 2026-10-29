@@ -112,9 +112,11 @@ The scripts run from a terminal do **not** publish: run them after a Publish, or
 
 ## 5. Generate, simulate, choose
 
-Desk: steps 4 to 6 of the **actions** bar, with the knobs in the **config** section (lineups, jobs, sims, field cap,
-fresh pool, and the chooser's weights from `config/nba.json → choose`); **4–6 in a row** runs the three. The entries
-export goes in through the **contests** section, which flags contests of another slate (the sim skips them). Jobs run
+Desk: steps 4 to 6 of the **actions** bar, with the knobs in the **config** tile beside the games strip (lineups, jobs,
+sims, field cap, fresh pool, and the chooser's weights from `config/nba.json → choose`); **4–6 in a row** runs the
+three. The entries export goes in through the **contests** section, which flags contests of another slate (the sim
+skips them) and takes each contest's own chooser knobs (`scripts/nba/contest_weights.py`; Choose passes them as
+`--weights-json data/nba/input/contest_weights.json`). Jobs run
 one at a time in the desk's job runner (`ivan.web.jobs`) with logs under `data/nba/jobs/`.
 
 ```bash
@@ -124,7 +126,7 @@ venv/bin/python scripts/nba/choose.py --no-prompt [--method greedy|portfolio] [-
 ```
 
 What they do and write is in [field-and-simulation.md](field-and-simulation.md). The chooser's
-upload file is `data/nba/output/chosen_entries.classic.<stamp>.csv`; the desk's exposures view and
+upload file is `data/nba/output/chosen_entries.classic.<stamp>.csv`; the desk's exposures section and
 the Downloads list read the newest run. The "fresh pool" box unticked keeps the existing pool, so a
 second scenario's lineups can sit beside the first's before lock.
 

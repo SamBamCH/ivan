@@ -16,6 +16,7 @@ IVAN_DESK_PASSWORD puts a login page in front (ivan.web.auth).
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import sys
@@ -1510,8 +1511,8 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, open: Optional[str] = None, view: Optional[str] = None, dg: Optional[int] = None):
     """
-    view=games: the team cards paired into games; players: every player in one table; lateswap; exposures; backtest (dg = a
-    past slate, read only: ivan.sports.nba.slate_backtest). With no view the loaded slate's mode picks it
+    view=games (pre-lock: the games strip, actions, news, contests, the team card, every player, exposures); lateswap
+    (post-lock); backtest (dg = a past slate, read only: ivan.sports.nba.slate_backtest). players / exposures open pre-lock. With no view the loaded slate's mode picks it
     (slate_backtest.mode_for): before the first lock the slate, after it the late swap, a slate of an earlier day its backtest.
     """
     with LOCK:
@@ -1528,6 +1529,7 @@ def index(request: Request, open: Optional[str] = None, view: Optional[str] = No
                 dg = header.get("draft_group")
         if view == "backtest" and dg is None:
             dg = header.get("draft_group")
+        view = VIEW_ALIAS.get(view, view)
         return _render(request, "nba_desk.html", header=header, open_team=open, view=view, busy=desk.busy, dg=dg)
 
 
@@ -1548,9 +1550,21 @@ def _backtest_board(request: Request, dg: Optional[int]):
                    lateswap=None, exposures=None, card=None, game=None, open_team=None)
 
 
+VIEW_ALIAS = {"players": "games", "exposures": "games"}      # the players table and the exposures are sections of pre-lock now
+
+
+@app.get("/exposures", response_class=HTMLResponse)
+def exposures_section(request: Request, set: str = "pool", metric: str = "proj", bins: str = ""):
+    """The exposures section of pre-lock and post-lock (loaded when opened; its switches reload only the section)."""
+    with LOCK:
+        if desk.busy:
+            return HTMLResponse('<div class="loading">the slate is loading</div>')
+        ex = _exposures_view(set, metric, int(bins) if str(bins).strip().isdigit() else None)
+        return _render(request, "_nba_exposures.html", exposures=ex)
+
+
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = "", team: str = "", after: str = "",
-          dg: Optional[int] = None):
+def board(request: Request, view: str = "games", team: str = "", after: str = "", dg: Optional[int] = None):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view.
     after=busy is the loading poll's request: once the load or refresh is done the whole page reloads (HX-Refresh), because
     the header (the slate picker, the counts) was built from the slate before it; swapping only the board left the picker
@@ -1560,6 +1574,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     if view == "backtest":
         return _backtest_board(request, dg)
+    view = VIEW_ALIAS.get(view, view)
     with LOCK:
         now = datetime.now()
         if desk.busy:
@@ -1577,15 +1592,12 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
         card = desk.team_card(open_team, now) if (view == "games" and open_team) else None
         news_table = desk.news_table(now) if view == "games" else None
         game = next((g for grp in menu for g in grp["games"] if any(c["team"] == open_team for c in g["teams"])), None)
-        cards = [desk.team_card(t, now) for t in teams] if view == "players" else []
         games = []
         players = []; lateswap = None; exposures = None
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
-        if view == "exposures":
-            exposures = _exposures_view(set, metric, int(bins) if str(bins).strip().isdigit() else None)
-        if view == "players":
-            players = [r for c in cards for r in c["rows"]]
+        if view == "games":                                  # the players table under the team card: every team's rows
+            players = [r for t in teams for r in (card["rows"] if card and t == open_team else desk.team_rows(t))]   # rows only: a whole card per team is ~0.4 s
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
         return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
                        card=card, game=game, open_team=open_team, news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(),
@@ -2648,8 +2660,24 @@ def _contests_ctx() -> dict:
         except Exception as ex:   # noqa: BLE001
             ent = dict(ent, error=f"{type(ex).__name__}: {ex}")
     rows.sort(key=lambda r: (r["match"] != "other", -(r["fee"] or 0) * r["entries"]))
+    from ivan.sports.nba.lineup_export import contest_weights
+    cw = contest_weights()
+    for r in rows:
+        r["weights"] = cw.get(str(r["contest_id"]), {})
     return dict(entries=ent, contests=rows, draft_group=dg, other=sum(1 for r in rows if r["match"] == "other"),
                 unknown=sum(1 for r in rows if r["match"] == "unknown"))
+
+
+@app.post("/contest/{contest_id}/weights", response_class=HTMLResponse)
+async def contest_weights_set(contest_id: int, request: Request):
+    """One contest's chooser knobs from the contests section (= scripts/nba/contest_weights.py set); blank = the panel's value."""
+    from ivan.sports.nba.lineup_export import CONTEST_KNOBS, set_contest_weights
+    form = await request.form()
+    try:
+        cur = set_contest_weights(contest_id, {k: form.get(k) for k in CONTEST_KNOBS if k in form})
+    except ValueError as e:
+        return HTMLResponse(f'<span class="bad">{html.escape(str(e))}</span>')
+    return HTMLResponse('<span class="ok">saved</span>' if cur else '<span class="muted">panel</span>')
 
 
 def _field(raw, label: str, kind=float):
@@ -2715,6 +2743,9 @@ def _submit(step: str, form: dict) -> list:
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
                "--cash-pct", "%g" % ch["cash_pct"], "--avg-roi-win", "%g" % ch["avg_roi_win"], "--diversity-lambda", "%g" % ch["diversity_lambda"], "--bankroll", "%g" % ch["bankroll"]]
+        from ivan.sports.nba.lineup_export import CONTEST_WEIGHTS_JSON, contest_weights
+        if contest_weights():                                     # the contests section's knobs win over the panel's for their contest
+            cmd += ["--weights-json", str(CONTEST_WEIGHTS_JSON)]
         jobs.append(runner.submit("choose", cmd, meta=dict(step="choose")))
     return jobs
 

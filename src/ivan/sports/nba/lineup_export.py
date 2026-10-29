@@ -11,7 +11,8 @@ DraftKings wants them uploaded, plus what a web UI and a backtest read:
     <base>.simroi.<stamp>.npz        each pick's per-simulation ROI, for the calibration tests
 
 read_entries() parses the entries file, weights_resolver() decides the
-per-contest weights (file / flags / prompt), choose_entries() does the picking
+per-contest weights (file / flags / prompt; contest_weights() holds the ones set on
+the desk's contests section), choose_entries() does the picking
 and slot assignment, write_outputs() the files. scripts/nba/choose.py is
 argparse around run_choose().
 """
@@ -31,6 +32,7 @@ import pandas as pd
 from ivan.core.utils import coerce_player_ids
 from ivan.sports.nba.choose import DEFAULT_WEIGHTS, choose_lineup_ids, sim_roi_traces
 from ivan.sports.nba.models import Lineup, NBAPlayer
+from ivan.sports.nba.paths import INPUT_DIR
 from ivan.sports.nba.pre_lock.lineup_generation import SLOT_ELIGIBILITY, SLOT_NAMES
 from ivan.sports.nba.utils import _coerce_positions
 
@@ -97,6 +99,48 @@ def load_weights_json(raw: Optional[str]) -> dict:
     if not raw:
         return {}
     return json.loads(Path(raw).read_text() if Path(raw).exists() else raw)
+
+
+# per-contest weights set on the desk's contests section (scripts/nba/contest_weights.py): {"<contest id>": {knob: value}};
+# the desk's choose job passes the file as --weights-json, so a contest's entry wins over the config panel's knobs
+CONTEST_WEIGHTS_JSON = INPUT_DIR / "contest_weights.json"
+CONTEST_KNOBS = {"method": str, "cash_pct": float, "avg_roi_win": float, "diversity_lambda": float, "bankroll": float}
+
+
+def contest_weights(path: Optional[Path] = None) -> Dict[str, dict]:
+    try:
+        return {str(k): v for k, v in json.loads((path or CONTEST_WEIGHTS_JSON).read_text()).items() if v}
+    except (OSError, ValueError):
+        return {}
+
+
+def set_contest_weights(contest_id: int, knobs: dict, path: Optional[Path] = None) -> dict:
+    """Set one contest's knobs (blank / None drops a knob back to the panel's value; no knobs left drops the contest)."""
+    path = path or CONTEST_WEIGHTS_JSON
+    allw = contest_weights(path)
+    cur = dict(allw.get(str(int(contest_id)), {}))
+    for k, v in knobs.items():
+        if k not in CONTEST_KNOBS:
+            raise ValueError(f"unknown knob {k!r}: one of {', '.join(CONTEST_KNOBS)}")
+        v = None if v is None else str(v).strip()
+        if not v:
+            cur.pop(k, None)
+        elif k == "method":
+            if v not in ("greedy", "portfolio"):
+                raise ValueError(f"method: {v!r} is not greedy or portfolio")
+            cur[k] = v
+        else:
+            try:
+                cur[k] = float(v)
+            except ValueError:
+                raise ValueError(f"{k}: {v!r} is not a number")
+    if cur:
+        allw[str(int(contest_id))] = cur
+    else:
+        allw.pop(str(int(contest_id)), None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(allw, indent=1, sort_keys=True))
+    return cur
 
 
 # ------------------------------------------------------------------------------ slot assignment

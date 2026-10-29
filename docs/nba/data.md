@@ -41,6 +41,7 @@ data/nba/
 ├── capture_state.json              the (disabled) capture tick's state
 ├── input/
 │   ├── entries.csv                 the DraftKings entries export the sim and chooser read
+│   ├── contest_weights.json        per-contest chooser knobs set on the desk's contests section (contest_weights.py); Choose passes it as --weights-json
 │   ├── minutes_overrides.csv       the desk's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
 │   ├── rotations/<TEAM>.json       the painted grid per team with its locked rows
 │   ├── scenarios/<TEAM>/*.json     named copies of a team's two files + assumptions; _active.json
