@@ -58,6 +58,9 @@ contest step to run.
 
 ## 3. Work the teams
 
+Start each team at its card's **special considerations** box (rest, starters out, a new five, players back, big
+spread): the things the history-built rotation does not know. `scripts/nba/considerations.py` prints the same.
+
 The board sorts team cards by how far they are from their norm; alerts are listed in
 [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 

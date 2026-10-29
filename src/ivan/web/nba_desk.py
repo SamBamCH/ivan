@@ -431,6 +431,19 @@ class Desk:
             return None
         return dict(games=int((sa.get("season") or {}).get("games", 0)))
 
+    def considerations(self, team: str) -> list:
+        """What is unusual about the team's game tonight (ivan.sports.nba.considerations; scripts/nba/considerations.py)."""
+        from ivan.sports.nba import considerations as CN
+        ps = self.players(team)
+        opp = next((p.opponent for p in ps if p.opponent), None)
+        try:
+            return CN.team_considerations(team, ps, self.slate.box, self.slate.state, self.starters_of(team),
+                                          confirmed=self.slate.starters_confirmed.get(team, False), spread=self.slate.spread(team),
+                                          opponent=opp, opp_players=self.players(opp) if opp else [],
+                                          is_rookie=lambda n: self.rookie_of(n) is not None, tip=self.tip(team))
+        except Exception as e:   # noqa: BLE001 - a convenience: never break the card
+            return [dict(level="info", kind="error", text=f"special considerations failed: {type(e).__name__}: {e}")]
+
     SCORE_STEP = 3   # minutes per cell of the score strip above a past game's grid
 
     def score_strip(self, team: str, game_id: str) -> Optional[dict]:
@@ -1277,7 +1290,7 @@ class Desk:
                     questions=self.questions(team, now), scenarios=self.scenario_list(team),
                     published=dict(grid=ROT.drawn_source(team), pins=sum(1 for r in rows if "published" in r.get("layer", {}).values()),
                                    own=sum(1 for r in rows if "local" in r.get("layer", {}).values()), consumer=PUBLISHED_OVERRIDES_CSV.exists() or ROT.PUBLISHED_ROTATIONS_DIR.is_dir()),
-                    last_game=self.game_grid(team),
+                    last_game=self.game_grid(team), considerations=self.considerations(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),

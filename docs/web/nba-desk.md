@@ -60,6 +60,15 @@ priced players, the flags. Inputs on the row:
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
 - **Clear** (`/clear`): drop the team's pins and grid.
 
+**Special considerations** (above the grids; `Desk.considerations` = `ivan.sports.nba.considerations`, terminal
+`scripts/nba/considerations.py [--team XXX]`): what is unusual about tonight's game, warnings first. Rest (back to back,
+3 games in 4 nights, 3+ days off; the opponent's back to back), a regular starter (started most games, 20+ usual
+minutes) OUT or questionable, tonight's five against the last game's (who is new in it, who dropped out; a rookie
+starting), a 15+ minute player back after sitting out the last game(s), a player whose last game was for another
+team, a spread of 10+ (blowout risk) or no line yet, the opponent's regular starters out. From the files on hand: the
+box scores lag until the nightly brings last night's game, so a back to back can read as a day of rest more before it
+runs.
+
 The **rotation grid** (`_nba_rotation.html`): players × 48 minutes. Paint cells to put a player on the
 floor; the grid autosaves every stroke (`/rotation`). Row lock holds a row exactly; **Re-fill** fills the
 unlocked rows around the locks (`/rotation/propose` with `source=propose`, or a past game's grid with
