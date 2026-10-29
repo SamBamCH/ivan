@@ -11,6 +11,8 @@ page is what is on the screen.
 
 - **Slate picker**: a day, then that day's classic draft groups (from the DK lobby for today and
   tomorrow, from the archive for past days; the loaded slate is always listed). **Load** switches.
+  While a load or a refresh runs the board shows its progress; when it is done the whole page reloads, so the
+  picker and the header counts show the new slate.
 - **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). The board shows the
   state until the new pool is projected (about 10 seconds). The public field and the ownership column are not
   rebuilt by a refresh: the sim does that, or the pipeline panel's **Field + ownership** button. On a consumer a

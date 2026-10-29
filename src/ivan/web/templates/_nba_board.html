@@ -1,7 +1,7 @@
 {# the slate's board: everything that needs the team cards. Loaded into #board after the page shell, so the page is up at once
    and shows "loading" while the pool is fetched or projected (nba_desk.index / board / the background refresh). #}
 {% if busy %}
-<div id="board-poll" hx-get="{{ root }}/board?view={{ view }}" hx-trigger="every 2s" hx-target="#board" hx-swap="innerHTML">
+<div id="board-poll" hx-get="{{ root }}/board?view={{ view }}&after=busy" hx-trigger="every 2s" hx-target="#board" hx-swap="innerHTML">
   <div class="loading"><span class="spin"></span> {{ busy }}…</div>
 </div>
 {% else %}

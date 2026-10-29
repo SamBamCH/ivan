@@ -1497,8 +1497,14 @@ def index(request: Request, open: Optional[str] = None, view: str = "games"):
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = "", team: str = ""):
-    """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view."""
+def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = "", team: str = "", after: str = ""):
+    """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view.
+    after=busy is the loading poll's request: once the load or refresh is done the whole page reloads (HX-Refresh), because
+    the header (the slate picker, the counts) was built from the slate before it; swapping only the board left the picker
+    showing the old slate as loaded (2026-10-29)."""
+    if after == "busy" and not desk.busy:
+        from fastapi.responses import Response
+        return Response(status_code=200, headers={"HX-Refresh": "true"})
     with LOCK:
         now = datetime.now()
         if desk.busy:
