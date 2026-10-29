@@ -37,8 +37,10 @@ In order, each step guarded so a failure does not stop the next (except the box 
    and the skeleton read these.
 4. **Standings derive** (`standings.derive_pending`): parses every standings export on disk that has no
    derived folder yet. It never fetches; the scrape is yours (below).
-5. **Feed**: `feed.publish("nba", which="both")` then `feed.push` to `IVAN_FEED_PUSH`, so the server's
-   reference tables (box scores, stints, captures, models) follow.
+5. **Experience** (`experience.fetch`, also `scripts/nba/experience.py fetch`): nba_api's all-players list, one
+   request, each player's first NBA season into `data/nba/derived/players/experience.json` (the desk's rookie marks).
+6. **Feed**: `feed.publish("nba", which="both")` then `feed.push` to `IVAN_FEED_PUSH`, so the server's
+   reference tables (box scores, stints, captures, models) and `data/nba/derived` follow.
 
 A laptop that wakes with no network yet fails at step 1 with a DNS error and nothing else runs; the
 next slot or `systemctl --user start ivan-nba-nightly.service` repeats it. The job is idempotent.

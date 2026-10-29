@@ -63,6 +63,11 @@ unlocked rows around the locks (`/rotation/propose` with `source=propose`, or a 
 `game_id`); **Hold all** locks everything as drawn; **Clear locks**; **Map** adds a player the cut left off
 (`/rotation/add`), **drop** removes one, **restore** undoes. Spot colours mark the slot each player
 inherited; fouls are shown on historical views. The row sums are the minutes projection.
+Rookies carry a purple **R** badge with their games played this season (`R4`) and a purple edge on the name, on
+tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a player whose first NBA season is this one
+in nba_api's all-players list (`ivan.sports.nba.experience`, fetched by the nightly or `scripts/nba/experience.py
+fetch`), matched by name without suffixes, then by last name on his team; a name the list lacks is a rookie when no
+NBA game is on file before this season.
 
 The **late news form** (`/team/<TEAM>/news`): player, call (out / starts / bench / back), then
 (sim + choose, late swap, publish only). **Scenarios**: save the team's edits under a name, activate,

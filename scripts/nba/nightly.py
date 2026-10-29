@@ -4,6 +4,7 @@ Nightly NBA data job: box scores for the current season (nba_api), capped per ru
 because of nba_api rate limits; the timer runs it three times a day so it catches up.
 Then the projection scorecard for every slate whose box scores have arrived
 (ivan.sports.nba.validation.run_pending_scorecards) -> data/nba/diagnostics/scorecard/.
+Then every player's first NBA season (ivan.sports.nba.experience) for the desk's rookie marks.
 """
 import argparse
 import logging
@@ -62,6 +63,11 @@ def main() -> int:
             logging.info(f"standings derived: {len(derived)}")
         except Exception as e:   # noqa: BLE001
             logging.warning(f"standings derive failed: {type(e).__name__}: {e}")
+    try:
+        from ivan.sports.nba import experience
+        experience.fetch(log=logging.info)                                       # the rookie marks on the desk
+    except Exception as e:   # noqa: BLE001
+        logging.warning(f"experience fetch failed: {type(e).__name__}: {e}")
     try:
         from ivan.core import feed
         from ivan.sports.nba import autopilot

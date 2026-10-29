@@ -417,7 +417,30 @@ class Desk:
             out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
         return out
 
+    def rookie_of(self, name: str) -> Optional[dict]:
+        """
+        A rookie: his first NBA season is this one (ivan.sports.nba.experience, nba_api's list, fetched nightly); a name the
+        list lacks is a rookie when no NBA game is on file before this season. {games: this season's games played} or None.
+        """
+        from ivan.sports.nba import experience as X
+        if getattr(self, "_exp_stamp", None) != self.pool_stamp:
+            self._first_years, self._exp_stamp = X.load(), self.pool_stamp
+        sa = (getattr(self, "season", None) or {}).get(name) or {}
+        team = next((p.team for p in self.slate.players if normalize_name(p.name) == name), None)
+        if not X.is_rookie(name, X.season_start_year(), self._first_years, played_before=bool(sa.get("last")), team=team):
+            return None
+        return dict(games=int((sa.get("season") or {}).get("games", 0)))
+
     def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
+        """The rotation grid (_rotation) with each row's rookie mark (rookie_of): the same on tonight's grid and a past game's."""
+        rot = self._rotation(team, source=source, game_id=game_id)
+        for r in rot.get("rows") or []:
+            rk = self.rookie_of(r["key"])
+            r["rookie"] = rk is not None
+            r["rookie_games"] = rk["games"] if rk else None
+        return rot
+
+    def _rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
         """
         The team's rotation grid for the card.
           source "auto"    the projection's grid: the coach's slots filled at the solve's minutes, the desk's locked rows held

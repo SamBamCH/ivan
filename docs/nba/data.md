@@ -65,6 +65,7 @@ data/nba/
 ├── derived/
 │   ├── contests/<id>/              lineups.parquet, players.csv, field.json from a standings export
 │   ├── field_cache/                the two-group field per public-projection key
+│   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
 │   └── props_hist/                 parquet of the historical props
 ├── output/
 │   ├── projections/projections.<stamp>.csv       the projection artifact of each Publish / ingest
