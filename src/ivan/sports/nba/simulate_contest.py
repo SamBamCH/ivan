@@ -399,8 +399,27 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
     if n_old or n_rep:
         log(f"cleared the previous sim: {n_old:,} per-lineup results, {n_rep} contest reports")
     log(f"Simulating {len(contests)} contest(s): {n_sims} sims each, field cap {field_cap:,}" + (f"; run artifacts -> {art}" if art else ""))
-    out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}}
+    out = {"contests": int(len(contests)), "simulated": 0, "failed": [], "reports": {}, "skipped": []}
     biggest: dict = {}
+    # an entries file of another slate's contests cannot be simulated on this pool: those contests are skipped (each contest's
+    # draft group as stored, or fetched once from DraftKings when it is new)
+    from ivan.sports.nba.field_generation import pool_draft_group
+    dg_pool = pool_draft_group(session)
+    if dg_pool is not None:
+        keep, skipped = [], []
+        for cid, name in zip(contests["Contest ID"], contests["Contest Name"]):
+            try:
+                c = C.ensure_contest(session, int(cid), log=log)
+            except Exception:   # noqa: BLE001 - unknown: the contest's own run reports it
+                c = None
+            if c is not None and c.draft_group_id is not None and int(c.draft_group_id) != int(dg_pool):
+                skipped.append(dict(contest_id=int(cid), name=name, draft_group=int(c.draft_group_id)))
+            else:
+                keep.append(int(cid))
+        for x in skipped:
+            log(f"SKIPPED contest {x['contest_id']} ('{x['name']}'): it belongs to slate {x['draft_group']}, the pool is slate {dg_pool}")
+        out["skipped"] = skipped
+        contests = contests[contests["Contest ID"].astype(int).isin(keep)].reset_index(drop=True)
     cfg0 = json.load(open(config_path, encoding="utf-8"))
     if str(_cfg(cfg0, "field.sampler", "projection_model")) == "two_group":
         prebuild_field(session, contests["Contest ID"], field_cap, log=log)

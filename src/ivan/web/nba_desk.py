@@ -548,6 +548,17 @@ class Desk:
                 games = matches
             except Exception:   # noqa: BLE001 - the match is a convenience; the latest game is the fallback
                 matches = []
+        for i, g in enumerate(games):                         # the dropdown: a short title, the details on hover
+            try:
+                d = date.fromisoformat(str(g["game_date"])[:10])
+                day = f"{d:%a %m-%d}" if g.get("season") != "last" else f"{d:%m-%d-%y}"
+            except ValueError:
+                day = str(g.get("game_date", ""))
+            n_diff = len(g.get("missing") or {}) + len(g.get("extra") or {})
+            tag = (" · same group" if g.get("exact") else (f" · {n_diff} change{'s' if n_diff != 1 else ''}" if "match" in g else ""))
+            g["short"] = f"{day}" + (f" vs {g['opp']}" if g.get("opp") else "") + (" · last" if i == 0 and g.get("season") == "this" else "") + tag + (" · odd" if g.get("odd") else "")
+            g["long"] = " · ".join(x for x in [str(g.get("game_date", "")), f"vs {g['opp']}" if g.get("opp") else "", g.get("match") or "",
+                                                ("odd: " + ", ".join(g.get("reasons") or [])) if g.get("odd") else ""] if x)
         proj = self.proj.get(team)
         targets = rot.get("targets") or {}
         base = dict(team=team, games=games, kind="none", drawn=False, locked=[], rows=[], counts=[], benched=[], game_id=None, last_game=None,
@@ -1577,7 +1588,8 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
         return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
-                       card=card, game=game, open_team=open_team, news_table=news_table, **_pipeline_ctx())
+                       card=card, game=game, open_team=open_team, news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(),
+                       questions_sum=desk.questions_summary(now), **_pipeline_ctx())
 
 
 def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:
@@ -2573,9 +2585,71 @@ def _pipeline_ctx() -> dict:
     ready = dict(generate=projected, sim=bool(projected and n_lineups and ent.get("exists")), choose=bool(n_sims and ent.get("exists")),
                  all=bool(projected and ent.get("exists")))
     just_finished = bool(jobs and not runner.active() and jobs[0].finished and (time.time() - jobs[0].finished) < 8)
+    now = datetime.now()
     return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=ent,
                 outputs=_latest_outputs(), lineups_in_db=n_lineups, sims_in_db=n_sims, lineup_slates=slates, current_draft_group=current,
-                side=_side_ctx(), ready=ready, projected=projected, just_finished=just_finished)
+                side=_side_ctx(), ready=ready, projected=projected, just_finished=just_finished,
+                fresh=desk.freshness(now), published=_published_info(now), news=desk.news_status(now), now=now)
+
+
+PUBLISH_RED_MIN = 10   # unpublished changes older than this turn the published label red
+
+
+def _published_info(now: datetime) -> dict:
+    """
+    The last publish and whether it is behind: the producer's own feed manifest (a consumer: the laptop's, as pulled), and
+    what changed since on this desk: an edit (autopilot's desk activity) or a newer projection (a refresh). behind and
+    older than PUBLISH_RED_MIN = red, behind = amber, else up to date.
+    """
+    at = None
+    try:
+        if CONSUMER:
+            v = feed.status("nba").get("published_at")
+        else:
+            m = feed.FEED_DIR / "nba" / "manifest.json"
+            v = json.loads(m.read_text()).get("published_at") if m.exists() else None
+        at = datetime.fromisoformat(str(v)) if v else None
+    except Exception:   # noqa: BLE001
+        at = None
+    behind = []
+    if not CONSUMER:
+        try:
+            act = json.loads(autopilot.DESK_ACTIVITY_JSON.read_text()) if autopilot.DESK_ACTIVITY_JSON.exists() else {}
+            edit = datetime.fromisoformat(act["edit_at"]) if act.get("edit_at") else None
+        except Exception:   # noqa: BLE001
+            edit = None
+        if edit is not None and (at is None or edit > at):
+            behind.append(("edits", edit))
+        proj = next((f["at"] for f in desk.freshness(now) if f["label"] == "projected"), None)
+        if proj is not None and (at is None or proj > at + timedelta(seconds=60)):
+            behind.append(("a refresh", proj))
+    since = min((t for _, t in behind), default=None)
+    level = "red" if since is not None and (now - since).total_seconds() / 60 >= PUBLISH_RED_MIN else ("amber" if behind else "")
+    return dict(at=at, age=None if at is None else (now - at).total_seconds() / 60, behind=[k for k, _ in behind], since=since, level=level)
+
+
+def _contests_ctx() -> dict:
+    """The entries file's contests against the loaded slate: each contest's stored draft group (historical_contest_information),
+    our entries in it, and whether it belongs to the slate loaded at the top (the sim skips the ones that do not)."""
+    ent = _entries_info()
+    dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
+    rows = []
+    if ent.get("exists") and not ent.get("error"):
+        try:
+            from ivan.sports.nba.lineup_export import read_entries
+            from ivan.sports.nba.models import HistoricalContest
+            e = read_entries(_entries_path())
+            for (cid, name), g in e.groupby(["Contest ID", "Contest Name"]):
+                c = desk.session.query(HistoricalContest).filter(HistoricalContest.contest_id == int(cid)).first()
+                cdg = None if c is None else c.draft_group_id
+                rows.append(dict(contest_id=int(cid), name=str(name).strip(), entries=int(len(g)), fee=None if c is None else c.entry_fee,
+                                 field=None if c is None else c.total_entries, draft_group=cdg,
+                                 match=("unknown" if cdg is None else ("ok" if dg is not None and int(cdg) == int(dg) else "other"))))
+        except Exception as ex:   # noqa: BLE001
+            ent = dict(ent, error=f"{type(ex).__name__}: {ex}")
+    rows.sort(key=lambda r: (r["match"] != "other", -(r["fee"] or 0) * r["entries"]))
+    return dict(entries=ent, contests=rows, draft_group=dg, other=sum(1 for r in rows if r["match"] == "other"),
+                unknown=sum(1 for r in rows if r["match"] == "unknown"))
 
 
 def _field(raw, label: str, kind=float):
@@ -2667,11 +2741,15 @@ async def pipeline_run(request: Request, step: str):
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
-        pipeline_form.update({k: str(form.get(k, "")) for k in PIPELINE_DEFAULTS})
+        # only the knobs the request carries move (the actions bar's buttons send the config form along; a button without it,
+        # Field + ownership, used to blank every knob); the checkboxes count only when the config form was sent (its cfg field)
+        pipeline_form.update({k: str(form.get(k)) for k in PIPELINE_DEFAULTS if k in form and k not in ("fresh", "jam", "ls_live")})
         notes = clamp_form(pipeline_form)
         if notes:
             desk.flash.append("lowered to this desk's limits: " + ", ".join(notes))
-        pipeline_form["jam"] = "on" if form.get("jam") else ""
+        if form.get("cfg"):
+            pipeline_form["jam"] = "on" if form.get("jam") else ""
+            pipeline_form["fresh"] = "on" if form.get("fresh") else ""
         if step == "lateswap":
             pipeline_form["ls_live"] = "on" if form.get("ls_live") else ""
         if step not in ("generate", "sim", "choose", "all", "lateswap", "field"):
@@ -2737,12 +2815,16 @@ async def entries_upload(request: Request, file: UploadFile = File(...)):
     if len(data) > MAX_UPLOAD or not (file.filename or "").lower().endswith(".csv"):
         with LOCK:
             desk.flash.append("entries upload refused: a .csv under 5 MB, please")
-            return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+        from fastapi.responses import Response
+        return Response(status_code=200, headers={"HX-Refresh": "true"})
     with LOCK:
         p = _entries_path(); p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
-        desk.flash.append(f"entries file saved: {file.filename} -> {p.name} ({len(data)} bytes)")
-        return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
+        cx = _contests_ctx()
+        desk.flash.append(f"entries file saved: {file.filename} -> {p.name} ({len(data)} bytes)"
+                          + (f"; {cx['other']} contest(s) belong to another slate than the loaded one: the sim skips them" if cx["other"] else ""))
+    from fastapi.responses import Response
+    return Response(status_code=200, headers={"HX-Refresh": "true"})
 
 
 MAX_STANDINGS = 60 * 1024 * 1024        # a 100k-entry contest's standings csv is ~15 MB; the zip DraftKings hands out is smaller

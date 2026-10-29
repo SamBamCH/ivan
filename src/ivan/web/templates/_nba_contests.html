@@ -1,0 +1,14 @@
+{# the contests section: the entries file (upload), its contests against the slate loaded at the top, our latest picks and
+   their exposures. Built with the board (nba_desk._contests_ctx); an upload reloads the page. #}
+{% set cx = contests_ctx %}
+<details class="hist-box contests-box" id="contests" {% if not cx.entries.exists or cx.other %}open{% endif %}><summary>Contests <span class="muted">{% if cx.entries.exists %}{{ cx.entries.entries or 0 }} entries in {{ cx.contests|length }} contest{{ '' if cx.contests|length == 1 else 's' }}{% if cx.other %} · <b class="bad">{{ cx.other }} of another slate</b>{% endif %}{% else %}no entries file yet{% endif %}</span></summary>
+  <div class="pipe-row">
+    <form class="inline" hx-post="{{ root }}/entries" hx-encoding="multipart/form-data"><label class="btn">Upload entries CSV <input type="file" name="file" accept=".csv" onchange="this.form.requestSubmit()" style="display:none"></label></form>
+    <span class="muted small">the DraftKings entries export{% if cx.entries.exists %} · on file: {{ cx.entries.path }}{% if cx.entries.modified %}, {{ cx.entries.modified.strftime('%a %H:%M') }}{% endif %}{% endif %}</span>
+    {% if cx.entries.error %}<span class="bad small">{{ cx.entries.error }}</span>{% endif %}
+  </div>
+  {% if cx.contests %}<table class="players contests"><thead><tr><th>contest</th><th class="n">fee</th><th class="n">field</th><th class="n">our entries</th><th>slate</th></tr></thead>
+    <tbody>{% for r in cx.contests %}<tr class="{{ r.match }}"><td>{{ r.name }} <span class="muted small">{{ r.contest_id }}</span></td><td class="n">{{ '$%g'|format(r.fee) if r.fee is not none else '' }}</td><td class="n">{{ r.field or '' }}</td><td class="n">{{ r.entries }}</td>
+      <td>{% if r.match == 'ok' %}<span class="ok">✓ the loaded slate</span>{% elif r.match == 'other' %}<b class="bad">slate {{ r.draft_group }}: not the loaded {{ cx.draft_group }}, the sim skips it</b>{% else %}<span class="muted">not stored yet: checked when the sim starts</span>{% endif %}</td></tr>{% endfor %}</tbody></table>{% endif %}
+  {% with oob=False %}{% include "_nba_pipeline_side.html" %}{% endwith %}
+</details>

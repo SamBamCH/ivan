@@ -40,7 +40,7 @@ A refresh takes about 10 seconds: the fetch, the market means (the props de-vigg
 vectorised pass, `projection/market.py`), the pool, the projection and the public projection land
 in one transaction. Nothing else runs: the public field and the ownership column are **not** rebuilt
 by a refresh, a generate or an edit (since 2026-10-28). The sim builds the field it needs and writes
-ownership from the largest contest's field; the pipeline panel's **Field + ownership** button
+ownership from the largest contest's field; the actions bar's **Field + ownership** button
 (`scripts/nba/field_ownership.py`, about 45 seconds at `field.ownership_entries` = 3,000) builds it
 on demand when you want the column fresh before a sim. `ingest.py --field` does both in one go.
 
@@ -112,9 +112,10 @@ The scripts run from a terminal do **not** publish: run them after a Publish, or
 
 ## 5. Generate, simulate, choose
 
-Desk: the **pipeline** panel (fields: lineups, jobs, sims, field cap, fresh pool, and the chooser's
-weights from `config/nba.json → choose`). **All** runs the three in a row. Jobs run one at a time
-in the desk's job runner (`ivan.web.jobs`) with logs under `data/nba/jobs/`.
+Desk: steps 4 to 6 of the **actions** bar, with the knobs in the **config** section (lineups, jobs, sims, field cap,
+fresh pool, and the chooser's weights from `config/nba.json → choose`); **4–6 in a row** runs the three. The entries
+export goes in through the **contests** section, which flags contests of another slate (the sim skips them). Jobs run
+one at a time in the desk's job runner (`ivan.web.jobs`) with logs under `data/nba/jobs/`.
 
 ```bash
 venv/bin/python scripts/nba/generate_lineups.py 10000 8 [--fresh] [--randomness 0.25] [--min-fpts 260]

@@ -1,47 +1,29 @@
-<div id="pipeline" class="pipe dash">
-  <form class="pipe-form dash-form" hx-post="{{ root }}/pipeline/all" hx-target="#pipeline" hx-swap="outerHTML" hx-vals='js:{pins: collectDirtyPins()}'>
-    <div class="pipe-row">
-      <span class="brand-sm">Pipeline</span>
-      {% if limited %}<span class="muted small" title="this desk is shared: settings above these are lowered, and a job running longer than {{ job_max_minutes }} minutes is stopped">limits: {{ limits.lineups }} lineups, {{ limits.jobs }} jobs, {{ limits.sims }} sims, field {{ limits.field_cap }}, {{ job_max_minutes }} min per job</span>{% endif %}
-      <span class="spacer"></span>
-      <button type="button" hx-post="{{ root }}/pipeline/generate" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.generate %}disabled{% endif %} title="{% if ready.generate %}publish the projections, then generate the lineup pool{% else %}load and project a slate first{% endif %}">Publish + generate</button>
-      <button type="button" hx-post="{{ root }}/pipeline/sim" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.sim %}disabled{% endif %} title="{% if ready.sim %}publish, then simulate every contest in the entries file over the pool{% elif not entries.exists %}upload the entries export first{% else %}generate the lineup pool first{% endif %}">Sim</button>
-      <button type="button" hx-post="{{ root }}/pipeline/choose" hx-include="closest form" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}choose lineups and write the upload CSV{% elif not entries.exists %}upload the entries export first{% else %}run the sim first{% endif %}">Choose</button>
-      <button type="submit" class="primary" {% if not ready.all %}disabled{% endif %} title="{% if ready.all %}publish, generate, sim, choose{% elif not projected %}load and project a slate first{% else %}upload the entries export first{% endif %}">Run all</button>
-      <button type="button" hx-post="{{ root }}/pipeline/field" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.generate %}disabled{% endif %} title="build the public field on the stored public projection and write every player's ownership from it (about 45s; nothing else does this on a slate day except the sim). scripts/nba/field_ownership.py">Field + ownership</button>
-    </div>
-    <div class="pipe-row pipe-sec {% if not ready.generate %}off{% endif %}" title="{% if not ready.generate %}opens once a slate is loaded and projected{% endif %}">
-      <span class="sec">generate</span>
-      <label title="ticked: the pool starts empty. Unticked: the new lineups join the existing pool (build a second scenario's lineups beside the first; the sim scores them all under whatever is published)"><input type="checkbox" name="fresh" value="on" {% if form.fresh %}checked{% endif %}> fresh pool</label>
-      <label>lineups <input name="lineups" value="{{ form.lineups }}" size="6"></label>
-      <label title="parallel solver processes, at most 8">jobs <input name="jobs" value="{{ form.jobs }}" size="2" type="number" min="1" max="8"></label>
-      <label title="every lineup must spend at least this">min salary <input name="min_salary" value="{{ form.min_salary }}" size="5"></label>
-      <label title="at most this much salary on one team's players">max salary / team <input name="max_salary_per_team" value="{{ form.max_salary_per_team }}" size="5"></label>
-      <label title="spread of the sampled worlds the lineups are optimised in, 0-1; lower = closer to the optimal">randomness <input name="randomness" value="{{ form.randomness }}" size="4"></label>
-      <label title="every lineup must project at least this share of the mean-optimal lineup">min fpts frac <input name="min_fpts_frac" value="{{ form.min_fpts_frac }}" size="4"></label>
-      <label title="players projected below this are left out of the solver's pool">player min fpts <input name="player_min_fpts" value="{{ form.player_min_fpts }}" size="3"></label>
-    </div>
-    <div class="pipe-row pipe-sec {% if not ready.sim %}off{% endif %}" title="{% if not ready.sim %}opens once the pool is generated{% endif %}">
-      <span class="sec">sim</span>
-      <label title="simulated worlds per contest">sims <input name="sims" value="{{ form.sims }}" size="5"></label>
-      <label title="largest field size simulated; bigger contests are scaled down to it">field cap <input name="field_cap" value="{{ form.field_cap }}" size="6"></label>
-    </div>
-    <div class="pipe-row pipe-sec {% if not ready.choose %}off{% endif %}" title="{% if not ready.choose %}opens once the sim has run{% endif %}">
-      <span class="sec">choose</span>
-      <label>method <select name="method" onchange="var f=this.form; f.querySelectorAll('.only-greedy').forEach(function(x){x.style.display=this.value==='greedy'?'':'none'}.bind(this)); f.querySelectorAll('.only-portfolio').forEach(function(x){x.style.display=this.value==='portfolio'?'':'none'}.bind(this))" title="greedy: best quality first, then quality plus a diversity bonus. portfolio: the set that maximises the log-utility of the bankroll over the simulated worlds"><option value="greedy" {% if form.method == 'greedy' %}selected{% endif %}>greedy</option><option value="portfolio" {% if form.method == 'portfolio' %}selected{% endif %}>portfolio</option></select></label>
-      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="weight on a lineup's cash rate in its quality score">cash weight <input name="cash_pct" value="{{ form.cash_pct }}" size="3"></label>
-      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="weight on a lineup's mean ROI in its quality score">roi weight <input name="avg_roi_win" value="{{ form.avg_roi_win }}" size="3"></label>
-      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="how much a pick is rewarded for being unlike the picks so far (0 = none)">diversity <input name="diversity_lambda" value="{{ form.diversity_lambda }}" size="3" {% if form.jam %}disabled{% endif %}></label>
-      <label class="only-greedy" {% if form.method == 'portfolio' %}style="display:none"{% endif %} title="take the top lineups by quality in order, no diversity between them"><input type="checkbox" name="jam" {% if form.jam %}checked{% endif %} onchange="this.form.querySelector('[name=diversity_lambda]').disabled = this.checked"> jam the best</label>
-      <label class="only-portfolio" {% if form.method != 'portfolio' %}style="display:none"{% endif %} title="utility scale in multiples of the entry fees: lower = more risk-averse picks">bankroll <input name="bankroll" value="{{ form.bankroll }}" size="3"></label>
-    </div>
-  </form>
-  <div class="pipe-row muted dash-entries">
-    <span>entries: {% if entries.exists %}<b>{{ entries.path }}</b>{% if entries.entries is defined %} · {{ entries.entries }} entries in {{ entries.contests|length }} contest{{ 's' if entries.contests|length != 1 else '' }} ({% for n, k in entries.contests.items() %}{{ n|truncate(34, True, '') }} ×{{ k }}{% if not loop.last %}, {% endif %}{% endfor %}) · {{ entries.modified.strftime('%H:%M') }}{% elif entries.error %} · <span class="bad">{{ entries.error }}</span>{% endif %}{% else %}<span class="bad">none at {{ entries.path }}</span>{% endif %}</span>
-    <form class="inline" hx-post="{{ root }}/entries" hx-target="#pipeline" hx-swap="outerHTML" hx-encoding="multipart/form-data"><input type="file" name="file" accept=".csv" onchange="this.form.requestSubmit()"><span class="muted small">upload the DraftKings entries export</span></form>
-    <span class="spacer"></span>
-    <span>{{ lineups_in_db }} lineups · {{ sims_in_db }} sim rows in the database</span>
+{# the actions bar, in the order a slate is worked: refresh the data, build the field, publish, generate, sim, choose, late
+   swap. The pipeline routes re-render this partial (#pipeline); the knobs live in the config section (#pipe-config, sent
+   along by every pipeline button), the entries in the contests section. #}
+<div id="pipeline" class="actions">
+  <div class="act-row">
+    <span class="brand-sm">Actions</span>
+    <span class="step"><i>1</i>
+      {% if consumer %}<form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections the laptop published, and read the news">Refresh</button></form>
+      {% else %}<form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups + news (free)">Refresh DK</button></form>
+      <form method="post" action="{{ root }}/refresh" title="the pool plus every game's spread and total (about 3 odds-api credits): what the games strip and the minutes model's blowout draw read"><input type="hidden" name="what" value="lines"><button>Lines</button></form>
+      <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game, plus about 3 for the game lines.')" title="the pool, the player props and the game lines (about 12 credits a game)"><input type="hidden" name="what" value="props"><button>Props</button></form>{% endif %}
+    </span>
+    <span class="step"><i>2</i><button type="button" hx-post="{{ root }}/pipeline/field" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.generate %}disabled{% endif %} title="build the public field on the stored public projection and write every player's ownership from it (about 45s; the sim also does this). scripts/nba/field_ownership.py">Field + ownership</button></span>
+    <span class="step"><i>3</i><form method="post" action="{{ root }}/publish" onsubmit="this.pins.value = collectDirtyPins()"><input type="hidden" name="pins" value=""><button class="primary" title="write the projections + edits into the pool for the sim and the other desk; values typed into the grids but not yet refigured are applied first{% if consumer %}; only the teams you edited are re-projected, the rest stays as published{% endif %}">Publish</button></form>
+      <span class="pub {{ published.level }}" title="{% if published.at %}last published {{ published.at.strftime('%a %H:%M') }}{% else %}not published yet{% endif %}{% if published.behind %} · since then: {{ published.behind|join(', ') }}{% if published.level == 'red' %} for {{ ((now - published.since).total_seconds() / 60)|int }} min: publish soon{% endif %}{% else %} · up to date{% endif %}">published {% if published.at %}{{ published.at.strftime('%H:%M') }} <small>{{ (published.age // 60)|int ~ 'h ' if published.age >= 60 else '' }}{{ (published.age % 60)|int }}m ago</small>{% else %}never{% endif %}{% if published.behind %} · <b>{{ published.behind|join(' + ') }} since</b>{% endif %}</span></span>
+    <span class="step"><i>4</i><button type="button" hx-post="{{ root }}/pipeline/generate" hx-include="#pipe-config" hx-vals='js:{pins: collectDirtyPins()}' hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.generate %}disabled{% endif %} title="{% if ready.generate %}publish the projections, then generate the lineup pool{% else %}load and project a slate first{% endif %}">Generate</button></span>
+    <span class="step"><i>5</i><button type="button" hx-post="{{ root }}/pipeline/sim" hx-include="#pipe-config" hx-vals='js:{pins: collectDirtyPins()}' hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.sim %}disabled{% endif %} title="{% if ready.sim %}publish, then simulate every contest in the entries file over the pool (contests of another slate are skipped){% elif not entries.exists %}upload the entries export first (contests, below){% else %}generate the lineup pool first{% endif %}">Sim</button></span>
+    <span class="step"><i>6</i><button type="button" hx-post="{{ root }}/pipeline/choose" hx-include="#pipe-config" hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}choose lineups and write the upload CSV{% elif not entries.exists %}upload the entries export first{% else %}run the sim first{% endif %}">Choose</button>
+      <button type="button" hx-post="{{ root }}/pipeline/all" hx-include="#pipe-config" hx-vals='js:{pins: collectDirtyPins()}' hx-target="#pipeline" hx-swap="outerHTML" {% if not ready.all %}disabled{% endif %} class="ghost" title="{% if ready.all %}publish, generate, sim, choose in a row{% elif not projected %}load and project a slate first{% else %}upload the entries export first{% endif %}">4–6 in a row</button></span>
+    <span class="step"><i>7</i><a class="btn" href="{{ root }}/?view=lateswap" title="after a tip: fetch the standings and swap the entries of the games not started">Late swap</a></span>
+    {% if limited %}<span class="muted small" title="this desk is shared: settings above these are lowered, and a job running longer than {{ job_max_minutes }} minutes is stopped">limits: {{ limits.lineups }} lineups, {{ limits.sims }} sims, {{ job_max_minutes }} min a job</span>{% endif %}
+  </div>
+  <div class="act-row fresh-row">
+    <span class="fresh">{% for f in fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}
+      <span class="f" title="Rotowire's news page, last read (every Refresh reads it; news auto every 5 minutes)">news {% if news.checked %}{{ news.checked }}{% else %}not read{% endif %}</span></span>
+    <span class="muted small">{{ lineups_in_db }} lineups · {{ sims_in_db }} sim rows on this slate</span>
   </div>
   {% with poll=False %}{% include "_nba_pipeline_status.html" %}{% endwith %}
-  {% with oob=False %}{% include "_nba_pipeline_side.html" %}{% endwith %}
 </div>

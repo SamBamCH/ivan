@@ -17,7 +17,7 @@ Read in this order:
 | [overnight.md](overnight.md)                               | What runs on timers (nightly box scores, archive at tip, feed pull) and what do I run by hand (standings scrape)? |
 | [validation-and-backtests.md](validation-and-backtests.md) | How do I check the model against what happened, refit it, and calibrate the field?                                |
 | [data.md](data.md)                                         | What is in the database and on disk, and who writes each table and file?                                          |
-| [../web/nba-desk.md](../web/nba-desk.md)                   | The desk page: cards, grids, pins, Publish, pipeline panel, exports, the consumer mode.                           |
+| [../web/nba-desk.md](../web/nba-desk.md)                   | The desk page: cards, grids, pins, Publish, actions bar, exports, the consumer mode.                           |
 | [notes/](notes/)                                           | Design notes and plans, dated; history of why things are the way they are.                                        |
 
 ## The flow in one picture

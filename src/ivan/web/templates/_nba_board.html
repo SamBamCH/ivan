@@ -8,8 +8,12 @@
 
 
   {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
-  {% if view not in ('exposures', 'backtest') %}{% include "_nba_pipeline.html" %}{% endif %}
 {% if view not in ('exposures', 'backtest') %}<nav class="menu below">
+  {% if mapped and mapped.n %}<div class="slot mapped-slot">
+    <div class="slot-time">mapped</div>
+    <div class="mapped-sum {% if mapped.n_mapped == mapped.n and questions_sum.open == 0 %}ok{% elif mapped.changed %}warn{% endif %}" title="green: mapped and no open question · yellow: an open question (a questionable player who could shake the rotation) · red: mapped but the inputs moved since · grey: unmapped{% if mapped.changed %} · changed: {{ mapped.changed|join(', ') }}{% endif %}{% if mapped.unmapped %} · unmapped: {{ mapped.unmapped|join(', ') }}{% endif %}">
+      <b>{{ mapped.n_mapped }}/{{ mapped.n }}</b> teams{% if questions_sum.open %}<br>{{ questions_sum.open }} open question{{ '' if questions_sum.open == 1 else 's' }}{% endif %}{% if mapped.n_mapped == mapped.n and questions_sum.open == 0 %}<br><b>good to go</b>{% endif %}</div>
+  </div>{% endif %}
   {% for grp in menu %}
   <div class="slot">
     <div class="slot-time">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }}</div>
@@ -22,6 +26,7 @@
   </div>
   {% endfor %}
 </nav>{% endif %}
+  {% if view not in ('exposures', 'backtest') %}{% include "_nba_pipeline.html" %}{% endif %}
   {% if view == 'games' and news_table %}{% with nt = news_table %}{% include "_nba_news.html" %}{% endwith %}{% endif %}
   {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% endif %}
   {% if view == 'backtest' %}{% include "_nba_backtest.html" %}{% endif %}
@@ -126,6 +131,7 @@
       </div>
     </div>
   {% endif %}
+  {% if view not in ('exposures', 'backtest') %}{% include "_nba_contests.html" %}{% include "_nba_config.html" %}{% endif %}
   {% if view != 'backtest' %}<p class="muted" style="font-size:12px;margin-top:14px">Type into min, the band's low–high, or fppm to override the model for that player (blank restores it); ✕ scratches; the team re-allocates around every edit. Publish saves the edits for the sim and the capture loop. Green rows have book odds behind them (the props set their rates); grey rows are history-only and are the ones to question or remove. Amber cell = worth a look, red = likely wrong; hover for why. Hover a projection for the stat lines behind it. Italic history = last season's.</p>{% endif %}
 
 {% endif %}

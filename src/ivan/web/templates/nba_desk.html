@@ -10,7 +10,7 @@
   :root { --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2e2; --bg:#f7f7f5; --card:#fff; --accent:#1f5fbf; --ok:#1a7f37; --bad:#b42318; --warn:#9a6700; }
   * { box-sizing:border-box } body { margin:0; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
   header { background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5 }
-  .bar { max-width:1700px; margin:0 auto; padding:12px 20px; display:flex; gap:14px 22px; align-items:center; flex-wrap:wrap; white-space:nowrap; border-bottom:1px solid var(--line) }
+  .bar { max-width:none; margin:0 auto; padding:12px 20px; display:flex; gap:14px 22px; align-items:center; flex-wrap:wrap; white-space:nowrap; border-bottom:1px solid var(--line) }
   .bar > * { flex:0 0 auto } .bar form, .bar button { flex:0 0 auto }
   .bar .fresh { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis }  /* the freshness strip gives way first; the buttons never clip */
   .bar .spacer { flex:1 0 12px }
@@ -34,9 +34,9 @@
   .teamfoot button.primary-sm { border-color:var(--ok); color:var(--ok) }
   .loading { padding:40px 0; text-align:center; color:var(--muted); font-size:14px } .spin { display:inline-block; width:14px; height:14px; border:2px solid #ccc; border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; vertical-align:-2px; margin-right:6px } @keyframes spin { to { transform:rotate(360deg) } }
   .countdown { font-weight:700; font-variant-numeric:tabular-nums } .countdown.soon { color:var(--bad) }
-  main { max-width:1700px; margin:0 auto; padding:28px 20px }
+  main { max-width:none; margin:0 auto; padding:28px 20px }
   .menu.below { padding:4px 0 14px }
-  .menu { max-width:1700px; margin:0 auto; padding:14px 20px 14px; display:flex; gap:26px; flex-wrap:nowrap; align-items:flex-start; overflow-x:auto; scrollbar-width:thin }
+  .menu { max-width:none; margin:0 auto; padding:14px 20px 14px; display:flex; gap:26px; flex-wrap:nowrap; align-items:flex-start; overflow-x:auto; scrollbar-width:thin }
   .menu::-webkit-scrollbar { height:6px } .menu::-webkit-scrollbar-thumb { background:#ccc; border-radius:3px }
   .slot { display:flex; gap:8px; align-items:flex-start; flex:0 0 auto } .slot-time { font-size:11px; font-weight:700; color:var(--muted); padding-top:6px; width:38px }
   .gm { border:1px solid var(--line); border-radius:8px; padding:5px 8px 4px; background:#fafafa; min-width:112px; flex:0 0 auto } .gm.locked { opacity:.45 }
@@ -72,7 +72,8 @@
   .menu a.chip .dot.moved { background:var(--accent) }
   .changes { margin:6px 0; padding:5px 10px; border:1px solid #bfdbfe; border-left:3px solid var(--accent); border-radius:6px; background:#eff6ff; font-size:12px } .changes ul { list-style:none; margin:3px 0 0; padding:0 } .changes .ck { display:inline-block; min-width:72px; font-size:10px; font-weight:700; text-transform:uppercase; color:var(--accent) } .changes li.status, .changes li.lineup { font-weight:600 }
   .notes { margin:6px 0; padding:5px 10px; border:1px solid #fde68a; border-left:3px solid #eab308; border-radius:6px; background:#fefce8; font-size:12px } .notes ul { list-style:none; margin:3px 0 0; padding:0 } .notes li { padding:1px 0 } .notes button.x { font-size:11px; color:var(--bad); background:none; border:0; cursor:pointer }
-  table.rot-grid .note-btn { font-size:10px; line-height:12px; padding:0 2px; border:0; background:none; color:#ccc; cursor:pointer } table.rot-grid .note-btn.on { color:#ca8a04; font-weight:700 } table.rot-grid tr:hover .note-btn { color:#999 } table.rot-grid tr:hover .note-btn.on { color:#a16207 }
+  table.rot-grid .note-btn { font-size:11px; line-height:13px; padding:0 4px; margin-left:3px; border:1px solid #fde68a; border-radius:4px; background:#fffbeb; color:#a16207; cursor:pointer; font-weight:700 }
+  table.rot-grid .note-btn:hover { background:#fef3c7; border-color:#eab308 } table.rot-grid .note-btn.on { background:#facc15; border-color:#ca8a04; color:#422006 }
   .consider { margin:6px 0 8px; padding:6px 10px; border:1px solid var(--line); border-left:3px solid var(--warn); border-radius:6px; background:#fffbeb; font-size:12px } .consider ul { list-style:none; margin:3px 0 0; padding:0 } .consider li { padding:1px 0 } .consider li.info { color:var(--muted) } .consider li.warn { color:var(--ink) } .consider .ck { display:inline-block; min-width:64px; font-size:10px; font-weight:700; text-transform:uppercase; color:#92400e } .consider li.info .ck { color:var(--muted) }
   table.rot-grid tr.score-row th { font-size:9px; font-weight:600; height:13px; padding:0; color:var(--muted); background:var(--card); text-transform:none } table.rot-grid tr.score-row th.sc { text-align:center; font-variant-numeric:tabular-nums; border-left:1px solid var(--line) } table.rot-grid tr.score-row th.sc.q { border-left:2px solid #bbb }
   table.rot-grid tr.score-row.us th.sc { color:var(--ink) } table.rot-grid tr.score-row th.sc.lead { color:var(--ok) } table.rot-grid tr.score-row th.sc.trail { color:var(--bad) } table.rot-grid tr.score-row th.score-lab { text-align:left; font-size:10px; color:var(--ink) } table.rot-grid tr.score-row th.score-lab .muted { font-weight:400 }
@@ -232,6 +233,24 @@
   table.bt-grid td.c.both { background:var(--accent) } table.bt-grid td.c.act { background:#34a853 } table.bt-grid td.c.ours { background:#f3b2ad }
   .bt-rot .sw { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:-1px; margin:0 2px 0 6px } .bt-rot .sw.both { background:var(--accent) } .bt-rot .sw.act { background:#34a853 } .bt-rot .sw.ours { background:#f3b2ad }
   .bt tr.final td { font-weight:700; border-top:2px solid var(--line) }
+  /* the actions bar: the steps of a slate in order */
+  .actions { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:6px 0 12px }
+  .act-row { display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap } .act-row form { display:inline; margin:0 } .act-row + .act-row { margin-top:6px }
+  .act-row .step { display:inline-flex; gap:5px; align-items:center; padding-right:14px; border-right:1px solid var(--line) } .act-row .step:last-of-type { border-right:0 }
+  .act-row .step > i { font-style:normal; font-size:11px; font-weight:700; color:#fff; background:var(--accent); border-radius:50%; width:17px; height:17px; display:inline-flex; align-items:center; justify-content:center }
+  .act-row button, .act-row a.btn, .contests-box label.btn { font:inherit; font-size:13px; padding:4px 11px; border-radius:6px; border:1px solid #cfcfcf; background:#fff; cursor:pointer; color:var(--ink); text-decoration:none }
+  .act-row button.primary { background:var(--accent); color:#fff; border-color:var(--accent) } .act-row button.ghost { color:var(--muted) } .act-row button:disabled { opacity:.45; cursor:not-allowed }
+  .act-row .pub { font-size:12px; color:var(--muted) } .act-row .pub.amber { color:#b45309 } .act-row .pub.red { color:#fff; background:var(--bad); padding:2px 8px; border-radius:10px } .act-row .pub.red small { color:#fde2e2 }
+  .fresh-row { font-size:12px } .fresh-row .fresh .f { margin-right:12px } .fresh-row .fresh .f.old { color:var(--bad); font-weight:600 }
+  .menu .mapped-slot .mapped-sum { font-size:12px; line-height:1.35; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:#fff }
+  .menu .mapped-slot .mapped-sum.ok { background:#dcfce7; border-color:#bbf7d0 } .menu .mapped-slot .mapped-sum.warn { background:#fee2e2; border-color:#fecaca }
+  .newsbox .news-head { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap } .newsbox .news-head h3 { margin:0 } .newsbox .news-head form { margin:0 } .newsbox .news-head label { font-size:12px }
+  .newsbox tr.divider td { background:#fff; border-top:3px solid #c9d7f2; padding:6px 6px 2px; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+  .newsbox tr.divider.out td { border-top-color:#f0c4c4 } .newsbox tr.divider.old td { border-top-color:#ddd } .newsbox tr.divider a.out-toggle { text-transform:none; letter-spacing:0; margin-right:6px }
+  .newsbox table:not(.show-old) tr.old-out { display:none }
+  .contests-box table.contests tr.other td { background:#fee2e2 } .contests-box .ok { color:var(--ok) } .bad { color:var(--bad) } .contests-box .dash-side { border-left:0; padding-left:0; max-height:none }
+  .cfg-box .pipe-form { display:block } .cfg-box .pipe-row { margin:4px 0 }
+  .view-pick { font:inherit; font-size:13px; padding:5px 8px; font-weight:600 } .zoom button { font:inherit; font-size:12px; padding:3px 7px; border:1px solid #cfcfcf; background:#fff; cursor:pointer } .zoom button:first-child { border-radius:5px 0 0 5px } .zoom button:last-child { border-radius:0 5px 5px 0 } .zoom button.on { background:#eef4ff; color:var(--accent) }
   .slate-step { font:inherit; font-size:14px; line-height:1; padding:2px 7px; border:1px solid #cfcfcf; border-radius:5px; background:#fff; cursor:pointer }
   .newsbox { margin:10px 0 14px } .newsbox h3 { font-size:14px; margin:10px 0 4px } .newsbox h3 .muted { font-weight:400; font-size:12px } .newsbox h3 .muted b { color:#92400e }
   .newsbox table.news-table { width:100%; margin-bottom:4px } .newsbox table.news-table td.newscell { max-width:520px; white-space:normal } .newsbox a.plink { color:inherit; text-decoration:none; cursor:pointer } .newsbox a.plink:hover { text-decoration:underline }
@@ -241,6 +260,25 @@
 </style>
 </head>
 <body>
+<script>
+  // page size: "fit" (default) scales the page so its natural width (BASE css px: the team grid with its columns) fills the
+  // window; A- / A+ set a size by hand. Remembered in this browser only.
+  (function () {
+    const BASE = 1500, KEY = "nba_zoom";
+    function get() { try { return localStorage.getItem(KEY) || "fit"; } catch (e) { return "fit"; } }
+    function set(v) { try { localStorage.setItem(KEY, v); } catch (e) {} }
+    function zoomOf(v) { return v === "fit" ? Math.max(0.8, Math.min(2.2, (window.innerWidth - 4) / BASE)) : (parseFloat(v) || 1); }
+    function apply() { const v = get(); document.documentElement.style.zoom = zoomOf(v).toFixed(3);
+      const f = document.getElementById("zoom-fit"); if (f) f.classList.toggle("on", v === "fit"); }
+    window.deskZoom = { apply: apply, step: function (k) { set(Math.max(0.6, Math.min(2.6, zoomOf(get()) + k)).toFixed(2)); apply(); }, fit: function () { set("fit"); apply(); } };
+    apply(); window.addEventListener("resize", function () { if (get() === "fit") apply(); });
+    document.addEventListener("DOMContentLoaded", function () {
+      const o = document.getElementById("zoom-out"), i = document.getElementById("zoom-in"), f = document.getElementById("zoom-fit");
+      if (o) o.onclick = function () { window.deskZoom.step(-0.1); }; if (i) i.onclick = function () { window.deskZoom.step(0.1); }; if (f) f.onclick = window.deskZoom.fit;
+      apply();
+    });
+  })();
+</script>
 <header>
 <div class="bar">
   <span class="brand" title="pool {{ header.pool_at.strftime('%H:%M') if header.pool_at else '—' }} · lineups {{ header.starters_at.strftime('%H:%M') if header.starters_at else 'none' }} · props {{ header.odds_at[11:16] if header.odds_at else 'none' }} UTC · {{ header.overrides }} edits">Ivan · NBA desk</span>
@@ -259,9 +297,9 @@
     <button type="button" id="slate-next" class="slate-step" title="the slate after">&rsaquo;</button>
     <script type="application/json" id="slate-days">{{ header.slate_days|tojson }}</script>
   </form>
-  {% if header.mapped and header.mapped.n %}<span class="mapped-sum {% if header.mapped.n_mapped == header.mapped.n and header.questions.open == 0 %}ok{% elif header.mapped.changed %}warn{% endif %}" title="green: mapped and no open question · yellow: an open question (a questionable player who could shake the rotation) · red: mapped but the inputs moved since · grey: unmapped">mapped {{ header.mapped.n_mapped }}/{{ header.mapped.n }}{% if header.questions.open %} · {{ header.questions.open }} open{% endif %}{% if header.mapped.n_mapped == header.mapped.n and header.questions.open == 0 %} · <b>good to go</b>{% endif %}</span>{% endif %}
-  {% if header.news is defined %}  <form method="post" action="{{ root }}/news/auto" class="news-auto" title="read Rotowire's news every 5 minutes while the desk runs; every Refresh reads it too (off: only Refresh does)"><label><input type="checkbox" name="on" value="1" {% if header.news.auto %}checked{% endif %} onchange="this.form.submit()"> news auto</label></form>
-  <span class="news-sum muted" title="headlines on file about this slate's players in the last 24h · when the page was last read">{% if header.news.checked %}news read {{ header.news.checked }}{% else %}news not read yet{% endif %} · {{ header.news.n_slate }} on this slate (24h)</span>{% endif %}
+  <select id="view-pick" class="view-pick" title="what the page shows: the slate (the team cards), every player, the late swap, the exposures of a set of lineups, or a slate's backtest" onchange="location.href = '{{ root }}/?view=' + this.value + (this.value === 'backtest' && document.getElementById('slate-form').dataset.viewing ? '&dg=' + document.getElementById('slate-form').dataset.viewing : '')">
+    {% for v, lab in (('games', 'slate'), ('players', 'players'), ('lateswap', 'late swap'), ('exposures', 'exposures'), ('backtest', 'backtest')) %}<option value="{{ v }}" {% if (view == v) or (v == 'games' and view not in ('players', 'lateswap', 'exposures', 'backtest')) %}selected{% endif %}>{{ lab }}</option>{% endfor %}
+  </select>
   {% if header.autopilot is defined and header.autopilot is not none %}{% set ap = header.autopilot %}
   <form method="post" action="{{ root }}/autopilot" class="news-auto" title="autopilot: every 15 minutes the capture tick refreshes the loaded slate, fetches props at the offsets before lock and publishes + pushes the feed to the other desk; it stands down while you are editing here (scripts/nba/autopilot.py){% if ap.last_tick %} · last tick {{ ap.last_tick.at[11:16] }}: {{ ap.last_tick.result }}{% endif %}"><label><input type="checkbox" name="on" value="1" {% if ap.on %}checked{% endif %} onchange="this.form.submit()"> autopilot</label>{% if ap.on and ap.last_tick %} <span class="muted" style="font-size:12px">tick {{ ap.last_tick.at[11:16] }}{% if not ap.last_tick.ok %} <b style="color:var(--bad)">failed</b>{% elif ap.last_tick.skipped %} held{% endif %}</span>{% endif %}</form>
   {% elif header.feed is defined and header.feed is not none %}{% set fd = header.feed %}{% set prod = fd.producer or {} %}
@@ -270,17 +308,8 @@
   <label title="hide players projected below this many fantasy points">show ≥
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>
-  <span class="fresh">{% for f in header.fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{{ '%02d'|format((f.age % 60)|int) }}{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}</span>
-  <span class="views"><a href="{{ root }}/?view=games" class="{% if view not in ('players', 'lateswap', 'exposures', 'backtest') %}on{% endif %}">slate</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a><a href="{{ root }}/?view=exposures" class="{% if view == 'exposures' %}on{% endif %}">exposures</a><a href="{{ root }}/?view=backtest{% if dg %}&dg={{ dg }}{% endif %}" class="{% if view == 'backtest' %}on{% endif %}" title="a slate's results, read only: our entries against the sim's claim, every player against our projection">backtest</a></span>
   <span class="spacer"></span>
-  {% if consumer %}
-  <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections pushed from the laptop">Refresh</button></form>
-  {% else %}
-  <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
-  <form method="post" action="{{ root }}/refresh" title="the pool plus every game's spread and total (about 3 odds-api credits): what the games strip and the minutes model's blowout draw read"><input type="hidden" name="what" value="lines"><button>Refresh lines</button></form>
-  <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game, plus about 3 for the game lines.')" title="the pool, the player props and the game lines"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
-  {% endif %}
-  <form method="post" action="{{ root }}/publish" onsubmit="this.pins.value = collectDirtyPins()"><input type="hidden" name="pins" value=""><button class="primary" title="write projections + edits for the sim and the capture loop; values typed into the grids but not yet refigured are applied first{% if consumer %}; only the teams you edited are re-projected, the rest stays as published{% endif %}">Publish</button></form>
+  <span class="zoom" title="page size: fit fills the window's width; A− / A+ size by hand (remembered in this browser)"><button type="button" id="zoom-out">A−</button><button type="button" id="zoom-fit">fit</button><button type="button" id="zoom-in">A+</button></span>
   <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
 </div>
 
