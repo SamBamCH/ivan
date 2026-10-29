@@ -71,6 +71,10 @@ tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a play
 in nba_api's all-players list (`ivan.sports.nba.experience`, fetched by the nightly or `scripts/nba/experience.py
 fetch`), matched by name without suffixes, then by last name on his team; a name the list lacks is a rookie when no
 NBA game is on file before this season.
+A past game's grid (the dropdown) has two small rows above the minutes: each team's running score at the end of every
+3 minutes, the team's own row green while it leads and red while it trails, the final and home/away beside the name,
+and the score at each minute on hover (`Desk.score_strip` = `pbp.game_score`, the stored play-by-play, no fetch;
+overtime folds into the last cell like the grid; no rows when the game's feed is not on disk).
 
 The **late news form** (`/team/<TEAM>/news`): player, call (out / starts / bench / back), then
 (sim + choose, late swap, publish only). **Scenarios**: save the team's edits under a name, activate,

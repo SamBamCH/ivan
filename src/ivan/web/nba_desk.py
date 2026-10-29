@@ -431,6 +431,32 @@ class Desk:
             return None
         return dict(games=int((sa.get("season") or {}).get("games", 0)))
 
+    SCORE_STEP = 3   # minutes per cell of the score strip above a past game's grid
+
+    def score_strip(self, team: str, game_id: str) -> Optional[dict]:
+        """
+        The game's running score above its grid (pbp.game_score, the stored play-by-play; no fetch): the team's and the
+        opponent's score at the end of every SCORE_STEP minutes, the margin, and the exact score per minute for the hover.
+        None when the feed is not on disk.
+        """
+        from ivan.sports.nba import pbp as PBP
+        try:
+            sc = PBP.game_score(str(game_id))
+        except Exception:   # noqa: BLE001 - a missing or odd feed: no strip
+            sc = None
+        if not sc or team not in sc:
+            return None
+        opp = next(t for t in sc["final"] if t != team)
+        step = self.SCORE_STEP
+        cells = []
+        for k in range(48 // step):
+            m = (k + 1) * step - 1
+            us, them = sc[team][m], sc[opp][m]
+            cells.append(dict(start=k * step, us=us, them=them, margin=us - them,
+                              tip=" · ".join(f"{i + 1}': {sc[team][i]}-{sc[opp][i]}" for i in range(k * step, m + 1))))
+        return dict(team=team, opp=opp, step=step, cells=cells, final=(sc[team][-1], sc[opp][-1]), overtime=sc["overtime"],
+                    home=sc["home"] == team)
+
     def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
         """The rotation grid (_rotation) with each row's rookie mark (rookie_of): the same on tonight's grid and a past game's."""
         rot = self._rotation(team, source=source, game_id=game_id)
@@ -556,6 +582,7 @@ class Desk:
                                  foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
             match = next((m for m in matches if str(m["game_id"]) == str(last["game_id"])), None)
             return {**base, "kind": "last", "rows": rows, "counts": ROT.column_counts(grid), "game_id": last["game_id"], "last_game": last["game_date"], "fouls": True,
+                    "score": self.score_strip(team, last["game_id"]),
                     "owners": owners, "match": match, "games": games, "garbage_from": (match or {}).get("garbage_from")}
 
         grid = rot.get("grid")

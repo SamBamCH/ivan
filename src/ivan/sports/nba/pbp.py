@@ -264,6 +264,56 @@ def fouls_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str) -> pd.Dat
     return df
 
 
+def home_of(pbp: pd.DataFrame, teams: List[str]) -> Optional[str]:
+    """The home team: the first scoring action's team, by which of scoreHome / scoreAway it raised (pbp sorted by time)."""
+    home = None; last = (0, 0)
+    for r in pbp.itertuples():
+        try:
+            sh, sa = int(r.scoreHome), int(r.scoreAway)
+        except (TypeError, ValueError):
+            continue
+        if (sh, sa) != last and r.teamTricode:
+            home = r.teamTricode if sh > last[0] else (None if sa <= last[1] else r.teamTricode)
+            if sa > last[1] and sh == last[0]:
+                away = r.teamTricode
+                home = next((t for t in teams if t != away), None)
+            break
+    return home if home is not None else (teams[0] if teams else None)
+
+
+def score_by_minute(pbp: pd.DataFrame, teams: Optional[List[str]] = None) -> Optional[dict]:
+    """
+    The running score at the end of each of the 48 minutes, from the raw play-by-play (overtime folded into the last
+    minute, so minute 48 is the final, the way the rotation grid folds it): {team: [48 scores]}, plus home and final.
+    None when the feed has no scores.
+    """
+    if pbp is None or pbp.empty or "scoreHome" not in pbp:
+        return None
+    pbp = pbp.copy()
+    pbp["elapsed"] = [elapsed_at(int(p), c) for p, c in zip(pbp.period, pbp.clock)]
+    pbp = pbp.sort_values(["period", "elapsed", "actionNumber"]).reset_index(drop=True)
+    teams = teams or [t for t in pbp.teamTricode.dropna().unique() if t]
+    if len(teams) != 2:
+        return None
+    home = home_of(pbp, teams); away = next(t for t in teams if t != home)
+    sh = pd.to_numeric(pbp.scoreHome, errors="coerce").ffill().fillna(0).astype(int)
+    sa = pd.to_numeric(pbp.scoreAway, errors="coerce").ffill().fillna(0).astype(int)
+    el = pbp.elapsed.to_numpy()
+    hs, as_ = [], []
+    for m in range(48):
+        upto = (m + 1) * 60.0 if m < 47 else float("inf")
+        idx = np.nonzero(el <= upto)[0]
+        i = idx[-1] if len(idx) else None
+        hs.append(int(sh.iloc[i]) if i is not None else 0); as_.append(int(sa.iloc[i]) if i is not None else 0)
+    return {home: hs, away: as_, "home": home, "final": {home: hs[-1], away: as_[-1]}, "overtime": int(pbp.period.max()) > 4}
+
+
+def game_score(game_id: str) -> Optional[dict]:
+    """score_by_minute from the stored raw play-by-play (no fetch); None when the game's feed is not on disk."""
+    df = load_raw(str(game_id))
+    return score_by_minute(df) if df is not None else None
+
+
 def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str, subs_out: Optional[list] = None) -> pd.DataFrame:
     """
     box: this game's nba_stats rows (player_name normalized, team_abbreviation, minutes, position).
@@ -276,22 +326,8 @@ def stints_from_pbp(pbp: pd.DataFrame, box: pd.DataFrame, game_id: str, subs_out
     pbp["elapsed"] = [elapsed_at(int(p), c) for p, c in zip(pbp.period, pbp.clock)]
     pbp = pbp.sort_values(["period", "elapsed", "actionNumber"]).reset_index(drop=True)
     max_period = int(pbp.period.max()); end = game_length(max_period)
-    # home team: the first scoring action whose team raises scoreHome
-    home = None; last = (0, 0)
-    for r in pbp.itertuples():
-        try:
-            sh, sa = int(r.scoreHome), int(r.scoreAway)
-        except (TypeError, ValueError):
-            continue
-        if (sh, sa) != last and r.teamTricode:
-            home = r.teamTricode if sh > last[0] else (None if sa <= last[1] else r.teamTricode)
-            if sa > last[1] and sh == last[0]:
-                home = None; away = r.teamTricode
-                home = next((t for t in box.team_abbreviation.unique() if t != away), None)
-            last = (sh, sa); break
     teams = list(box.team_abbreviation.unique())
-    if home is None:
-        home = teams[0]
+    home = home_of(pbp, teams)
     # running margin from the home side; filled forward
     sh = pd.to_numeric(pbp.scoreHome, errors="coerce").ffill().fillna(0); sa = pd.to_numeric(pbp.scoreAway, errors="coerce").ffill().fillna(0)
     pbp["margin_home"] = (sh - sa).astype(int)

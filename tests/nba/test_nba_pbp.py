@@ -112,3 +112,21 @@ def test_substitution_pairs_are_collected_with_the_stints():
     subs = []
     P.stints_from_pbp(_pbp(rows), box, "g1", subs_out=subs)
     assert [(s["player_out"], s["player_in"], s["elapsed"]) for s in subs] == [("a one", "b one", 360.0), ("a two", "a one", 540.0)]
+
+
+def test_score_by_minute():
+    """The running score at the end of each minute; overtime folded into the last one; the home team from the first basket."""
+    import pandas as pd
+    from ivan.sports.nba.pbp import score_by_minute
+    rows = [
+        dict(actionNumber=1, period=1, clock="PT11M30.00S", teamTricode="AWY", scoreHome="0", scoreAway="2"),   # 0:30: the away side scores
+        dict(actionNumber=2, period=1, clock="PT10M10.00S", teamTricode="HOM", scoreHome="3", scoreAway="2"),   # 1:50
+        dict(actionNumber=3, period=2, clock="PT11M00.00S", teamTricode="HOM", scoreHome="5", scoreAway="2"),   # 13:00
+        dict(actionNumber=4, period=5, clock="PT01M00.00S", teamTricode="AWY", scoreHome="5", scoreAway="8"),   # overtime
+    ]
+    sc = score_by_minute(pd.DataFrame(rows))
+    assert sc["home"] == "HOM"
+    assert sc["AWY"][0] == 2 and sc["HOM"][0] == 0          # end of minute 1
+    assert sc["HOM"][1] == 3 and sc["HOM"][12] == 5         # end of minute 2; minute 13 (the basket at 13:00 exactly)
+    assert sc["HOM"][46] == 5 and sc["AWY"][46] == 2        # end of regulation's 47th minute
+    assert sc["final"] == {"HOM": 5, "AWY": 8} and sc["overtime"]
