@@ -192,9 +192,12 @@ def group_news(players, box: pd.DataFrame, state: pd.DataFrame, news: Dict[str, 
 
 
 def slate_news(session: Session, slate, now: Optional[datetime] = None, calls: Optional[Dict[str, str]] = None,
-               minutes: Optional[Dict[str, float]] = None, mapped_at: Optional[Dict[str, datetime]] = None) -> dict:
-    """group_news over a LiveSlate (its pool, box scores, history state and starters) with the headlines on file."""
+               minutes: Optional[Dict[str, float]] = None, mapped_at: Optional[Dict[str, datetime]] = None,
+               starters: Optional[Dict[str, set]] = None) -> dict:
+    """group_news over a LiveSlate (its pool, box scores, history state and Rotowire's starters unless `starters` is given:
+    the desk passes its own, with its starter calls in) with the headlines on file."""
     now = now or datetime.now()
     names = [normalize_name(p.name) for p in slate.players if (p.status or "").upper() in (QUESTION_STATUSES | OUT_STATUSES)]
     news = latest(session, names, hours=NEWS_HOURS, now=now)
-    return group_news(slate.players, slate.box, slate.state, news, now=now, calls=calls, minutes=minutes, starters=slate.starters, mapped_at=mapped_at)
+    return group_news(slate.players, slate.box, slate.state, news, now=now, calls=calls, minutes=minutes,
+                      starters=slate.starters if starters is None else starters, mapped_at=mapped_at)

@@ -214,7 +214,8 @@
   details summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:6px }
   .newsbox { margin:10px 0 14px } .newsbox h3 { font-size:14px; margin:10px 0 4px } .newsbox h3 .muted { font-weight:400; font-size:12px } .newsbox h3 .muted b { color:#92400e }
   .newsbox table.news-table { width:100%; margin-bottom:4px } .newsbox table.news-table td.newscell { max-width:520px; white-space:normal } .newsbox a.plink { color:inherit; text-decoration:none; cursor:pointer } .newsbox a.plink:hover { text-decoration:underline }
-  .newsbox tr.qrow td:first-child { color:#92400e } .newsbox tr.qrow.answered td:first-child { color:var(--ink) } .newsbox .nocall { color:#b45309 } .newsbox tr.out td:first-child a { text-decoration:line-through; text-decoration-color:var(--bad) }
+  .newsbox tr.qrow td:first-child { color:#92400e } .newsbox tr.qrow.answered td:first-child { color:var(--ink) } .newsbox .nocall { color:#b45309 }
+  .newsbox tr.out td { color:var(--ink); text-decoration:none } .newsbox tr.out td:first-child a { text-decoration:line-through; text-decoration-color:var(--bad) }   /* the page-wide tr.out strikes the whole row; here only the name */
   .newsbox b.warn { color:#b45309 } details.news-out > summary { font-size:13px }
 </style>
 </head>
