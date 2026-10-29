@@ -12,7 +12,7 @@ page is what is on the screen.
 - **Slate picker**: a day, then that day's classic draft groups (from the DK lobby for today and
   tomorrow, from the archive for past days; the loaded slate is always listed). Picking a slate goes at once, and
   the ‹ › arrows step through every slate in time order. A slate of **today or tomorrow loads** into the desk (fetched,
-  projected; it clears the loaded slate's lineups and sims, so the desk asks first when there are any). A slate of an
+  projected; the slate it replaces keeps its lineups, sims and edits for when it comes back). A slate of an
   **earlier day opens its backtest** (below), read only: nothing is loaded or deleted. The backtest's **Restore into
   the desk** button loads a past slate from its archive capture when it is to be re-worked.
   While a load or a refresh runs the board shows its progress; when it is done the whole page reloads, so the
@@ -67,6 +67,11 @@ priced players, the flags. Inputs on the row:
 - **starter** toggle (`/starter`).
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
 - **Clear** (`/clear`): drop the team's pins and grid.
+
+**Since the last refresh** (top of the card): what the last Refresh moved for the team (`ivan.sports.nba.changes`,
+returned by `ingest.run_ingest` and printed by `ingest.py`; a consumer's Refresh diffs its pull): statuses, players
+into or out of Rotowire's five and a confirmed lineup, players added to or dropped from the pool, projections that
+moved 3+ points, new headlines. The team's chip in the games strip gets a blue dot with the list on hover.
 
 **Notes** (`/team/<TEAM>/note` = `scripts/nba/notes.py set|clear|list`, `ivan.sports.nba.notes`): the pencil beside a
 name on tonight's grid asks for a note on that player (blank clears it); it turns amber when he has one, hovering shows
@@ -124,10 +129,26 @@ A past slate, read only (`ivan.sports.nba.slate_backtest`, terminal `scripts/nba
   scores (DraftKings' names matched to the box by name, by name without suffixes, then by a unique last name; 99.6
   to 100% of lineups equal DraftKings' final points on the finished exports checked), ranks with ties sharing the
   payouts of the places they cover. Before the box scores arrive the export's own points stand.
+- **ROI through the night**: what our entries were expected to make at each point: the chooser's claim before lock,
+  every late swap run's expected ROI for the entries as held and after its swaps (`lateswap.<stamp>.json`, the
+  expected payouts it computed with the games started so far), then the final. Late news moves a slate after the first
+  lock; this shows when the expectation fell.
+- **By tip**: each tip's games judged on the projection before lock and on the newest capture taken by that tip (ours
+  or the archive's at-tip capture, up to 12 minutes after it): minutes and points MAE and bias of the rotation
+  players, and the players the late news moved most, with what they scored.
+- **Fields**: per contest the entries, unique lineups, the share duplicated, the most copies, the winning score, our
+  entries' mean copies; the most-owned players of the largest contest, DraftKings' ownership against our projected
+  ownership at the first tip and our exposure.
 - **Notes at lock**: the desk's player notes that stood at lock.
 - **Players by team**: minutes and points projected (our last capture before lock) against played, the miss, our
-  exposure, the field's ownership (DraftKings' %drafted in the largest contest), the note.
-- **Our lineups**: every entry, best first: rank, points, payout, copies of it in that contest's field.
+  exposure, the field's ownership (DraftKings' %drafted in the largest contest), our projected ownership, the note.
+  Below each team's table, the game as played over our grid: the grid drawn on the desk (filed per slate under
+  `data/nba/input/edits/<draft group>/<TEAM>.json`), else the grid rows the archive kept at the tip (`rotation_cells`,
+  kept from 2026-10-29 by `archive_at_lock.py`), each minute marked on the floor in both, played but not in ours, or in
+  ours and sat; the share of the 240 player-minutes on the floor in both.
+- **Our lineups**: every entry, best first: rank, points, payout, copies of it in that contest's field, and the sim's
+  ROI for that lineup at choose time (chooser runs from 2026-10-29 keep it per lineup with its players, `by_lineup`;
+  matched to the entry through the chooser's upload file, so a late-swapped entry shows its claim at choose time).
 
 The plan this is phase 1 of: [../nba/notes/slate_views_plan_2026-10-29.md](../nba/notes/slate_views_plan_2026-10-29.md).
 

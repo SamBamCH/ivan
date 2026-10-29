@@ -28,8 +28,7 @@ inputs and outcomes of every slate, derive everything else) is [../data_framewor
 | `contest_sim_report` | one report per simulated contest (field, payouts, scores, checks) | `sim.py` | no |
 | `raw_artifact` | the index of raw payloads (mirror of `raw/index.jsonl`) | `ivan.core.raw.store` | no |
 
-Working tables (`lineup*`, `lineup_simulation_results`, `contest_sim_report`) hold one slate: loading
-another deletes the others' rows (`ingest.isolate_slate`). `scripts/nba/clear_all.py [--yes|--dry-run]`
+Working tables (`lineup*`, `lineup_simulation_results`, `contest_sim_report`): each slate keeps its own lineups, sims and contest reports: generate, the field sampler and the sim read only the loaded slate's (`field_generation.slate_lineups`), and a switch (`ingest.isolate_slate`) deletes only the work of slates more than 2 days old (`KEEP_SLATE_DAYS`). `scripts/nba/clear_all.py [--yes|--dry-run]`
 empties them by hand.
 
 ## On disk (`data/nba/`)

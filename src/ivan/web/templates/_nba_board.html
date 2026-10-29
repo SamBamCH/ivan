@@ -15,7 +15,7 @@
     <div class="slot-time">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }}</div>
     {% for g in grp.games %}
     <div class="gm {% if g.locked %}locked{% endif %} {% if open_team in g.teams|map(attribute='team') %}cur{% endif %}">
-      <div class="gm-teams">{% for c in g.teams %}<a class="chip {{ c.colour or 'unmapped' }} {% if c.team == open_team %}on{% endif %}" hx-get="{{ root }}/board?view=games&team={{ c.team }}" hx-target="#board" hx-swap="innerHTML" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}">{{ c.team }}{% if c.new %}<i class="dot"></i>{% endif %}</a>{% if not loop.last %}<span class="at">@</span>{% endif %}{% endfor %}</div>
+      <div class="gm-teams">{% for c in g.teams %}<a class="chip {{ c.colour or 'unmapped' }} {% if c.team == open_team %}on{% endif %}" hx-get="{{ root }}/board?view=games&team={{ c.team }}" hx-target="#board" hx-swap="innerHTML" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}{% if c.moved %} · since the last refresh: {{ c.moved }}{% endif %}">{{ c.team }}{% if c.new or c.moved %}<i class="dot {% if c.moved %}moved{% endif %}"></i>{% endif %}</a>{% if not loop.last %}<span class="at">@</span>{% endif %}{% endfor %}</div>
       <div class="gm-line" title="the favourite and by how many points (the consensus spread of tonight's game) · the game total">{% if g.fav %}{% if g.fav[0] %}{{ g.fav[0] }} by {{ '%g'|format(g.fav[1]) }}{% else %}pick'em{% endif %}{% if g.total %} · {{ '%g'|format(g.total) }}{% endif %}{% else %}no line{% endif %}</div>
     </div>
     {% endfor %}

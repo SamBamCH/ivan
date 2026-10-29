@@ -102,8 +102,8 @@ venv/bin/python scripts/nba/feed.py apply <dir>                              # a
 
 On the consumer a pull (the timer's, or the desk's Refresh) ends in `ingest.after_pull`: when the
 published slate moved to another draft group, this machine's own edits of the old slate are filed under
-`data/nba/input/edits/<draft group>/` and the new slate's come back (`retire_edits`), and the other
-slate's lineups and sims are cleared (`isolate_slate`), as on the producer; then only the slate's teams
+`data/nba/input/edits/<draft group>/` and the new slate's come back (`retire_edits`), and slates more than
+2 days old lose their lineups and sims (`isolate_slate`), as on the producer; then only the slate's teams
 it edited itself are re-projected (its edits on top of the published projection) and the rest stays
 exactly as published. State in `data/feed-state/` (`nba.json`: stamps, the last check, the producer's
 note from the manifest).

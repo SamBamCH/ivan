@@ -27,7 +27,8 @@ Config (`config/nba.json → generate`): `n_samples` (the desk's default count),
 the worlds around the mean), `jitter` 0.05, `min_fpts` or `min_fpts_frac` 0.9 of the optimal,
 `player_min_fpts` 15. The solver reads `max_salary` 50000, `min_salary` 49000, `max_salary_per_team` 30000.
 
-`--fresh` (the desk's "fresh pool" box, on by default) empties the lineup and sim tables first;
+`--fresh` (the desk's "fresh pool" box, on by default) empties the loaded slate's lineups and their sims first
+(other slates' stay; generate, the field sampler and the sim only ever read the loaded slate's, `field_generation.slate_lineups`);
 without it a second run adds to the pool, which is how two scenarios' lineups sit side by side
 before lock. The generate step writes nothing else (no field, no ownership, since 2026-10-28).
 

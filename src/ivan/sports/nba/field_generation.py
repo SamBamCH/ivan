@@ -154,6 +154,15 @@ def pool_draft_group(session: Session) -> Optional[int]:
     return None if row is None else int(row[0])
 
 
+def slate_lineups(session: Session, *columns):
+    """The loaded slate's lineups (Lineup.draft_group_id = the pool's draft group): what generate, the field sampler and the
+    sim work on. Other slates' lineups stay in the table (ingest.isolate_slate keeps the recent ones) and are never read
+    as this slate's. Rows without a draft group (older than the column) count as the loaded slate's."""
+    q = session.query(*columns) if columns else session.query(Lineup)
+    dg = pool_draft_group(session)
+    return q if dg is None else q.filter((Lineup.draft_group_id == dg) | (Lineup.draft_group_id.is_(None)))
+
+
 def snapshot_pool(session: Session) -> Optional[int]:
     """Write (replace) the lineup_pool rows for the current pool's slate: what the exports read names and positions from."""
     dg = pool_draft_group(session)
@@ -250,7 +259,7 @@ class _ProgressBars:
 def deduplicate_lineups(session: Session) -> Tuple[int, int]:
     """Remove Lineup rows that repeat an earlier row's player set (any order). Returns (removed, kept)."""
     seen = set(); dupes = []
-    for lid, raw in session.query(Lineup.id, Lineup.player_ids_list).order_by(Lineup.id).all():
+    for lid, raw in slate_lineups(session, Lineup.id, Lineup.player_ids_list).order_by(Lineup.id).all():
         key = tuple(sorted(coerce_player_ids(raw)))
         if key in seen:
             dupes.append(int(lid))
@@ -264,9 +273,16 @@ def deduplicate_lineups(session: Session) -> Tuple[int, int]:
 
 
 def clear_lineups(session: Session) -> Tuple[int, int]:
-    """Empty the working tables (simulation results, then lineups). Returns the rows removed from each."""
-    n_sims = session.execute(text("DELETE FROM lineup_simulation_results")).rowcount
-    n_lineups = session.execute(text("DELETE FROM lineup")).rowcount
+    """Empty the loaded slate's lineups and their simulation results (a fresh generate); other slates' stay. Returns the rows
+    removed from each."""
+    dg = pool_draft_group(session)
+    if dg is None:
+        n_sims = session.execute(text("DELETE FROM lineup_simulation_results")).rowcount
+        n_lineups = session.execute(text("DELETE FROM lineup")).rowcount
+    else:
+        mine = "SELECT id FROM lineup WHERE draft_group_id = :d OR draft_group_id IS NULL"
+        n_sims = session.execute(text(f"DELETE FROM lineup_simulation_results WHERE lineup_id IN ({mine})").bindparams(d=dg)).rowcount
+        n_lineups = session.execute(text("DELETE FROM lineup WHERE draft_group_id = :d OR draft_group_id IS NULL").bindparams(d=dg)).rowcount
     session.commit()
     return int(n_lineups or 0), int(n_sims or 0)
 
@@ -276,7 +292,7 @@ def pool_report(session: Session, config: dict, log: Log = print) -> dict:
     players = player_pool(session, generate_settings(config)["player_min_fpts"])
     opt = optimal_total(players, config)
     means = {p.id: float(p.fpts_mean or 0.0) for p in players}; names = {p.id: p.name for p in players}
-    L = [coerce_player_ids(x) for (x,) in session.query(Lineup.player_ids_list).all()]
+    L = [coerce_player_ids(x) for (x,) in slate_lineups(session, Lineup.player_ids_list).all()]
     if not L or not opt:
         return {}
     import numpy as np

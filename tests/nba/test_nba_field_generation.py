@@ -68,3 +68,26 @@ def test_projection_weighted_sampler_and_expand(session):
     assert lineup_ix[0] == lineup_ix[1] == [0, 1] and lineup_ix[2] == [2, 3] and list(starts) == [0, 2] and list(ends) == [2, 3]
     with pytest.raises(ValueError):
         SF.sample_field(session, 10, {"field": {"sampler": "nope"}}, {})
+
+
+def test_each_slate_keeps_its_own_lineups(session):
+    """2026-10-29: generate / the sim read the loaded slate's lineups only; a fresh generate and a switch leave recent slates' work."""
+    from datetime import timedelta
+    from ivan.sports.nba.ingest import isolate_slate
+    from ivan.sports.nba.models import HistoricalContest
+    today = datetime.now()
+    session.add(NBAPlayer(name="a", team="AAA", position="PG", roster_slot_id=1, gametime=today, salary=5000, draft_group_id=1))
+    for dg, day in ((1, today), (2, today), (3, today - timedelta(days=5))):
+        session.add(HistoricalContest(contest_id=100 + dg, draft_group_id=dg, name=f"c{dg}", date=day, entry_fee=1.0, total_entries=10, multi_entry=1))
+        for k in range(2):
+            session.add(Lineup(player_ids_list=[dg, k], draft_group_id=dg))
+    session.commit()
+    for L in session.query(Lineup).all():
+        session.add(LineupSimulationResult(lineup_id=L.id, contest_id=100 + L.draft_group_id, contest_name="c", fpts=[1.0], payout=[0.0], roi=[-1.0], rank=[2]))
+    session.commit()
+    assert sorted(L.draft_group_id for L in FG.slate_lineups(session).all()) == [1, 1]
+    assert FG.clear_lineups(session) == (2, 2)                                   # slate 1's lineups and their sims only
+    assert sorted(L.draft_group_id for L in session.query(Lineup).all()) == [2, 2, 3, 3]
+    out = isolate_slate(session, 1, log=lambda m: None)                          # slate 2 (today) stays, slate 3 (5 days old) goes
+    assert out["slates"] == [3] and sorted(L.draft_group_id for L in session.query(Lineup).all()) == [2, 2]
+    assert session.query(LineupSimulationResult).count() == 2

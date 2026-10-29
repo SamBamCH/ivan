@@ -161,6 +161,17 @@ def _name(p) -> str:
     return getattr(p, "name", "") or ""
 
 
+def _claims_by_lineup(session, by_lineup: dict) -> Dict[str, dict]:
+    """{lineup id: {players: DK ids, cash_pct, avg_roi}}: each chosen lineup's simulated claim with its players, so the slate's
+    backtest (slate_backtest) can set every entry's result beside the claim made for it after the lineup rows are gone."""
+    from ivan.sports.nba.models import Lineup
+    ids = [int(i) for i in by_lineup]
+    if not ids:
+        return {}
+    players = {int(l.id): [int(x) for x in (l.player_ids_list or [])] for l in session.query(Lineup).filter(Lineup.id.in_(ids)).all()}
+    return {str(i): dict(players=sorted(players.get(int(i), [])), cash_pct=v.get("cash_pct"), avg_roi=v.get("avg_roi")) for i, v in by_lineup.items()}
+
+
 def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print) -> ChooseRun:
     """Pick and slot-assign lineups for every contest in the entries frame (read_entries)."""
     run = ChooseRun()
@@ -189,7 +200,8 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
             log(f"  WARNING: no lineups chosen for contest {cid}; skipping")
             continue
         run.choose_viz[str(cid)] = {"contest_name": cname, "entries": n_entries, "book": stats.get("book"), "trace": stats.get("trace"),
-                                    **{k: stats.get(k) for k in ("results", "unique", "chosen", "chosen_roi", "chosen_cash", "top_quality_roi", "top_quality_cash")}}
+                                    **{k: stats.get(k) for k in ("results", "unique", "chosen", "chosen_roi", "chosen_cash", "top_quality_roi", "top_quality_cash")},
+                                    "by_lineup": _claims_by_lineup(session, stats.get("by_lineup") or {})}
         log(f"  chosen {stats['chosen']}: mean ROI {stats['chosen_roi']:+.1%}, cash {stats['chosen_cash']:.1%}"
             f"  (top-{stats['chosen']} by quality alone: ROI {stats['top_quality_roi']:+.1%}, cash {stats['top_quality_cash']:.1%})")
         book = stats.get("book") or {}

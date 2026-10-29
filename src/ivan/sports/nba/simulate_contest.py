@@ -200,7 +200,8 @@ def simulate_one_contest(session: Session, contest_id: int, contest_name: str, c
         C.fetch_payouts(session, [int(contest_id)], log=log)
     field_sz = int(contest.total_entries); entry_fee = float(contest.entry_fee)
     capped = min(int(field_cap or 10000), field_sz)
-    n_candidates = session.query(Lineup).count()
+    from ivan.sports.nba.field_generation import slate_lineups
+    n_candidates = slate_lineups(session).count()
     if n_candidates == 0:
         raise ValueError("no lineups in the database; run the generate step first")
     contest_params = {"entry_fee": entry_fee, "total_entries": field_sz, "multi_entry": int(contest.multi_entry or 150)}
@@ -381,10 +382,19 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
     """simulate_one_contest for every contest in the entries file; a failure is logged and the others still run."""
     contests = contests_in_entries(entries_csv)
     art = Path(artifact_dir) if artifact_dir is not None else None
-    # every run starts from nothing: the per-lineup results and the contest reports of earlier runs are gone, whatever
-    # contests they covered (2026-10-26: a sim run must never sit beside stale results of another run or slate)
-    n_old = session.query(LineupSimulationResult).delete(synchronize_session=False)
-    n_rep = session.query(ContestSimReport).delete(synchronize_session=False)
+    # every run starts from nothing for the loaded slate: its per-lineup results and contest reports of earlier runs are gone
+    # (2026-10-26: a sim run must never sit beside stale results of another run); other slates' are kept for them
+    from ivan.sports.nba.field_generation import pool_draft_group
+    dg = pool_draft_group(session)
+    if dg is None:
+        n_old = session.query(LineupSimulationResult).delete(synchronize_session=False)
+        n_rep = session.query(ContestSimReport).delete(synchronize_session=False)
+    else:
+        from sqlalchemy import text as _t
+        n_old = session.execute(_t("DELETE FROM lineup_simulation_results WHERE lineup_id IN (SELECT id FROM lineup WHERE draft_group_id = :d OR draft_group_id IS NULL)"
+                                   " OR lineup_id NOT IN (SELECT id FROM lineup)").bindparams(d=dg)).rowcount
+        n_rep = session.execute(_t("DELETE FROM contest_sim_report WHERE contest_id IN (SELECT contest_id FROM historical_contest_information WHERE draft_group_id = :d)"
+                                   " OR contest_id NOT IN (SELECT contest_id FROM historical_contest_information)").bindparams(d=dg)).rowcount
     session.commit()
     if n_old or n_rep:
         log(f"cleared the previous sim: {n_old:,} per-lineup results, {n_rep} contest reports")
@@ -496,7 +506,8 @@ def simulate_vs_field(session: Session, contest_id: int, contest_name: str, fiel
     n = field_sizes([field_sz], field_cap)[0]                                       # the field around one of our entries
     field = slate_field(session, n, log=log)[:n]
     n = len(field)
-    cands = [(int(lid), coerce_player_ids(raw)) for lid, raw in session.query(Lineup.id, Lineup.player_ids_list).all()]
+    from ivan.sports.nba.field_generation import slate_lineups
+    cands = [(int(lid), coerce_player_ids(raw)) for lid, raw in slate_lineups(session, Lineup.id, Lineup.player_ids_list).all()]
     if not cands:
         raise ValueError("no lineups in the database; run the generate step first")
     copies = Counter(field)

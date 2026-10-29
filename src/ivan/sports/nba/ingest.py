@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Callable, Optional
 
@@ -253,24 +253,44 @@ def retire_edits(old_draft_group: int, log: Log = print, new_draft_group: Option
                 log(f"restored {n} edit file(s) of slate {new_draft_group}")
 
 
-def isolate_slate(session, draft_group_id: int, log: Log = print) -> dict:
+KEEP_SLATE_DAYS = 2   # a switch keeps the lineups and sims of slates this many days back (today's other slates side by side)
+
+
+def isolate_slate(session, draft_group_id: int, log: Log = print, keep_days: int = KEEP_SLATE_DAYS) -> dict:
     """
-    The working tables belong to the loaded slate: lineups, pool snapshots, simulation results and contest reports of any
-    other draft group are deleted when a slate is loaded (2026-10-26: Monday's desk still carried Sunday's 12k lineups and
-    sims). Rows of the loaded slate stay, so coming back to a slate finds its own work. The pool, props, captures, news and
-    box scores are never touched.
+    Loading a slate keeps each slate's own work: lineups, pool snapshots, simulation results and contest reports belong to
+    their draft group, and generate / the field sampler / the sim read only the loaded slate's (field_generation.
+    slate_lineups). What a switch deletes is the work of slates older than `keep_days` (by the day of their contests or
+    their pool snapshot's lock) and rows of no known slate, so two of today's slates can be worked side by side and coming
+    back to one finds its lineups and sims (until 2026-10-29 every other slate's work was deleted, 2026-10-26: Monday's
+    desk still carried Sunday's 12k lineups and sims). The pool, props, captures, news and box scores are never touched.
     """
     from sqlalchemy import text
     from ivan.sports.nba.models import ContestSimReport, Lineup, LineupPool, LineupSimulationResult
     dg = int(draft_group_id)
-    n_l = session.query(Lineup).filter((Lineup.draft_group_id != dg) | (Lineup.draft_group_id.is_(None))).delete(synchronize_session=False)
-    n_p = session.query(LineupPool).filter(LineupPool.draft_group_id != dg).delete(synchronize_session=False)
+    cutoff = (datetime.now() - timedelta(days=int(keep_days))).date().isoformat()
+    days = {}
+    for d, day in session.execute(text("select draft_group_id, min(date(date)) from historical_contest_information group by draft_group_id")).all():
+        if d is not None and day:
+            days[int(d)] = str(day)
+    for d, day in session.execute(text("select draft_group_id, min(date(lock)) from lineup_pool group by draft_group_id")).all():
+        if d is not None and day and int(d) not in days:
+            days[int(d)] = str(day)
+    have = {int(d) for (d,) in session.execute(text("select distinct draft_group_id from lineup where draft_group_id is not null")).all()}
+    old = sorted(d for d in have | {int(x) for (x,) in session.execute(text("select distinct draft_group_id from lineup_pool")).all() if x is not None}
+                 if d != dg and (d not in days or days[d] < cutoff))
+    n_l = session.query(Lineup).filter(Lineup.draft_group_id.in_(old) | Lineup.draft_group_id.is_(None)).delete(synchronize_session=False)
+    n_p = session.query(LineupPool).filter(LineupPool.draft_group_id.in_(old)).delete(synchronize_session=False) if old else 0
     n_s = session.execute(text("DELETE FROM lineup_simulation_results WHERE lineup_id NOT IN (SELECT id FROM lineup)")).rowcount
-    n_r = session.execute(text("DELETE FROM contest_sim_report WHERE contest_id NOT IN (SELECT contest_id FROM historical_contest_information WHERE draft_group_id = :dg)").bindparams(dg=dg)).rowcount
+    n_r = 0
+    if old:
+        n_r = session.execute(text("DELETE FROM contest_sim_report WHERE contest_id IN (SELECT contest_id FROM historical_contest_information WHERE draft_group_id IN ("
+                                   + ",".join(str(int(x)) for x in old) + "))")).rowcount
     session.commit()
-    out = dict(lineups=int(n_l or 0), pool=int(n_p or 0), sims=int(n_s or 0), reports=int(n_r or 0))
-    if any(out.values()):
-        log(f"cleared another slate's work: {out['lineups']} lineups, {out['sims']} sim results, {out['reports']} reports, {out['pool']} pool rows")
+    out = dict(lineups=int(n_l or 0), pool=int(n_p or 0), sims=int(n_s or 0), reports=int(n_r or 0), slates=old)
+    if any(v for k, v in out.items() if k != "slates"):
+        log(f"cleared older slates' work ({', '.join(map(str, old)) or 'no slate'}): {out['lineups']} lineups, {out['sims']} sim results, "
+            f"{out['reports']} reports, {out['pool']} pool rows")
     return out
 
 
@@ -347,11 +367,11 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     (2026-10-23: a sim started during a rewrite found no point guard). The public field and ownership are NOT built here
     (field=True does, after the commit): the sim builds the field it needs, the desk's "Field + ownership" button /
     scripts/nba/field_ownership.py builds it on demand (2026-10-28: thin wiring). Rotowire's news is read after the commit
-    (news=False skips it). Returns (StoreInfo, ProjectInfo, the news check's result or None).
+    (news=False skips it). Returns (StoreInfo, ProjectInfo, the news check's result or None, the changes per team).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
     out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news)
-    return out["stored"], out["projected"], out["news"]
+    return out["stored"], out["projected"], out["news"], out["changes"]
 
 
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
@@ -588,8 +608,14 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
     unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the autopilot tick
     attaches the game lines to it) is stored as given instead of fetching again. news=True (the default) also reads
     Rotowire's news page after the commit (newsfeed.check, free, about a second; a failure is logged, never raised), so
-    every refresh brings the headlines with the statuses.
+    every refresh brings the headlines with the statuses. out["changes"] is what the refresh moved per team
+    (ivan.sports.nba.changes: statuses, the lineups, the pool, projections that moved, new headlines), also logged.
     """
+    from ivan.sports.nba import changes as CH
+    try:
+        before = CH.snapshot(session)
+    except Exception:   # noqa: BLE001 - the diff is a convenience
+        before = None
     if fetched is None:
         fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
     current = session.query(NBAPlayer.draft_group_id).first()
@@ -608,7 +634,13 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
         isolate_slate(session, int(draft_group_id), log=log)
     ownership = refresh_field(session, log=log) if field else None
     news_r = check_news(session, log=log) if news else None
-    return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r}
+    try:
+        moved = CH.diff(before, CH.snapshot(session), (news_r or {}).get("new"))
+    except Exception:   # noqa: BLE001
+        moved = {}
+    for team, items in sorted(moved.items()):
+        log(f"changed {team}: " + "; ".join(x["text"] for x in items))
+    return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r, "changes": moved}
 
 
 def check_news(session, log: Log = print) -> Optional[dict]:

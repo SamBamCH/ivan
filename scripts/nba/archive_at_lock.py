@@ -65,7 +65,8 @@ def archive_tip(session, players, tip, now, dg) -> dict:
     prow = [dict(id=p.id, name=p.name, team=p.team, opponent=p.opponent, position=p.position, roster_slot_id=p.roster_slot_id,
                  gametime=p.gametime.isoformat() if p.gametime else None, salary=p.salary, status=p.status, dk_avg_fpts=p.dk_avg_fpts,
                  draft_group_id=p.draft_group_id, starter=starters.get(p.name, "bench"), minutes_proj=p.minutes_proj,
-                 fpts_mean=p.fpts_mean, fpts_std=p.fpts_std, ownership=p.ownership) for p in players]
+                 fpts_mean=p.fpts_mean, fpts_std=p.fpts_std, ownership=p.ownership, pub_fpts=p.pub_fpts,
+                 rotation_cells=p.rotation_cells, minutes_p10=p.minutes_p10, minutes_p90=p.minutes_p90) for p in players]   # the grid row: the backtest's "our grid" for teams not drawn by hand
     pool = {p.name for p in players}
     odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.get_bind())
     odds = odds[odds.player.isin(pool)]

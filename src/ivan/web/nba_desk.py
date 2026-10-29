@@ -1308,6 +1308,7 @@ class Desk:
                     published=dict(grid=ROT.drawn_source(team), pins=sum(1 for r in rows if "published" in r.get("layer", {}).values()),
                                    own=sum(1 for r in rows if "local" in r.get("layer", {}).values()), consumer=PUBLISHED_OVERRIDES_CSV.exists() or ROT.PUBLISHED_ROTATIONS_DIR.is_dir()),
                     last_game=self.game_grid(team), considerations=self.considerations(team), notes=self.team_notes(team),
+                    changes=((getattr(self, "changes", None) or {}).get("teams") or {}).get(team, []), changes_at=(getattr(self, "changes", None) or {}).get("at"),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
@@ -1443,6 +1444,7 @@ def games_menu(now: datetime) -> list[dict]:
         teams[t] = dict(team=t, opp=opp, tip=tip, mins_to_tip=mtt, locked=bool(mtt is not None and mtt < 0),
                         starters="confirmed" if confirmed else ("expected" if st else "none"),
                         qtext="; ".join(f"{q['raw']} {q['status']}" + (f" · {q['news']['headline']}" if q.get("news") else "") for q in qs),
+                        moved="; ".join(x["text"] for x in ((getattr(desk, "changes", None) or {}).get("teams") or {}).get(t, [])),
                         **{k: states.get(t, {}).get(k) for k in ("colour", "why", "open", "new", "state")})
     seen, games = set(), []
     for t, c in sorted(teams.items(), key=lambda kv: (kv[1]["tip"] or now, kv[0])):
@@ -1956,7 +1958,8 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
         log = []
         sess = get_session(engine)
         try:
-            _, _, news = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
+            _, _, news, moved = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
+            desk.changes = dict(at=datetime.now(), teams=moved or {})
             msg = f"{what}: done" + (_news_note(news) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
         except IngestError as e:
             msg = f"{what} failed: {e}"
@@ -2380,10 +2383,13 @@ def refresh(request: Request, what: str = Form("dk")):
         if feed_url:                                             # a consumer never fetches: it takes what the producer pushed
             try:
                 from ivan.core import feed
+                from ivan.sports.nba import changes as CH
+                before = CH.snapshot(desk.session)
                 changed = feed.pull(feed_url, os.environ.get("IVAN_FEED_TOKEN"), "nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
                 if changed:
                     desk.session.expire_all()                        # the pool was replaced underneath this session
                     r = after_pull(desk.session, dg, n_sims=2000, log=desk.flash.append)
+                    desk.changes = dict(at=datetime.now(), teams=CH.diff(before, CH.snapshot(desk.session)))
                     if r["moved"]:
                         desk.flash.append(f"the laptop moved to slate {r['draft_group']}: your edits of the previous slate are filed, this slate's are back, the previous slate's lineups cleared")
                     if r["teams"]:
@@ -2551,7 +2557,9 @@ def _pipeline_ctx() -> dict:
     except Exception:   # noqa: BLE001 - a desk without the lineup tables yet
         slates = []
     current = next((p.draft_group_id for p in (desk.slate.players if desk.slate else []) if p.draft_group_id), None)
-    n_lineups = desk.session.query(Lineup).count(); n_sims = desk.session.query(LineupSimulationResult).count()
+    from ivan.sports.nba.field_generation import slate_lineups
+    n_lineups = slate_lineups(desk.session).count()                    # the loaded slate's (other recent slates' are kept beside them)
+    n_sims = desk.session.query(LineupSimulationResult).filter(LineupSimulationResult.lineup_id.in_(slate_lineups(desk.session, Lineup.id))).count()
     projected = desk.session.query(NBAPlayer).filter(NBAPlayer.fpts_mean.isnot(None)).count() > 0
     ent = _entries_info()
     # each step opens when the one before it has run: generate needs a projected pool, sim needs lineups (and entries), choose needs sims

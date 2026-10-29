@@ -44,7 +44,8 @@ def lineup_projections(session: Session) -> Tuple[List[int], np.ndarray, Dict[in
     """Every generated lineup's id, its projection sum, and its player ids (one query for the players)."""
     means = {int(pid): float(m) for pid, m in session.query(NBAPlayer.id, NBAPlayer.fpts_mean).all() if m is not None}
     ids, sums, pids_by_lid = [], [], {}
-    for lid, raw in session.query(Lineup.id, Lineup.player_ids_list).all():
+    from ivan.sports.nba.field_generation import slate_lineups
+    for lid, raw in slate_lineups(session, Lineup.id, Lineup.player_ids_list).all():
         pids = coerce_player_ids(raw)
         pids_by_lid[int(lid)] = pids
         ids.append(int(lid))

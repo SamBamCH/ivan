@@ -13,8 +13,8 @@ backtest instead, read only ([../web/nba-desk.md](../web/nba-desk.md)); its **Re
 it from its archive capture (no fetch, nothing recorded) to re-work it. Switching files the slate you leave (its pins and
 grids) under `data/nba/input/edits/<draft group>/` and brings back the new slate's own.
 
-Loading a slate also deletes the lineups, pool snapshots, sim results and contest reports of every
-*other* draft group (`ingest.isolate_slate`), so the working tables hold one slate at a time.
+Loading a slate keeps the slate you leave as it was: each slate keeps its own lineups, sims and contest reports: generate, the field sampler and the sim read only the loaded slate's (`field_generation.slate_lineups`), and a switch (`ingest.isolate_slate`) deletes only the work of slates more than 2 days old (`KEEP_SLATE_DAYS`). Two of today's slates can be worked side by
+side, and coming back to one finds its lineups and sims.
 
 Terminal:
 
