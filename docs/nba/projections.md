@@ -108,8 +108,9 @@ rule (the most-played five).
 ### 8. Minutes as a distribution (`team_minutes.py`)
 
 In one world: the final margin is drawn N(spread, sd) with a 5.2% overtime chance (the spread comes
-from `game_odds` through `lines.py`; without a priced game the model falls back to independent
-minutes); who plays is drawn from each player's availability; the team's minutes are split by a
+from `game_odds` through `lines.py`: the team's game nearest its tip on the slate, within 12 hours, so a slate
+whose game lines were not fetched has no spread rather than another night's; without a priced game the model
+falls back to independent minutes); who plays is drawn from each player's availability; the team's minutes are split by a
 softmax of log μ + β[role]·|margin| + ε, with ε ~ N(0, τ[role]). The softmax keeps the team at 241
 so one player's extra minutes are someone else's; β < 0 for starters moves their minutes to the bench
 in blowouts; τ by role makes a star's draw tight and a bench player's wide. With the rotation model

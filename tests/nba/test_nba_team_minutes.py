@@ -50,7 +50,7 @@ def test_lines_consensus_and_team_lookup():
     ])
     c = consensus(rows)
     assert len(c) == 1 and c.iloc[0].spread_home == -5.0 and c.iloc[0].total == 239.0 and 0.6 < c.iloc[0].p_home < 0.65
-    gl = GameLines(c)
+    gl = GameLines(c, tips={"WAS": pd.Timestamp("2026-10-21 18:00").to_pydatetime(), "MIL": pd.Timestamp("2026-10-21 18:00").to_pydatetime()})
     assert gl.team_spread("WAS") == -5.0 and gl.team_spread("MIL") == 5.0 and gl.team_total("MIL") == 239.0 and gl.team_spread("BOS") is None
 
 

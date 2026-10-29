@@ -1396,7 +1396,8 @@ def games_menu(now: datetime) -> list[dict]:
         home = pair[-1]["team"] if len(pair) == 2 else None
         spread = desk.slate.spread(home) if home else None
         total = desk.slate._lines.team_total(home) if home and getattr(desk.slate, "_lines", None) else None
-        games.append(dict(teams=pair, tip=c["tip"], mins_to_tip=c["mins_to_tip"], locked=all(x["locked"] for x in pair), home=home, spread=spread, total=total))
+        fav = desk.slate._lines.favourite(t) if getattr(desk.slate, "_lines", None) else None
+        games.append(dict(teams=pair, tip=c["tip"], mins_to_tip=c["mins_to_tip"], locked=all(x["locked"] for x in pair), home=home, spread=spread, total=total, fav=fav))
     games.sort(key=lambda g: (g["locked"], g["tip"] or now))
     menu = []
     for g in games:
@@ -1422,8 +1423,9 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
         home = pair[-1]["team"] if len(pair) == 2 else None
         spread = desk.slate.spread(home) if home else None
         total = desk.slate._lines.team_total(home) if home and getattr(desk.slate, "_lines", None) else None
+        fav = desk.slate._lines.favourite(c["team"]) if getattr(desk.slate, "_lines", None) else None
         games.append(dict(teams=pair, tip=c["tip"], mins_to_tip=c["mins_to_tip"], locked=all(x["locked"] for x in pair),
-                          score=max(x["score"] for x in pair), home=home, spread=spread, total=total))
+                          score=max(x["score"] for x in pair), home=home, spread=spread, total=total, fav=fav))
     return sorted(games, key=lambda g: (g["locked"], g["tip"] or now))
 
 

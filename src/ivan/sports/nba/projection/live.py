@@ -269,12 +269,20 @@ class LiveSlate:
         except Exception:   # noqa: BLE001 - no targets is a plain solve
             return {}
 
+    def tips(self) -> dict:
+        """team -> its tip on the loaded slate (the earliest DK game time of its players): which game_odds row is tonight's."""
+        out: dict = {}
+        for p in self.players:
+            if p.team and p.gametime and (p.team not in out or p.gametime < out[p.team]):
+                out[p.team] = p.gametime
+        return out
+
     def spread(self, team: str) -> float | None:
         """The team's own consensus spread from game_odds (negative = favoured); None when unpriced."""
         if getattr(self, "_lines", None) is None:
             from .lines import GameLines
             try:
-                self._lines = GameLines.load(self.session)
+                self._lines = GameLines.load(self.session, tips=self.tips())
             except Exception:   # noqa: BLE001 - no lines table yet
                 self._lines = GameLines(pd.DataFrame())
         return self._lines.team_spread(team)

@@ -128,7 +128,11 @@ def generate_player_samples(
         if minutes_model in ("team", "rotation"):
             from ivan.sports.nba.projection.lines import GameLines
             try:
-                lines = GameLines.load(session)
+                tips: dict = {}
+                for p in players:
+                    if p.team and p.gametime and (p.team not in tips or p.gametime < tips[p.team]):
+                        tips[p.team] = p.gametime
+                lines = GameLines.load(session, tips=tips)
             except Exception:   # noqa: BLE001
                 lines = GameLines(__import__("pandas").DataFrame())
             tp = load_team_params(); disp = load_calibration()["dispersion"]
