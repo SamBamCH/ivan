@@ -43,8 +43,8 @@ page is what is on the screen.
 
 ## The board (view `slate`)
 
-A games strip with tips and each game's line as "DET by 7.5 · 228" (the favourite, the points it is favoured by, the
-total; tonight's game only, "no line" until the props refresh fetches the game lines), then team cards sorted by an
+A games strip with tips and each game's line as "DET -7.5 · 228" (the favourite with its spread, "PK" for a pick'em, the
+total; tonight's game only, "no line" until Refresh lines or Refresh props fetches them), then team cards sorted by an
 alert score (bad 10, warn 3, info 1):
 
 | Level | Fires when |
