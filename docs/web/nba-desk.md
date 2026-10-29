@@ -54,6 +54,26 @@ alert score (bad 10, warn 3, info 1):
 
 The flags come from `ivan.sports.nba.validation.review_team`, the same ones `scripts/nba/validate.py review` prints.
 
+### The news table
+
+Under the games strip, before the open team's card (`_nba_news.html`, `Desk.news_table` =
+`ivan.sports.nba.newsfeed.slate_news`; terminal: `scripts/nba/newsfeed.py slate`). The slate's players whose
+night is news, one row per player, in three lists:
+
+1. **Questions**: DK status Q / GTD / D / P, not ruled out. Columns: player (bold when in the expected lineup;
+   the name opens his team's card), team, opponent and tip, status, salary, usual minutes (the history state),
+   the model's minutes now with your call ("no call" in amber until a pin or a starter call answers it), the
+   latest headline on file.
+2. **Out tonight, played last game**: DK OUT / O / IR / SUSP and on the floor in his team's last box score. These are
+   the outs the rotation has not absorbed yet: the column shows the last game's date and his minutes in it.
+3. **Already out** (collapsed): OUT and out of the team's last game too, or never in a box score ("did not play").
+
+Each list is ordered earliest tip first, then the most usual minutes. The headline is the newest `nba_news`
+row for the player within 7 days (its source link; hover for the text), with its age, the item count and
+**new** when it arrived after the team was mapped (within 3 hours when the team is unmapped). "No news on
+file" means nothing stored: Refresh reads the news. The team's last game is the newest box score on file, so
+until the nightly brings last night's game the "last game" is the one before it.
+
 ## A team card (`/team/<TEAM>`)
 
 Rows: starters first, then the players who are out, then the bench, minutes descending. Per player:
@@ -222,6 +242,29 @@ producer without a browser on the other machine:
 `scripts/nba/consumer_check.py` (see [../deployment.md](../deployment.md)) logs in with a cookie minted on
 the server, walks the pages and the CSV exports through the public hostname or the tailnet, presses
 Refresh and compares what the desk shows with the bundle the laptop published.
+
+## Trying a branch's desk before it is merged
+
+A worktree has no venv, `.env` or `data/`. Run its desk on another port with the main checkout's interpreter and
+database, and `PYTHONPATH=src` so the worktree's code wins over the editable install:
+
+```bash
+cd ~/ivan/.claude/worktrees/<branch>
+IVAN_NBA_DB_URL=sqlite:////home/sam-pratt/ivan/data/nba/nba_history.sqlite PYTHONPATH=src \
+  ~/ivan/venv/bin/python scripts/nba/serve.py --port 8002      # http://127.0.0.1:8002/
+```
+
+Views that read the raw archive (a past game's score strip reads the stored play-by-play) need the main checkout's:
+link it once with `mkdir -p data/nba && ln -s ~/ivan/data/nba/raw data/nba/raw` in the worktree. The backtest view
+reads our upload files: link `data/nba/output` the same way. Raw files and outputs the branch's desk then writes land
+in the main folders, as the live desk's would. The filed edits (`data/nba/input`) stay the worktree's own, so the
+backtest's overlay shows grids drawn on the live desk only after the merge.
+
+It shows the live slate. Its pins, grids, jobs and autopilot switch live under the worktree's own `data/`, so the
+live desk's edits are not in it and nothing typed here reaches the live desk; with no `.env` it never pushes the
+feed. **Refresh, Publish, Generate and Sim still write the shared database** (the pool, the projections, the
+lineups), so on a slate day look and click but leave those to the live desk, or point `IVAN_NBA_DB_URL` at a copy
+of the sqlite file (2.7 GB) for a free hand. A Refresh also reads the news, which only adds headlines.
 
 ## Login and public access
 

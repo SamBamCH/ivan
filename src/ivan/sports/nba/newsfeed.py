@@ -10,12 +10,15 @@ a time, so first_seen is the news clock: minutes behind the tweet when the check
 
     check(session)                    fetch, store, return what is new
     latest(session, names, hours=48)  {player: [items newest first]} for the pool's players
+    slate_news(session, slate)        the slate's open questions and outs in three lists (the desk's news table, newsfeed.py slate)
 """
 from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Optional
+
+import pandas as pd
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,6 +27,7 @@ from sqlalchemy.orm import Session
 from ivan.core import raw
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.models import NBANews
+from ivan.sports.nba.projection.live import OUT_STATUSES
 
 NEWS_URL = "https://www.rotowire.com/basketball/news.php"
 ROTOWIRE = "https://www.rotowire.com"
@@ -121,3 +125,80 @@ def age(ts: datetime, now: Optional[datetime] = None) -> str:
     if s < 36 * 3600:
         return f"{s / 3600:.0f}h ago"
     return f"{ts:%m-%d %H:%M}"
+
+
+QUESTION_STATUSES = {"Q", "GTD", "D", "P"}      # DK statuses that leave the player's night open
+NEWS_HOURS = 7 * 24                              # how far back the table looks for a headline
+NEW_HOURS = 3.0                                  # a headline this fresh is marked new when the team has no mapped time to compare with
+
+
+def group_news(players, box: pd.DataFrame, state: pd.DataFrame, news: Dict[str, List[NBANews]], now: Optional[datetime] = None,
+               calls: Optional[Dict[str, str]] = None, minutes: Optional[Dict[str, float]] = None, starters: Optional[Dict[str, set]] = None,
+               mapped_at: Optional[Dict[str, datetime]] = None) -> dict:
+    """
+    The slate's players whose night is news, in the order the desk reads them:
+
+      questionable  DK status Q / GTD / D / P and not ruled out: the open questions, one row per player
+      new_out       OUT tonight but on the floor in his team's last game: the rotation moves around him tonight
+      out           OUT and already out of the last game (or never seen): the ones the rotation has absorbed
+
+    Each row: the player, team, opponent, tip, status, salary, position, usual minutes (the history state, min_ewm x
+    play_ewm), the model's minutes now (`minutes`, when given), the desk's call (`calls`: player -> text, when given),
+    whether he started last game, the team's last game (date, his minutes in it, whether he played), and the latest
+    headline on file (`news`: latest()'s output) with its age and whether it is new: after the team's mapped time
+    (`mapped_at`, team -> datetime) when known, else within NEW_HOURS. Within each list: earliest tip first, then the
+    most minutes at stake.
+    """
+    now = now or datetime.now()
+    calls = calls or {}; minutes = minutes or {}; starters = starters or {}; mapped_at = mapped_at or {}
+    played = box[box.played] if len(box) else box
+    team_last = played.groupby("team")["game_date"].max().to_dict() if len(played) else {}
+    last_rows = {}
+    if len(box):
+        for r in box.sort_values(["game_date", "game_id"]).itertuples():
+            d = team_last.get(r.team)
+            if d is not None and r.game_date == d:
+                last_rows[(r.team, r.player_name)] = (float(r.minutes), str(r.starter) if hasattr(r, "starter") else "")
+    out = dict(questionable=[], new_out=[], out=[])
+    for p in players:
+        st = (p.status or "").upper()
+        if st in OUT_STATUSES:
+            bucket = None
+        elif st in QUESTION_STATUSES:
+            bucket = "questionable"
+        else:
+            continue
+        n = normalize_name(p.name)
+        s = state.loc[n] if n in state.index else None
+        hist = float(s["min_ewm"]) * float(s.get("play_ewm", 1.0)) if s is not None else None
+        d = team_last.get(p.team)
+        lr = last_rows.get((p.team, n))
+        last_min = None if lr is None else lr[0]
+        played_last = bool(lr is not None and lr[0] > 0)
+        if bucket is None:
+            bucket = "new_out" if played_last else "out"
+        items = news.get(n) or []
+        item = None
+        if items:
+            x = items[0]
+            ma = mapped_at.get(p.team)
+            item = dict(headline=x.headline, text=x.text, url=x.source_url or x.url, rw=x.url, injury=x.injury, age=age(x.first_seen, now),
+                        first_seen=x.first_seen, n=len(items), new=(x.first_seen > ma) if ma else ((now - x.first_seen) <= timedelta(hours=NEW_HOURS)))
+        out[bucket].append(dict(name=n, raw=p.name, team=p.team, opp=p.opponent or "", tip=p.gametime, status=st, salary=p.salary, pos=p.position,
+                                hist=hist, minutes=minutes.get(n), call=calls.get(n), starter=n in (starters.get(p.team) or set()),
+                                last_date=None if d is None else str(d), last_min=last_min, played_last=played_last, news=item))
+    for k in out:
+        out[k].sort(key=lambda r: (r["tip"] or now, -(r["hist"] or 0), -(r["salary"] or 0)))
+    return out
+
+
+def slate_news(session: Session, slate, now: Optional[datetime] = None, calls: Optional[Dict[str, str]] = None,
+               minutes: Optional[Dict[str, float]] = None, mapped_at: Optional[Dict[str, datetime]] = None,
+               starters: Optional[Dict[str, set]] = None) -> dict:
+    """group_news over a LiveSlate (its pool, box scores, history state and Rotowire's starters unless `starters` is given:
+    the desk passes its own, with its starter calls in) with the headlines on file."""
+    now = now or datetime.now()
+    names = [normalize_name(p.name) for p in slate.players if (p.status or "").upper() in (QUESTION_STATUSES | OUT_STATUSES)]
+    news = latest(session, names, hours=NEWS_HOURS, now=now)
+    return group_news(slate.players, slate.box, slate.state, news, now=now, calls=calls, minutes=minutes,
+                      starters=slate.starters if starters is None else starters, mapped_at=mapped_at)

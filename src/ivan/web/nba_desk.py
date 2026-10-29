@@ -148,7 +148,7 @@ DESK_CONFIG = NBA_DATA_DIR / "jobs" / "desk_config.json"           # config/nba.
 
 MAX_UPLOAD = 5 * 1024 * 1024   # the DK entries export is tens of KB
 ROTATION_MIN = 15.0        # a scratch/questionable above this baseline is news
-QUESTION_STATUSES = {"Q", "GTD", "D", "P"}   # DK statuses that leave the player's night open
+QUESTION_STATUSES = NF.QUESTION_STATUSES     # DK statuses that leave the player's night open (Q / GTD / D / P)
 NEWS_AUTO_SECONDS = 300    # the desk's auto-check interval while it is on
 NEAR_TIP_MIN = 75          # minutes before tip when an unconfirmed lineup becomes a warning
 MINUTES_DEV = 8.0          # model minutes this far from history is a role change
@@ -880,46 +880,50 @@ class Desk:
                 diff.append(f"{short(n)} {st}")
         return dict(state="changed" if diff else "mapped", diff=diff, saved_at=g.attrs.get("saved_at"))
 
-    def questions(self, team: str, now: Optional[datetime] = None) -> list:
+    def news_table(self, now: Optional[datetime] = None) -> dict:
         """
-        The team's questionable players (DK status Q / GTD / D / P, not ruled out): who they are, what they usually play,
-        whether you have made a call (a minutes pin or a starter call answers the question), and the latest news on file
-        for each with its age and whether it arrived after the team was mapped. No questions = good to go at lock, barring
-        a surprise lineup.
+        The slate's news table (newsfeed.slate_news, the same lists scripts/nba/newsfeed.py slate prints): the open
+        questions, the players OUT tonight who played their team's last game, and the standing outs, each with the latest
+        headline on file; this desk adds its calls (a pin or a starter call), the model's minutes, its starter calls and each
+        team's mapped time. Built once per request: the same `now` object gets the same table (the menu, the team states,
+        the header and every card's questions read it).
         """
         now = now or datetime.now()
-        from ivan.sports.nba.projection.live import OUT_STATUSES
-        hist = {r["key"]: r for r in self.team_rows(team)} if team in self.proj else {}
-        ms = self.mapped_state(team)
-        mapped_at = None
-        if ms.get("state") in ("mapped", "changed") and ms.get("saved_at"):
-            try:
-                mapped_at = datetime.fromisoformat(str(ms["saved_at"]))
-            except ValueError:
-                mapped_at = None
-        qs = []
-        for p in self.players(team):
-            st = (p.status or "").upper()
-            if st not in QUESTION_STATUSES or st in OUT_STATUSES:
-                continue
-            n = normalize_name(p.name); ov = override_of(self.overrides, n)
-            call = None
+        memo = getattr(self, "_news_memo", None)
+        if memo is not None and memo[0] is now:
+            return memo[1]
+        calls, minutes, mapped, starters = {}, {}, {}, {}
+        for t in self.slate.teams():
+            ms = self.mapped_state(t)
+            if ms.get("state") in ("mapped", "changed") and ms.get("saved_at"):
+                try:
+                    mapped[t] = datetime.fromisoformat(str(ms["saved_at"]))
+                except ValueError:
+                    pass
+            proj = self.proj.get(t)
+            if proj is not None and "minutes" in proj:
+                minutes.update({str(n): float(v) for n, v in proj["minutes"].items()})
+            starters[t] = set(self.starters_of(t) or [])
+        for n, ov in self.overrides.items():
             if ov.get("minutes") is not None:
-                call = "scratched" if ov["minutes"] <= 0 else f"pinned {ov['minutes']:g} min"
+                calls[n] = "scratched" if ov["minutes"] <= 0 else f"pinned {ov['minutes']:g} min"
             elif ov.get("starter") is not None:
-                call = "starts" if ov["starter"] > 0 else "benched"
-            r = hist.get(n, {})
-            qs.append(dict(name=n, raw=p.name, status=st, hist=r.get("hist_min"), minutes=r.get("minutes"), starter=(r.get("starter") == "S"),
-                           answered=call is not None, call=call, salary=p.salary, news=None))
-        if qs:
-            news = NF.latest(self.session, [q["name"] for q in qs], hours=72, now=now)
-            for q in qs:
-                items = news.get(q["name"]) or []
-                if items:
-                    x = items[0]
-                    q["news"] = dict(headline=x.headline, text=x.text, url=x.source_url or x.url, rw=x.url, injury=x.injury, age=NF.age(x.first_seen, now),
-                                     first_seen=x.first_seen, new=(x.first_seen > mapped_at) if mapped_at else ((now - x.first_seen) <= timedelta(hours=3)),
-                                     n=len(items))
+                calls[n] = "starts" if ov["starter"] > 0 else "benched"
+        tbl = NF.slate_news(self.session, self.slate, now=now, calls=calls, minutes=minutes, mapped_at=mapped, starters=starters)
+        for q in tbl["questionable"]:
+            q["answered"] = q["call"] is not None
+        self._news_memo = (now, tbl)
+        return tbl
+
+    def questions(self, team: str, now: Optional[datetime] = None) -> list:
+        """
+        The team's rows of the news table's questions (DK status Q / GTD / D / P, not ruled out): who they are, what they
+        usually play, whether you have made a call (a minutes pin or a starter call answers the question), and the latest
+        news on file with its age and whether it arrived after the team was mapped. Open questions first, then the most
+        minutes at stake. No questions = good to go at lock, barring a surprise lineup.
+        """
+        now = now or datetime.now()
+        qs = [dict(q) for q in self.news_table(now)["questionable"] if q["team"] == team]
         qs.sort(key=lambda q: (q["answered"], -(q["hist"] or 0)))
         return qs
 
@@ -1560,6 +1564,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
             open_team = next((c["team"] for grp in menu for g in grp["games"] for c in g["teams"]), teams[0] if teams else None)
             desk.open_team = open_team
         card = desk.team_card(open_team, now) if (view == "games" and open_team) else None
+        news_table = desk.news_table(now) if view == "games" else None
         game = next((g for grp in menu for g in grp["games"] if any(c["team"] == open_team for c in g["teams"])), None)
         cards = [desk.team_card(t, now) for t in teams] if view == "players" else []
         games = []
@@ -1572,7 +1577,7 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
             players = [r for c in cards for r in c["rows"]]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
         return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
-                       card=card, game=game, open_team=open_team, **_pipeline_ctx())
+                       card=card, game=game, open_team=open_team, news_table=news_table, **_pipeline_ctx())
 
 
 def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:

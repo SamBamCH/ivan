@@ -81,6 +81,12 @@ The board sorts team cards by how far they are from their norm; alerts are liste
 - **News** comes with every Refresh: the pool refresh (`ingest.run_ingest`, so `ingest.py` and the autopilot tick
   too) reads Rotowire's news page after the commit (`ivan.sports.nba.newsfeed`); the news auto box also reads it every
   5 minutes while the desk runs. The header counts the slate's open questions (Q/GTD/D/P players with no call).
+- **the news table** (under the games strip; `scripts/nba/newsfeed.py slate` in a terminal) is where to start:
+  the slate's questionable players first, one row each with the model's minutes, your call and the last
+  headline; then the players out tonight who played their team's last game (the rotations that move tonight);
+  then, collapsed, the ones already out. Work it top down: every question gets a call (a pin, a starter call
+  or the late news form) and every new out gets its team's rotation looked at. Columns and rules are in
+  [../web/nba-desk.md](../web/nba-desk.md#the-news-table).
 
 Terminal equivalents: `scripts/nba/news.py "Player Name" [--accept] [--conditional]` for one scratch
 (shows the team with and without him, asks minutes player by player, writes the pool for that team);
