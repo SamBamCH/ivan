@@ -20,7 +20,8 @@ page is what is on the screen.
   bundle last pulled is applied again and only the slate's teams it edited are projected on top: the other teams
   are exactly as published, and clearing an edit then publishing gives the published numbers back. Generate, Sim
   and Late swap do the same before they queue.
-- **Check news** and the **auto** box (every 5 minutes while the desk runs).
+- **news auto** box: reads Rotowire's news every 5 minutes while the desk runs. There is no news button: every
+  Refresh (and a slate load) reads the news after the pool, and its message lists the new headlines on this slate.
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
   fetches props at the offsets and publishes + pushes every 15 minutes while nobody is editing here; the
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See

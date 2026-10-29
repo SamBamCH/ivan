@@ -340,17 +340,18 @@ def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) 
 
 
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
-                 log: Log = print, field: bool = False) -> tuple:
+                 log: Log = print, field: bool = False, news: bool = True) -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
     and write its public projection in ONE transaction. Nothing downstream can see a half-written or unprojected pool
     (2026-10-23: a sim started during a rewrite found no point guard). The public field and ownership are NOT built here
     (field=True does, after the commit): the sim builds the field it needs, the desk's "Field + ownership" button /
-    scripts/nba/field_ownership.py builds it on demand (2026-10-28: thin wiring). Returns (StoreInfo, ProjectInfo).
+    scripts/nba/field_ownership.py builds it on demand (2026-10-28: thin wiring). Rotowire's news is read after the commit
+    (news=False skips it). Returns (StoreInfo, ProjectInfo, the news check's result or None).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
-    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field)
-    return out["stored"], out["projected"]
+    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news)
+    return out["stored"], out["projected"], out["news"]
 
 
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
@@ -576,7 +577,7 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False) -> dict:
+               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True) -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
     replaced, projected and its public projection written in one transaction, so a desk serving the same database from
@@ -585,7 +586,9 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
     builds the field it needs and the desk's "Field + ownership" button builds it on demand. When the pool moves to another draft group the old
     slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the desk then shows an
     unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the autopilot tick
-    attaches the game lines to it) is stored as given instead of fetching again.
+    attaches the game lines to it) is stored as given instead of fetching again. news=True (the default) also reads
+    Rotowire's news page after the commit (newsfeed.check, free, about a second; a failure is logged, never raised), so
+    every refresh brings the headlines with the statuses.
     """
     if fetched is None:
         fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
@@ -604,7 +607,18 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
     if switching:
         isolate_slate(session, int(draft_group_id), log=log)
     ownership = refresh_field(session, log=log) if field else None
-    return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership}
+    news_r = check_news(session, log=log) if news else None
+    return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r}
+
+
+def check_news(session, log: Log = print) -> Optional[dict]:
+    """Rotowire's news page into nba_news (newsfeed.check) for a refresh: None and a log line when it fails."""
+    from ivan.sports.nba import newsfeed
+    try:
+        return newsfeed.check(session, log=log)
+    except Exception as e:   # noqa: BLE001 - the pool is the refresh; the news is a convenience on top
+        log(f"news check failed: {type(e).__name__}: {e}")
+        return None
 
 
 def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: int = 1000, log: Log = print) -> dict:

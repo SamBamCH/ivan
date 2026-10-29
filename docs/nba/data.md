@@ -21,7 +21,7 @@ inputs and outcomes of every slate, derive everything else) is [../data_framewor
 | `archived_slate`, `archived_blob` | the slate archive: a capture per ingest/refresh/tip with the pool, the props and the game lines as JSON (`ivan.core.archive`) | `ingest.store_slate`, `archive_at_lock.py` | reference (`archived_slate`) |
 | `projection_snapshot` | last season's Stokastic projections and our own, one `fpts_mean` per player-day | the old pipeline; `ingest.py --stok-csv` | reference |
 | `classic_contest_metadata` | last season's contest bins the old field sampler was fitted on | historical scrape (old) | reference |
-| `nba_news` | Rotowire headlines with `first_seen` | `newsfeed.check` (Check news, auto, `newsfeed.py`) | no |
+| `nba_news` | Rotowire headlines with `first_seen` | `newsfeed.check` (every pool refresh, the news auto box, `newsfeed.py check`) | no |
 | `lineup`, `lineup_pool` | the generated candidate pool and the pool snapshot taken at generate | `generate_lineups.py` | no |
 | `lineup_simulation_results` | per unique lineup per contest: fpts / payout / ROI / rank per simulation | `sim.py` (replaces per contest) | no |
 | `contest_sim_report` | one report per simulated contest (field, payouts, scores, checks) | `sim.py` | no |

@@ -1855,8 +1855,8 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
         log = []
         sess = get_session(engine)
         try:
-            refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
-            msg = f"{what}: done"
+            _, _, news = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
+            msg = f"{what}: done" + (_news_note(news) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
         except IngestError as e:
             msg = f"{what} failed: {e}"
         except Exception as e:   # noqa: BLE001 - the transaction rolled back: the old pool stands
@@ -2146,6 +2146,14 @@ def _push_feed(log) -> None:
         log(f"feed push failed: {type(e).__name__}: {e}")
 
 
+def _news_note(r: dict) -> str:
+    """'; news: 3 new, 1 on this slate: X · headline' after a refresh read Rotowire (the desk's news clock moves too)."""
+    desk.news_checked_at = r["fetched_at"]
+    pool = {normalize_name(p.name) for p in desk.slate.players}
+    on_slate = [x for x in r["new"] if x.player_name in pool]
+    return f"; news: {len(r['new'])} new" + (f", {len(on_slate)} on this slate: " + "; ".join(f"{x.player_raw} · {x.headline}" for x in on_slate[:6]) if on_slate else "")
+
+
 def _news_check(log) -> dict:
     sess = get_session(engine)
     try:
@@ -2156,18 +2164,6 @@ def _news_check(log) -> dict:
         return dict(new=len(r["new"]), on_slate=on_slate, total=r["total"])
     finally:
         sess.close()
-
-
-@app.post("/news/check")
-def news_check(request: Request):
-    """Fetch Rotowire's news page once, store the new headlines, say which are about this slate's players."""
-    with LOCK:
-        try:
-            r = _news_check(desk.flash.append)
-            desk.flash.append(f"news: {r['new']} new headline(s) of {r['total']}" + (": " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]) if r["on_slate"] else "; none on this slate"))
-        except Exception as e:   # noqa: BLE001
-            desk.flash.append(f"news check failed: {type(e).__name__}: {e}")
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
 
 
 @app.post("/news/auto")
@@ -2258,7 +2254,7 @@ def reload(request: Request):
 def refresh(request: Request, what: str = Form("dk")):
     if CONSUMER and what == "props":
         what = "dk"                                              # a consumer has no props button; the laptop's capture loop fetches them
-    """dk: pool + statuses + Rotowire (free). props: also the player props (costs credits)."""
+    """dk: pool + statuses + Rotowire starters and news (free). props: also the player props (costs credits). A consumer pulls the feed and reads the news."""
     with LOCK:
         feed_url = os.environ.get("IVAN_FEED_URL", "").strip()
         dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
@@ -2283,6 +2279,11 @@ def refresh(request: Request, what: str = Form("dk")):
                                       + (f" ({prod.get('source')}; autopilot {'on' if prod.get('autopilot') else 'off'})" if prod else ""))
             except Exception as e:   # noqa: BLE001
                 desk.flash.append(f"feed pull failed: {type(e).__name__}: {e}")
+            try:                                                 # the feed carries no headlines: a consumer reads Rotowire itself (free)
+                r = _news_check(lambda m: None)
+                desk.flash.append(f"news: {r['new']} new" + (": " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]) if r["on_slate"] else ", none on this slate"))
+            except Exception as e:   # noqa: BLE001
+                desk.flash.append(f"news check failed: {type(e).__name__}: {e}")
         elif dg is None:
             desk.flash.append("no draft group in the pool; pick a slate first")
         elif runner.active():

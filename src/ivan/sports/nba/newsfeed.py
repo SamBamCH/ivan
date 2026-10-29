@@ -3,7 +3,8 @@ ivan.sports.nba.newsfeed
 
 Player news from Rotowire's NBA news page (free, no login): every item is a headline about one player with the team,
 the injury, the report's text and the source it cites (the tweet from Underdog, Shams or the beat writer). Fetched only
-when asked (the desk's Check news button, its auto-check while on, scripts/nba/newsfeed.py); each fetch stores the page
+when asked (every pool refresh: ingest.run_ingest, so the desk's Refresh, ingest.py and the autopilot tick; the desk's
+auto box while on; a consumer's Refresh; scripts/nba/newsfeed.py check); each fetch stores the page
 raw (rotowire/news) and adds the headlines not seen before to nba_news with first_seen = now. Rotowire shows a date, not
 a time, so first_seen is the news clock: minutes behind the tweet when the check runs every few minutes.
 

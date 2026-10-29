@@ -28,7 +28,7 @@ while the desk is up; the desk shows "new data · load".
 
 ## 2. Refresh through the day
 
-Desk **Refresh**: `dk` re-fetches the pool, statuses and Rotowire (free); `props` also fetches the
+Desk **Refresh**: `dk` re-fetches the pool, statuses, Rotowire's starters and its news (free); `props` also fetches the
 player props (about 12 credits per game) and re-derives the market rates. Pins and locked grid rows
 survive a refresh; statuses and props change underneath them. Fetch props once the books have posted
 most of the slate (early evening for a 7pm lock) and again if the news moved.
@@ -74,7 +74,8 @@ The board sorts team cards by how far they are from their norm; alerts are liste
   before lock, late swap after, or publish only). One request pins, re-allocates, publishes and queues.
 - **scenarios**: save the team's edits under a name ("Giannis out"); the scenario whose assumptions all
   hold activates itself when a refresh or a call changes the facts.
-- **Check news** fetches Rotowire's news page (`ivan.sports.nba.newsfeed`); the auto box repeats it every
+- **News** comes with every Refresh: the pool refresh (`ingest.run_ingest`, so `ingest.py` and the autopilot tick
+  too) reads Rotowire's news page after the commit (`ivan.sports.nba.newsfeed`); the news auto box also reads it every
   5 minutes while the desk runs. The header counts the slate's open questions (Q/GTD/D/P players with no call).
 
 Terminal equivalents: `scripts/nba/news.py "Player Name" [--accept] [--conditional]` for one scratch
