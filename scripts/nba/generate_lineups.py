@@ -24,7 +24,7 @@ def main() -> int:
     p.add_argument("num_lineups", type=int, help="total number of lineups to generate")
     p.add_argument("num_jobs", type=int, help="how many parallel jobs to split across")
     p.add_argument("-c", "--config", default=str(config_path("nba")), help="path to the nba json config file")
-    p.add_argument("--fresh", action="store_true", help="delete every stored lineup and simulation result first")
+    p.add_argument("--fresh", action="store_true", help="delete the loaded slate's lineups and their simulation results first (other slates' stay)")
     p.add_argument("--min-fpts", type=float, default=None, help="minimum projected total for a lineup (default: config generate.min_fpts_frac x the optimal)")
     p.add_argument("--randomness", type=float, default=None, help="spread of the sampled worlds around the mean, 0-1 (default: config generate.randomness, 0.25)")
     p.add_argument("--no-progress", action="store_true", help="plain log lines instead of progress bars")
