@@ -166,6 +166,23 @@ producer without a browser on the other machine:
 the server, walks the pages and the CSV exports through the public hostname or the tailnet, presses
 Refresh and compares what the desk shows with the bundle the laptop published.
 
+## Trying a branch's desk before it is merged
+
+A worktree has no venv, `.env` or `data/`. Run its desk on another port with the main checkout's interpreter and
+database, and `PYTHONPATH=src` so the worktree's code wins over the editable install:
+
+```bash
+cd ~/ivan/.claude/worktrees/<branch>
+IVAN_NBA_DB_URL=sqlite:////home/sam-pratt/ivan/data/nba/nba_history.sqlite PYTHONPATH=src \
+  ~/ivan/venv/bin/python scripts/nba/serve.py --port 8002      # http://127.0.0.1:8002/
+```
+
+It shows the live slate. Its pins, grids, jobs and autopilot switch live under the worktree's own `data/`, so the
+live desk's edits are not in it and nothing typed here reaches the live desk; with no `.env` it never pushes the
+feed. **Refresh, Publish, Generate and Sim still write the shared database** (the pool, the projections, the
+lineups), so on a slate day look and click but leave those to the live desk, or point `IVAN_NBA_DB_URL` at a copy
+of the sqlite file (2.7 GB) for a free hand. Check news is safe: it only adds headlines.
+
 ## Login and public access
 
 `ivan.web.auth` puts a login page at `<root>/login` when `IVAN_DESK_PASSWORD_HASH` (or the plain
