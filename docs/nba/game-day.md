@@ -29,7 +29,9 @@ while the desk is up; the desk shows "new data · load".
 
 ## 2. Refresh through the day
 
-Desk **Refresh**: `dk` re-fetches the pool, statuses, Rotowire's starters and its news (free); `props` also fetches the
+Desk **Refresh**: `dk` re-fetches the pool, statuses, Rotowire's starters and its news (free); `lines` also fetches
+every game's spread and total (about 3 credits; `ingest.py --lines`), which the games strip and the minutes model's
+blowout draw read: nothing else fetches them on a day worked by hand. `props` fetches the lines and the
 player props (about 12 credits per game) and re-derives the market rates. Pins and locked grid rows
 survive a refresh; statuses and props change underneath them. Fetch props once the books have posted
 most of the slate (early evening for a 7pm lock) and again if the news moved.

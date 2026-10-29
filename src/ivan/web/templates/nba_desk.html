@@ -277,7 +277,8 @@
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections pushed from the laptop">Refresh</button></form>
   {% else %}
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups (free)">Refresh DK</button></form>
-  <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game.')"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
+  <form method="post" action="{{ root }}/refresh" title="the pool plus every game's spread and total (about 3 odds-api credits): what the games strip and the minutes model's blowout draw read"><input type="hidden" name="what" value="lines"><button>Refresh lines</button></form>
+  <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game, plus about 3 for the game lines.')" title="the pool, the player props and the game lines"><input type="hidden" name="what" value="props"><button>Refresh props</button></form>
   {% endif %}
   <form method="post" action="{{ root }}/publish" onsubmit="this.pins.value = collectDirtyPins()"><input type="hidden" name="pins" value=""><button class="primary" title="write projections + edits for the sim and the capture loop; values typed into the grids but not yet refigured are applied first{% if consumer %}; only the teams you edited are re-projected, the rest stays as published{% endif %}">Publish</button></form>
   <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>

@@ -154,14 +154,14 @@ def main() -> int:
 
     # the real fetch: statuses + Rotowire, the props when due (a props failure costs nothing but the props)
     try:
-        full = fetch_slate(session, s["id"], update_odds=bool(due), starters=True, log=log.info)
+        full = fetch_slate(session, s["id"], update_odds=bool(due), starters=True, log=log.info, lines=False)   # lines below
     except IngestError as e:
         if not due:
             return stand_down(f"{s['id']}: {e}", ok=False, code=1)
         log.warning(f"props fetch failed ({e}); this tick refreshes the pool without them")
         due = []
         try:
-            full = fetch_slate(session, s["id"], update_odds=False, starters=True, log=log.info)
+            full = fetch_slate(session, s["id"], update_odds=False, starters=True, log=log.info, lines=False)
         except IngestError as e2:
             return stand_down(f"{s['id']}: {e2}", ok=False, code=1)
     if due:

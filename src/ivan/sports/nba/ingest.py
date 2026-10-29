@@ -125,7 +125,10 @@ def pool_from_draftables(draftables: list[dict], draft_group_id: int) -> tuple[l
 
 
 def fetch_slate(session: Session, draft_group_id: int, *, update_odds: bool, starters: bool = True,
-                api_key: Optional[str] = None, log: Log = print) -> SlateFetch:
+                api_key: Optional[str] = None, log: Log = print, lines: Optional[bool] = None) -> SlateFetch:
+    """DK draftables, Rotowire's lineups, the props (update_odds, ~12 credits a game) and the game lines (`lines`, ~3
+    credits; None = with the props). The lines are the spread and total the desk and the minutes model read: until
+    2026-10-29 only the autopilot tick fetched them, so a day worked by hand had no spreads."""
     out = SlateFetch(draft_group_id=int(draft_group_id))
     log(f"fetching DK draftables for draft group {draft_group_id}")
     draftables = get_players_for_slate(int(draft_group_id), raw_sport="nba")
@@ -151,6 +154,11 @@ def fetch_slate(session: Session, draft_group_id: int, *, update_odds: bool, sta
             raise IngestError("the-odds-api returned no NBA props; check ODDS_API_KEY and the plan. Nothing changed.")
         out.odds = df
         log(f"props: {len(df)} rows, {df.player.nunique()} players, {df.sportsbook.nunique()} books")
+    if update_odds if lines is None else lines:
+        try:
+            out.game_lines = fetch_game_lines(api_key=api_key, log=log)
+        except Exception as e:   # noqa: BLE001 - the lines are a convenience on top of the pool and the props
+            log(f"WARNING: game lines fetch failed: {type(e).__name__}: {e}")
     return out
 
 
@@ -360,7 +368,7 @@ def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) 
 
 
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
-                 log: Log = print, field: bool = False, news: bool = True) -> tuple:
+                 log: Log = print, field: bool = False, news: bool = True, lines: Optional[bool] = None) -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
     and write its public projection in ONE transaction. Nothing downstream can see a half-written or unprojected pool
@@ -370,7 +378,7 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     (news=False skips it). Returns (StoreInfo, ProjectInfo, the news check's result or None, the changes per team).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
-    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news)
+    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news, lines=lines)
     return out["stored"], out["projected"], out["news"], out["changes"]
 
 
@@ -597,7 +605,8 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True) -> dict:
+               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
+               lines: Optional[bool] = None) -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
     replaced, projected and its public projection written in one transaction, so a desk serving the same database from
@@ -617,7 +626,7 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
     except Exception:   # noqa: BLE001 - the diff is a convenience
         before = None
     if fetched is None:
-        fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log)
+        fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log, lines=lines)
     current = session.query(NBAPlayer.draft_group_id).first()
     switching = bool(current and current[0] and int(current[0]) != int(draft_group_id))
     if switching:

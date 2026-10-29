@@ -17,7 +17,8 @@ page is what is on the screen.
   the desk** button loads a past slate from its archive capture when it is to be re-worked.
   While a load or a refresh runs the board shows its progress; when it is done the whole page reloads, so the
   picker and the header counts show the new slate.
-- **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). The board shows the
+- **Refresh DK** (free) / **Refresh lines** (the game lines, spread and total, about 3 credits) / **Refresh props**
+  (about 12 credits per game plus the lines; confirm dialog). Spreads show only once tonight's lines are fetched. The board shows the
   state until the new pool is projected (about 10 seconds). The public field and the ownership column are not
   rebuilt by a refresh: the sim does that, or the pipeline panel's **Field + ownership** button. On a consumer a
   single **Refresh** pulls the feed instead.

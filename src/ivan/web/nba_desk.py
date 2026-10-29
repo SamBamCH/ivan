@@ -1955,7 +1955,7 @@ def _start_restore(draft_group: int) -> None:
     threading.Thread(target=run, name="ivan-restore", daemon=True).start()
 
 
-def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
+def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Optional[bool] = None) -> None:
     """Fetch, store, project and write the public projection in a background thread with its own session (one transaction);
     the board shows `what` until it is done, then the desk rebuilds from the new pool. No field build: the sim builds the
     field it needs, the Field + ownership button builds it on demand."""
@@ -1963,7 +1963,7 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool) -> None:
         log = []
         sess = get_session(engine)
         try:
-            _, _, news, moved = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append)
+            _, _, news, moved = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append, lines=lines)
             desk.changes = dict(at=datetime.now(), teams=moved or {})
             msg = f"{what}: done" + (_news_note(news) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
         except IngestError as e:
@@ -2379,9 +2379,10 @@ def reload(request: Request):
 
 @app.post("/refresh")
 def refresh(request: Request, what: str = Form("dk")):
-    if CONSUMER and what == "props":
+    if CONSUMER and what in ("props", "lines"):
         what = "dk"                                              # a consumer has no props button; the laptop's capture loop fetches them
-    """dk: pool + statuses + Rotowire starters and news (free). props: also the player props (costs credits). A consumer pulls the feed and reads the news."""
+    """dk: pool + statuses + Rotowire starters and news (free). lines: also the game lines, spread and total (~3 credits).
+    props: also the player props and the game lines (~12 credits a game). A consumer pulls the feed and reads the news."""
     with LOCK:
         feed_url = os.environ.get("IVAN_FEED_URL", "").strip()
         dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
@@ -2421,7 +2422,8 @@ def refresh(request: Request, what: str = Form("dk")):
         elif desk.busy:
             desk.flash.append(f"already {desk.busy}")
         else:
-            _start_refresh("refreshing the pool" + (" and the props" if what == "props" else ""), dg, update_odds=(what == "props"))
+            _start_refresh("refreshing the pool" + (" and the props" if what == "props" else " and the game lines" if what == "lines" else ""), dg,
+                           update_odds=(what == "props"), lines=True if what == "lines" else None)
             return RedirectResponse(auth.root_of(request) + "/", status_code=303)
         desk.rebuild()
     return RedirectResponse(auth.root_of(request) + "/", status_code=303)

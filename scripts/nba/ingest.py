@@ -26,6 +26,7 @@ def main() -> int:
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--update-odds", action="store_true", help="fetch player props (costs odds-api credits)")
     g.add_argument("--no-odds", action="store_true", help="skip props (default)")
+    ap.add_argument("--lines", action="store_true", help="fetch the game lines (spread, total; ~3 credits) without the props; --update-odds fetches them anyway")
     ap.add_argument("--no-starters", action="store_true", help="skip the Rotowire fetch")
     ap.add_argument("--no-project", action="store_true", help="store only; do not project")
     ap.add_argument("--project-only", action="store_true", help="re-project the stored pool, no fetch")
@@ -51,7 +52,7 @@ def main() -> int:
         if args.draft_group is None:
             ap.error("--draft-group is required (see --list)")
         run_ingest(session, args.draft_group, update_odds=args.update_odds, project=not args.no_project,
-                   starters=not args.no_starters, n_sims=args.sims, field=args.field)
+                   starters=not args.no_starters, n_sims=args.sims, field=args.field, lines=True if args.lines else None)
         return 0
     except IngestError as e:
         print(f"ERROR: {e}")
