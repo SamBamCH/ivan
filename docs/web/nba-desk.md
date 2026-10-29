@@ -177,6 +177,10 @@ IVAN_NBA_DB_URL=sqlite:////home/sam-pratt/ivan/data/nba/nba_history.sqlite PYTHO
   ~/ivan/venv/bin/python scripts/nba/serve.py --port 8002      # http://127.0.0.1:8002/
 ```
 
+Views that read the raw archive (a past game's score strip reads the stored play-by-play) need the main checkout's:
+link it once with `mkdir -p data/nba && ln -s ~/ivan/data/nba/raw data/nba/raw` in the worktree. Raw files the
+branch's desk then stores (a refresh's pages) land in the main archive, as the live desk's would.
+
 It shows the live slate. Its pins, grids, jobs and autopilot switch live under the worktree's own `data/`, so the
 live desk's edits are not in it and nothing typed here reaches the live desk; with no `.env` it never pushes the
 feed. **Refresh, Publish, Generate and Sim still write the shared database** (the pool, the projections, the
