@@ -77,7 +77,7 @@ async def _desk_activity(request: Request, call_next):
     edit; the tick stands down for a while after one that was not published since. A consumer leaves no footprint."""
     if request.method == "POST" and not CONSUMER:
         path = request.url.path[len(auth.root_of(request)):] or "/"
-        if not path.startswith(NOT_AN_EDIT):
+        if not path.startswith(NOT_AN_EDIT) and not path.endswith("/note"):      # a note is not a projection edit
             try:
                 autopilot.touch("edit")
             except OSError:
@@ -431,6 +431,21 @@ class Desk:
             return None
         return dict(games=int((sa.get("season") or {}).get("games", 0)))
 
+    def draft_group(self) -> Optional[int]:
+        return next((p.draft_group_id for p in self.slate.players if p.draft_group_id), None)
+
+    def notes(self) -> dict:
+        """The loaded slate's player notes, not cleared (ivan.sports.nba.notes): {player: row}."""
+        from ivan.sports.nba import notes as NOTES
+        try:
+            return NOTES.active(self.session, self.draft_group())
+        except Exception:   # noqa: BLE001 - no table yet on an old database: no notes
+            return {}
+
+    def team_notes(self, team: str) -> list:
+        names = {normalize_name(p.name): p.name for p in self.players(team)}
+        return [dict(key=n, name=names[n], text=r.text, at=r.updated_at) for n, r in self.notes().items() if n in names]
+
     def considerations(self, team: str) -> list:
         """What is unusual about the team's game tonight (ivan.sports.nba.considerations; scripts/nba/considerations.py)."""
         from ivan.sports.nba import considerations as CN
@@ -473,7 +488,9 @@ class Desk:
     def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
         """The rotation grid (_rotation) with each row's rookie mark (rookie_of): the same on tonight's grid and a past game's."""
         rot = self._rotation(team, source=source, game_id=game_id)
+        notes = self.notes() if rot.get("kind") != "last" else {}
         for r in rot.get("rows") or []:
+            r["note"] = notes[r["key"]].text if r["key"] in notes else None
             rk = self.rookie_of(r["key"])
             r["rookie"] = rk is not None
             r["rookie_games"] = rk["games"] if rk else None
@@ -1290,7 +1307,7 @@ class Desk:
                     questions=self.questions(team, now), scenarios=self.scenario_list(team),
                     published=dict(grid=ROT.drawn_source(team), pins=sum(1 for r in rows if "published" in r.get("layer", {}).values()),
                                    own=sum(1 for r in rows if "local" in r.get("layer", {}).values()), consumer=PUBLISHED_OVERRIDES_CSV.exists() or ROT.PUBLISHED_ROTATIONS_DIR.is_dir()),
-                    last_game=self.game_grid(team), considerations=self.considerations(team),
+                    last_game=self.game_grid(team), considerations=self.considerations(team), notes=self.team_notes(team),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
@@ -2049,6 +2066,24 @@ async def refigure(request: Request, team: str):
                 msg += f"; the public projection was not written to the pool: {type(e).__name__}: {e}"
             desk.rebuild()
         desk.flash.append(msg)
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@app.post("/team/{team}/note", response_class=HTMLResponse)
+def player_note(request: Request, team: str, player: str = Form(...), text: Optional[str] = Form(None)):
+    """A note next to a player on this slate (ivan.sports.nba.notes = scripts/nba/notes.py): the text comes from the form or
+    the prompt (HX-Prompt); a blank text clears it. It shows while this slate is loaded and goes into its scorecard."""
+    from ivan.sports.nba import notes as NOTES
+    text = text if text is not None else request.headers.get("HX-Prompt", "")
+    with LOCK:
+        key = normalize_name(player)
+        p = next((x for x in desk.players(team) if normalize_name(x.name) == key), None)
+        dg = desk.draft_group()
+        if p is None or dg is None:
+            desk.flash.append(f"no {player} on {team} in the loaded slate")
+        else:
+            lock = min((x.gametime for x in desk.slate.players if x.gametime), default=None)
+            NOTES.set_note(desk.session, dg, lock.date().isoformat() if lock else None, key, text, team=team, raw=p.name)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 

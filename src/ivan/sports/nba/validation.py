@@ -245,6 +245,15 @@ class Scorecard:
         return f"{self.day.isoformat() if self.day else 'nodate'}_{self.draft_group}"
 
 
+def slate_notes(session: Session, draft_group: int, lock: Optional[datetime]) -> List[dict]:
+    """The desk's player notes that stood at the slate's lock (ivan.sports.nba.notes.at), as dicts; [] without the table."""
+    from ivan.sports.nba import notes as NOTES
+    try:
+        return [NOTES.as_dict(r) for r in NOTES.at(session, int(draft_group), lock)]
+    except Exception:   # noqa: BLE001 - an old database without the notes table
+        return []
+
+
 def build_scorecard(session: Session, draft_group: int) -> Optional[Scorecard]:
     ours, dk, lock = captures_for(session, draft_group)
     if ours.empty:
@@ -256,6 +265,9 @@ def build_scorecard(session: Session, draft_group: int) -> Optional[Scorecard]:
     if act.empty:
         return Scorecard(int(draft_group), day, lock, ours.captured_at.max().to_pydatetime(), pd.DataFrame())
     rows = join_actuals(ours, act, dk)
+    notes = slate_notes(session, int(draft_group), lock)
+    by_note = {n["player"]: n["text"] for n in notes}
+    rows["note"] = rows.player_name.map(by_note)
     rot = rows[rows.played & (rows.minutes_proj >= ROTATION_MIN)]
     summary = {
         "draft_group": int(draft_group), "day": day.isoformat(), "lock": lock.isoformat(timespec="minutes") if lock else None,
@@ -267,6 +279,7 @@ def build_scorecard(session: Session, draft_group: int) -> Optional[Scorecard]:
         "by_team": group_table(rows, "team").to_dict("index"),
         "yardsticks": yardsticks(rows), "findings": findings(rows),
         "worst": worst(rows).to_dict("records"),
+        "notes": notes,
     }
     return Scorecard(int(draft_group), day, lock, ours.captured_at.max().to_pydatetime(), rows, summary)
 
@@ -313,6 +326,15 @@ def format_scorecard(card: Scorecard, top: int = TOP_N) -> str:
     L.append("  findings:")
     for f in s["findings"]:
         L.append(f"    [{f['level']}] {f['text']}  (n={f['n']})")
+    if s.get("notes"):
+        L.append("  your notes at lock (the desk's player notes) and how each player went:")
+        rows = card.rows.set_index("player_name") if len(card.rows) else None
+        for n in s["notes"]:
+            r = rows.loc[n["player"]] if rows is not None and n["player"] in rows.index else None
+            if isinstance(r, pd.DataFrame):
+                r = r.iloc[0]
+            how = "" if r is None else f"  min {r.minutes_proj:4.1f}->{(r.min_act if r.min_act == r.min_act else 0):4.1f}  fpts {r.fpts_proj:5.1f}->{(r.fpts_act if r.fpts_act == r.fpts_act else 0):5.1f}"
+            L.append(f"    {n['player_raw'] or n['player']:24s} {n['team'] or '':4s} {n['text']}{how}")
     L.append(f"  worst {top} fpts misses:")
     w = pd.DataFrame(s["worst"]).head(top)
     for r in w.itertuples():

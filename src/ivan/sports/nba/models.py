@@ -405,3 +405,23 @@ class NBANews(NBABase):
     url         = Column(String,   nullable=True)                   # Rotowire's headline page
     date        = Column(String,   nullable=True)                   # Rotowire's date text
     first_seen  = Column(DateTime, nullable=False, index=True)
+
+
+class NBAPlayerNote(NBABase):
+    """
+    A note typed next to a player on the desk (ivan.sports.nba.notes): it belongs to one slate (draft group and day)
+    and shows only while that slate is loaded, until cleared. Cleared notes stay with cleared_at set, so the slate's
+    scorecard can say which notes stood at lock.
+    """
+    __tablename__ = "nba_player_note"
+
+    id             = Column(Integer,  primary_key=True)
+    draft_group_id = Column(Integer,  nullable=False, index=True)
+    slate_day      = Column(String,   nullable=True, index=True)     # YYYY-MM-DD of the slate's lock
+    player_name    = Column(String,   nullable=False, index=True)    # normalized
+    player_raw     = Column(String,   nullable=True)
+    team           = Column(String,   nullable=True)
+    text           = Column(String,   nullable=False)
+    created_at     = Column(DateTime, nullable=False)
+    updated_at     = Column(DateTime, nullable=False)
+    cleared_at     = Column(DateTime, nullable=True)

@@ -27,7 +27,10 @@ fpts_proj − fpts_act = (min_proj − min_act) · fpm_proj + min_act · (fpm_pr
 Players are classed by where their minutes came from (same team as history, new team, no history, a
 pin); summaries by starter label, priced or not, salary tier and history class; DK's own average and
 the books' implied points stand beside as yardsticks; plain-language findings. One CSV + JSON per slate
-under `data/nba/diagnostics/scorecard/`, read back by `history`. The desk's cards carry the same flags
+under `data/nba/diagnostics/scorecard/`, read back by `history`. The desk's player notes that stood at lock
+(`ivan.sports.nba.notes.at`: written before it, not cleared by then) are in the JSON as `notes`, in the CSV as a `note`
+column, and in the printed report with each player's minutes and points projected against actual; a scorecard
+built before a note existed gets it with `--force`. The desk's cards carry the same flags
 as `review`.
 
 ## The walk-forward backtest of the projection (`scripts/nba/backtest_projection.py`)

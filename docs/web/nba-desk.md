@@ -60,6 +60,13 @@ priced players, the flags. Inputs on the row:
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
 - **Clear** (`/clear`): drop the team's pins and grid.
 
+**Notes** (`/team/<TEAM>/note` = `scripts/nba/notes.py set|clear|list`, `ivan.sports.nba.notes`): the pencil beside a
+name on tonight's grid asks for a note on that player (blank clears it); it turns amber when he has one, hovering shows
+it, and the card lists the team's notes with a clear button. A note belongs to the slate it was written on (draft group
+and day): it shows only while that slate is loaded, a past day restored from its archive included, and stays until
+cleared. The slate's scorecard lists the notes that stood at lock beside how each player went
+([../nba/validation-and-backtests.md](../nba/validation-and-backtests.md)). Each machine keeps its own (the table is not in the feed).
+
 **Special considerations** (above the grids; `Desk.considerations` = `ivan.sports.nba.considerations`, terminal
 `scripts/nba/considerations.py [--team XXX]`): what is unusual about tonight's game, warnings first. Rest (back to back,
 3 games in 4 nights, 3+ days off; the opponent's back to back), a regular starter (started most games, 20+ usual
