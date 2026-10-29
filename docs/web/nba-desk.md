@@ -10,7 +10,11 @@ page is what is on the screen.
 ## Header
 
 - **Slate picker**: a day, then that day's classic draft groups (from the DK lobby for today and
-  tomorrow, from the archive for past days; the loaded slate is always listed). **Load** switches.
+  tomorrow, from the archive for past days; the loaded slate is always listed). Picking a slate goes at once, and
+  the ‹ › arrows step through every slate in time order. A slate of **today or tomorrow loads** into the desk (fetched,
+  projected; it clears the loaded slate's lineups and sims, so the desk asks first when there are any). A slate of an
+  **earlier day opens its backtest** (below), read only: nothing is loaded or deleted. The backtest's **Restore into
+  the desk** button loads a past slate from its archive capture when it is to be re-worked.
   While a load or a refresh runs the board shows its progress; when it is done the whole page reloads, so the
   picker and the header counts show the new slate.
 - **Refresh DK** (free) / **Refresh props** (about 12 credits per game; confirm dialog). The board shows the
@@ -32,7 +36,9 @@ page is what is on the screen.
 - **new data · load** appears when the pool changed on disk since the page was built (a terminal
   ingest or project, a feed pull); it reloads without fetching.
 - The questions count: Q/GTD/D/P players with no call yet, by team.
-- Views: **slate** (the board), **players**, **late swap**, **exposures**.
+- Views: **slate** (the board), **players**, **late swap**, **exposures**, **backtest**. Opening the desk with no view
+  picks one from the loaded slate (`slate_backtest.mode_for`): before its first lock the slate, after it the late swap,
+  and a slate of an earlier day its backtest.
 
 ## The board (view `slate`)
 
@@ -104,6 +110,26 @@ Each card lists its open questions with the latest news on file (headline, sourc
 
 The whole pool as one sortable table: team, position, salary, status, minutes, proj, pub, ownership,
 value, flags.
+
+## Backtest (view `backtest`, `/?view=backtest&dg=<draft group>`, `_nba_backtest.html`)
+
+A past slate, read only (`ivan.sports.nba.slate_backtest`, terminal `scripts/nba/backtest_slate.py --draft-group N |
+--date YYYY-MM-DD`). Built in about two seconds from what is on disk; the desk's working tables are not touched.
+
+- **Tiles**: net and ROI, winnings on fees, entries cashed, the sim's claim (the chooser's ROI for the same entries,
+  fee-weighted; red when it claimed far more than happened).
+- **Contests**: fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, where the
+  points came from. Our entries are the Entry IDs in the upload files the desk wrote (`chosen_entries.classic.*.csv`,
+  `lateswap.*.csv`); the field is the contest's newest standings export, every lineup rescored from the day's box
+  scores (DraftKings' names matched to the box by name, by name without suffixes, then by a unique last name; 99.6
+  to 100% of lineups equal DraftKings' final points on the finished exports checked), ranks with ties sharing the
+  payouts of the places they cover. Before the box scores arrive the export's own points stand.
+- **Notes at lock**: the desk's player notes that stood at lock.
+- **Players by team**: minutes and points projected (our last capture before lock) against played, the miss, our
+  exposure, the field's ownership (DraftKings' %drafted in the largest contest), the note.
+- **Our lineups**: every entry, best first: rank, points, payout, copies of it in that contest's field.
+
+The plan this is phase 1 of: [../nba/notes/slate_views_plan_2026-10-29.md](../nba/notes/slate_views_plan_2026-10-29.md).
 
 ## Pipeline panel (`_nba_pipeline.html`, `/pipeline/<step>`)
 

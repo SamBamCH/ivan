@@ -1375,7 +1375,11 @@ class Desk:
             day = now.date() if now.date() in days else (ahead[0] if ahead else days[-1])
             slates = {k: v for k, v in slates.items() if v.get("lock_dt") is None or v["lock_dt"].date() == day or k == str(dg)}
         slates = dict(sorted(slates.items(), key=lambda kv: (kv[1].get("lock_dt") is None, kv[1].get("lock_dt") or now, kv[1]["label"])))
-        return dict(draft_group=dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None,
+        try:
+            n_lineups = int(self.session.query(Lineup).filter(Lineup.draft_group_id == dg).count()) if dg is not None else 0
+        except Exception:   # noqa: BLE001
+            n_lineups = 0
+        return dict(draft_group=dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None, n_lineups=n_lineups,
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
                     slates=slates, slate_days=self.slate_days(now, dg), props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
@@ -1487,17 +1491,49 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, open: Optional[str] = None, view: str = "games"):
-    """view=games: the team cards paired into games; view=players: every player in one table, highest ownership first."""
+def index(request: Request, open: Optional[str] = None, view: Optional[str] = None, dg: Optional[int] = None):
+    """
+    view=games: the team cards paired into games; players: every player in one table; lateswap; exposures; backtest (dg = a
+    past slate, read only: ivan.sports.nba.slate_backtest). With no view the loaded slate's mode picks it
+    (slate_backtest.mode_for): before the first lock the slate, after it the late swap, a slate of an earlier day its backtest.
+    """
     with LOCK:
         if not desk.busy:
             desk.maybe_reload()
         now = datetime.now()
-        return _render(request, "nba_desk.html", header=desk.header(now), open_team=open, view=view, busy=desk.busy)
+        header = desk.header(now)
+        if view is None:
+            from ivan.sports.nba.slate_backtest import mode_for
+            lock = header.get("lock")
+            mode = mode_for(lock.date() if lock else None, lock, now)
+            view = {"lateswap": "lateswap", "backtest": "backtest"}.get(mode, "games")
+            if view == "backtest":
+                dg = header.get("draft_group")
+        if view == "backtest" and dg is None:
+            dg = header.get("draft_group")
+        return _render(request, "nba_desk.html", header=header, open_team=open, view=view, busy=desk.busy, dg=dg)
+
+
+def _backtest_board(request: Request, dg: Optional[int]):
+    """A past slate, read only (ivan.sports.nba.slate_backtest = scripts/nba/backtest_slate.py): nothing is loaded or deleted."""
+    from ivan.sports.nba import slate_backtest as SB
+    if dg is None:
+        return _render(request, "_nba_board.html", busy=None, view="backtest", bt=None, bt_error="no slate picked", menu=[], games=[], players=[],
+                       lateswap=None, exposures=None, card=None, game=None, open_team=None)
+    sess = get_session(engine)                                     # its own session: the page never waits on the desk's lock
+    try:
+        bt, err = SB.slate_backtest(sess, int(dg)), None
+    except Exception as e:   # noqa: BLE001 - show what failed instead of a blank page
+        bt, err = None, f"{type(e).__name__}: {e}"
+    finally:
+        sess.close()
+    return _render(request, "_nba_board.html", busy=None, view="backtest", bt=bt, bt_error=err, menu=[], games=[], players=[],
+                   lateswap=None, exposures=None, card=None, game=None, open_team=None)
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = "", team: str = "", after: str = ""):
+def board(request: Request, view: str = "games", set: str = "pool", metric: str = "proj", bins: str = "", team: str = "", after: str = "",
+          dg: Optional[int] = None):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view.
     after=busy is the loading poll's request: once the load or refresh is done the whole page reloads (HX-Refresh), because
     the header (the slate picker, the counts) was built from the slate before it; swapping only the board left the picker
@@ -1505,6 +1541,8 @@ def board(request: Request, view: str = "games", set: str = "pool", metric: str 
     if after == "busy" and not desk.busy:
         from fastapi.responses import Response
         return Response(status_code=200, headers={"HX-Refresh": "true"})
+    if view == "backtest":
+        return _backtest_board(request, dg)
     with LOCK:
         now = datetime.now()
         if desk.busy:

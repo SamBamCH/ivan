@@ -218,6 +218,13 @@
   .teamfoot button, .scratch { font:inherit } .teamfoot button { font-size:12px; padding:3px 8px; border-radius:5px; border:1px solid #cfcfcf; background:#fff; cursor:pointer }
   .scratch { font-size:11px; color:var(--bad); background:none; border:0; cursor:pointer; padding:0 4px }
   details summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:6px }
+  .bt-head { display:flex; gap:14px; align-items:center } .bt-head h2 { font-size:17px; margin:4px 0 } .bt-head form { margin-left:auto }
+  .bt-tiles { display:flex; gap:12px; flex-wrap:wrap; margin:8px 0 } .bt-tiles .tile { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 14px; min-width:150px }
+  .bt-tiles .tile b { display:block; font-size:20px; font-variant-numeric:tabular-nums } .bt-tiles .tile span { font-size:12px; color:var(--muted) } .bt-tiles .tile.over b { color:var(--bad) }
+  .bt h3 { font-size:14px; margin:16px 0 4px } .bt td.lo { color:var(--bad) } .bt td.hi { color:var(--ok) } .bt tr.dnp td { color:#999 } .bt tr.cash td { background:#f0fbf3 }
+  .bt-teams { display:grid; grid-template-columns:repeat(auto-fill, minmax(520px, 1fr)); gap:10px } .bt-team { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:4px 10px }
+  .bt-team > summary { margin:2px 0; color:var(--ink); font-size:13px } .bt td.lineup { white-space:normal; max-width:560px } .bt-notes { font-size:12px; margin:2px 0 }
+  .slate-step { font:inherit; font-size:14px; line-height:1; padding:2px 7px; border:1px solid #cfcfcf; border-radius:5px; background:#fff; cursor:pointer }
 </style>
 </head>
 <body>
@@ -230,11 +237,13 @@
     </span>
   {% endif %}
   {% if header.stale %}<form method="post" action="{{ root }}/reload" title="the pool, lineups or props changed on disk since this page was built (a terminal ingest or project, a feed pull); load it without fetching anything"><button class="stale">new data · load</button></form>{% endif %}
-  <form method="post" action="{{ root }}/slate" id="slate-form" title="pick a day, then one of its slates: a lobby slate is fetched from DraftKings and projected; an archived one is restored from its capture (nothing fetched)">
+  <form method="post" action="{{ root }}/slate" id="slate-form" data-root="{{ root }}" data-viewing="{{ dg if view == 'backtest' and dg else '' }}" data-lineups="{{ header.n_lineups or 0 }}" data-today="{{ now.strftime('%Y-%m-%d') }}" title="pick a day, then one of its slates: today's and tomorrow's load into the desk (fetched from DraftKings and projected); an earlier day's opens its backtest, read only (nothing loaded or deleted)">
+    <button type="button" id="slate-prev" class="slate-step" title="the slate before">&lsaquo;</button>
     <select id="slate-day" title="the day">{% for d, label, sl in header.slate_days %}<option value="{{ d }}" {% if sl|selectattr("loaded")|list %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
     <select name="draft_group" id="slate-pick" title="the day's slates"></select>
     <input type="hidden" name="source" id="slate-source" value="lobby">
     <button type="submit" id="slate-load">Load</button>
+    <button type="button" id="slate-next" class="slate-step" title="the slate after">&rsaquo;</button>
     <script type="application/json" id="slate-days">{{ header.slate_days|tojson }}</script>
   </form>
   {% if header.mapped and header.mapped.n %}<span class="mapped-sum {% if header.mapped.n_mapped == header.mapped.n and header.questions.open == 0 %}ok{% elif header.mapped.changed %}warn{% endif %}" title="green: mapped and no open question · yellow: an open question (a questionable player who could shake the rotation) · red: mapped but the inputs moved since · grey: unmapped">mapped {{ header.mapped.n_mapped }}/{{ header.mapped.n }}{% if header.questions.open %} · {{ header.questions.open }} open{% endif %}{% if header.mapped.n_mapped == header.mapped.n and header.questions.open == 0 %} · <b>good to go</b>{% endif %}</span>{% endif %}
@@ -249,7 +258,7 @@
     <select id="minfpts">{% for v in (0, 5, 10, 15, 20, 25, 30) %}<option value="{{ v }}" {% if v == 15 %}selected{% endif %}>{{ v }} fpts</option>{% endfor %}</select>
   </label>
   <span class="fresh">{% for f in header.fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{{ '%02d'|format((f.age % 60)|int) }}{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}</span>
-  <span class="views"><a href="{{ root }}/" class="{% if view not in ('players', 'lateswap', 'exposures') %}on{% endif %}">slate</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a><a href="{{ root }}/?view=exposures" class="{% if view == 'exposures' %}on{% endif %}">exposures</a></span>
+  <span class="views"><a href="{{ root }}/?view=games" class="{% if view not in ('players', 'lateswap', 'exposures', 'backtest') %}on{% endif %}">slate</a><a href="{{ root }}/?view=players" class="{% if view == 'players' %}on{% endif %}">players</a><a href="{{ root }}/?view=lateswap" class="{% if view == 'lateswap' %}on{% endif %}">late swap</a><a href="{{ root }}/?view=exposures" class="{% if view == 'exposures' %}on{% endif %}">exposures</a><a href="{{ root }}/?view=backtest{% if dg %}&dg={{ dg }}{% endif %}" class="{% if view == 'backtest' %}on{% endif %}" title="a slate's results, read only: our entries against the sim's claim, every player against our projection">backtest</a></span>
   <span class="spacer"></span>
   {% if consumer %}
   <form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections pushed from the laptop">Refresh</button></form>
@@ -263,7 +272,7 @@
 
 </header>
 <main>
-  <div id="board" hx-get="{{ root }}/board?view={{ view }}" hx-trigger="load" hx-swap="innerHTML">
+  <div id="board" hx-get="{{ root }}/board?view={{ view }}{% if dg %}&dg={{ dg }}{% endif %}" hx-trigger="load" hx-swap="innerHTML">
     <div class="loading"><span class="spin"></span> loading the slate…</div>
   </div>
 </main>
@@ -406,18 +415,42 @@
     rows.sort((a, b) => { const x = val(a), y = val(b); if (typeof x === "number" && typeof y === "number") return desc ? y - x : x - y; return desc ? String(y).localeCompare(String(x)) : String(x).localeCompare(String(y)); });
     const tb = table.querySelector(":scope > tbody"); rows.forEach(r => tb.appendChild(r));
   });
-  // the slate picker: a day, then its slates (the loaded one selected; Load is disabled while it is the loaded one)
+  // the slate picker: a day, then its slates. An earlier day's slate opens its backtest (read only, nothing loaded or deleted);
+  // today's and tomorrow's load into the desk. The arrows step through every slate in time order. Picking a slate goes at once.
   (function () {
     const form = document.getElementById("slate-form"); if (!form) return;
     const days = JSON.parse(document.getElementById("slate-days").textContent || "[]");
     const day = document.getElementById("slate-day"), pick = document.getElementById("slate-pick"), src = document.getElementById("slate-source"), load = document.getElementById("slate-load");
+    const root = form.dataset.root || "", viewing = form.dataset.viewing || "", today = form.dataset.today, lineups = parseInt(form.dataset.lineups || "0", 10);
+    const flat = []; days.slice().reverse().forEach(r => (r[2] || []).slice().forEach(s => flat.push({day: r[0], s: s})));   // oldest first
+    const isPast = d => d < today;
+    if (viewing) { const hit = flat.find(x => String(x.s.id) === viewing); if (hit) day.value = hit.day; }
     function fill() {
       const row = days.find(r => r[0] === day.value); pick.innerHTML = "";
-      (row ? row[2] : []).forEach(s => { const o = document.createElement("option"); o.value = s.id; o.dataset.source = s.source; o.textContent = s.label + (s.loaded ? " (loaded)" : ""); if (s.loaded) o.selected = true; pick.appendChild(o); });
+      (row ? row[2] : []).forEach(s => { const o = document.createElement("option"); o.value = s.id; o.dataset.source = s.source;
+        o.textContent = s.label + (s.loaded ? " (loaded)" : ""); if (viewing ? String(s.id) === viewing : s.loaded) o.selected = true; pick.appendChild(o); });
       sync();
     }
-    function sync() { const o = pick.options[pick.selectedIndex]; src.value = o ? o.dataset.source : "lobby"; load.disabled = !o || /\(loaded\)$/.test(o.textContent); load.textContent = (o && o.dataset.source === "archive") ? "Restore" : "Load"; }
-    day.addEventListener("change", fill); pick.addEventListener("change", sync); fill();
+    function sync() {
+      const o = pick.options[pick.selectedIndex]; src.value = o ? o.dataset.source : "lobby";
+      const past = isPast(day.value);
+      load.textContent = past ? "View" : "Load";
+      load.disabled = !o || (!past && /\(loaded\)$/.test(o.textContent) && !viewing);
+    }
+    function go(id, d, source, loaded) {
+      if (isPast(d)) { location.href = root + "/?view=backtest&dg=" + id; return; }
+      if (loaded) { location.href = root + "/?view=games"; return; }
+      if (lineups > 0 && !confirm("Loading slate " + id + " clears the loaded slate's " + lineups + " lineups and its sims (its edits are kept). Go on?")) return;
+      pick.value = id; src.value = source || "lobby"; form.submit();
+    }
+    function current() { const o = pick.options[pick.selectedIndex]; return o ? flat.findIndex(x => String(x.s.id) === o.value) : -1; }
+    function step(k) { const i = current() + k; if (i < 0 || i >= flat.length) return; const x = flat[i]; go(x.s.id, x.day, x.s.source, x.s.loaded); }
+    day.addEventListener("change", () => { fill(); if (isPast(day.value) && pick.options.length === 1) go(pick.value, day.value, src.value, false); });
+    pick.addEventListener("change", () => { sync(); const o = pick.options[pick.selectedIndex]; if (o) go(o.value, day.value, o.dataset.source, /\(loaded\)$/.test(o.textContent)); });
+    form.addEventListener("submit", e => { e.preventDefault(); const o = pick.options[pick.selectedIndex]; if (o) go(o.value, day.value, o.dataset.source, /\(loaded\)$/.test(o.textContent)); });
+    document.getElementById("slate-prev").addEventListener("click", () => step(-1));
+    document.getElementById("slate-next").addEventListener("click", () => step(1));
+    fill();
   })();
   // typed values in the grid's columns wait for Refigure. Until then they survive any re-render of the card (a paint stroke, a
   // starter click, a news check): dirty inputs are stashed before the swap and put back after it.

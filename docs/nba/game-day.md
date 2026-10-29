@@ -8,8 +8,9 @@ pipeline reads the pool (`nba_player`), and only Publish moves the first into th
 
 Desk: the slate picker (top of the page) lists a day, then that day's classic draft groups from the
 DraftKings lobby. Picking one fetches the pool and the Rotowire starters, stores them, projects and
-writes the public projection (the field's numbers). A past day restores the slate from its
-archive capture instead (no fetch, nothing recorded). Switching files the slate you leave (its pins and
+writes the public projection (the field's numbers). A past day's slate opens its
+backtest instead, read only ([../web/nba-desk.md](../web/nba-desk.md)); its **Restore into the desk** button loads
+it from its archive capture (no fetch, nothing recorded) to re-work it. Switching files the slate you leave (its pins and
 grids) under `data/nba/input/edits/<draft group>/` and brings back the new slate's own.
 
 Loading a slate also deletes the lineups, pool snapshots, sim results and contest reports of every

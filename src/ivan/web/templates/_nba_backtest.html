@@ -1,0 +1,60 @@
+{# a past slate, read only (nba_desk._backtest_board = ivan.sports.nba.slate_backtest; terminal: scripts/nba/backtest_slate.py).
+   Nothing here loads the slate into the desk; "Restore into the desk" does, for re-working it. #}
+{% macro money(x) %}{% if x is none %}—{% else %}{{ '-' if x < 0 else '' }}${{ '%.2f'|format(x|abs) }}{% endif %}{% endmacro %}
+{% macro pct(x) %}{% if x is none %}—{% else %}{{ '%+.0f%%'|format(100 * x) }}{% endif %}{% endmacro %}
+<div class="bt">
+{% if bt_error %}<p class="flash">backtest failed: {{ bt_error }}</p>
+{% elif not bt %}<p class="muted">pick a slate of an earlier day in the picker</p>
+{% else %}{% set sm = bt.summary %}
+  <div class="bt-head">
+    <h2>{{ bt.day.strftime('%a %m-%d') if bt.day else '' }} · slate {{ bt.draft_group }}{% if bt.lock %} <span class="muted">lock {{ bt.lock.strftime('%H:%M') }}</span>{% endif %}</h2>
+    <form method="post" action="{{ root }}/slate" onsubmit="return confirm('Restore slate {{ bt.draft_group }} into the desk? It replaces the loaded slate and clears its lineups and sims (its edits are kept).')">
+      <input type="hidden" name="draft_group" value="{{ bt.draft_group }}"><input type="hidden" name="source" value="archive">
+      <button type="submit" title="load this slate's archive capture into the desk to re-work it (the old desk restore)">Restore into the desk</button></form>
+  </div>
+  <div class="bt-tiles">
+    <div class="tile"><b>{{ money(sm.net) }}</b><span>net · {{ pct(sm.roi) }} ROI</span></div>
+    <div class="tile"><b>{{ money(sm.won) }}</b><span>won on {{ money(sm.fees) }} in fees</span></div>
+    <div class="tile"><b>{{ sm.cashed }} / {{ sm.entries }}</b><span>entries cashed · {{ sm.contests }} contest{{ '' if sm.contests == 1 else 's' }}</span></div>
+    <div class="tile {% if sm.claimed_roi is not none and sm.roi is not none and sm.claimed_roi > sm.roi + 0.5 %}over{% endif %}"><b>{{ pct(sm.claimed_roi) }}</b><span>the sim's claim (chooser's ROI, fee-weighted)</span></div>
+  </div>
+  <p class="muted small">{% if sm.final %}Ranks and payouts rescored from the box scores of the day (final points; the export's live points are not used).{% else %}No box scores for the day yet: points are DraftKings' as of each export.{% endif %}{% if sm.missing_exports %} No standings export for: {{ sm.missing_exports|join(', ') }} (press Fetch standings after a tip, or scrape).{% endif %}</p>
+
+  {% if bt.contests %}<h3>Contests</h3>
+  <table class="players sortable bt-contests">
+    <thead><tr><th>contest</th><th class="n">fee</th><th class="n" title="entries in the export">field</th><th class="n">ours</th><th class="n">best</th><th class="n">cashed</th><th class="n" title="the lowest score that cashed">cash line</th><th class="n">won</th><th class="n">net</th><th class="n">ROI</th><th class="n" title="the chooser's claimed ROI for these entries (its run closest before lock)">claimed</th><th>scored from</th></tr></thead>
+    <tbody>{% for r in bt.contests %}<tr>
+      <td>{{ r.name }}</td><td class="n" data-v="{{ r.entry_fee }}">{{ money(r.entry_fee) }}</td><td class="n">{{ r.field }}</td><td class="n">{{ r.found if r.found is defined else 0 }}{% if r.found is defined and r.found != r.ours %}<span class="muted small"> of {{ r.ours }}</span>{% endif %}</td>
+      <td class="n">{{ r.best_rank or '' }}</td><td class="n">{{ r.cashed }}</td><td class="n">{{ '%.1f'|format(r.min_cash) if r.min_cash is defined and r.min_cash is not none else '' }}</td>
+      <td class="n" data-v="{{ r.won }}">{{ money(r.won) }}</td><td class="n {% if r.net < 0 %}lo{% elif r.net > 0 %}hi{% endif %}" data-v="{{ r.net }}">{{ money(r.net) }}</td>
+      <td class="n" data-v="{{ r.roi if r.roi is defined and r.roi is not none else 0 }}">{{ pct(r.roi if r.roi is defined else none) }}</td>
+      <td class="n" data-v="{{ r.claim.roi if r.claim and r.claim.roi is not none else 0 }}">{{ pct(r.claim.roi) if r.claim else '—' }}</td>
+      <td class="muted small">{{ r.scored }}</td></tr>{% endfor %}</tbody>
+  </table>{% else %}<p class="muted">No entries of ours found for this slate's contests (the upload files under data/nba/output name them).</p>{% endif %}
+
+  {% if bt.notes %}<h3>Notes at lock</h3><ul class="bt-notes">{% for n in bt.notes %}<li><b>{{ n.player_raw or n.player }}</b> {{ n.team or '' }} · {{ n.text }}</li>{% endfor %}</ul>{% endif %}
+
+  <h3>Players by team <span class="muted small">our last projection before lock against the box score{% if not bt.scorecard %}: no projection capture or no box scores for this slate{% endif %}</span></h3>
+  <div class="bt-teams">
+  {% for team, rows in bt.players|dictsort %}{% set played = rows|selectattr('played')|list %}
+    <details class="bt-team" open><summary><b>{{ team }}</b> <span class="muted small">proj {{ '%.0f'|format(rows|map(attribute='fpts_proj')|select('number')|sum) }} · actual {{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }} fpts</span></summary>
+    <table class="players sortable"><thead><tr><th>player</th><th class="n" title="minutes: projected → played">min</th><th class="n" title="fantasy points: projected → scored">fpts</th><th class="n" title="scored minus projected">Δ</th><th class="n" title="share of our entries holding him">ours</th><th class="n" title="the field's ownership (DK %drafted, largest contest)">field</th><th>note</th></tr></thead>
+    <tbody>{% for p in rows %}{% set d = (p.fpts_act - p.fpts_proj) if p.fpts_act is not none and p.fpts_proj is not none else none %}<tr class="{% if not p.played %}dnp{% endif %}">
+      <td>{% if p.starter in ('S', 'confirmed', 'expected', 'True') %}<b>{{ p.name }}</b>{% else %}{{ p.name }}{% endif %}{% if not p.played %} <span class="status">DNP</span>{% endif %}</td>
+      <td class="n" data-v="{{ p.min_act or 0 }}">{{ '%.0f'|format(p.min_proj) if p.min_proj is not none else '—' }} → {{ '%.0f'|format(p.min_act) if p.min_act is not none else '—' }}</td>
+      <td class="n" data-v="{{ p.fpts_act or 0 }}">{{ '%.1f'|format(p.fpts_proj) if p.fpts_proj is not none else '—' }} → {{ '%.1f'|format(p.fpts_act) if p.fpts_act is not none else '—' }}</td>
+      <td class="n {% if d is not none and d <= -8 %}lo{% elif d is not none and d >= 8 %}hi{% endif %}" data-v="{{ d or 0 }}">{{ '%+.1f'|format(d) if d is not none else '' }}</td>
+      <td class="n" data-v="{{ p.exposure or 0 }}">{{ '%.0f%%'|format(100 * p.exposure) if p.exposure else '' }}</td>
+      <td class="n" data-v="{{ p.own or 0 }}">{{ '%.1f%%'|format(p.own) if p.own is not none else '' }}</td>
+      <td class="small">{{ p.note or '' }}</td></tr>{% endfor %}</tbody></table>
+    </details>
+  {% endfor %}
+  </div>
+
+  {% if bt.entries %}<h3>Our lineups <span class="muted small">{{ bt.entries|length }} entries, best first; copies = identical lineups in that contest's field (ours included)</span></h3>
+  <table class="players sortable bt-entries">
+    <thead><tr><th>contest</th><th class="n">rank</th><th class="n">points</th><th class="n">payout</th><th class="n">copies</th><th>lineup</th></tr></thead>
+    <tbody>{% for e in bt.entries %}<tr class="{% if e.payout > 0 %}cash{% endif %}"><td class="small">{{ e.contest }}</td><td class="n">{{ e.rank }}</td><td class="n">{{ '%.2f'|format(e.points) }}</td><td class="n" data-v="{{ e.payout }}">{{ money(e.payout) if e.payout else '' }}</td><td class="n">{{ e.copies }}</td><td class="small lineup">{{ e.names|select|join(' · ') }}</td></tr>{% endfor %}</tbody>
+  </table>{% endif %}
+{% endif %}
+</div>
