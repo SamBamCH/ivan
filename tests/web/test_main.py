@@ -74,3 +74,13 @@ def test_tunnel_requests_need_a_password(open_site):
     """Through the Cloudflare tunnel every path is forwarded; with no password configured the site refuses to serve."""
     for path in ("/", "/nba/", "/nfl/jobs"):
         assert open_site.get(path, headers=CF).status_code == 503, path
+
+
+def test_nba_bar_keeps_the_slate_being_loaded(open_site, monkeypatch):
+    """While a load runs the desk still holds the old pool; the bar must show the slate asked for, not the one being replaced."""
+    from ivan.web import nba_desk as D
+    monkeypatch.setattr(D.desk, "busy", "loading slate 999001")
+    r = open_site.get("/nba/2099-01-02/999001/")
+    assert r.status_code == 200
+    assert "loading slate 999001" in r.text
+    assert 'value="/nba/2099-01-02/999001/"' not in r.text or 'value="/nba/2099-01-02/999001/" data-day="2099-01-02" selected' in r.text

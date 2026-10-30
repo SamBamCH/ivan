@@ -17,8 +17,7 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
   keeps its lineups, sims and edits for when it comes back; its page shows a load button instead when opened by its
   address, so a link never fetches). A slate of an **earlier day opens its backtest** (below), read only: nothing is
   loaded or deleted. The backtest's **Restore into the desk** button loads a past slate from its archive capture when
-  it is to be re-worked. While a load or a refresh runs the board shows its progress; when it is done the whole page
-  reloads. Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
+  it is to be re-worked. While a load or a refresh runs, the bar keeps the slate you picked, the header reads "loading slate N…" and the board shows the progress; when it is done the whole page reloads on the new slate. Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
 - **View** dropdown: **pre-lock** (the slate view below, `view=games`), **post-lock** (the late swap,
   `view=lateswap`), **backtest**. Opening the loaded slate with no view picks one from its lock
   (`slate_backtest.mode_for`): before its first lock pre-lock, after it post-lock, and a slate of an earlier day its

@@ -1582,8 +1582,13 @@ def _shell(request: Request, view: Optional[str], open_team: Optional[str], page
     from ivan.sports.nba.slate_backtest import mode_for
     loaded = header.get("draft_group")
     days = _days_of(header["slate_days"], now)
-    if desk.busy:                       # a load or restore is replacing the pool: show its progress; the board's poll reloads the page when it is done
-        page = None
+    if desk.busy:
+        # a load or restore is replacing the pool: the bar keeps the slate asked for (2026-10-30: it showed the slate being
+        # replaced, so a load of today's read as yesterday's loading) and the board shows the progress; its poll reloads the
+        # page when the load is done, and the page is then the new loaded slate
+        fr = frame.ctx(request, SPORT, days, None, page if page is not None else next((s for d in days for s in d.slates if s.loaded), None), None, now)
+        return _render(request, "nba_desk.html", header=header, open_team=open_team, view="games", busy=desk.busy, dg=None, frame=fr,
+                       page_slate=fr["slate"], is_loaded=False)
     if page is None:
         page = next((s for d in days for s in d.slates if s.loaded), None)
     dg = None

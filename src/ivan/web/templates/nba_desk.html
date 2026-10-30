@@ -288,7 +288,8 @@
 </script>
 <header>
 {% call bar(frame) %}<span class="bar extra">
-  {% if header.lock %}
+  {% if busy %}<span class="countdown" title="the desk is replacing its pool; the page reloads on the new slate when it is done">{{ busy }}…</span>
+  {% elif header.lock %}
     <span class="countdown {% if header.mins_to_lock is not none and header.mins_to_lock < 60 %}soon{% endif %}" title="{% if not is_loaded %}the loaded slate ({{ header.draft_group }}): {% endif %}slate {{ header.draft_group }} locks {{ header.lock.strftime('%a %H:%M') }} · {{ header.n_players }} players, {{ header.n_priced }} priced · pool {{ header.pool_at.strftime('%H:%M') if header.pool_at else '—' }} · lineups {{ header.starters_at.strftime('%H:%M') if header.starters_at else 'none' }} · props {{ header.odds_at[11:16] if header.odds_at else 'none' }} UTC · {{ header.overrides }} edits">
       {% if not is_loaded %}<span class="muted">loaded slate </span>{% endif %}{% if header.mins_to_lock is not none and header.mins_to_lock > 0 %}locks in {{ (header.mins_to_lock // 60)|int }}h {{ (header.mins_to_lock % 60)|int }}m{% else %}locked{% endif %}
     </span>
