@@ -35,9 +35,11 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
 
 ## The slate view (pre-lock), top to bottom
 
-1. **Games strip**: the slate's games by tip, one chip per team (green mapped, yellow an open question, red changed
-   since mapped, grey unmapped; a dot for news or for what the last refresh moved), each game's line ("DET -7.5 ·
-   228"). Its first slot is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
+1. **Games strip**: one column per tip time across the row above the actions (the columns wrap when there are many),
+   each game a row: away, home, spread ("DET -7.5", "PK" for a pick'em), total. Each team is a chip coloured by its
+   map state (green mapped, yellow an open question, red changed since mapped, grey unmapped; a dot for news or for
+   what the last refresh moved); a chip opens the team's card, the open game's row is shaded, a started game is
+   faded. Its first slot is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
    Beside it on the right, the **Config** tile (`_nba_config.html`, form `#pipe-config`): the knobs every action
    sends: generate (fresh pool, lineups, jobs, salaries, randomness, min fpts), sim (sims, field cap), choose (method
    and weights). Seeded from `config/nba.json`; the jobs read them through `data/nba/jobs/desk_config.json`. A

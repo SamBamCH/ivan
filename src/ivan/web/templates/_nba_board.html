@@ -16,17 +16,23 @@
     <div class="mapped-sum {% if mapped.n_mapped == mapped.n and questions_sum.open == 0 %}ok{% elif mapped.changed %}warn{% endif %}" title="green: mapped and no open question · yellow: an open question (a questionable player who could shake the rotation) · red: mapped but the inputs moved since · grey: unmapped{% if mapped.changed %} · changed: {{ mapped.changed|join(', ') }}{% endif %}{% if mapped.unmapped %} · unmapped: {{ mapped.unmapped|join(', ') }}{% endif %}">
       <b>{{ mapped.n_mapped }}/{{ mapped.n }}</b> teams{% if questions_sum.open %}<br>{{ questions_sum.open }} open question{{ '' if questions_sum.open == 1 else 's' }}{% endif %}{% if mapped.n_mapped == mapped.n and questions_sum.open == 0 %}<br><b>good to go</b>{% endif %}</div>
   </div>{% endif %}
+  <div class="tips">
   {% for grp in menu %}
-  <div class="slot">
-    <div class="slot-time">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }}</div>
+  <table class="tipcol">
+    <thead><tr><th colspan="4">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }} <span class="n">{{ grp.games|length }} game{{ '' if grp.games|length == 1 else 's' }}</span></th></tr>
+      <tr class="sub"><th>away</th><th>home</th><th class="num">spread</th><th class="num">total</th></tr></thead>
+    <tbody>
     {% for g in grp.games %}
-    <div class="gm {% if g.locked %}locked{% endif %} {% if open_team in g.teams|map(attribute='team') %}cur{% endif %}">
-      <div class="gm-teams">{% for c in g.teams %}<a class="chip {{ c.colour or 'unmapped' }} {% if c.team == open_team %}on{% endif %}" hx-get="{{ root }}/board?view=games&team={{ c.team }}" hx-target="#board" hx-swap="innerHTML" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}{% if c.moved %} · since the last refresh: {{ c.moved }}{% endif %}">{{ c.team }}{% if c.new or c.moved %}<i class="dot {% if c.moved %}moved{% endif %}"></i>{% endif %}</a>{% if not loop.last %}<span class="at">@</span>{% endif %}{% endfor %}</div>
-      <div class="gm-line" title="the favourite and its spread (the consensus line of tonight's game) · the game total">{% if g.fav %}{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · {{ '%g'|format(g.total) }}{% endif %}{% else %}no line{% endif %}</div>
-    </div>
+    <tr class="gm {% if g.locked %}locked{% endif %} {% if open_team in g.teams|map(attribute='team') %}cur{% endif %}">
+      {% for c in g.teams %}<td><a class="chip {{ c.colour or 'unmapped' }} {% if c.team == open_team %}on{% endif %}" hx-get="{{ root }}/board?view=games&team={{ c.team }}" hx-target="#board" hx-swap="innerHTML" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}{% if c.moved %} · since the last refresh: {{ c.moved }}{% endif %}">{{ c.team }}{% if c.new or c.moved %}<i class="dot {% if c.moved %}moved{% endif %}"></i>{% endif %}</a></td>{% endfor %}{% if g.teams|length == 1 %}<td></td>{% endif %}
+      <td class="num" title="the favourite and its spread (the consensus line of tonight's game)">{% if g.fav %}{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% else %}<span class="muted">no line</span>{% endif %}</td>
+      <td class="num" title="the game total">{{ '%g'|format(g.total) if g.total else '' }}</td>
+    </tr>
     {% endfor %}
-  </div>
+    </tbody>
+  </table>
   {% endfor %}
+  </div>
 </nav>
   {% include "_nba_config.html" %}
   </div>
