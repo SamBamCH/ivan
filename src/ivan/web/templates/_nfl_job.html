@@ -1,0 +1,15 @@
+{# the desk's job: the running (or last) job, its log, what is queued; polls itself while a job runs (/desk/job) #}
+<div id="desk-job" hx-get="{{ root }}/desk/job{{ "?active=1" if job and job.is_active }}" hx-trigger="{{ 'every 2s' if job and job.is_active else 'every 15s' }}" hx-swap="outerHTML">
+  {% if job %}
+  <div class="jobrow">
+    <span class="jobstat {{ job.status }}">{{ job.name }} · {{ job.status }}</span>
+    <span class="muted small">{% if job.started %}started {{ job.started|time }} · {{ job.duration|dur }}{% else %}waiting{% endif %}</span>
+    {% if progress %}<span class="small">{{ progress }}</span>{% endif %}
+    {% if queued %}<span class="muted small">next: {% for q in queued %}{{ q.name }}{{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}
+    {% if job.is_active %}<form method="post" action="{{ root }}/jobs/{{ job.id }}/cancel"><button class="danger">cancel</button></form>{% endif %}
+    <a class="small" href="{{ root }}/jobs/{{ job.id }}">full log</a> · <a class="small" href="{{ root }}/jobs">every job</a>
+    {% if just_finished %}<span class="small"><a href="">reload the desk</a> for its results</span>{% endif %}
+  </div>
+  <pre class="log">{{ log }}</pre>
+  {% else %}<pre class="log muted">no job yet · Ingest, Generate, Sim and Choose report here</pre>{% endif %}
+</div>

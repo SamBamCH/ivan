@@ -1,0 +1,106 @@
+/* The NFL desk (templates/nfl_desk.html, _nfl_*.html): the NBA desk's look (full width, dense, white cards on the page grey,
+   uppercase muted headings, chips, one dark log) for the NFL slate. Loaded after ivan.css. */
+* { box-sizing:border-box }
+body.desk { margin:0; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
+body.desk header { background:#fff; position:sticky; top:0; z-index:5 }
+body.desk main { padding:14px 20px 40px }
+.extra .countdown { font-weight:700; font-variant-numeric:tabular-nums } .extra .countdown.soon { color:var(--bad) }
+.extra .clock { font-variant-numeric:tabular-nums; font-size:12px }
+.muted { color:var(--muted) } .small { font-size:12px } .ok { color:var(--ok) } .bad { color:var(--bad) } .warn { color:var(--warn) }
+a { color:var(--accent) }
+.flash { background:#eef4ff; border:1px solid #c9dbfb; border-radius:6px; padding:6px 12px; margin:0 0 10px; font-size:13px }
+.pill { font-size:11px; font-weight:600; padding:1px 7px; border-radius:10px; background:#eee; color:#444; white-space:nowrap }
+.pill.ok { background:#dcfce7; color:var(--ok) } .pill.warn { background:#fef3c7; color:#92400e } .pill.bad { background:#fee2e2; color:var(--bad) }
+.pill.info { background:#eef4ff; color:var(--accent) }
+th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; text-align:left } td.n, th.n { text-align:right; font-variant-numeric:tabular-nums }
+.sec-h { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+
+/* games strip */
+.strip { display:flex; gap:14px; align-items:flex-start; overflow-x:auto; padding:2px 0 12px; scrollbar-width:thin }
+.strip .sum { flex:0 0 auto; font-size:12px; padding-top:4px; min-width:110px }
+.strip .sum b { display:block; font-size:13px }
+.gm { flex:0 0 auto; border:1px solid var(--line); border-radius:8px; padding:6px 10px 5px; background:#fff; min-width:150px; cursor:pointer; text-decoration:none; color:inherit; display:block }
+.gm:hover { border-color:var(--accent) } .gm.cur { border-color:var(--accent); background:#eef4ff; box-shadow:0 0 0 1px var(--accent) inset }
+.gm .when { font-size:10px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; display:flex; justify-content:space-between; gap:8px }
+.gm .teams { display:flex; gap:5px; align-items:center; margin:3px 0 2px } .gm .teams .at { font-size:11px; color:var(--muted) }
+.chip { font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px; background:#ececec; color:#555; border:1px solid #ddd }
+.chip.ok { background:#dcfce7; color:#166534; border-color:#bbf7d0 } .chip.warn { background:#fef3c7; color:#92400e; border-color:#fde68a } .chip.bad { background:#fee2e2; color:#991b1b; border-color:#fecaca }
+.chip.fav { box-shadow:inset 0 -2px 0 currentColor }
+.gm .line { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums }
+.gm .corr { font-size:10px; margin-top:2px }
+
+/* actions */
+.actions { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:0 0 12px }
+.act-row { display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap } .act-row form { display:inline; margin:0 } .act-row + .act-row { margin-top:6px }
+.act-row .step { display:inline-flex; gap:5px; align-items:center; padding-right:14px; border-right:1px solid var(--line); position:relative }
+.act-row .step:last-of-type { border-right:0 }
+.act-row .step > i { font-style:normal; font-size:11px; font-weight:700; color:#fff; background:var(--accent); border-radius:50%; width:17px; height:17px; display:inline-flex; align-items:center; justify-content:center }
+.act-row button, .act-row a.btn, .upload label.btn { font:inherit; font-size:13px; padding:4px 11px; border-radius:6px; border:1px solid #cfcfcf; background:#fff; cursor:pointer; color:var(--ink); text-decoration:none }
+.act-row button.primary { background:var(--accent); color:#fff; border-color:var(--accent) } .act-row button.ghost { color:var(--muted); font-size:12px; padding:3px 8px }
+.act-row button.danger { color:var(--bad); border-color:#fecaca; font-size:12px; padding:3px 8px } .act-row button:disabled { opacity:.45; cursor:not-allowed }
+.act-row .brand-sm { font-weight:700 } .act-row .spacer { flex:1 }
+.fresh { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums } .fresh .old { color:var(--warn); font-weight:600 } .fresh small { font-size:10px; opacity:.8 }
+/* a step's knobs: a popover under its button after a short rest of the pointer, kept open while the pointer is in it or a field has focus */
+.step.has-knobs::after { content:""; position:absolute; left:0; right:0; top:100%; height:6px }
+.step .knobs { display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:30; width:max-content; max-width:560px; padding:8px 12px 10px; gap:8px 14px;
+  flex-wrap:wrap; align-items:center; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.12) }
+.step.has-knobs:hover .knobs { display:flex; animation:knobs-in 0s .25s both } .step.has-knobs:focus-within .knobs { display:flex; animation:none }
+@keyframes knobs-in { from { visibility:hidden } to { visibility:visible } }
+.knobs .knobs-title { flex-basis:100%; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+.knobs label { font-size:12px; color:var(--muted); display:flex; gap:5px; align-items:center }
+.knobs input, .knobs select { font:inherit; font-size:12px; padding:2px 5px; border:1px solid #cfcfcf; border-radius:4px }
+.knobs .slates label > span { display:none } .knobs .slates select { max-width:420px } .knobs .slates small { display:block; font-size:11px; color:var(--muted) }
+.jobrow { display:flex; gap:12px; align-items:center; flex-wrap:wrap; font-size:13px; margin:6px 0 0 }
+.jobstat { font-weight:600 } .jobstat.running, .jobstat.queued { color:var(--warn) } .jobstat.done { color:var(--ok) } .jobstat.failed, .jobstat.cancelled { color:var(--bad) }
+pre.log { background:#1b1b1b; color:#ddd; font:12px/1.35 ui-monospace,Menlo,Consolas,monospace; padding:8px 10px; border-radius:6px; max-height:230px; overflow:auto; margin:6px 0; white-space:pre-wrap }
+pre.log.muted { color:#999 }
+
+/* folded sections */
+details.box { margin:0 0 12px } details.box > summary { cursor:pointer; font-size:14px; font-weight:600; padding:8px 12px; background:var(--card); border:1px solid var(--line);
+  border-radius:6px; list-style:none; display:flex; align-items:center; gap:8px }
+details.box > summary::-webkit-details-marker { display:none } details.box > summary::before { content:'▸'; font-size:13px; color:var(--muted) }
+details.box[open] > summary::before { content:'▾' } details.box[open] > summary { margin-bottom:8px } details.box > summary:hover { border-color:var(--accent) }
+details.box > summary .muted { font-weight:400; font-size:12px }
+.upload { display:flex; gap:10px; align-items:center; font-size:12px; margin:0 0 8px } .upload input[type=file] { font-size:12px }
+
+/* tables */
+table.t { border-collapse:collapse; width:100%; background:var(--card); font-size:13px }
+table.t th, table.t td { padding:3px 7px; border-bottom:1px solid var(--line); white-space:nowrap }
+table.t tbody tr:hover td { background:#f6f8fc }
+table.t tr.other td { background:#fef2f2 } table.t tr.ok td:first-child { box-shadow:inset 3px 0 0 var(--ok) }
+table.t td.wrap { white-space:normal } table.t td.dim, table.t .dim { color:#aaa }
+table.sortable th { cursor:pointer; user-select:none } table.sortable th.asc::after { content:' ▲'; font-size:9px } table.sortable th.desc::after { content:' ▼'; font-size:9px }
+.cw-form { display:inline-flex; gap:8px; align-items:center } .cw-form label { font-size:11px; color:var(--muted); display:inline-flex; gap:3px; align-items:center }
+.cw-form input, .cw-form select { font:inherit; font-size:12px; padding:1px 4px; border:1px solid #cfcfcf; border-radius:4px } .cw-form input { width:42px }
+.cw-form input::placeholder { color:#bbb }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:0 0 12px }
+.card h2 { font-size:15px; margin:0; display:flex; gap:10px; align-items:baseline; flex-wrap:wrap }
+.card h2 .muted { font-weight:400; font-size:12px }
+.players-head { display:flex; gap:12px; align-items:baseline; margin:4px 0 6px } .players-head .spacer { flex:1 }
+.players-head label { font-size:12px; color:var(--muted) } .players-head select { font:inherit; font-size:12px; padding:1px 4px }
+.pos { font-size:10px; font-weight:700; color:var(--muted) }
+.vs-team { display:inline-block; min-width:30px; font-weight:600 }
+
+/* the game card: correlations */
+.game-meta { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0 } .game-meta .hist { font-size:12px }
+.consider { margin:6px 0 8px; padding:6px 10px; border:1px solid var(--line); border-left:3px solid var(--warn); border-radius:6px; background:#fffbeb; font-size:12px }
+.consider.ok { border-left-color:var(--ok); background:#f0fdf4 } .consider.bad { border-left-color:var(--bad); background:#fef2f2 }
+.consider ul { list-style:none; margin:2px 0 0; padding:0 } .consider li { padding:1px 0 } .consider .ck { display:inline-block; min-width:44px; font-size:10px; font-weight:700; text-transform:uppercase }
+.consider li.bad .ck { color:var(--bad) } .consider li.warn .ck { color:var(--warn) } .consider li.info .ck { color:var(--accent) }
+.corr-grid { display:grid; grid-template-columns:minmax(0, 1.5fr) minmax(400px, 1fr); gap:14px; align-items:start } .corr-grid > div { min-width:0 } .pairs-wrap { overflow-x:auto }
+@media (max-width:1250px) { .corr-grid { grid-template-columns:1fr } }
+table.pairs td.pp { font-size:11px; color:var(--muted); max-width:190px; overflow:hidden; text-overflow:ellipsis }
+table.pairs tr.sec td { background:#fafafa; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); padding-top:6px }
+table.pairs tr.pr { cursor:pointer } table.pairs tr.pr.on td { background:#eef4ff }
+table.pairs td.flag { font-size:11px } table.pairs td.flag span { margin-right:4px }
+table.pairs td.dots { padding:0 4px } table.pairs td.dots svg { display:block }
+table.pairs td.big { font-weight:700 }
+.legend { font-size:11px; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; margin:4px 0 } .legend i { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:-1px; margin-right:3px }
+.side-panel .card { margin-bottom:12px } .pair-stats { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin:4px 0 } .pair-stats b { font-variant-numeric:tabular-nums }
+table.heat { border-collapse:separate; border-spacing:1px; width:auto }
+table.heat th { font-size:10px; font-weight:500; color:var(--ink); padding:1px 3px; white-space:nowrap; text-transform:none }
+table.heat th.col { writing-mode:vertical-rl; transform:rotate(180deg); text-align:left; height:96px; vertical-align:bottom }
+table.heat td { width:22px; height:18px; padding:0; text-align:center; font-size:9px; font-variant-numeric:tabular-nums }
+table.heat td.diag { background:#e8e8e6 } table.heat tr.sep td, table.heat tr.sep th { border-top:2px solid #999 } table.heat td.sepc, table.heat th.sepc { border-left:2px solid #999 }
+.heat-wrap { overflow-x:auto }
+table.t.auto { width:auto; min-width:640px }

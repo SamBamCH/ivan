@@ -1,0 +1,176 @@
+{% from "_frame.html" import bar %}
+{# The NFL desk: one page for the working slate, the NBA desk's look. Top to bottom: the games strip (a chip per game, coloured
+   by its correlation check), the actions (the five pipeline steps; a step's knobs open when the pointer rests on its button),
+   the job, the contests (the entries file, each contest's own chooser knobs), the open game's card (_nfl_game.html: the
+   correlations, then its players), the whole pool. Every button is a script in scripts/nfl/ (docs/web/nfl-app.md). #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ivan · NFL · {{ slate.label if slate else 'desk' }}</title>
+<link rel="icon" type="image/svg+xml" href="{{ frame.site }}/static/favicon.svg">
+<link rel="stylesheet" href="{{ frame.site }}/static/ivan.css">
+<link rel="stylesheet" href="{{ frame.site }}/static/nfl_desk.css">
+<script src="{{ frame.site }}/static/htmx.min.js"></script>
+</head>
+<body class="desk">
+{% macro knob(f) %}{% if f.kind == 'checkbox' %}<label title="{{ f.help }}"><input type="checkbox" name="{{ f.name }}" {% if f.default %}checked{% endif %}> {{ f.label|lower }}</label>
+{% else %}<label title="{{ f.help }}">{{ f.label|lower }} <input name="{{ f.name }}" value="{{ f.default }}" size="6" type="number" step="{{ f.step }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %}></label>{% endif %}{% endmacro %}
+<header>
+{% call bar(frame) %}<span class="extra">
+  {% if lock %}<span class="countdown {% if mins_to_lock is not none and 0 < mins_to_lock < 60 %}soon{% endif %}" title="the working slate locks {{ lock.strftime('%a %H:%M') }} · {{ n_players }} player rows">
+    {% if slate and not slate.loaded %}<span class="muted">working slate </span>{% endif %}{% if mins_to_lock is not none and mins_to_lock > 0 %}locks in {{ (mins_to_lock // 60)|int }}h {{ (mins_to_lock % 60)|int }}m{% else %}locked{% endif %}</span>
+  <span class="pill info">{{ mode or 'slate' }}</span>{% else %}<span class="muted small">no slate in the database: ingest one (step 1)</span>{% endif %}
+  <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
+</span>{% endcall %}
+</header>
+<main>
+  {% if notice %}<div class="flash">{{ notice }}</div>{% endif %}
+  {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+
+  {# ---------------------------------------------------------------- games strip #}
+  {% set games = check.games or [] %}
+  <div class="strip">
+    <div class="sum">
+      <span class="sec-h">correlations</span>
+      {% if check.error %}<b class="bad">not built</b><span class="small bad">{{ check.error }}</span>
+      {% elif games %}{% set nb = games|selectattr('level', 'equalto', 'bad')|list|length %}{% set nw = games|selectattr('level', 'equalto', 'warn')|list|length %}
+        <b class="{{ 'bad' if nb else 'warn' if nw else 'ok' }}">{{ games|length - nb - nw }}/{{ games|length }} game{{ '' if games|length == 1 else 's' }} clean</b>
+        <span class="small muted">{% if nb %}{{ nb }} with a bad draw{% endif %}{% if nb and nw %} · {% endif %}{% if nw %}{{ nw }} to look at{% endif %}{% if not nb and not nw %}history + draw agree{% endif %}</span>
+      {% else %}<b class="muted">no games</b>{% endif %}
+    </div>
+    {% for g in games %}{% set ln = g.lines %}
+    <a class="gm {% if game and g.key == game.key %}cur{% endif %}" hx-get="{{ root }}/desk/game?game={{ g.key }}" hx-target="#game" hx-swap="outerHTML"
+       onclick="document.querySelectorAll('.gm.cur').forEach(e => e.classList.remove('cur')); this.classList.add('cur')"
+       title="{% for x in g.alerts %}{{ x.level }}: {{ x.text }}&#10;{% else %}history and draw agree{% endfor %}">
+      <div class="when"><span>{{ g.gametime.strftime('%a %H:%M') if g.gametime else '' }}</span><span class="{{ g.level }}">{{ {'ok': '✓', 'warn': '!', 'bad': '✗'}[g.level] }}</span></div>
+      <div class="teams"><span class="chip {{ g.level }} {% if ln and ln.fav == g.away %}fav{% endif %}">{{ g.away }}</span><span class="at">@</span><span class="chip {{ g.level }} {% if ln and ln.fav == g.home %}fav{% endif %}">{{ g.home }}</span></div>
+      <div class="line">{% if ln %}{{ ln.fav ~ ' ' ~ '%g'|format(ln.spread) if ln.fav else 'PK' }} · {{ '%g'|format(ln.total) }} · {{ '%.1f'|format(ln.implied[g.away]) }}/{{ '%.1f'|format(ln.implied[g.home]) }}{% else %}no line{% endif %}</div>
+      <div class="corr muted">{% for t in [g.away, g.home] %}{% set h = g.history[t] %}<span class="{{ '' if h.own else 'warn' }}">{{ t }} {{ h.games }}g</span>{% if h.qb_games < 8 %} <b class="warn">new QB</b>{% endif %}{{ ' · ' if loop.first }}{% endfor %}{% if g.sampled %} · drawn{% endif %}</div>
+    </a>
+    {% endfor %}
+  </div>
+
+  {# ---------------------------------------------------------------- actions #}
+  <div class="actions" id="actions">
+    <div class="act-row">
+      <span class="brand-sm">Actions</span>
+      <form method="post" action="{{ root }}/run/ingest" class="step has-knobs"><i>1</i>
+        <button class="{{ 'primary' if pick or not n_players else '' }}" title="DraftKings players + salaries, odds, fitted distributions, projected ownership (scripts/nfl/ingest.py -p --draft-group ID --update-odds). Re-run near lock for fresh odds.">Ingest</button>
+        <div class="knobs"><div class="knobs-title">ingest</div>
+          <div id="slates" class="slates" hx-get="{{ root }}/partials/slates{% if pick %}?pick={{ pick }}{% endif %}" hx-trigger="load" hx-swap="outerHTML"><span class="small muted">loading the DraftKings slates…</span></div>
+          {% for f in step_fields.ingest %}{{ knob(f) }}{% endfor %}
+        </div></form>
+      <form method="post" action="{{ root }}/run/contests" class="step"><i>2</i>
+        <button title="the upcoming DraftKings contests and their payout tables; the sim needs them for every contest in the entries file (get_contest_ids.py, get_payouts.py)">Contests + payouts</button></form>
+      <form method="post" action="{{ root }}/run/generate" class="step has-knobs"><i>3</i>
+        <button {% if not ready.generate %}disabled{% endif %} title="{% if ready.generate %}the candidate lineups the sim scores (generate_lineups.py N J){% else %}ingest a slate first{% endif %}">Generate</button>
+        <div class="knobs"><div class="knobs-title">generate</div>{% for f in step_fields.generate %}{{ knob(f) }}{% endfor %}</div></form>
+      <form method="post" action="{{ root }}/run/sim" class="step has-knobs"><i>4</i>
+        <button {% if not ready.sim %}disabled{% endif %} title="{% if ready.sim %}every contest in the entries file against the field; replaces earlier results (sim.py -n N -c CAP --entries ...){% elif not entries %}upload the entries export first (contests, below){% else %}generate the lineups first{% endif %}">Sim</button>
+        <div class="knobs"><div class="knobs-title">sim</div>{% for f in step_fields.sim %}{{ knob(f) }}{% endfor %}</div></form>
+      <form method="post" action="{{ root }}/run/choose" class="step"><i>5</i>
+        <button class="primary" {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}pick each contest's lineups and write the DraftKings upload CSV; each contest's knobs are set in the contests section, a blank one is the default (choose.py --weights-json){% elif not entries %}upload the entries export first{% else %}run the sim first{% endif %}">Choose</button></form>
+      <span class="spacer"></span>
+      <form method="post" action="{{ root }}/reset/sims" onsubmit="return confirm('Clear every simulation result of this slate?')"><button class="danger" title="scripts/nfl/clear_sims.py">clear sims</button></form>
+      <form method="post" action="{{ root }}/reset/lineups" onsubmit="return confirm('Clear the generated lineups and every simulation result?')"><button class="danger" title="scripts/nfl/clear_all.py">clear lineups + sims</button></form>
+    </div>
+    <div class="act-row">
+      <span class="fresh">
+        {% for f in fresh %}<span class="{{ 'old' if f.warn }}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% elif f.age < 2880 %}{{ (f.age // 60)|int }}h{% else %}{{ (f.age // 1440)|int }}d{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}
+        <span>{{ status.players }} rows · {{ status.teams|length }} teams</span>
+        <span class="{{ 'old' if status.players and status.players_with_ownership < status.players // 2 }}">ownership on {{ status.players_with_ownership }}</span>
+        <span>{{ '{:,}'.format(status.lineups) }} lineups</span>
+        <span>{{ '{:,}'.format(sims_total) }} sim rows · {{ status.sims|length }} contest{{ '' if status.sims|length == 1 else 's' }}</span>
+      </span>
+    </div>
+    {% include "_nfl_job.html" %}
+    {% if outputs %}{% set up = outputs|selectattr('key', 'in', ['showdown', 'classic'])|list %}
+    <div class="jobrow small"><b>latest picks</b>
+      {% for f in up[:2] %}<a href="{{ root }}/downloads/{{ f.name }}">{{ f.kind }} upload CSV</a> <span class="muted">{{ f.mtime|time }}</span> ·{% endfor %}
+      <a href="{{ slate.path(root) if slate else root ~ '/desk' }}?view=choose">choose</a> · <a href="{{ slate.path(root) if slate else root ~ '/desk' }}?view=exposures">exposures</a> · <a href="{{ root }}/downloads">every file</a></div>{% endif %}
+  </div>
+
+  {# ---------------------------------------------------------------- contests #}
+  {% set other = contests_rows|selectattr('match', 'equalto', 'other')|list|length %}
+  <details class="box" id="contests" {% if not entries or other or not contests_rows %}open{% endif %}>
+    <summary>Contests <span class="muted">{% if entries %}{{ entries.total }} entries in {{ contests_rows|length }} contest{{ '' if contests_rows|length == 1 else 's' }}{% if other %} · <b class="bad">{{ other }} of another slate</b>{% endif %}{% if entries.error %} · <b class="bad">{{ entries.error }}</b>{% endif %}{% else %}no entries file yet{% endif %}</span></summary>
+    <form class="upload" method="post" action="{{ root }}/upload" enctype="multipart/form-data">
+      <label class="btn">Upload entries CSV<input type="file" name="file" accept=".csv" hidden onchange="this.form.submit()"></label>
+      <span class="muted">the DraftKings entries export{% if entries %} · on file since {{ entries.mtime|time }}, {{ entries.total }} entries{% endif %}; re-upload when the entries change</span>
+    </form>
+    {% if contests_rows %}
+    <table class="t">
+      <thead><tr><th>contest</th><th class="n">fee</th><th class="n">field</th><th class="n">ours</th><th>slate</th><th class="n">payouts</th><th>sim</th>
+        <th title="the chooser's knobs for this contest alone (blank = the default, greyed); saved as you type into data/nfl/input/web/weights.json (scripts/nfl/contest_weights.py)">choose</th></tr></thead>
+      <tbody>{% for r in contests_rows %}{% set w = r.weights %}
+      <tr class="{{ r.match }}">
+        <td>{{ r.name|truncate(58, True, '…') }} <span class="muted small">{{ r.id }}</span></td>
+        <td class="n">{{ r.fee|money }}</td><td class="n">{{ '{:,}'.format(r.field) if r.field else '' }}</td><td class="n">{{ r.entries }}</td>
+        <td>{% if r.match == 'ok' %}<span class="ok">✓ working slate</span>{% elif r.match == 'other' %}<b class="bad">slate {{ r.draft_group }}: not the working one</b>{% else %}<span class="muted">not stored yet (step 2)</span>{% endif %}</td>
+        <td class="n">{% if r.payouts %}{{ r.payouts }} tiers{% else %}<span class="warn">none</span>{% endif %}</td>
+        <td>{% if r.report %}{% set c = r.report.counts %}<a href="{{ slate.path(root) if slate else root ~ '/desk' }}?view=contests&id={{ r.id }}" title="the sim report: checks, field, payouts, simulation, correlation">
+            {% if c.bad %}<span class="pill bad">{{ c.bad }} bad</span>{% endif %}{% if c.warn %}<span class="pill warn">{{ c.warn }} warn</span>{% endif %}{% if not c.bad and not c.warn %}<span class="pill ok">{{ c.ok or 0 }} ok</span>{% endif %}</a>
+            <span class="muted small">{{ '{:,}'.format(r.sim_rows) }} rows</span>
+          {% elif r.sim_rows %}<span class="small">{{ '{:,}'.format(r.sim_rows) }} rows</span>{% else %}<span class="muted small">not simulated</span>{% endif %}</td>
+        <td><form class="cw-form" hx-post="{{ root }}/contest/{{ r.id }}/weights" hx-trigger="change" hx-target="find .cw-saved" hx-swap="innerHTML">
+          <select name="method" title="greedy, portfolio (world-level log utility) or slate (the whole slate as one book)"><option value="">default ({{ defaults.method }})</option>{% for m in methods %}<option value="{{ m }}" {% if w.method == m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select>
+          <label title="greedy: weight on cash rate">cash <input name="cash_pct" value="{{ '%g'|format(w.cash_pct) if w.cash_pct is defined else '' }}" placeholder="{{ defaults.cash_pct }}"></label>
+          <label title="greedy: weight on ROI">roi <input name="avg_roi_win" value="{{ '%g'|format(w.avg_roi_win) if w.avg_roi_win is defined else '' }}" placeholder="{{ defaults.avg_roi_win }}"></label>
+          <label title="greedy: diversity bonus (0 = jam the best)">div <input name="diversity_lambda" value="{{ '%g'|format(w.diversity_lambda) if w.diversity_lambda is defined else '' }}" placeholder="{{ defaults.diversity_lambda }}"></label>
+          <label title="portfolio: utility scale in multiples of the entry fees">bankroll <input name="bankroll" value="{{ '%g'|format(w.bankroll) if w.bankroll is defined else '' }}" placeholder="{{ defaults.bankroll }}"></label>
+          <span class="cw-saved small">{% if w %}<span class="ok">own knobs</span>{% endif %}</span></form></td>
+      </tr>{% endfor %}</tbody>
+    </table>{% endif %}
+  </details>
+
+  {# ---------------------------------------------------------------- the open game #}
+  {% include "_nfl_game.html" %}
+
+  {# ---------------------------------------------------------------- players #}
+  <div class="card" id="players">
+    <div class="players-head"><h2>Players <span class="muted">{{ players|length }} in the pool{% if showdown %} · captain rows folded in{% endif %}</span></h2>
+      <span class="spacer"></span>
+      <label>show ≥ <select id="minfpts" onchange="filterPlayers()">{% for v in [0, 1, 3, 5, 8] %}<option value="{{ v }}">{{ v }} fpts</option>{% endfor %}</select></label>
+      <a class="small" href="{{ root }}/players.csv">CSV</a></div>
+    <table class="t sortable" id="pool">
+      <thead><tr><th>player</th><th>team</th><th>opp</th><th>pos</th><th title="depth-chart slot: the correlation row the sim gives him">depth</th><th class="n">salary</th>
+        <th class="n">proj</th><th class="n">sd</th><th class="n">p10</th><th class="n">p50</th><th class="n">p90</th><th class="n" title="projection per $1000">value</th><th class="n">own</th>
+        {% if showdown %}<th class="n">cpt sal</th><th class="n">cpt own</th>{% endif %}<th>status</th><th title="where the player's volume came from: market (priced props), environment, salary, lines">volume</th></tr></thead>
+      <tbody>{% for p in players %}<tr data-fpts="{{ p.fpts_mean or 0 }}">
+        <td><b>{{ p.name }}</b></td><td>{{ p.team }}</td><td class="muted">{{ p.opponent or '' }}</td><td class="pos">{{ p.position }}</td><td class="muted">{{ p.slot_label or '' }}</td>
+        <td class="n">{{ p.salary }}</td><td class="n"><b>{{ p.fpts_mean|num(1) }}</b></td><td class="n muted">{{ p.fpts_std|num(1) }}</td>
+        <td class="n muted">{{ p.fpts_p10|num(1) }}</td><td class="n">{{ p.fpts_p50|num(1) }}</td><td class="n muted">{{ p.fpts_p90|num(1) }}</td>
+        <td class="n">{{ p.value|num(2) }}</td><td class="n">{{ p.ownership_proj|num(1) }}</td>
+        {% if showdown %}<td class="n muted">{{ p.cpt_salary or '' }}</td><td class="n">{{ p.cpt_own|num(1) }}</td>{% endif %}
+        <td class="{{ 'bad' if p.status and p.status not in ('None', 'Active', '') else 'muted' }} small">{{ p.status if p.status and p.status != 'None' else '' }}</td>
+        <td class="muted small">{{ p.volume_source or '' }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+</main>
+<script>
+  // sortable tables: click a header; numbers sort descending first
+  document.addEventListener("click", function (e) {
+    const th = e.target.closest("table.sortable th"); if (!th) return;
+    const table = th.closest("table"), tb = table.tBodies[0], i = [...th.parentNode.children].indexOf(th);
+    const asc = th.classList.contains("desc"); table.querySelectorAll("th").forEach(h => h.classList.remove("asc", "desc")); th.classList.add(asc ? "asc" : "desc");
+    const val = r => { const t = (r.children[i] ? r.children[i].innerText : "").replace(/[,$%]/g, "").trim(); const n = parseFloat(t); return isNaN(n) ? t.toLowerCase() : n; };
+    [...tb.rows].sort((a, b) => { const x = val(a), y = val(b); const c = (typeof x === "number" && typeof y === "number") ? x - y : String(x).localeCompare(String(y)); return asc ? c : -c; }).forEach(r => tb.appendChild(r));
+  });
+  // show >= N fpts on the pool and the open game's players (remembered in this browser)
+  function filterPlayers() {
+    const sel = document.getElementById("minfpts"); const v = parseFloat(sel.value) || 0;
+    try { localStorage.setItem("nfl_minfpts", sel.value); } catch (e) {}
+    document.querySelectorAll("tr[data-fpts]").forEach(r => r.hidden = parseFloat(r.dataset.fpts) < v);
+  }
+  (function () { try { const v = localStorage.getItem("nfl_minfpts"); if (v) document.getElementById("minfpts").value = v; } catch (e) {} filterPlayers(); })();
+  document.addEventListener("htmx:afterSwap", function (e) { filterPlayers(); e.target.querySelectorAll && e.target.querySelectorAll("pre.log").forEach(l => l.scrollTop = l.scrollHeight); });
+  document.querySelectorAll("pre.log").forEach(l => l.scrollTop = l.scrollHeight);
+  // a pair row opens its history beside the table
+  document.addEventListener("click", function (e) {
+    const tr = e.target.closest("tr.pr"); if (!tr) return;
+    document.querySelectorAll("tr.pr.on").forEach(r => r.classList.remove("on")); tr.classList.add("on");
+  });
+</script>
+</body>
+</html>

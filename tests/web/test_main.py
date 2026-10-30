@@ -97,3 +97,36 @@ def test_nba_step_knobs_move_only_their_own(open_site, monkeypatch):
     assert D.pipeline_form["sims"] == "777" and D.pipeline_form["lineups"] == "12345" and D.pipeline_form["fresh"] == "on"
     assert open_site.post("/nba/pipeline/generate", data={"cfg_fresh": "1", "lineups": "2000"}).status_code == 200
     assert D.pipeline_form["lineups"] == "2000" and D.pipeline_form["fresh"] == "" and D.pipeline_form["sims"] == "777"
+
+
+def test_nfl_desk_renders(open_site):
+    """The NFL desk: the slate page's default view, its game card and pair partials, the old pipeline address redirecting to it."""
+    r = open_site.get("/nfl/desk")
+    assert r.status_code == 200 and "Actions" in r.text and 'id="game"' in r.text and 'id="players"' in r.text
+    r = open_site.get("/nfl/pipeline", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("/nfl/desk")
+    assert open_site.get("/nfl/desk/job").status_code == 200
+    assert open_site.get("/nfl/desk/game?game=AAA-BBB").status_code == 200          # no such game: the card says so
+    assert open_site.get("/nfl/desk/pair?team=GB&a=QB&b=WR1").status_code == 200
+    assert open_site.get("/nfl/desk/pair?team=GB&a=QB&b=DST&opp=CAR").status_code == 200
+
+
+def test_nfl_contest_weights_save_own_knobs(open_site, monkeypatch, tmp_path):
+    """A contest's knobs save as typed: a value is its own, a blank drops back to the default, a bad value is refused."""
+    import json
+    from ivan.web import pipeline_nfl as P
+    monkeypatch.setattr(P, "WEIGHTS_FILE", tmp_path / "weights.json")
+    monkeypatch.setattr(P, "WEB_INPUT_DIR", tmp_path)
+    r = open_site.post("/nfl/contest/123/weights", data={"method": "portfolio", "bankroll": "4", "cash_pct": ""})
+    assert "own knobs" in r.text
+    assert json.loads((tmp_path / "weights.json").read_text())["123"] == {"method": "portfolio", "bankroll": 4.0}
+    assert "not a chooser method" in open_site.post("/nfl/contest/123/weights", data={"method": "yolo"}).text
+    r = open_site.post("/nfl/contest/123/weights", data={"method": "", "bankroll": ""})
+    assert "defaults" in r.text and "123" not in json.loads((tmp_path / "weights.json").read_text())
+
+
+def test_spearman_se():
+    from ivan.sports.nfl.correlation_check import spearman_se
+    assert spearman_se(0.0, 3) is None
+    assert abs(spearman_se(0.0, 103) - 0.1) < 1e-9
+    assert spearman_se(0.5, 103) > spearman_se(0.0, 103)

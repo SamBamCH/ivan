@@ -29,7 +29,9 @@ Contest Name, Contest ID, Entry Fee, ...`), read from `config/nfl.json → paths
 | `sim/<stamp>/contest_<id>.npz + .json` | the sim's artifacts |
 | `diagnostics/contest_<id>_<name>/report.json` | the sim report (also the `contest_sim_report` row) |
 
-`--weights-json` takes a file or a literal keyed by contest id or name with an optional `default`:
+`--weights-json` takes a file or a literal keyed by contest id or name with an optional `default`; a contest's own
+knobs win over `default` one by one. The desk keeps them in `data/nfl/input/web/weights.json`
+(`scripts/nfl/contest_weights.py list | set ID knob=value | clear ID`):
 
 ```json
 {"default": {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1},

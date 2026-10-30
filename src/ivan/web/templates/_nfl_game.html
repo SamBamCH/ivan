@@ -1,0 +1,87 @@
+{# The open game's card (a games-strip chip swaps it in, /desk/game): the lines and the history behind each team's matrix, the
+   check's alerts, every slot pair that moves a lineup (league / own history / used / drawn, as numbers and on one axis; a row
+   opens its history beside the table), the players' target and drawn correlation matrix, the game's players.
+   Same numbers in the terminal: scripts/nfl/correlations.py --game AWAY-HOME (ivan.sports.nfl.correlation_check). #}
+{% macro dots(p) %}{# one pair on a -1..1 axis: league grey tick, own history blue dot with ±1 se, used black diamond, drawn orange #}
+{%- set W = 130 -%}{%- macro X(v) %}{{ '%.1f'|format(6 + (v + 1) / 2 * (W - 12)) }}{% endmacro -%}
+<svg width="{{ W }}" height="18" viewBox="0 0 {{ W }} 18" aria-hidden="true">
+  <line x1="6" x2="{{ W - 6 }}" y1="9" y2="9" stroke="#e5e5e5"/><line x1="{{ X(0) }}" x2="{{ X(0) }}" y1="3" y2="15" stroke="#ccc"/>
+  {% if p.league is not none %}<line x1="{{ X(p.league) }}" x2="{{ X(p.league) }}" y1="2" y2="16" stroke="#999" stroke-width="2"><title>league {{ '%+.2f'|format(p.league) }}</title></line>{% endif %}
+  {% if p.own is not none %}{% if p.se %}<line x1="{{ X([p.own - p.se, -1]|max) }}" x2="{{ X([p.own + p.se, 1]|min) }}" y1="9" y2="9" stroke="#1f5fbf" stroke-width="2" opacity=".45"/>{% endif %}
+    <circle cx="{{ X(p.own) }}" cy="9" r="3.5" fill="#1f5fbf"><title>own history {{ '%+.2f'|format(p.own) }} (n {{ p.n }})</title></circle>{% endif %}
+  {% if p.used is not none %}<path d="M{{ X(p.used) }} 4 l4 5 -4 5 -4 -5z" fill="#1b1b1b"><title>used {{ '%+.2f'|format(p.used) }}</title></path>{% endif %}
+  {% if p.sampled is not none %}<circle cx="{{ X(p.sampled) }}" cy="9" r="3" fill="none" stroke="#e8710a" stroke-width="2"><title>drawn {{ '%+.2f'|format(p.sampled) }}</title></circle>{% endif %}
+</svg>{% endmacro %}
+{% macro v(x, fmt='%+.2f') %}{{ fmt|format(x) if x is not none else '—' }}{% endmacro %}
+<div class="card" id="game">
+{% if not game %}
+  <h2>Correlations <span class="muted">{% if check.error %}could not be built: {{ check.error }}{% else %}no game in the pool: ingest a slate{% endif %}</span></h2>
+{% else %}{% set g = game %}{% set ln = g.lines %}
+  <h2>{{ g.away }} @ {{ g.home }}
+    <span class="muted">{{ g.gametime.strftime('%a %b %-d %H:%M') if g.gametime else '' }}{% if ln %} · {{ ln.fav ~ ' ' ~ '%g'|format(ln.spread) if ln.fav else 'PK' }} · O/U {{ '%g'|format(ln.total) }} · implied {{ g.away }} {{ '%.1f'|format(ln.implied[g.away]) }}, {{ g.home }} {{ '%.1f'|format(ln.implied[g.home]) }}{% else %} · no line on file: the team-points nodes are left out{% endif %}</span>
+    <span class="pill {{ g.level }}">{{ {'ok': 'correlations check out', 'warn': 'look at the flags', 'bad': 'the draw is off'}[g.level] }}</span></h2>
+  <div class="game-meta">
+    {% for t in [g.away, g.home] %}{% set h = g.history[t] %}
+    <span class="pill {{ 'ok' if h.own and h.qb_games >= 8 else 'warn' }}" title="the games behind {{ t }}'s matrix (to {{ h.last[0] if h.last else '' }} wk {{ h.last[1] if h.last else '' }}); its own matrix needs 10, and is shrunk {{ check.shrink|default(300) }} games toward the league's">{{ t }} {{ h.games }} games{% if not h.own %} · league matrix{% endif %} · QB {{ h.qb or '?' }} {{ h.qb_games }}g</span>{% endfor %}
+    <span class="pill {{ 'ok' if g.cross_own else 'warn' }}">cross: {{ 'both teams\' history' if g.cross_own else 'league' }}</span>
+    {% if g.sampled %}{% set s = g.sampled %}<span class="pill {{ 'bad' if s.max_abs_error and s.se and s.max_abs_error > 4 * s.se else 'ok' }}" title="{{ s.contest }}, simulated {{ s.at.strftime('%a %H:%M') if s.at else '' }}">drawn: {{ s.n_samples }} sims · largest error {{ '%.3f'|format(s.max_abs_error) if s.max_abs_error is not none else '—' }} (noise ~{{ '%.3f'|format(s.se) if s.se else '—' }})</span>
+    {% else %}<span class="pill">not drawn yet: Sim shows what the sampler produced</span>{% endif %}
+  </div>
+  {% if g.alerts %}{% set worst = 'bad' if g.alerts|selectattr('level', 'equalto', 'bad')|list else 'warn' if g.alerts|selectattr('level', 'equalto', 'warn')|list else 'ok' %}
+  <div class="consider {{ worst }}"><ul>{% for x in g.alerts %}<li class="{{ x.level }}"><span class="ck">{{ x.level }}</span>{{ x.text }}</li>{% endfor %}</ul></div>{% endif %}
+
+  <div class="corr-grid">
+    <div>
+      <div class="legend"><span><i style="background:#999;border-radius:0;width:3px"></i>league</span><span><i style="background:#1f5fbf"></i>own history ±1 se</span>
+        <span><i style="background:#1b1b1b;border-radius:1px;transform:rotate(45deg)"></i>used by the sim</span><span><i style="border:2px solid #e8710a;background:none"></i>drawn (last sim)</span>
+        <span>Spearman of the slots' DK points; target and drawn are the players' Pearson. Click a row for its games.</span></div>
+      <div class="pairs-wrap"><table class="t pairs">
+        <thead><tr><th>pair</th><th>players tonight</th><th class="n">league</th><th class="n">own</th><th class="n">n</th><th class="n" title="the team's own history with tonight's QB only">QB now</th>
+          <th class="n">used</th><th>−1 · 0 · +1</th><th class="n" title="the players' requested Pearson">target</th><th class="n">drawn</th><th>flags</th></tr></thead>
+        <tbody>
+        {% set ns = namespace(sec=None) %}
+        {% for p in g.pairs %}{% set sec = p.kind if p.kind == 'cross' else p.a_team %}
+          {% if sec != ns.sec %}{% set ns.sec = sec %}<tr class="sec"><td colspan="11">{% if sec == 'cross' %}across the game: one team's slot × the other's{% else %}{{ sec }} with itself{% endif %}</td></tr>{% endif %}
+          <tr class="pr" hx-get="{{ root }}/desk/pair?team={{ p.a_team }}&a={{ p.a }}&b={{ p.b }}{% if p.kind == 'cross' %}&opp={{ p.b_team }}{% endif %}" hx-target="#pair-hist" hx-swap="outerHTML">
+            <td><b>{{ p.a_team if p.kind == 'cross' else '' }} {{ p.a }}</b> × <b>{{ p.b_team if p.kind == 'cross' else '' }} {{ p.b }}</b></td>
+            <td class="pp" title="{{ p.players|join(' × ') if p.players else '' }}">{{ p.players|join(' × ') if p.players else '' }}</td>
+            <td class="n muted">{{ v(p.league) }}</td><td class="n {{ 'big' if p.own is not none and p.se and (p.own - p.used)|abs > 2 * p.se }}">{{ v(p.own) }}</td>
+            <td class="n muted">{{ p.n }}</td><td class="n {{ 'dim' if p.n_qb < 8 }}">{% if p.kind != 'cross' %}{{ v(p.own_qb) }} <span class="muted small">{{ p.n_qb }}</span>{% endif %}</td>
+            <td class="n"><b>{{ v(p.used) }}</b></td><td class="dots">{{ dots(p) }}</td>
+            <td class="n muted">{{ v(p.target) }}</td><td class="n {{ 'bad' if p.flags|select('in', ['draw missed target', 'DST draw vs history'])|list else '' }}">{{ v(p.sampled) }}</td>
+            <td class="flag">{% for f in p.flags %}<span class="pill {{ 'bad' if f == 'draw missed target' else 'warn' if f == 'DST draw vs history' else 'info' }}" title="{{ f }}">{{ {'own history differs': 'differs', 'no own history': 'no history', 'draw missed target': 'missed', 'DST draw vs history': 'DST off'}.get(f, f) }}</span>{% endfor %}{% if p.structural and p.sampled is not none %}<span class="muted small" title="the DST is built from the opponent's drawn score plus takeaways, not drawn on the matrix">built</span>{% endif %}</td>
+          </tr>{% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+    <div class="side-panel">
+      {% set p0 = g.pairs[0] %}
+      <div id="pair-hist" class="card" hx-get="{{ root }}/desk/pair?team={{ p0.a_team }}&a={{ p0.a }}&b={{ p0.b }}" hx-trigger="load" hx-swap="outerHTML"><span class="muted small">loading the pair's games…</span></div>
+      <div class="card">
+        <h2>Players' matrix <span class="muted">target above the diagonal{% if g.sampled %}, drawn below{% else %}; drawn appears below it after a sim{% endif %} · ×100</span></h2>
+        <div class="heat-wrap"><table class="heat">
+          {% set L = g.labels %}{% set split = L|selectattr('team', 'equalto', L[0].team)|list|length if L else 0 %}
+          <tr><th></th>{% for l in L %}<th class="col {{ 'sepc' if loop.index0 == split }}" title="{{ l.name }} ({{ l.team }} {{ l.slot }})">{{ l.team }} {{ l.slot }} {{ l.name.split(' ')[-1] }}</th>{% endfor %}</tr>
+          {% for i in range(L|length) %}{% set l = L[i] %}
+          <tr class="{{ 'sep' if i == split }}"><th title="{{ l.name }}">{{ l.team }} {{ l.slot }} {{ l.name.split(' ')[-1] }}</th>
+            {% for j in range(L|length) %}{% set m = L[j] %}
+              {% if i == j %}<td class="diag {{ 'sepc' if j == split }}"></td>
+              {% elif j > i %}{% set x = g.target[i][j] %}<td class="{{ 'sepc' if j == split }}" style="{{ x|corr_css }}" title="target {{ l.name }} × {{ m.name }}: {{ x }}">{{ (x * 100)|round|int }}</td>
+              {% elif g.sampled and g.sampled.matrix[i][j] is not none %}{% set x = g.sampled.matrix[i][j] %}<td class="{{ 'sepc' if j == split }}" style="{{ x|corr_css }}" title="drawn {{ l.name }} × {{ m.name }}: {{ x }} (target {{ g.target[j][i] }})">{{ (x * 100)|round|int }}</td>
+              {% else %}<td class="{{ 'sepc' if j == split }}"></td>{% endif %}
+            {% endfor %}</tr>{% endfor %}
+        </table></div>
+      </div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:10px">Players in the game <span class="muted">depth order, the correlation slot each is drawn in</span></h2>
+  <table class="t auto">
+    <thead><tr><th>team</th><th>depth</th><th>player</th><th>pos</th><th class="n">salary</th><th class="n">mean</th><th class="n">sd</th><th class="n">own</th></tr></thead>
+    <tbody>{% for l in g.labels %}<tr data-fpts="{{ l.mean or 0 }}" {% if loop.index0 == split %}style="border-top:2px solid #999"{% endif %}>
+      <td>{{ l.team }}</td><td class="muted">{{ l.slot }}</td><td><b>{{ l.name }}</b></td><td class="pos">{{ l.position }}</td><td class="n">{{ l.salary }}</td>
+      <td class="n"><b>{{ l.mean|num(1) }}</b></td><td class="n muted">{{ l.sd|num(1) }}</td><td class="n">{{ l.own|num(1) }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% if check.independent %}<p class="small warn">Drawn independently (no game correlation): {% for x in check.independent %}{{ x.name }} ({{ x.team }}, {{ x.reason }}){{ '; ' if not loop.last }}{% endfor %}</p>{% endif %}
+{% endif %}
+</div>

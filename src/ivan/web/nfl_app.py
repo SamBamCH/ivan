@@ -1,14 +1,15 @@
 # src/ivan/web/nfl_app.py
 """
-The NFL screens of the one Ivan UI (ivan.web.main mounts this at /nfl): the pre-lock pipeline as
-forms over scripts/nfl/*, the report pages that read what the pipeline wrote, and the tools that are
-not about one slate (the backtest runs, models, validation, dupes, jobs). FastAPI + Jinja + htmx, no
-build step; the login is the site's (ivan.web.auth, installed by main). One job at a time.
+The NFL screens of the one Ivan UI (ivan.web.main mounts this at /nfl): the desk (one page for the working slate, the NBA
+desk's look: the games strip, the pipeline steps as buttons over scripts/nfl/*, the contests with their chooser knobs, the
+open game's correlation check, the pool), the report pages that read what the pipeline wrote, and the tools that are not
+about one slate (the backtest runs, models, validation, dupes, jobs). FastAPI + Jinja + htmx, no build step; the login is
+the site's (ivan.web.auth, installed by main). One job at a time.
 
     /                 the picker: the NFL days, then a day's slates (ivan.web.frame)
-    /<day>/<key>/     one slate, ?view= pipeline | players | contests | choose | exposures | downloads | backtest
-    /pipeline         the working slate's pipeline (what the flat pages below show too)
-    /players /contests /choose /exposures /downloads     the working slate's report pages
+    /<day>/<key>/     one slate, ?view= desk | contests | choose | exposures | backtest
+    /desk             the working slate's desk (/pipeline redirects here); /desk/game, /desk/pair, /desk/job its partials
+    /contests /choose /exposures /players /downloads     the working slate's report pages
     /backtest ...     the runs hub, /models, /validate, /dupes, /jobs: the sport's tools
 
 The working slate is the one in the database's working tables (nfl_player, lineup, ...), ingested
@@ -43,11 +44,12 @@ from ivan.web import backtest_hub as hub
 from ivan.web import auth, frame
 from ivan.web.jobs import JobRunner
 from ivan.web.sports import Day, SlateInfo, Sport, find_slate, group_days, lobby_day, lobby_lock
-from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR, WEIGHT_KEYS,
-                                   WEIGHT_LABELS, RESETS, choose_rows, choose_view, chosen_runs, chosen_view, contest_report,
+from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR,
+                                   RESETS, choose_view, chosen_runs, chosen_view, contest_report,
                                    contest_reports, corr_css, entries_summary, legacy_exposures_view, output_files,
                                    players_frame, report_view, reset_working, slate_status, slates, OUTPUT_KINDS,
-                                   projections_for_slate, run_contest_ids, run_dir, runs_for_contests, slate_contest_ids)
+                                   projections_for_slate, run_contest_ids, run_dir, runs_for_contests, slate_contest_ids,
+                                   WEIGHT_METHODS, DEFAULT_WEIGHTS, desk_contests, desk_players, set_contest_weights)
 
 HERE = Path(__file__).parent
 engine = init_db("nfl")
@@ -71,8 +73,7 @@ app = FastAPI(title="Ivan · NFL", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 KEY, LABEL = "nfl", "NFL"
-VIEWS = [("pipeline", "pipeline"), ("players", "players"), ("contests", "contests"), ("choose", "choose"), ("exposures", "exposures"),
-         ("downloads", "downloads"), ("backtest", "backtest")]
+VIEWS = [("desk", "desk"), ("contests", "sim report"), ("choose", "choose"), ("exposures", "exposures"), ("backtest", "backtest")]
 TOOLS = [("Backtest runs", "/backtest"), ("Models", "/models"), ("Validation", "/validate"), ("Dupes", "/dupes"), ("Jobs", "/jobs")]
 SPORT: Optional[Sport] = None                                 # set by sport(); the frame's context reads it
 
@@ -205,27 +206,142 @@ def favicon():
     return FileResponse(HERE / "static" / "favicon.svg", media_type="image/svg+xml")
 
 
-@app.get("/pipeline", response_class=HTMLResponse)
+@app.get("/pipeline")
 def index(request: Request):
-    """The working slate's pipeline (the flat address; /<day>/<key>/ shows the same for that slate)."""
-    return _pipeline_page(request, None)
+    """The old address of the pipeline page: the desk."""
+    return _redirect(request, "/desk")
 
 
-def _pipeline_page(request: Request, slate: Optional[SlateInfo]):
+@app.get("/desk", response_class=HTMLResponse)
+def desk(request: Request, game: Optional[str] = None):
+    """The working slate's desk (the flat address; /<day>/<key>/ shows the same for that slate)."""
+    return _desk_page(request, None, game)
+
+
+# --------------------------------------------------------------- the desk: one page for the slate (nfl_desk.html)
+_corr_cache: dict = {}
+
+
+def _corr_check(session) -> dict:
+    """ivan.sports.nfl.correlation_check.slate_check, kept while the pool and the stored sim reports are unchanged (about 3 s to build)."""
+    from sqlalchemy import text
+    from ivan.sports.nfl import correlation_check as cc
+    key = tuple(session.execute(text("SELECT count(*), sum(fpts_mean), sum(coalesce(ownership_proj, 0)), max(id), min(gametime) FROM nfl_player")).one()) + \
+        (session.execute(text("SELECT max(created_at) FROM contest_sim_report")).scalar(),)
+    if key not in _corr_cache:
+        try:
+            _corr_cache.clear()
+            _corr_cache[key] = cc.slate_check(session)
+        except Exception as e:   # noqa: BLE001 - a missing model must not take the desk down
+            return {"games": [], "independent": [], "error": f"{type(e).__name__}: {e}"}
+    return _corr_cache[key]
+
+
+def _game(check: dict, game: Optional[str]) -> Optional[dict]:
+    games = check.get("games") or []
+    if game:
+        want = set(game.upper().split("-"))
+        for g in games:
+            if set(g["teams"]) == want:
+                return g
+    bad = [g for g in games if g["level"] != "ok"]
+    return (bad or games or [None])[0]
+
+
+def _fresh(session, entries: Optional[dict], lock: Optional[datetime]) -> list[dict]:
+    """The inputs' ages under the actions: the working slate's last ingest capture, the entries file."""
+    from sqlalchemy import text
+    from ivan.core import archive
+    now = datetime.now()
+    out = []
+    try:
+        caps = archive.captures(session, "nfl", since=lock - timedelta(minutes=1), until=lock + timedelta(minutes=1), source="ingest") if lock else []
+        last = max((c.captured_at for c in caps), default=None)
+    except Exception:   # noqa: BLE001
+        last = None
+    def item(label, at, what, old_min=None):
+        age = (now - at).total_seconds() / 60 if at else None
+        out.append({"label": label, "at": at, "age": age, "what": what, "warn": bool(at and old_min and age > old_min)})
+    item("ingest", last, "the last ingest capture (players, salaries, odds, projections)", 180)
+    if entries:
+        item("entries", datetime.fromtimestamp(entries["mtime"]), "the DraftKings entries export uploaded")
+    return out
+
+
+def _desk_ctx(request: Request, slate: Optional[SlateInfo], game: Optional[str]) -> dict:
     entries = entries_summary()
+    key, lock, mode, n = _working()
+    now = datetime.now()
+    with _session() as session:
+        status = slate_status(session)
+        check = _corr_check(session) if n else {"games": [], "independent": []}
+        contests_rows = desk_contests(session, entries, key)
+        players_rows = desk_players(session) if n else []
+        fresh = _fresh(session, entries, lock)
+    g = _game(check, game)
+    ready = {"generate": bool(n), "sim": bool(status["lineups"]) and bool(entries), "choose": bool(status["sims"]) and bool(entries)}
     notice = None
     if slate is not None and not slate.loaded:
-        notice = (f"This is not the working slate. Step 1 is set to ingest it ({slate.label}); the status, lineups and sims below "
-                  f"belong to the slate in the database now.")
-    return templates.TemplateResponse(request, "index.html", _ctx(
-        request, page="pipeline", slate=slate, notice=notice, pick=(slate.key if slate is not None and not slate.loaded else None),
-        status=_with_db(slate_status), entries=entries, weights_rows=choose_rows(entries),
-        weight_keys=WEIGHT_KEYS, weight_labels=WEIGHT_LABELS, outputs=_outputs()[:3], **_job_view(None, 40)))
+        notice = (f"{slate.label} is not the working slate. Ingest (step 1) is set to load it; everything below belongs to the slate "
+                  f"in the database now{f' ({mode}, locks {lock:%a %H:%M})' if lock else ''}.")
+    mins = (lock - now).total_seconds() / 60 if lock else None
+    sims_total = sum(r["rows"] for r in status["sims"])
+    return _ctx(request, page="desk", slate=slate, notice=notice, view="desk",
+                pick=(slate.key if slate is not None and not slate.loaded else None),
+                status=status, entries=entries, contests_rows=contests_rows, players=players_rows, check=check, game=g,
+                mode=mode, lock=lock, mins_to_lock=mins, n_players=n, now=now, ready=ready, fresh=fresh, sims_total=sims_total,
+                defaults=DEFAULT_WEIGHTS, methods=WEIGHT_METHODS, outputs=_outputs()[:6], showdown=(mode == "showdown"),
+                step_fields={s.key: s.fields for s in STEPS}, **_job_view(None, 40))
 
 
-@app.get("/partials/status", response_class=HTMLResponse)
-def partial_status(request: Request):
-    return templates.TemplateResponse(request, "_status.html", _ctx(request, status=_with_db(slate_status)))
+def _desk_page(request: Request, slate: Optional[SlateInfo], game: Optional[str] = None):
+    return templates.TemplateResponse(request, "nfl_desk.html", _desk_ctx(request, slate, game))
+
+
+@app.get("/desk/job", response_class=HTMLResponse)
+def desk_job(request: Request, active: int = 0):
+    """The desk's job box, polled while a job runs; `active` says the last poll saw one running."""
+    view = _job_view(None, 40)
+    job = view["job"]
+    return templates.TemplateResponse(request, "_nfl_job.html", {"request": request, "root": auth.root_of(request), **view,
+                                                                  "just_finished": bool(active) and job is not None and not job.is_active})
+
+
+@app.get("/desk/game", response_class=HTMLResponse)
+def desk_game(request: Request, game: str):
+    """One game's card (htmx: a chip in the games strip swaps it in)."""
+    with _session() as session:
+        check = _corr_check(session)
+        players_rows = desk_players(session)
+    g = _game(check, game)
+    return templates.TemplateResponse(request, "_nfl_game.html", {"request": request, "root": auth.root_of(request), "game": g,
+                                                                   "check": check, "players": players_rows})
+
+
+@app.get("/desk/pair", response_class=HTMLResponse)
+def desk_pair(request: Request, team: str, a: str, b: str, opp: Optional[str] = None):
+    """The team-games behind one slot pair, as a scatter (correlation_check.pair_history; scripts/nfl/correlations.py --pair)."""
+    from ivan.sports.nfl import correlation_check as cc
+    from ivan.web.charts import scatter_svg
+    with _session() as session:
+        h = cc.pair_history(session, team.upper(), a.upper(), b.upper(), opponent=opp or None)
+    pts = [{"x": p["x"], "y": p["y"], "kind": "pick" if p["same_qb"] else "cand", "shade": 0.35 + 0.65 * (i + 1) / max(1, len(h["points"])),
+            "title": f"{p['season']} wk{p['week']} vs {p['opp']} · {p['qb']}: {p['x']:.1f} / {p['y']:.1f}"}
+           for i, p in enumerate(h["points"])]
+    ylab = f"{'opp ' if opp else ''}{b.upper()} fpts"
+    svg = scatter_svg(pts, xlabel=f"{team.upper()} {a.upper()} fpts", ylabel=ylab, width=420, height=300) if pts else ""
+    return templates.TemplateResponse(request, "_nfl_pair.html", {"request": request, "h": h, "svg": svg, "opp": opp})
+
+
+@app.post("/contest/{contest_id}/weights", response_class=HTMLResponse)
+async def contest_weights(request: Request, contest_id: str):
+    """One contest's own chooser knobs, saved as typed (scripts/nfl/contest_weights.py set ID knob=value)."""
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    try:
+        own = set_contest_weights(contest_id, form)
+    except ValueError as e:
+        return HTMLResponse(f'<span class="bad">{e}</span>')
+    return HTMLResponse('<span class="ok">own knobs</span>' if own else '<span class="muted">defaults</span>')
 
 
 @app.get("/partials/job", response_class=HTMLResponse)
@@ -247,15 +363,15 @@ def partial_slates(request: Request, refresh: int = 0, pick: Optional[str] = Non
 async def upload(request: Request, file: UploadFile = File(...)):
     data = await file.read()
     if not data:
-        return _redirect(request, "/pipeline", "That file was empty.")
+        return _redirect(request, "/desk", "That file was empty.")
     WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     (WEB_INPUT_DIR / f"entries.{stamp}.csv").write_bytes(data)
     CURRENT_ENTRIES.write_bytes(data)
     summary = entries_summary()
     if summary and summary["error"]:
-        return _redirect(request, "/pipeline", summary["error"])
-    return _redirect(request, "/pipeline", f"Uploaded {file.filename}: {summary['total']} entries across {len(summary['contests'])} contest(s).")
+        return _redirect(request, "/desk", summary["error"])
+    return _redirect(request, "/desk", f"Uploaded {file.filename}: {summary['total']} entries across {len(summary['contests'])} contest(s).")
 
 
 @app.post("/run/{key}")
@@ -264,18 +380,18 @@ async def run_step(key: str, request: Request):
     if not step:
         raise HTTPException(404, "unknown step")
     if step.needs_entries and not CURRENT_ENTRIES.exists():
-        return _redirect(request, "/pipeline", f"'{step.title}' needs an entries file. Upload one first.")
+        return _redirect(request, "/desk", f"'{step.title}' needs an entries file. Upload one first.")
     form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
     try:
         cmds = step.build(form)
     except ValueError as e:
-        return _redirect(request, "/pipeline", str(e))
+        return _redirect(request, "/desk", str(e))
     ahead = len(runner.active())
     for i, cmd in enumerate(cmds):
         name = step.title if len(cmds) == 1 else f"{step.title} ({i + 1}/{len(cmds)})"
         runner.submit(name, cmd, meta={"step": key, "form": form})
     note = f"Started: {step.title}." if ahead == 0 else f"Queued: {step.title} (behind {ahead} job{'s' if ahead > 1 else ''})."
-    return _redirect(request, "/pipeline", note)
+    return _redirect(request, "/desk", note)
 
 
 @app.post("/reset/{what}")
@@ -283,9 +399,9 @@ def reset(request: Request, what: str):
     if what not in RESETS:
         raise HTTPException(404)
     if runner.active():
-        return _redirect(request, "/pipeline", "A job is running; wait for it to finish (or cancel it) before clearing.")
+        return _redirect(request, "/desk", "A job is running; wait for it to finish (or cancel it) before clearing.")
     counts = _with_db(lambda s: reset_working(s, what))
-    return _redirect(request, "/pipeline", "Cleared " + ", ".join(f"{n:,} rows from {t}" for t, n in counts.items()) + ".")
+    return _redirect(request, "/desk", "Cleared " + ", ".join(f"{n:,} rows from {t}" for t, n in counts.items()) + ".")
 
 
 @app.get("/players", response_class=HTMLResponse)
@@ -921,7 +1037,7 @@ def nfl_summary(now: datetime) -> dict:
 
 
 def _default_view(slate: SlateInfo, now: datetime) -> str:
-    return "pipeline" if (slate.loaded or slate.day >= now.date()) else "backtest"
+    return "desk" if (slate.loaded or slate.day >= now.date()) else "backtest"
 
 
 def _slate_backtest_page(request: Request, slate: SlateInfo):
@@ -938,11 +1054,11 @@ def slate_page(request: Request, day: str, key: str, view: Optional[str] = None)
     d = frame.parse_day(day)
     now = datetime.now()
     s = find_slate(nfl_days(now), key) or SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
-    view = view if view in dict(VIEWS) else _default_view(s, now)
+    view = view if view in dict(VIEWS) or view in ("pipeline", "players", "downloads") else _default_view(s, now)
     if view == "backtest":
         return _slate_backtest_page(request, s)
-    if view == "pipeline":
-        return _pipeline_page(request, s)
+    if view in ("desk", "pipeline"):
+        return _desk_page(request, s, request.query_params.get("game"))
     notice = None if s.loaded else f"{s.label} is not the working slate: this page shows the working slate's data. Its own builds are under backtest."
     if view == "players":
         return players(request, slate=s, notice=notice)

@@ -192,9 +192,10 @@ def _build_choose(form: dict) -> list[list[str]]:
     entries = entries_summary()
     if not entries or entries.get("error"):
         raise ValueError("Upload an entries file first.")
-    weights = {k: v for k, v in load_weights().items() if k != "default"}
+    saved = load_weights()
+    weights = {k: v for k, v in saved.items() if k != "default"}
     for row in choose_rows(entries):
-        w = dict(row["weights"])
+        w = {k: v for k, v in (saved.get(row["id"]) or {}).items() if k in WEIGHT_KEYS}     # its own knobs; choose.py fills the rest from "default"
         for key in WEIGHT_KEYS:
             raw = str(form.get(f"w-{row['id']}-{key}", "")).strip()
             if raw == "":
@@ -211,7 +212,8 @@ def _build_choose(form: dict) -> list[list[str]]:
             if val < 0:
                 raise ValueError(f"{WEIGHT_LABELS[key]} for {row['name']} must be 0 or more.")
             w[key] = val
-        weights[row["id"]] = w
+        if w:
+            weights[row["id"]] = w
     WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     WEIGHTS_FILE.write_text(json.dumps({"default": DEFAULT_WEIGHTS, **weights}, indent=1))
     return [_script("choose.py") + ["--entries", str(CURRENT_ENTRIES), "--no-prompt",
@@ -585,3 +587,80 @@ def projections_for_slate(lock, day) -> Optional[tuple[Path, pd.DataFrame]]:
             continue
         return f.path, df
     return None
+
+
+# ------------------------------------------------------------------ the desk (nfl_desk.html)
+def set_contest_weights(contest_id: str, values: dict) -> dict:
+    """One contest's own chooser knobs into weights.json: a blank value drops the knob (the default stands). Returns the
+    contest's saved knobs. Same as scripts/nfl/contest_weights.py set ID knob=value."""
+    cid = str(contest_id).strip()
+    if not cid.isdigit():
+        raise ValueError(f"'{contest_id}' is not a contest id.")
+    data = load_weights()
+    own = {k: v for k, v in (data.get(cid) or {}).items() if k in WEIGHT_KEYS}
+    for key, raw in values.items():
+        if key not in WEIGHT_KEYS:
+            continue
+        raw = str(raw).strip()
+        if raw == "":
+            own.pop(key, None)
+        elif key == "method":
+            if raw not in WEIGHT_METHODS:
+                raise ValueError(f"'{raw}' is not a chooser method (greedy, portfolio or slate).")
+            own[key] = raw
+        else:
+            try:
+                val = float(raw)
+            except ValueError:
+                raise ValueError(f"'{raw}' is not a number ({WEIGHT_LABELS[key]}).")
+            if val < 0:
+                raise ValueError(f"{WEIGHT_LABELS[key]} must be 0 or more.")
+            own[key] = val
+    if own:
+        data[cid] = own
+    else:
+        data.pop(cid, None)
+    WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    WEIGHTS_FILE.write_text(json.dumps({"default": DEFAULT_WEIGHTS, **{k: v for k, v in data.items() if k != "default"}}, indent=1))
+    return own
+
+
+def desk_players(session) -> list[dict]:
+    """The pool one row per player (a showdown's CPT row folded into its FLEX row as cpt salary and cpt ownership), by projection."""
+    df = players_frame(session)
+    if df.empty:
+        return []
+    cpt = df[df.roster_slot_id == 511].set_index(["name", "team"])
+    base = df[df.roster_slot_id != 511].copy()
+    if len(cpt):
+        base["cpt_salary"] = [cpt.salary.get((n, t)) for n, t in zip(base.name, base.team)]
+        base["cpt_own"] = [cpt.ownership_proj.get((n, t)) for n, t in zip(base.name, base.team)]
+    base["value"] = base.fpts_mean / base.salary.where(base.salary > 0) * 1000
+    keep = [c for c in ["name", "team", "opponent", "position", "slot_label", "salary", "status", "fpts_mean", "fpts_std", "fpts_p10",
+                        "fpts_p50", "fpts_p90", "value", "ownership_proj", "cpt_salary", "cpt_own", "volume_source"] if c in base.columns]
+    base = base.sort_values("fpts_mean", ascending=False)
+    return [{k: (None if (isinstance(v, float) and v != v) else v) for k, v in r.items()} for r in base[keep].to_dict("records")]
+
+
+def desk_contests(session, entries: Optional[dict], loaded_key: Optional[str]) -> list[dict]:
+    """The entries file's contests with DraftKings' fee and field, the slate each belongs to against the loaded one, the payouts
+    and sim on file, the sim report's checks, and the contest's own chooser knobs (blank = default)."""
+    from ivan.sports.nfl.models import ContestPayout, HistoricalContest
+    if not entries or entries.get("error"):
+        return []
+    saved = load_weights()
+    reports = {r["id"]: r for r in contest_reports(session)}
+    sim_rows = dict(session.execute(text("SELECT contest_name, count(*) FROM lineup_simulation_results GROUP BY contest_name")).all())
+    out = []
+    for c in entries["contests"]:
+        cid = str(c["Contest ID"]).strip()
+        info = session.get(HistoricalContest, int(cid)) if cid.isdigit() else None
+        paid = session.query(ContestPayout).filter(ContestPayout.contest_id == int(cid)).count() if cid.isdigit() else 0
+        rep = reports.get(int(cid)) if cid.isdigit() else None
+        match = "unknown" if info is None or not loaded_key or not str(loaded_key).isdigit() else (
+            "ok" if str(info.draft_group_id) == str(loaded_key) else "other")
+        out.append({"id": cid, "name": c["Contest Name"], "entries": c["entries"], "fee": info.entry_fee if info else None,
+                    "field": info.total_entries if info else None, "draft_group": info.draft_group_id if info else None, "match": match,
+                    "payouts": paid, "sim_rows": sim_rows.get(c["Contest Name"], 0), "report": rep,
+                    "weights": {k: v for k, v in (saved.get(cid) or {}).items() if k in WEIGHT_KEYS}})
+    return out

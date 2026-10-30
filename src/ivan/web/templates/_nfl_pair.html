@@ -1,0 +1,11 @@
+{# one slot pair's history (/desk/pair = correlation_check.pair_history; scripts/nfl/correlations.py --pair TEAM A B [--opp]) #}
+<div class="card" id="pair-hist">
+  <h2>{{ h.team }} {{ h.a }} × {{ 'opp ' if opp }}{{ h.b }} <span class="muted">every team-game on file, oldest faint; blue = tonight's QB ({{ h.qb or 'none' }})</span></h2>
+  <div class="pair-stats">
+    <span>all <b>{{ '%+.2f'|format(h.rho) if h.rho is not none else '—' }}</b> <span class="muted">n {{ h.n }}{% if h.se %} · se {{ '%.2f'|format(h.se) }}{% endif %}</span></span>
+    <span>{{ h.qb or 'QB now' }} <b>{{ '%+.2f'|format(h.rho_qb) if h.rho_qb is not none else '—' }}</b> <span class="muted">n {{ h.n_qb }}</span></span>
+    <span>last {{ h.n_recent }} <b>{{ '%+.2f'|format(h.rho_recent) if h.rho_recent is not none else '—' }}</b></span>
+    <span class="muted">Spearman of the slots' DraftKings points</span>
+  </div>
+  {% if svg %}<div class="chart">{{ svg|safe }}</div>{% else %}<p class="muted small">no games on file for this pair</p>{% endif %}
+</div>

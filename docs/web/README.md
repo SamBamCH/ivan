@@ -24,12 +24,12 @@ its load form instead of navigating, like the desk's old picker did.
 | the sports | `ivan.web.sports` | `Sport`: key, label, the slate views, the tools, `days(now)` (the slate index the picker and the dropdowns read), `summary(now)` (the home tile). `SlateInfo` / `Day` are what the index returns. `REGISTRY` is what main mounted. |
 | the frame | `ivan.web.frame` | the bar's context (`ctx`), the picker pages installed at every sport's root (`install_picker`), the shared Jinja environment |
 | NBA | `ivan.web.nba_desk` | the desk: pre-lock, post-lock (late swap), backtest. [nba-desk.md](nba-desk.md) |
-| NFL | `ivan.web.nfl_app` + `pipeline_nfl.py`, `backtest_hub.py`, `*_view.py` | pipeline, players, contests, choose, exposures, downloads, backtest (the slate's builds); tools: the backtest runs hub, models, validation, dupes, jobs. [nfl-app.md](nfl-app.md) |
+| NFL | `ivan.web.nfl_app` + `pipeline_nfl.py`, `backtest_hub.py`, `*_view.py` | the desk (the NBA desk's look: games strip, actions, contests, the open game's correlation check, the pool), sim report, choose, exposures, backtest (the slate's builds); tools: the backtest runs hub, models, validation, dupes, jobs. [nfl-app.md](nfl-app.md) |
 | MMA | `ivan.web.mma_slot` | the slot only: the days and cards (the DraftKings lobby and the stored contests), a slate card, a backtest view that says what settle has not built. The pipeline runs from `scripts/mma/` ([../mma/README.md](../mma/README.md)). |
 
 Shared pieces: `ivan.web.jobs.JobRunner` (one job at a time per sport, `nice`d, logs under
 `data/<sport>/jobs/`), `ivan.web.auth` (the password), `ivan.web.charts` (dependency-free SVG),
-`static/ivan.css` (the frame, the home and picker pages). Every sport keeps its own database, job runner
+`static/ivan.css` (the frame, the home and picker pages), `static/nfl_desk.css` (the NFL desk). Every sport keeps its own database, job runner
 and working slate; flipping between sports is navigation, so an NFL slate and an NBA slate can be worked
 in the same process. Switching slates within a sport is still a load (the desk keeps the replaced slate's
 lineups, sims and edits). Every button is a script in `scripts/<sport>/`; the job log is the script's output.

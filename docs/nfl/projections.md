@@ -78,6 +78,15 @@ fix) through each player's own marginal. `generate_lineups.py` prints a per-game
 correlation matches the target; the Contests page's Correlation tab shows it per contest.
 `scripts/nfl/backtest_correlation.py --shrink ...` chooses the shrink strength.
 
+**Checking a slate's correlations** (`correlation_check.py`, `scripts/nfl/correlations.py`, the desk's game card): per game
+of the working slate, the slot pairs that move a lineup (QB with each pass catcher, QB/RB1/K/DST with team points, RB1-RB2,
+RB1/QB with DST, and across the game QB × QB, QB × opposing WR1 and DST, PTS × PTS) with the league's Spearman, the team's
+own history (count, standard error, and with tonight's QB only), what the sim uses, the players' target Pearson and what
+the newest sim of a contest on the game drew. Flags: own history beyond 2 se of what is used, a draw more than 3 se off
+its target, a DST pair more than 0.12 from its history (the DST is built from the drawn score, so it has no target of its
+own), a team under 10 games (league matrix) or a QB with fewer than 8 of the team's games. `--pair TEAM A B [--opp]` lists
+the team-games behind one pair.
+
 ## History the models read
 
 `nfl_stats` and `nfl_schedule` from nflverse (`refactor/historical/data_fetch.py`, the nightly job),

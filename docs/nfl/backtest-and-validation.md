@@ -143,6 +143,7 @@ per contest, the running ledger with the point where tax owed exceeds the bankro
 |---|---|
 | `scripts/nfl/backtest_projections.py` | the projection snapshots vs actual DK points; `--write-calibration` |
 | `scripts/nfl/backtest_correlation.py --shrink ...` | how hard to shrink team correlation toward the league |
+| `scripts/nfl/correlations.py [--game A-B] [--pair TEAM A B]` | the working slate's correlations against history and the last sim's draw ([projections.md](projections.md#correlation-refactorteam_correlationpy-correlated_samplespy)) |
 | `scripts/nfl/backtest_usage.py --modes salary,environment` | projection-only A/B of the unpriced-volume modes |
 | `scripts/nfl/environment.py backtest --from 2024-1` | the game environment layer, rolling refit |
 | `scripts/nfl/compare_choosers.py` | chooser settings on one slate's existing sim, settled against the real fields |
