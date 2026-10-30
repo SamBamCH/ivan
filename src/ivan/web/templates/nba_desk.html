@@ -263,9 +263,17 @@
   .menu table.tips .num { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted) }
   .menu table.tips td.locked { opacity:.45 } .menu table.tips td.cur { background:#eef4ff }
   .top-row { display:flex; gap:14px; align-items:flex-start } .top-row > nav.menu { flex:1 1 auto; min-width:0; padding-left:0; padding-right:0; overflow-x:auto }
-  .cfg-tile { flex:0 0 auto; max-width:560px; margin:14px 0 10px; padding:6px 10px 8px; background:var(--card); border:1px solid var(--line); border-radius:8px; font-size:12px }
-  .cfg-tile .cfg-title { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) } .cfg-tile .pipe-form { display:block }
-  .cfg-tile .pipe-row { margin:3px 0; gap:4px 10px; font-size:12px } .cfg-tile .pipe-row input, .cfg-tile .pipe-row select { font-size:12px; padding:1px 4px } .cfg-tile .pipe-sec .sec { width:52px }
+  /* a step's knobs: a popover under its button, opened after a short rest of the pointer, kept open while the pointer is in it or a field has focus */
+  .actions .step.has-knobs { position:relative }
+  .actions .step .knobs { display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:30; width:max-content; max-width:520px; padding:8px 12px 10px;
+    background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.12); font-size:12px;
+    flex-wrap:wrap; gap:6px 12px; align-items:center; white-space:normal }
+  .actions .step.has-knobs::after { content:""; position:absolute; left:0; right:0; top:100%; height:6px }   /* a bridge, so the pointer can reach the popover */
+  .actions .step.has-knobs:hover .knobs { display:flex; animation:knobs-in 0s .25s both } .actions .step.has-knobs:focus-within .knobs { display:flex; animation:none }
+  @keyframes knobs-in { from { visibility:hidden } to { visibility:visible } }
+  .actions .step .knobs .knobs-title { flex-basis:100%; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+  .actions .step .knobs label { font-size:12px; color:var(--muted); display:flex; gap:5px; align-items:center }
+  .actions .step .knobs input, .actions .step .knobs select { font:inherit; font-size:12px; padding:2px 5px; border:1px solid #cfcfcf; border-radius:4px }
   .players-head { margin:6px 0 } .game .gh .spacer { flex:1 } .minfpts-lab { font-size:12px; color:var(--muted) } .minfpts-lab select { font:inherit; font-size:12px; padding:1px 4px }
   .contests-box td.cw { white-space:nowrap } .contests-box td.cw input, .contests-box td.cw select { font:inherit; font-size:12px; padding:1px 3px } .contests-box td.cw label { margin-right:6px; font-size:12px }
   .view-pick { font:inherit; font-size:13px; padding:5px 8px; font-weight:600 } .zoom button { font:inherit; font-size:12px; padding:3px 7px; border:1px solid #cfcfcf; background:#fff; cursor:pointer } .zoom button:first-child { border-radius:5px 0 0 5px } .zoom button:last-child { border-radius:0 5px 5px 0 } .zoom button.on { background:#eef4ff; color:var(--accent) }

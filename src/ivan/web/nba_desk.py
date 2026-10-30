@@ -2888,14 +2888,16 @@ async def pipeline_run(request: Request, step: str):
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
-        # only the knobs the request carries move (the actions bar's buttons send the config form along; a button without it,
+        # only the knobs the request carries move (generate and sim send their own popover's knobs; a button without any,
         # Field + ownership, used to blank every knob); the checkboxes count only when the config form was sent (its cfg field)
         pipeline_form.update({k: str(form.get(k)) for k in PIPELINE_DEFAULTS if k in form and k not in ("fresh", "jam", "ls_live")})
         notes = clamp_form(pipeline_form)
         if notes:
             desk.flash.append("lowered to this desk's limits: " + ", ".join(notes))
-        if form.get("cfg"):
+        if form.get("cfg"):                                       # the whole knob form (scripts and older pages)
             pipeline_form["jam"] = "on" if form.get("jam") else ""
+            pipeline_form["fresh"] = "on" if form.get("fresh") else ""
+        elif form.get("cfg_fresh"):                               # generate's knobs (the popover on its button): its checkbox only
             pipeline_form["fresh"] = "on" if form.get("fresh") else ""
         if step == "lateswap":
             pipeline_form["ls_live"] = "on" if form.get("ls_live") else ""

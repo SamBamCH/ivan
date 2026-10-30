@@ -1,0 +1,17 @@
+{# a step's knobs, shown when the pointer rests on its button (or a field in it has focus); the button sends only these
+   (hx-include="#knobs-<step>"), and the desk keeps every knob it was last sent (pipeline_form, data/nba/jobs/desk_config.json) #}
+{% macro generate_knobs(form) %}<div class="knobs" id="knobs-generate"><div class="knobs-title">generate</div>
+  <input type="hidden" name="cfg_fresh" value="1">
+      <label title="ticked: the pool starts empty. Unticked: the new lineups join the existing pool (build a second scenario's lineups beside the first; the sim scores them all under whatever is published)"><input type="checkbox" name="fresh" value="on" {% if form.fresh %}checked{% endif %}> fresh pool</label>
+      <label>lineups <input name="lineups" value="{{ form.lineups }}" size="6"></label>
+      <label title="parallel solver processes, at most 8">jobs <input name="jobs" value="{{ form.jobs }}" size="2" type="number" min="1" max="8"></label>
+      <label title="every lineup must spend at least this">min salary <input name="min_salary" value="{{ form.min_salary }}" size="5"></label>
+      <label title="at most this much salary on one team's players">max salary / team <input name="max_salary_per_team" value="{{ form.max_salary_per_team }}" size="5"></label>
+      <label title="spread of the sampled worlds the lineups are optimised in, 0-1; lower = closer to the optimal">randomness <input name="randomness" value="{{ form.randomness }}" size="4"></label>
+      <label title="every lineup must project at least this share of the mean-optimal lineup">min fpts frac <input name="min_fpts_frac" value="{{ form.min_fpts_frac }}" size="4"></label>
+      <label title="players projected below this are left out of the solver's pool">player min fpts <input name="player_min_fpts" value="{{ form.player_min_fpts }}" size="3"></label>
+</div>{% endmacro %}
+{% macro sim_knobs(form) %}<div class="knobs" id="knobs-sim"><div class="knobs-title">sim</div>
+      <label title="simulated worlds per contest">sims <input name="sims" value="{{ form.sims }}" size="5"></label>
+      <label title="largest field size simulated; bigger contests are scaled down to it">field cap <input name="field_cap" value="{{ form.field_cap }}" size="6"></label>
+</div>{% endmacro %}

@@ -41,10 +41,6 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
    map state (green mapped, yellow an open question, red changed since mapped, grey unmapped; a dot for news or for
    what the last refresh moved); a chip opens the team's card, the open game's row is shaded, a started game is
    faded. Its first slot is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
-   Beside it on the right, the **Config** tile (`_nba_config.html`, form `#pipe-config`): the knobs every action
-   sends: generate (fresh pool, lineups, jobs, salaries, randomness, min fpts), sim (sims, field cap), choose (method
-   and weights). Seeded from `config/nba.json`; the jobs read them through `data/nba/jobs/desk_config.json`. A
-   request that does not carry a knob leaves it as it was.
 2. **Actions** (`_nba_pipeline.html`, re-rendered by every `/pipeline/<step>`), the steps of a slate in order:
    1 **Refresh DK** (free) / **Lines** (every game's spread and total, about 3 credits) / **Props** (about 12 credits a
    game plus the lines; confirm dialog); on a consumer a single **Refresh** pulls the feed. Every refresh reads the
@@ -56,6 +52,12 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
    consumer: the laptop's): amber when there are edits or a refresh since, red when those are older than 10 minutes
    (publish soon), plain when up to date.
    4 **Generate**, 5 **Sim**, 6 **Choose**, and **4–6 in a row**: jobs (below); generate, sim and the row publish first.
+   **Knobs**: resting the pointer on Generate or Sim opens its knobs under the button (`_nba_knobs.html`; they stay open
+   while the pointer is in them or a field has focus): generate's fresh pool, lineups, jobs, min salary, max salary per
+   team, randomness, min fpts frac, player min fpts; sim's sims and field cap. A button sends only its own knobs
+   (4–6 in a row sends both); the desk keeps every knob it was last sent, seeded from `config/nba.json`, and the jobs
+   read them through `data/nba/jobs/desk_config.json`. Choose has no panel knobs: they are set per contest in the
+   contests section, a blank one is the desk default.
    7 **Late swap** opens the late swap view.
    Under the steps: when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
    the news was read, the slate's lineups and sim rows; then the job status, its log, the exports and the latest picks.
@@ -65,10 +67,10 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
    checked against the loaded slate (`historical_contest_information`): green the loaded slate, red another slate's
    (the sim skips those contests and says so in its log, `simulate_contest.simulate_entries`), grey not stored yet
    (checked when the sim starts, one DraftKings lookup). Each contest's **choose** cell sets the chooser's knobs for
-   that contest alone (method, cash, roi, diversity, bankroll; blank = the Config tile's value, shown greyed). They save
+   that contest alone (method, cash, roi, diversity, bankroll; blank = the desk default from `config/nba.json`, shown greyed). They save
    as they are typed (`/contest/<id>/weights` = `scripts/nba/contest_weights.py set <id> knob=value`) into
    `data/nba/input/contest_weights.json`, and Choose passes that file as `--weights-json`, so a contest's own knobs
-   win over the panel's. Then the exposures panel: the candidate pool or the chosen entries.
+   win over the defaults. Then the exposures panel: the candidate pool or the chosen entries.
 5. **The team card** (below). Its header carries the **show ≥ N fpts** filter: it hides the rows projected below N,
    on the card and in the players table alike (one value, remembered in this browser).
 6. **Players** (below).

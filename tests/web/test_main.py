@@ -84,3 +84,16 @@ def test_nba_bar_keeps_the_slate_being_loaded(open_site, monkeypatch):
     assert r.status_code == 200
     assert "loading slate 999001" in r.text
     assert 'value="/nba/2099-01-02/999001/"' not in r.text or 'value="/nba/2099-01-02/999001/" data-day="2099-01-02" selected' in r.text
+
+
+def test_nba_step_knobs_move_only_their_own(open_site, monkeypatch):
+    """Generate and sim send their popover's knobs only; the others, and the fresh-pool box, keep what the desk last had."""
+    from ivan.web import nba_desk as D
+    monkeypatch.setattr(D.runner, "active", lambda: [object()])          # "a job is running": the route stores the knobs, starts nothing
+    monkeypatch.setitem(D.pipeline_form, "lineups", "12345")
+    monkeypatch.setitem(D.pipeline_form, "fresh", "on")
+    monkeypatch.setitem(D.pipeline_form, "sims", "1000")
+    assert open_site.post("/nba/pipeline/sim", data={"sims": "777", "field_cap": "8000"}).status_code == 200
+    assert D.pipeline_form["sims"] == "777" and D.pipeline_form["lineups"] == "12345" and D.pipeline_form["fresh"] == "on"
+    assert open_site.post("/nba/pipeline/generate", data={"cfg_fresh": "1", "lineups": "2000"}).status_code == 200
+    assert D.pipeline_form["lineups"] == "2000" and D.pipeline_form["fresh"] == "" and D.pipeline_form["sims"] == "777"
