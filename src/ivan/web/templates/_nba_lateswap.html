@@ -18,6 +18,9 @@
     </form>
     {% endif %}
   </div>
+  <div class="pipe-row ls-entries">
+    {% with ent = contests_ctx.entries, hint = "after lock, the DraftKings entries export with the lineups as they stand (the swap edits those)" %}{% include "_nba_entries_upload.html" %}{% endwith %}
+  </div>
   {% if limited or consumer %}
   <div class="pipe-row" style="margin:6px 0 10px">
     <form class="inline" method="post" action="{{ root }}/lateswap/standings" enctype="multipart/form-data">
@@ -26,12 +29,12 @@
       <input type="file" name="files" accept=".zip,.csv" multiple>
       {% if lateswap.contests %}<select name="contest_id" title="only needed when the file name has no contest id">{% for c in lateswap.contests %}<option value="{{ c.contest_id }}">{{ c.name|truncate(36, True, '') }}</option>{% endfor %}</select>{% endif %}
       <button>Upload standings</button>
-      <b>3.</b> Upload your entries export in the pipeline panel above, then Run late swap.
+      <b>3.</b> Upload your entries export (above), then Run late swap.
     </form>
   </div>
   {% elif not lateswap.has_display %}<p class="muted small">No display on this desk's session: Chrome runs headless, which only works while the saved DraftKings profile is logged in. Log in once from a terminal session (scripts/nba/standings.py) if the run reports a login.</p>{% endif %}
   {% if lateswap.error %}<p class="bad">{{ lateswap.error }}</p>{% endif %}
-  {% if not lateswap.contests %}<p class="muted">No entries file at {{ lateswap.entries_path }}. Upload the DraftKings entries export in the pipeline panel.</p>{% endif %}
+  {% if not lateswap.contests %}<p class="muted">No entries file at {{ lateswap.entries_path }}. Upload the DraftKings entries export above.</p>{% endif %}
 
   {% set rep = lateswap.report %}
   {% if rep %}

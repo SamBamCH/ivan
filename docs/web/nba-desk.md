@@ -227,6 +227,9 @@ pub, status (OUT struck in red), value; team totals; sortable.
 
 ## Late swap (post-lock, view `lateswap`, `_nba_lateswap.html`)
 
+Under the buttons, **Upload entries CSV** (the same `/entries` upload as the contests section, with the file's time and
+entry count): after lock, the DraftKings entries export with the lineups as they stand, which is what the swap edits.
+
 Two buttons. **Fetch standings** (`/lateswap/fetch`, job `fetch_standings` = `scripts/nba/fetch_standings.py`;
 producer only) downloads every entries contest's standings export through the logged-in Chrome profile
 and keeps it under raw `dk/standings/<contest id>/`: press it a minute after a tip. **Run late swap**

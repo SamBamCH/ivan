@@ -1,0 +1,4 @@
+{# the entries upload (POST /entries, the page reloads): the contests section's and the late swap's. `ent` = _entries_info(). #}
+<form class="inline" hx-post="{{ root }}/entries" hx-encoding="multipart/form-data"><label class="btn">Upload entries CSV <input type="file" name="file" accept=".csv" onchange="this.form.requestSubmit()" style="display:none"></label></form>
+<span class="muted small">{{ hint }}{% if ent.exists %} · on file: {{ ent.path }}{% if ent.modified %}, <b>{{ ent.modified.strftime('%a %H:%M') }}</b>{% endif %}{% if ent.entries %} · {{ ent.entries }} entries{% endif %}{% else %} · none on file{% endif %}</span>
+{% if ent.error %}<span class="bad small">{{ ent.error }}</span>{% endif %}
