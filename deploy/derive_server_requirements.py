@@ -28,7 +28,7 @@ MODULES = [
     "ivan.sports.nfl.generate_lineups_logic", "ivan.sports.nfl.sample_field", "ivan.sports.nfl.simulate_contest",
     "ivan.sports.nfl.correlated_samples", "ivan.sports.nfl.choose", "ivan.sports.nfl.ownership",
     "ivan.sports.nfl.refactor.player", "ivan.sports.common.draftkings", "ivan.sports.common.odds",
-    "ivan.web.app", "fastapi", "uvicorn", "jinja2", "multipart", "rich.progress", "pandas", "dotenv",
+    "ivan.web.main", "fastapi", "uvicorn", "jinja2", "multipart", "rich.progress", "pandas", "dotenv",
     "matplotlib.pyplot",   # imported lazily by the backtest report the web UI can launch
     # the NBA side: the desk (mounted at /nba), the capture loop, the nightly job, the feed and the pipeline
     "ivan.web.nba_desk", "ivan.sports.nba.ingest", "ivan.sports.nba.contests", "ivan.sports.nba.historical.data_fetch",

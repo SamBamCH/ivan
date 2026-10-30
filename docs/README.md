@@ -9,7 +9,7 @@ Start with the [root README](../README.md) for the one-page install and run. Eve
 | [architecture.md](architecture.md) | repository layout, `ivan.core` (config, paths, raw, archive, artifacts, clock, seed, replay, validation, feed, chooser numerics), the database, config and `.env` |
 | [data_framework.md](data_framework.md) | the design principle: store the raw inputs and outcomes of every slate, derive everything else; the backtest as a result plus a confidence |
 | [deployment.md](deployment.md) | two machines (producer laptop, consumer server), the feed, the hardened `ivan-web` unit, Tailscale and the Cloudflare tunnel, `deploy/push.sh`, the user timers |
-| [web/](web/README.md) | the two web apps ([NFL app](web/nfl-app.md), [NBA desk](web/nba-desk.md)) and the direction toward one UI (sport, then date, then slate) |
+| [web/](web/README.md) | the one web UI (sport, then date, then slate): the frame, the slate index, the login; the [NFL screens](web/nfl-app.md) and the [NBA desk](web/nba-desk.md) |
 
 ## Per sport
 

@@ -1,0 +1,80 @@
+{# The bar every Ivan page shares (ivan.web.frame.ctx -> `frame`): Ivan › sport › day › slate › view, the sport's tools, sign out.
+   Each level is a dropdown; changing one goes there. A slate option with data-load posts the sport's load form instead
+   (the NBA desk loads a lobby slate before it can show it). #}
+{% macro bar(frame) %}
+<nav class="frame" data-site="{{ frame.site }}" data-root="{{ frame.root }}">
+  <a class="brand" href="{{ frame.site }}/" title="every sport">Ivan</a>
+  <span class="sep">›</span>
+  <select class="crumb crumb-sport" title="the sport" onchange="location.href = this.value">
+    {% if not frame.sport %}<option value="{{ frame.site }}/" selected>sport…</option>{% endif %}
+    {% for s in frame.sports %}<option value="{{ frame.site }}/{{ s.key }}/" {% if frame.sport and s.key == frame.sport.key %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
+  </select>
+  {% if frame.sport %}
+  <span class="sep">›</span>
+  <select class="crumb crumb-day" title="the day" onchange="location.href = this.value">
+    {% if not frame.day %}<option value="{{ frame.root }}/" selected>date…</option>{% endif %}
+    {% for d in frame.days %}<option value="{{ frame.root }}/{{ d.iso }}/" {% if frame.day and d.day == frame.day.day %}selected{% endif %}>{{ d.label }}{% if d.slates|length > 1 %} ({{ d.slates|length }}){% endif %}</option>{% endfor %}
+  </select>
+  {% if frame.day %}
+  <span class="sep">›</span>
+  <span class="crumb-slates">
+    <button type="button" class="step" data-step="-1" title="the slate before">&lsaquo;</button>
+    <select class="crumb crumb-slate" title="the day's slates: pick one to open it" onchange="ivanPickSlate(this)">
+      {% if not frame.slate %}<option value="" selected>slate…</option>{% endif %}
+      {% for d in frame.days %}{% for s in d.slates %}
+        <option value="{{ s.path(frame.root) }}" data-day="{{ d.iso }}" {% if s.load %}data-load="{{ frame.root }}{{ s.load.url }}" data-fields='{{ s.load.fields|tojson }}'{% endif %}
+                {% if frame.slate and s.key == frame.slate.key %}selected{% endif %} {% if frame.day and d.day != frame.day.day %}hidden{% endif %}>{{ s.label }}{% if s.loaded %} · loaded{% endif %}</option>
+      {% endfor %}{% endfor %}
+    </select>
+    <button type="button" class="step" data-step="1" title="the slate after">&rsaquo;</button>
+  </span>
+  {% endif %}
+  {% if frame.slate %}
+  <span class="sep">›</span>
+  <select class="crumb crumb-view" title="what the page shows for this slate" onchange="location.href = '{{ frame.slate.path(frame.root) }}?view=' + this.value">
+    {% for v, lab in frame.views %}<option value="{{ v }}" {% if v == frame.view %}selected{% endif %}>{{ lab }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  {% endif %}
+  {% if caller %}{{ caller() }}{% endif %}
+  <span class="spacer"></span>
+  {% if frame.sport %}{% for lab, path in frame.tools %}<a class="tool" href="{{ frame.root }}{{ path }}">{{ lab }}</a>{% endfor %}{% endif %}
+  {% if frame.login %}<a class="tool" href="{{ frame.site }}/logout" title="sign out of Ivan in this browser">sign out</a>{% endif %}
+</nav>
+<script>
+  // the slate dropdown: an option carrying data-load posts the sport's load form (the desk fetches the slate first); the arrows
+  // step through every slate in time order, across days
+  function ivanPickSlate(sel) {
+    const o = sel.options[sel.selectedIndex]; if (!o || !o.value) return;
+    if (o.dataset.load) {
+      const f = document.createElement("form"); f.method = "post"; f.action = o.dataset.load;
+      for (const [k, v] of Object.entries(JSON.parse(o.dataset.fields || "{}"))) { const i = document.createElement("input"); i.type = "hidden"; i.name = k; i.value = v; f.appendChild(i); }
+      document.body.appendChild(f); f.submit(); return;
+    }
+    location.href = o.value;
+  }
+  (() => {
+    const sel = document.querySelector("select.crumb-slate"); if (!sel) return;
+    const all = Array.from(sel.options).filter(o => o.value);          // newest day first in the markup, each day by lock
+    document.querySelectorAll(".crumb-slates button.step").forEach(b => b.addEventListener("click", () => {
+      const cur = all.findIndex(o => o.selected); const dir = parseInt(b.dataset.step, 10);
+      // the list is days newest-first and slates earliest-first within a day: "after" = later lock = next in the day, else the previous day's first
+      let i = cur;
+      if (cur < 0) { i = dir > 0 ? 0 : all.length - 1; }
+      else {
+        const day = all[cur].dataset.day; const sameDay = all.filter(o => o.dataset.day === day); const pos = sameDay.indexOf(all[cur]);
+        if (dir > 0 && pos + 1 < sameDay.length) i = all.indexOf(sameDay[pos + 1]);
+        else if (dir < 0 && pos > 0) i = all.indexOf(sameDay[pos - 1]);
+        else {
+          const days = Array.from(new Set(all.map(o => o.dataset.day)));            // newest first
+          const di = days.indexOf(day) + (dir > 0 ? -1 : 1);                           // later day = earlier in the list
+          if (di < 0 || di >= days.length) return;
+          const target = all.filter(o => o.dataset.day === days[di]); i = all.indexOf(dir > 0 ? target[0] : target[target.length - 1]);
+        }
+      }
+      if (i < 0 || i >= all.length || i === cur) return;
+      const o = all[i]; o.hidden = false; sel.value = o.value; o.selected = true; ivanPickSlate(sel);
+    }));
+  })();
+</script>
+{% endmacro %}

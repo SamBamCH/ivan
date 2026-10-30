@@ -1,14 +1,9 @@
 # /etc/cloudflared/config.yml, rendered by deploy/setup_cloudflare_tunnel.sh
-# The tunnel carries the NBA desk only: /nba and below to the app (behind the desk's password), the bare hostname to the
-# app so it can redirect to /nba/, everything else 404 at Cloudflare. The app refuses anything else arriving this way too
-# (ivan.web.app._public_only_the_desk).
+# The tunnel carries the whole Ivan site (every sport) to the app, which is behind its one password (ivan.web.auth) and
+# refuses to serve through the tunnel without one. Until 2026-10-30 only /nba was forwarded; the app no longer filters paths.
 tunnel: __TUNNEL_ID__
 credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
 ingress:
   - hostname: __HOSTNAME__
-    path: ^/nba(/.*)?$
-    service: http://__APP__
-  - hostname: __HOSTNAME__
-    path: ^/$
     service: http://__APP__
   - service: http_status:404

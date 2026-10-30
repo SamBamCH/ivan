@@ -1,19 +1,16 @@
+{% from "_frame.html" import bar %}
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Ivan · NFL{% endblock %}</title>
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<script src="/static/htmx.min.js"></script>
+<link rel="icon" type="image/svg+xml" href="{{ frame.site }}/static/favicon.svg">
+<link rel="stylesheet" href="{{ frame.site }}/static/ivan.css">
+<script src="{{ frame.site }}/static/htmx.min.js"></script>
 <style>
-  :root { --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2e2; --bg:#f7f7f5; --card:#fff; --accent:#1f5fbf; --ok:#1a7f37; --bad:#b42318; --warn:#9a6700; }
   * { box-sizing:border-box }
   body { margin:0; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg) }
-  header { background:#fff; border-bottom:1px solid var(--line) }
-  nav { max-width:1000px; margin:0 auto; padding:12px 20px; display:flex; gap:22px; align-items:baseline }
-  nav .brand { font-weight:700; font-size:18px; margin-right:auto; text-decoration:none; color:var(--ink) }
-  nav a { color:var(--accent); text-decoration:none } nav a:hover { text-decoration:underline }
   main { max-width:1000px; margin:0 auto; padding:20px }
   h1 { font-size:22px; margin:0 0 14px } h2 { font-size:17px; margin:0 0 10px } h3 { font-size:16px; margin:0 0 6px }
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin-bottom:16px }
@@ -81,11 +78,9 @@
 </style>
 </head>
 <body>
-<header><nav>
-  <a class="brand" href="/">Ivan · NFL</a>
-  <a href="/">Pipeline</a><a href="/players">Players</a><a href="/contests">Contests</a><a href="/choose">Choose</a><a href="/exposures">Exposures</a><a href="/backtest">Backtest</a><a href="/models">Models</a><a href="/downloads">Downloads</a><a href="/jobs">Jobs</a>
-</nav></header>
+<header>{{ bar(frame) }}</header>
 <main>
+  {% if notice %}<div class="flash">{{ notice }}</div>{% endif %}
   {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>

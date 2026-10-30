@@ -125,7 +125,8 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
             for i, s in enumerate(STATS):
                 rec[f"rate_{s}"] = r_num[i] / r_den
             out.append(rec)
-    rows = pd.DataFrame(out)
+    cols = ["player_name", "team", "game_date", "game_id", "min_ewm", "min_ewm_sd", "eff_min", "start_ewm", "play_ewm", "games"] + [f"rate_{s}" for s in STATS]
+    rows = pd.DataFrame(out, columns=cols) if not out else pd.DataFrame(out)       # no box scores yet: the columns, no rows
 
     # team-level production: EWM of total fantasy points per team-game
     tg = played.groupby(["team", "game_date", "game_id"], sort=True)["dk_fpts"].sum().reset_index()
@@ -137,14 +138,15 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
             num = a_t * num + float(row.dk_fpts); den = a_t * den + 1.0
             trows.append({"team": team, "game_date": row.game_date, "game_id": row.game_id,
                           "team_fpts_ewm": num / den})
-    team_rows = pd.DataFrame(trows)
+    team_rows = pd.DataFrame(trows, columns=["team", "game_date", "game_id", "team_fpts_ewm"]) if not trows else pd.DataFrame(trows)
 
-    league = {s: float(played[s].sum() / played["minutes"].sum()) for s in STATS}
+    total_min = float(played["minutes"].sum()) if len(played) else 0.0
+    league = {s: (float(played[s].sum() / total_min) if total_min > 0 else 0.0) for s in STATS}     # no box scores yet: zero rates, no crash
     # within-player minutes sd for rotation players
-    rot = rows[rows["games"] >= 10]
+    rot = rows[rows["games"] >= 10] if len(rows) else rows
     sd = float(rot["min_ewm_sd"].median()) if len(rot) else 5.0
     return HistoryState(rows=rows, team_rows=team_rows, league_rates=league, league_min_sd=sd,
-                        league_team_fpts=float(tg["dk_fpts"].mean()))
+                        league_team_fpts=float(tg["dk_fpts"].mean()) if len(tg) else 0.0)
 
 
 def without_player(box: pd.DataFrame, team: str, absent: str, before: date | None = None,

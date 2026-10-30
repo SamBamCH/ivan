@@ -4,16 +4,16 @@
 # The laptop fetches everything from DK and the odds API once, publishes the feed and pushes it here
 # (IVAN_FEED_PUSH on the laptop -> this checkout's data/feed). This script creates the data directories and the
 # database schema, applies whatever has been pushed, and installs the pull timer (every 5 minutes, from this
-# machine's own data/feed). The desk is served by ivan-web at /nba (ivan.web.app mounts it).
+# machine's own data/feed). The desk is served by ivan-web at /nba (ivan.web.main mounts it).
 #
-# Needs in .env: IVAN_DESK_PASSWORD (the login) and IVAN_FEED_URL=file:///opt/ivan/app/data/feed.
+# Needs in .env: IVAN_PASSWORD_HASH (the site's login, scripts/password.py) and IVAN_FEED_URL=file:///opt/ivan/app/data/feed.
 # User timers keep running without a login session only with lingering on, once, by an admin:
 #     sudo loginctl enable-linger <service user>
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-grep -q "^IVAN_DESK_PASSWORD=." .env 2>/dev/null || { echo "!! IVAN_DESK_PASSWORD is missing in $ROOT/.env"; exit 1; }
+grep -qE "^IVAN(_DESK)?_PASSWORD(_HASH)?=." .env 2>/dev/null || { echo "!! IVAN_PASSWORD_HASH is missing in $ROOT/.env (scripts/password.py --set)"; exit 1; }
 grep -q "^IVAN_FEED_URL=" .env 2>/dev/null || printf 'IVAN_FEED_URL=file://%s/data/feed\n' "$ROOT" >> .env
 mkdir -p data/nba/{input/rotations,output,models,jobs,logs,diagnostics/scorecard,derived,raw} data/feed/nba data/feed-state
 venv/bin/python - <<'PY'

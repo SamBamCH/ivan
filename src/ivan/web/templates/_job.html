@@ -5,8 +5,8 @@
       <b>{{ job.name }}</b>
       <span class="muted small">{% if job.started %}started {{ job.started|time }} · {{ job.duration|dur }}{% else %}waiting{% endif %}</span>
       {% if progress %}<span class="progress">{{ progress }}</span>{% endif %}
-      {% if job.is_active %}<form class="inline" method="post" action="/jobs/{{ job.id }}/cancel"><button class="danger small">Cancel</button></form>{% endif %}
-      {% if not full %}<a class="small" href="/jobs/{{ job.id }}">full log</a>{% endif %}
+      {% if job.is_active %}<form class="inline" method="post" action="{{ root }}/jobs/{{ job.id }}/cancel"><button class="danger small">Cancel</button></form>{% endif %}
+      {% if not full %}<a class="small" href="{{ root }}/jobs/{{ job.id }}">full log</a>{% endif %}
     </div>
     {% if queued %}<p class="muted small">Queued next: {% for q in queued %}{{ q.name }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
     <pre class="log {{ 'full' if full }}">{{ log }}</pre>

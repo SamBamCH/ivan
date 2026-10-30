@@ -18,14 +18,14 @@
       </select></label>
       {% endif %}
     </form>
-    {% if uploads %}<span class="small"> · Upload files: {% for label, name in uploads %}<a href="/downloads/{{ name }}">{{ label }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}
+    {% if uploads %}<span class="small"> · Upload files: {% for label, name in uploads %}<a href="{{ root }}/downloads/{{ name }}">{{ label }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}
     {% if view.legacy %}<p class="help">This run predates per-contest detail; only overall exposures are available. Re-run step 5 to get lineups and per-contest exposures.</p>{% endif %}
   </div>
 
   {% if view.contest_id and view.lineups %}
   {% set c = view.lineups[0] %}
   <div class="card">
-    <h2>{{ c.name }} <span class="muted small">— {{ c.rows|length }} lineups{% if c.mean_roi is not none %} · mean simulated cash {{ c.mean_cash|pct1 }}, ROI {{ c.mean_roi|pct1 }}{% endif %} · <a href="/choose?run={{ picked.stamp }}&contest={{ c.id }}">how they were chosen</a></span></h2>
+    <h2>{{ c.name }} <span class="muted small">— {{ c.rows|length }} lineups{% if c.mean_roi is not none %} · mean simulated cash {{ c.mean_cash|pct1 }}, ROI {{ c.mean_roi|pct1 }}{% endif %} · <a href="{{ root }}/choose?run={{ picked.stamp }}&contest={{ c.id }}">how they were chosen</a></span></h2>
     <div class="wide"><table class="compact">
       <tr><th class="num">#</th><th>Entry</th><th style="min-width:300px">Lineup</th><th class="num">Salary</th><th class="num">Proj</th><th>Teams</th><th style="min-width:280px">Stacks</th><th class="num">Cash %</th><th class="num">ROI</th></tr>
       {% for r in c.rows %}
@@ -43,7 +43,7 @@
       <tr><th>Contest</th><th class="num">Lineups</th><th class="num">Mean cash %</th><th class="num">Mean ROI</th><th></th></tr>
       {% for c in view.lineups %}
       <tr><td>{{ c.name }}</td><td class="num">{{ c.rows|length }}</td><td class="num">{{ c.mean_cash|pct1 }}</td><td class="num">{{ c.mean_roi|pct1 }}</td>
-          <td class="small"><a href="/exposures?run={{ picked.stamp }}&contest={{ c.id }}">lineups</a> · <a href="/choose?run={{ picked.stamp }}&contest={{ c.id }}">how chosen</a></td></tr>
+          <td class="small"><a href="{{ root }}/exposures?run={{ picked.stamp }}&contest={{ c.id }}">lineups</a> · <a href="{{ root }}/choose?run={{ picked.stamp }}&contest={{ c.id }}">how chosen</a></td></tr>
       {% endfor %}
     </table>
   </div>

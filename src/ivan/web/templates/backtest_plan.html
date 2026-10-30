@@ -16,7 +16,7 @@
 <h1>Backtest plan <span class="muted small">a window of slates, a contest pool, and what each slate still needs</span></h1>
 
 <div class="card">
-  <form method="get" action="/backtest/plan">
+  <form method="get" action="{{ root }}/backtest/plan">
     <div class="fields">
       <label>Sport <select name="sport"><option value="nfl">NFL</option></select></label>
       <label>Since <input type="text" name="since" value="{{ plan.since if plan else default_since }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
@@ -34,15 +34,15 @@
 <div class="card">
   <h2>{{ plan.since }} .. {{ plan.until }} <span class="muted small">{{ S.slates }} slates · {{ S.replayable }} replayable · {{ S.settled }} settled · {{ S.ready }} ready · {{ S.picks }} contests in the pool, {{ S.picks_scraped }} scraped, {{ S.our_entries }} of our entries recorded{% if S.other_draft_groups %} · {{ S.other_draft_groups }} other draft groups ignored (nothing captured or scraped){% endif %}</span></h2>
   <div class="actions">
-    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="replay"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+    <form method="post" action="{{ root }}/backtest/plan/run"><input type="hidden" name="action" value="replay"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
       <button class="small" {% if not S.replayable %}disabled{% endif %}>Replay {{ S.replayable }} slates + validate</button></form>
-    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="fetch_actuals"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+    <form method="post" action="{{ root }}/backtest/plan/run"><input type="hidden" name="action" value="fetch_actuals"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
       <button class="small">Fetch box scores</button></form>
-    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="scrape"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+    <form method="post" action="{{ root }}/backtest/plan/run"><input type="hidden" name="action" value="scrape"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
       <input type="text" name="username" placeholder="DK username" style="width:130px"><button class="small" {% if not plan.unscraped_ids %}disabled{% endif %}>Scrape {{ plan.unscraped_ids|length }} contests</button></form>
-    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="build_models"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+    <form method="post" action="{{ root }}/backtest/plan/run"><input type="hidden" name="action" value="build_models"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
       <button class="small">Build models as of {{ plan.since }}</button></form>
-    <form method="post" action="/backtest/plan/run"><input type="hidden" name="action" value="backfill"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
+    <form method="post" action="{{ root }}/backtest/plan/run"><input type="hidden" name="action" value="backfill"><input type="hidden" name="since" value="{{ plan.since }}"><input type="hidden" name="until" value="{{ plan.until }}">
       <button class="small">Backfill captures (no props)</button></form>
   </div>
   <p class="muted small" style="margin:8px 0 0">The scrape opens Chrome on this machine with the saved DraftKings profile; if it reports 403, log in there once and run it again. Jobs run one at a time (see Jobs). Equivalent commands:</p>

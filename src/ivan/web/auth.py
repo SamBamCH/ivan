@@ -1,24 +1,26 @@
 # src/ivan/web/auth.py
 """
-A password on a desk.
+The one password on the whole site.
 
-install(app, templates) adds a login page at <root>/login and a check on every
-other request. With no password configured nothing changes (the laptop's
-desk stays open on localhost).
+install(app, templates) adds a login page at /login and a check on every other
+request of the main app and everything mounted under it (ivan.web.main). With
+no password configured nothing changes (the laptop stays open on localhost).
 
-The password comes from .env as IVAN_DESK_PASSWORD_HASH (pbkdf2, made by
-scripts/desk_password.py; the plain password is never stored) or, as a
-fallback, IVAN_DESK_PASSWORD in plain text. A browser that logged in holds a
-cookie signed with a random secret kept in data/.desk_secret (mode 600, made
-on first use); delete that file to log everyone out. The typed password is
-only ever compared, never stored, logged, echoed or passed anywhere.
+The password comes from .env as IVAN_PASSWORD_HASH (pbkdf2, made by
+scripts/password.py; the plain password is never stored) or, as a fallback,
+IVAN_PASSWORD in plain text; the older IVAN_DESK_PASSWORD_HASH / IVAN_DESK_PASSWORD
+names still work. A browser that logged in holds a cookie signed with a random
+secret kept in data/.desk_secret (mode 600, made on first use); delete that
+file to log everyone out. The typed password is only ever compared, never
+stored, logged, echoed or passed anywhere.
 
 Guessing is throttled per client address (five misses, then a lockout that
 doubles each miss, up to an hour) and globally (thirty misses in ten
 minutes lock the page for ten minutes); every miss is logged with the
 address. Behind the Cloudflare tunnel (deploy/cloudflared) the address is Cloudflare's
-CF-Connecting-IP, trusted only on connections from this machine (via_tunnel); a desk
-reached through the tunnel, or with IVAN_DESK_PUBLIC=1, refuses to serve without a password.
+CF-Connecting-IP, trusted only on connections from this machine (via_tunnel); a site
+reached through the tunnel, or with IVAN_PUBLIC=1 (the older IVAN_DESK_PUBLIC too), refuses
+to serve without a password.
 """
 from __future__ import annotations
 
@@ -41,11 +43,12 @@ from ivan.core.utils import PROJECT_ROOT
 
 log = logging.getLogger("ivan.web.auth")
 
-COOKIE = "ivan_desk"
+COOKIE = "ivan"
 DAYS = 30
-ENV = "IVAN_DESK_PASSWORD"
-ENV_HASH = "IVAN_DESK_PASSWORD_HASH"
-PUBLIC_ENV = "IVAN_DESK_PUBLIC"     # 1 on a desk reachable from the internet: no password configured -> refuse to serve
+ENV = "IVAN_PASSWORD"
+ENV_HASH = "IVAN_PASSWORD_HASH"
+PUBLIC_ENV = "IVAN_PUBLIC"          # 1 on a site reachable from the internet: no password configured -> refuse to serve
+LEGACY = {"IVAN_PASSWORD": "IVAN_DESK_PASSWORD", "IVAN_PASSWORD_HASH": "IVAN_DESK_PASSWORD_HASH", "IVAN_PUBLIC": "IVAN_DESK_PUBLIC"}
 SECRET_FILE = PROJECT_ROOT / "data" / ".desk_secret"
 MAX_LEN = 128                     # bytes of password accepted
 PBKDF2_ITERS = 600_000
@@ -74,18 +77,23 @@ def check_hash(pw: str, stored: str) -> bool:
         return False
 
 
+def env(name: str) -> str:
+    """The variable, or its pre-2026-10-30 desk-only name."""
+    return os.environ.get(name, "").strip() or os.environ.get(LEGACY.get(name, ""), "").strip()
+
+
 def configured() -> bool:
-    return bool(os.environ.get(ENV_HASH, "").strip() or os.environ.get(ENV, "").strip())
+    return bool(env(ENV_HASH) or env(ENV))
 
 
 def check_password(pw: str) -> bool:
     """Constant-time against the hash when there is one, else the plain password."""
     if not pw or len(pw.encode()) > MAX_LEN:
         return False
-    h = os.environ.get(ENV_HASH, "").strip()
+    h = env(ENV_HASH)
     if h:
         return check_hash(pw, h)
-    plain = os.environ.get(ENV, "").strip()
+    plain = env(ENV)
     return bool(plain) and hmac.compare_digest(pw.encode(), plain.encode())
 
 
@@ -189,8 +197,8 @@ def _ip(request: Request) -> str:
 class _Gate(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if not configured():
-            if via_tunnel(request) or os.environ.get(PUBLIC_ENV, "").strip() in ("1", "true", "yes"):
-                return Response("this desk is public and has no password configured (IVAN_DESK_PASSWORD_HASH); refusing to serve",
+            if via_tunnel(request) or env(PUBLIC_ENV) in ("1", "true", "yes"):
+                return Response("this site is public and has no password configured (IVAN_PASSWORD_HASH); refusing to serve",
                                 status_code=503, media_type="text/plain")
             return await call_next(request)
         root = root_of(request)
@@ -229,11 +237,11 @@ def install(app: FastAPI, templates) -> None:
             return page(request, f"too many tries; wait {int(left // 60) + 1} min", 429)
         if not configured() or not check_password(pw):
             throttle.miss(ip)
-            log.warning(f"desk login failed from {ip}")
+            log.warning(f"login failed from {ip}")
             time.sleep(1.0)
             return page(request, "wrong password", 401)
         throttle.hit(ip)
-        log.info(f"desk login from {ip}")
+        log.info(f"login from {ip}")
         r = RedirectResponse(f"{root_of(request)}/", status_code=303)
         r.set_cookie(COOKIE, token(), max_age=DAYS * 86400, httponly=True, samesite="lax", path=f"{root_of(request)}/",
                      secure=via_tunnel(request))                  # over the tunnel the browser is on https: never send it in the clear

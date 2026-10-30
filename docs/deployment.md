@@ -10,9 +10,9 @@ laptop (producer)                                          server (consumer)
   NFL: overnight.py / sync_to_server.sh ──reference tables + models──► nfl_history.sqlite (its own working tables)
   NBA: desk Publish, nightly.py ──feed.publish + push (rsync)──────► data/feed/nba ──ivan-nba-pull.timer──► nba_history.sqlite
   user timers: ivan-nightly (NFL), ivan-nba-nightly, ivan-nba-archive
-                                                             ivan-web (system unit): scripts/nfl/serve.py on the Tailscale IP:80
-                                                                └── mounts the NBA desk at /nba (password)
-                                                             cloudflared: https://ivan.prattflix.com/nba → /nba only
+                                                             ivan-web (system unit): scripts/serve.py on the Tailscale IP:80
+                                                                └── one site, one password: /nfl, /nba (the desk), /mma
+                                                             cloudflared: https://nba.prattflix.com → the whole site
 ```
 
 ## The server
@@ -23,7 +23,7 @@ First-time setup, as your admin user on the server:
 sudo apt install python3-venv sqlite3 rsync
 git clone git@github.com:SamBamCH/ivan.git ~/ivan
 sudo ~/ivan/deploy/harden_server.sh        # user ivan, checkout to /opt/ivan/app, venv from requirements-server.txt, the sandboxed unit, ufw rule
-sudo -u ivan nano /opt/ivan/app/.env       # ODDS_API_KEY, IVAN_DESK_PASSWORD_HASH (scripts/desk_password.py), IVAN_DESK_PUBLIC=1, IVAN_FEED_URL=file:///opt/ivan/app/data/feed
+sudo -u ivan nano /opt/ivan/app/.env       # ODDS_API_KEY, IVAN_PASSWORD_HASH (scripts/password.py), IVAN_PUBLIC=1, IVAN_FEED_URL=file:///opt/ivan/app/data/feed
 sudo loginctl enable-linger ivan           # user timers survive logout
 ```
 
@@ -40,23 +40,24 @@ pre-lock path, the web UI, the NBA desk and the feed import: no Selenium, no tra
 
 ### The unit
 
-`deploy/ivan-web.service` (rendered by `install_unit.sh`) runs `scripts/nfl/serve.py --host <tailscale ip>
---port 80` as user `ivan`: read-only system, writable only under `data/` and its cache, no new privileges,
+`deploy/ivan-web.service` (rendered by `install_unit.sh`) runs `scripts/serve.py --host <tailscale ip>
+--port 80` as user `ivan` (the one UI, every sport; [web/README.md](web/README.md)): read-only system, writable only under `data/` and its cache, no new privileges,
 private tmp, a system-call filter, the single capability to bind port 80. `Restart=always`. Jobs the UI
 launches are `nice`d by the runner. `journalctl -u ivan-web -f` is the log.
 
 ### Access
 
-- **NFL app**: only over Tailscale (`ufw` allows port 80 on `tailscale0` alone). Being on the tailnet is
-  the login; invite people in the Tailscale admin console. `http://ivan.prattflix.com` is a public A
-  record pointing at the Tailscale IP (resolves everywhere, routes only on the tailnet; on the home LAN
-  the Pi-hole wildcard needs a local override).
-- **NBA desk**: the same host at `/nba` behind the desk password, and on the internet through a
-  Cloudflare tunnel (`sudo deploy/setup_cloudflare_tunnel.sh [hostname]`: installs cloudflared, creates
-  the tunnel, writes `/etc/cloudflared/config.yml` from `deploy/cloudflared/config.yml.template`, refuses to
-  finish without a password hash and `IVAN_DESK_PUBLIC=1`). Only `/nba` is forwarded, and the app's
-  middleware answers 404 to any other path carrying Cloudflare's headers. Cloudflare caches by URL: the
-  desk's CSV exports send `no-store`; a bypass-cache rule for the hostname is recommended.
+- **One password** for the whole site (`IVAN_PASSWORD_HASH`, `scripts/password.py --set`; the login page at
+  `/login`). With `IVAN_PUBLIC=1`, or through the tunnel, the site refuses to serve without one.
+- **Tailnet**: `ufw` allows port 80 on `tailscale0` alone; invite people in the Tailscale admin console.
+  `http://ivan.prattflix.com` is a public A record pointing at the Tailscale IP (resolves everywhere, routes
+  only on the tailnet; on the home LAN the Pi-hole wildcard needs a local override).
+- **Internet**: the Cloudflare tunnel (`sudo deploy/setup_cloudflare_tunnel.sh [hostname]`: installs
+  cloudflared, creates the tunnel, writes `/etc/cloudflared/config.yml` from
+  `deploy/cloudflared/config.yml.template`, refuses to finish without a password hash and `IVAN_PUBLIC=1`)
+  forwards the **whole site** since 2026-10-30 (a tunnel set up before then forwards `/nba` only until the
+  config is re-rendered on the server). Cloudflare caches by URL: the desk's CSV exports send `no-store`; a
+  bypass-cache rule for the hostname is recommended.
 
 ## Pushing code
 

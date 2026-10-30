@@ -26,7 +26,7 @@
 <h1>Validation <span class="muted small">projected vs actual, one component at a time</span></h1>
 
 <div class="card">
-  <form method="post" action="/validate/run">
+  <form method="post" action="{{ root }}/validate/run">
     <div class="fields">
       <label>Mode
         <select name="mode">
@@ -48,7 +48,7 @@
   <table class="compact">
     <tr><th>Report</th><th>Window</th><th class="num">Contests</th><th class="num">pass</th><th class="num">warn</th><th class="num">fail</th><th>Created</th></tr>
     {% for r in reports %}<tr {% if view and r.id == view.id %}style="background:#f6f6f3"{% endif %}>
-      <td><a href="/validate?r={{ r.id|urlencode }}">{{ r.title }}</a> <span class="muted small">{{ r.id }}</span></td>
+      <td><a href="{{ root }}/validate?r={{ r.id|urlencode }}">{{ r.title }}</a> <span class="muted small">{{ r.id }}</span></td>
       <td>{{ r.since }} .. {{ r.until }}</td><td class="num">{{ r.contests }}</td>
       <td class="num pos">{{ r.counts.pass or 0 }}</td><td class="num">{{ r.counts.warn or 0 }}</td><td class="num neg">{{ r.counts.fail or 0 }}</td><td class="muted small">{{ r.created_at }}</td></tr>{% endfor %}
   </table>
@@ -66,7 +66,7 @@
     <tr><th></th><th>Component</th><th>Check</th><th>Finding</th></tr>
     {% for c in view.checks %}<tr><td><span class="status {{ c.status }}">{{ c.status }}</span></td><td>{{ c.component }}</td><td>{{ c.name }}</td><td>{{ c.detail }}</td></tr>{% endfor %}
   </table>
-  <p class="small muted" style="margin-top:8px">Files: {% for f in view.files %}<a href="/validate/file/{{ view.id }}/{{ f }}">{{ f }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+  <p class="small muted" style="margin-top:8px">Files: {% for f in view.files %}<a href="{{ root }}/validate/file/{{ view.id }}/{{ f }}">{{ f }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
 </div>
 
 {# ---------------------------------------------------------------- game environment #}

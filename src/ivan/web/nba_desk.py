@@ -9,10 +9,11 @@ roster with the model's minutes; type minutes to pin them and the team
 re-projects in place; scratch pins 0. Publish writes projections and the
 overrides file the capture loop and the sim read.
 
-Separate process from the NFL app: python scripts/nba/serve.py (port 8001);
-also mounted at /nba inside the NFL app (ivan.web.app) so one server process
-serves both. Every link carries the mount prefix (`root`), and
-IVAN_DESK_PASSWORD puts a login page in front (ivan.web.auth).
+Mounted at /nba inside the one Ivan UI (ivan.web.main; scripts/serve.py), which also holds the
+login. Every link carries the mount prefix (`root`). The picker at /nba/ (the days, then a day's
+slates) is the frame's (ivan.web.frame); /nba/<day>/<draft group>/ is a slate: the desk when it is the
+loaded slate, its backtest when it is a past one, a load button when it is in the lobby and not
+loaded; /nba/desk/ is the loaded slate wherever it is. Actions redirect to the loaded slate's page.
 """
 from __future__ import annotations
 
@@ -47,7 +48,8 @@ from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, 
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
-from ivan.web import auth
+from ivan.web import auth, frame
+from ivan.web.sports import Day, SlateInfo, Sport, find_slate, group_days
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, OVERRIDE_KEYS, PUBLISHED_OVERRIDES_CSV, override_layers, override_of, read_overrides_full, write_overrides
 from ivan.sports.nba.projection.history import STATS
@@ -68,7 +70,9 @@ ensure_schema(engine)
 app = FastAPI(title="Ivan · NBA desk", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
-auth.install(app, templates)                                  # a password when IVAN_DESK_PASSWORD is set; open otherwise
+KEY, LABEL = "nba", "NBA"
+VIEWS = [("games", "pre-lock"), ("lateswap", "post-lock"), ("backtest", "backtest")]
+SPORT: Optional[Sport] = None                                 # set by sport(); the frame reads it
 NOT_AN_EDIT = ("/refresh", "/reload", "/news", "/autopilot", "/login", "/publish")
 
 
@@ -245,7 +249,8 @@ class Desk:
                 d = lk.date()
             when = f"{lk:%H:%M}" if lk is not None else (start.split(" ", 1)[1] if " " in start else start)
             days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=when + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
-                                                           source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=str(key) == str(dg)))
+                                                           source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=str(key) == str(dg),
+                                                           lock=lk.isoformat(timespec="minutes") if lk is not None else None, contests=v.get("contests")))
             seen.add(str(key))
         from sqlalchemy import text as _t
         for key, lock, src, n in self.session.execute(_t("select slate_key, min(lock), max(source), count(*) from archived_slate where sport = 'nba' group by slate_key")).all():
@@ -257,13 +262,14 @@ class Desk:
                 continue
             ng = self.slate_games(str(key))
             days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else "") + " · archived",
-                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg)))
+                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg), lock=t.isoformat(timespec="minutes")))
             seen.add(str(key))
         if dg is not None and str(dg) not in seen:
             lock = min((p.gametime for p in self.slate.players if p.gametime), default=None)
             d = (lock or now).date().isoformat()
             ng = len({frozenset((p.team, p.opponent)) for p in self.slate.players if p.team and p.opponent})
-            days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M}" if lock else "loaded") + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""), source="loaded", sort="", loaded=True))
+            days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M}" if lock else "loaded") + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""), source="loaded", sort="", loaded=True,
+                                               lock=lock.isoformat(timespec="minutes") if lock else None))
         out = []
         for d in sorted(days, reverse=True):
             dd = date.fromisoformat(d)
@@ -1415,7 +1421,7 @@ def _pool_vanished_handler():
         with LOCK:
             desk.session.rollback(); desk.rebuild()
             desk.flash.append("the player pool was replaced on disk while the page was built; reloaded")
-        return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+        return RedirectResponse(_here(request), status_code=303)
     app.add_exception_handler(ObjectDeletedError, handler)
 
 
@@ -1426,7 +1432,7 @@ def _busy(request: Request):
     """A refresh is replacing the pool: no edits or jobs until it is done (the board shows the state)."""
     if desk.busy:
         desk.flash.append(f"wait: {desk.busy}")
-        return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+        return RedirectResponse(_here(request), status_code=303)
     return None
 
 
@@ -1441,7 +1447,7 @@ def _render(request: Request, template: str, **ctx):
         desk.flash.clear()
     else:
         flash = []
-    return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "root": auth.root_of(request), "consumer": CONSUMER,
+    return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "root": auth.root_of(request), "here": _here(request), "consumer": CONSUMER,
                                                           "limited": LIMITED, "limits": LIMITS, "job_max_minutes": JOB_MAX_MINUTES, **ctx})
 
 
@@ -1508,29 +1514,134 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
     return sorted(games, key=lambda g: (g["locked"], g["tip"] or now))
 
 
-@app.get("/", response_class=HTMLResponse)
+def _loaded_slate() -> tuple[Optional[int], Optional[datetime]]:
+    """(draft group, first lock) of the pool the desk holds; (None, None) when it holds nothing. No lock taken: a column read."""
+    try:
+        dg = desk.pool_stamp[2] if desk.pool_stamp else None
+        lock = min((p.gametime for p in desk.slate.players if p.gametime), default=None) if desk.slate is not None else None
+        return (int(dg) if dg is not None else None), lock
+    except Exception:   # noqa: BLE001
+        return None, None
+
+
+def _here(request: Request) -> str:
+    """The loaded slate's page (/nba/<day>/<dg>/): where every action returns. The picker when nothing is loaded."""
+    root = auth.root_of(request)
+    dg, lock = _loaded_slate()
+    if dg is None:
+        return root + "/"
+    return f"{root}/{(lock or datetime.now()).date().isoformat()}/{dg}/"
+
+
+def _days_of(rows: list, now: datetime) -> list[Day]:
+    """Desk.slate_days rows -> the frame's days (ivan.web.sports). A lobby slate that is not loaded carries a load form (the
+    desk fetches a slate before it can show it); an archived one opens on its backtest, where Restore loads it."""
+    out = []
+    for d_iso, _label, slates in rows:
+        d = date.fromisoformat(d_iso)
+        for sl in slates:
+            lock = datetime.fromisoformat(sl["lock"]) if sl.get("lock") else None
+            src = {"loaded": "working"}.get(sl["source"], sl["source"])
+            load = None
+            if sl["source"] == "lobby" and not sl["loaded"] and not CONSUMER:
+                load = {"url": "/slate", "fields": {"draft_group": sl["id"], "source": "lobby", "day": d_iso}, "label": "load into the desk",
+                        "title": "fetch this slate from DraftKings, project it and work it (the loaded slate keeps its lineups, sims and edits)"}
+            detail = (f"{sl['contests']} contests in the lobby" if sl.get("contests") else "")
+            out.append(SlateInfo(key=str(sl["id"]), day=d, lock=lock, label=sl["label"].replace(" · archived", ""), source=src, loaded=bool(sl["loaded"]),
+                                 mode="classic", detail=detail, load=load))
+    return group_days(out, now)
+
+
+def nba_days(now: datetime) -> list[Day]:
+    """The slate index for the frame and the home page (takes the desk lock: the picker is its own request)."""
+    with LOCK:
+        if not desk.busy:
+            desk.maybe_reload()
+        dg, _lock = _loaded_slate()
+        return _days_of(desk.slate_days(now, dg), now)
+
+
+def nba_summary(now: datetime) -> dict:
+    days = nba_days(now)
+    loaded = next((s for d in days for s in d.slates if s.loaded), None)
+    cur = runner.current()
+    note = ""
+    if CONSUMER:
+        fd = feed.status("nba") or {}
+        note = f"consumer · laptop published {str(fd.get('published_at') or '')[11:16]}" if fd.get("published_at") else "consumer · nothing pulled yet"
+    else:
+        ap = autopilot.state()
+        note = f"autopilot {'on' if ap.get('on') else 'off'}"
+    ahead = [d for d in days if d.day >= now.date()]
+    nxt = min(ahead, key=lambda d: d.day) if ahead else None
+    return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else ""}
+
+
+def _shell(request: Request, view: Optional[str], open_team: Optional[str], page: Optional[SlateInfo], now: datetime, header: dict):
+    """The page shell for the loaded slate (page is None or the loaded one) or for another slate (its backtest, or a load card)."""
+    from ivan.sports.nba.slate_backtest import mode_for
+    loaded = header.get("draft_group")
+    days = _days_of(header["slate_days"], now)
+    if desk.busy:                       # a load or restore is replacing the pool: show its progress; the board's poll reloads the page when it is done
+        page = None
+    if page is None:
+        page = next((s for d in days for s in d.slates if s.loaded), None)
+    dg = None
+    if page is None or (loaded is not None and str(page.key) == str(loaded)):          # the loaded slate
+        if view is None:
+            lock = header.get("lock")
+            view = {"lateswap": "lateswap", "backtest": "backtest"}.get(mode_for(lock.date() if lock else None, lock, now), "games")
+        view = VIEW_ALIAS.get(view, view)
+        if view == "backtest":
+            dg = loaded
+    else:                                                                              # another slate: its backtest, or load it first
+        if view not in ("backtest", "load"):
+            view = "backtest" if (page.source == "archive" or page.day < now.date() or page.load is None) else "load"
+        dg = int(page.key) if str(page.key).isdigit() else None
+    fr = frame.ctx(request, SPORT, days, None, page, view if view != "load" else None, now)
+    return _render(request, "nba_desk.html", header=header, open_team=open_team, view=view, busy=desk.busy, dg=dg, frame=fr, page_slate=page,
+                   is_loaded=(page is None or (loaded is not None and str(page.key) == str(loaded))))
+
+
+@app.get("/desk/", response_class=HTMLResponse)
 def index(request: Request, open: Optional[str] = None, view: Optional[str] = None, dg: Optional[int] = None):
-    """
-    view=games (pre-lock: the games strip, actions, news, contests, the team card, every player, exposures); lateswap
-    (post-lock); backtest (dg = a past slate, read only: ivan.sports.nba.slate_backtest). players / exposures open pre-lock. With no view the loaded slate's mode picks it
-    (slate_backtest.mode_for): before the first lock the slate, after it the late swap, a slate of an earlier day its backtest.
-    """
+    """The loaded slate, wherever it is: the flat address actions and old links use. view=games (pre-lock), lateswap (post-lock),
+    backtest (dg = a past slate). With no view the loaded slate's mode picks it (slate_backtest.mode_for)."""
     with LOCK:
         if not desk.busy:
             desk.maybe_reload()
         now = datetime.now()
         header = desk.header(now)
-        if view is None:
-            from ivan.sports.nba.slate_backtest import mode_for
-            lock = header.get("lock")
-            mode = mode_for(lock.date() if lock else None, lock, now)
-            view = {"lateswap": "lateswap", "backtest": "backtest"}.get(mode, "games")
-            if view == "backtest":
-                dg = header.get("draft_group")
-        if view == "backtest" and dg is None:
-            dg = header.get("draft_group")
-        view = VIEW_ALIAS.get(view, view)
-        return _render(request, "nba_desk.html", header=header, open_team=open, view=view, busy=desk.busy, dg=dg)
+        if view == "backtest" and dg is not None and str(dg) != str(header.get("draft_group")):
+            page = find_slate(_days_of(header["slate_days"], now), str(dg))
+            return _shell(request, "backtest", open, page, now, header)
+        return _shell(request, view, open, None, now, header)
+
+
+@app.get("/{day}/{key}/", response_class=HTMLResponse)
+def slate_page(request: Request, day: str, key: str, open: Optional[str] = None, view: Optional[str] = None):
+    """One slate: sport › day › slate › view. The loaded slate is the desk; a past or archived slate its backtest (read only; Restore
+    loads it); a lobby slate not loaded a load button (nothing is fetched by a GET)."""
+    d = frame.parse_day(day)
+    with LOCK:
+        if not desk.busy:
+            desk.maybe_reload()
+        now = datetime.now()
+        header = desk.header(now)
+        page = find_slate(_days_of(header["slate_days"], now), key)
+        if page is None:
+            page = SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
+        return _shell(request, view, open, page, now, header)
+
+
+def sport() -> Sport:
+    """The description ivan.web.main mounts: the desk with the frame's picker at its root."""
+    global SPORT
+    from ivan.sports.nba.slate_backtest import mode_for
+    SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nba_days, summary=nba_summary, tools=[], app=app,
+                  default_view=lambda s, now: {"lateswap": "lateswap", "backtest": "backtest"}.get(mode_for(s.day, s.lock, now), "games"))
+    frame.install_picker(app, SPORT)
+    return SPORT
 
 
 def _backtest_board(request: Request, dg: Optional[int]):
@@ -2283,7 +2394,7 @@ def publish(request: Request, pins: str = Form("")):
         except IngestError as e:
             desk.flash.append(f"publish failed: {e}")
         desk.rebuild()
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    return RedirectResponse(_here(request), status_code=303)
 
 
 def _push_feed(log) -> None:
@@ -2323,7 +2434,7 @@ def news_auto(request: Request, on: str = Form("")):
     with LOCK:
         desk.news_auto = bool(on)
         desk.flash.append("news auto-check " + ("on: every 5 minutes while the desk runs" if desk.news_auto else "off"))
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    return RedirectResponse(_here(request), status_code=303)
 
 
 @app.post("/autopilot")
@@ -2332,12 +2443,12 @@ def autopilot_toggle(request: Request, on: str = Form("")):
     capture tick refreshes the loaded slate every 15 minutes, fetches props at the offsets and publishes + pushes the feed,
     standing down while this desk is being worked. Nothing on a consumer."""
     if CONSUMER:
-        return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+        return RedirectResponse(_here(request), status_code=303)
     with LOCK:
         st = autopilot.set_on(bool(on), by="desk")
         desk.flash.append("autopilot " + ("on: the tick refreshes, fetches props at the offsets and publishes every 15 minutes while nobody is editing here"
                                           if st["on"] else "off: only Publish sends projections to the other desk"))
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    return RedirectResponse(_here(request), status_code=303)
 
 
 def _news_loop():
@@ -2398,7 +2509,7 @@ def reload(request: Request):
     with LOCK:
         desk.rebuild()
         desk.flash.append("reloaded from disk")
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    return RedirectResponse(_here(request), status_code=303)
 
 
 @app.post("/refresh")
@@ -2448,9 +2559,9 @@ def refresh(request: Request, what: str = Form("dk")):
         else:
             _start_refresh("refreshing the pool" + (" and the props" if what == "props" else " and the game lines" if what == "lines" else ""), dg,
                            update_odds=(what == "props"), lines=True if what == "lines" else None)
-            return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+            return RedirectResponse(_here(request), status_code=303)
         desk.rebuild()
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    return RedirectResponse(_here(request), status_code=303)
 
 
 # ---------------------------------------------------------------- pipeline: generate / sim / choose as jobs
@@ -2908,7 +3019,7 @@ async def standings_upload(request: Request, files: list[UploadFile] = File(...)
             desk.flash.append("standings saved for " + ", ".join(saved))
         for e in errors:
             desk.flash.append("standings upload: " + e)
-    return RedirectResponse(auth.root_of(request) + "/?view=lateswap", status_code=303)
+    return RedirectResponse(_here(request) + "?view=lateswap", status_code=303)
 
 
 # ---------------------------------------------------------------- exports (the brother's spreadsheet: plain CSVs of what the desk holds now)
@@ -3163,7 +3274,7 @@ def download(name: str):
 
 
 @app.post("/slate")
-def switch_slate(request: Request, draft_group: int = Form(...), source: str = Form("lobby")):
+def switch_slate(request: Request, draft_group: int = Form(...), source: str = Form("lobby"), day: str = Form("")):
     """Load another slate: a lobby slate is fetched from DraftKings, an archived one restored from its capture (nothing fetched).
     The pick is remembered (data/nba/active_slate.json)."""
     with LOCK:
@@ -3180,4 +3291,9 @@ def switch_slate(request: Request, draft_group: int = Form(...), source: str = F
             _start_restore(int(draft_group))
         else:
             _start_refresh(f"loading slate {draft_group}", int(draft_group), update_odds=False)
-    return RedirectResponse(auth.root_of(request) + "/", status_code=303)
+    if day:
+        try:
+            return RedirectResponse(f"{auth.root_of(request)}/{date.fromisoformat(day).isoformat()}/{int(draft_group)}/", status_code=303)
+        except ValueError:
+            pass
+    return RedirectResponse(auth.root_of(request) + "/desk/", status_code=303)      # the loaded slate's page once the load is done

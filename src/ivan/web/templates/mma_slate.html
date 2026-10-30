@@ -1,0 +1,42 @@
+{% from "_frame.html" import bar %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ivan · MMA · {{ slate.label }}</title>
+<link rel="icon" type="image/svg+xml" href="{{ frame.site }}/static/favicon.svg">
+<link rel="stylesheet" href="{{ frame.site }}/static/ivan.css">
+<style> table { border-collapse:collapse; width:100%; background:#fff } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px } th { color:var(--muted); font-size:13px } td.num, th.num { text-align:right } .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px } </style>
+</head>
+<body class="plain">
+<header>{{ bar(frame) }}</header>
+<main>
+  <h1>{{ slate.label }} <span class="muted small">{{ slate.day.strftime('%a %m-%d') }}{% if slate.lock %} · {{ slate.lock.strftime('%H:%M') }}{% endif %} · slate {{ slate.key }}</span></h1>
+  {% if view == 'backtest' %}
+  <div class="card">
+    <h2>Backtest</h2>
+    <p class="muted">Not built for MMA yet: a card settles once the standings of its contests are on file and a validation compares the
+      simulated fields with them (docs/mma/README.md, "Not built"). The pieces that exist today run from the terminal:
+      <code>scripts/mma/get_contest_data.py --played</code> exports the standings of the contests we entered into
+      <code>data/mma/raw/dk/standings/</code>, and <code>scripts/mma/build_dupe_model.py</code> refits the field's duplication model on them.</p>
+    {% if contests %}<p class="small muted">{{ contests|length }} contests of this card are stored; the settle step would read their standings.</p>{% endif %}
+  </div>
+  {% else %}
+  <div class="card">
+    <h2>The slate</h2>
+    <p>{{ slate.detail or 'nothing on file for this slate' }}{% if slate.loaded %} · the fighter pool on file holds {{ fighters }} fighters{% endif %}.</p>
+    <p class="small muted">The MMA pipeline has no buttons here yet. From the repository root: <code>scripts/mma/ingest.py{% if slate.source == 'lobby' %} --draft-group {{ slate.key }}{% endif %}</code>,
+      then <code>generate_lineups.py --universe</code>, <code>sim.py</code>, <code>choose.py</code> (docs/mma/README.md).</p>
+  </div>
+  {% if contests %}
+  <div class="card">
+    <h2>Contests stored <span class="muted small">{{ contests|length }}</span></h2>
+    <table><tr><th>Contest</th><th class="num">Fee</th><th class="num">Entries</th><th class="num">Max per user</th><th>Type</th></tr>
+      {% for c in contests %}<tr><td>{{ c.name }} <span class="muted small">{{ c.contest_id }}</span></td><td class="num">${{ '%.2f'|format(c.entry_fee) }}</td><td class="num">{{ '{:,}'.format(c.total_entries) }}</td><td class="num">{{ c.multi_entry }}</td><td>{{ c.contest_type or '' }}</td></tr>{% endfor %}
+    </table>
+  </div>
+  {% endif %}
+  {% endif %}
+</main>
+</body>
+</html>

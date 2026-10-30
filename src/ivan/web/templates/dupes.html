@@ -13,7 +13,7 @@
 <h1>Dupes <span class="muted small">how many copies the field holds of a lineup, predicted vs actual</span></h1>
 
 <div class="card">
-  <form method="get" action="/dupes">
+  <form method="get" action="{{ root }}/dupes">
     <p class="small muted" style="margin:0 0 6px">Scraped fields, by slate. Tick contests and compare; the latest slate is picked by default.</p>
     {% for s in slates %}
     <details class="slate" {% if loop.index <= 1 or s.selected %}open{% endif %}>

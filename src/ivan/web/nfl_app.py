@@ -1,12 +1,26 @@
-# src/ivan/web/app.py
+# src/ivan/web/nfl_app.py
 """
-Thin web UI over the NFL pipeline scripts: FastAPI + Jinja + htmx, no build
-step, no auth (run it on a LAN or behind Tailscale). One job at a time.
+The NFL screens of the one Ivan UI (ivan.web.main mounts this at /nfl): the pre-lock pipeline as
+forms over scripts/nfl/*, the report pages that read what the pipeline wrote, and the tools that are
+not about one slate (the backtest runs, models, validation, dupes, jobs). FastAPI + Jinja + htmx, no
+build step; the login is the site's (ivan.web.auth, installed by main). One job at a time.
+
+    /                 the picker: the NFL days, then a day's slates (ivan.web.frame)
+    /<day>/<key>/     one slate, ?view= pipeline | players | contests | choose | exposures | downloads | backtest
+    /pipeline         the working slate's pipeline (what the flat pages below show too)
+    /players /contests /choose /exposures /downloads     the working slate's report pages
+    /backtest ...     the runs hub, /models, /validate, /dupes, /jobs: the sport's tools
+
+The working slate is the one in the database's working tables (nfl_player, lineup, ...), ingested
+by step 1; a past slate opens on its backtest (its builds, ivan.sports.nfl.run_index) and its report
+pages read the artifacts those builds left.
 """
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
+
+import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
@@ -26,53 +40,41 @@ from ivan.web import dupes_view as dv
 from ivan.web import models_view as mv
 from ivan.web import plan_view as pv
 from ivan.web import backtest_hub as hub
+from ivan.web import auth, frame
 from ivan.web.jobs import JobRunner
+from ivan.web.sports import Day, SlateInfo, Sport, find_slate, group_days, lobby_day, lobby_lock
 from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR, WEIGHT_KEYS,
                                    WEIGHT_LABELS, RESETS, choose_rows, choose_view, chosen_runs, chosen_view, contest_report,
                                    contest_reports, corr_css, entries_summary, legacy_exposures_view, output_files,
-                                   players_frame, report_view, reset_working, slate_status, slates, OUTPUT_KINDS)
+                                   players_frame, report_view, reset_working, slate_status, slates, OUTPUT_KINDS,
+                                   projections_for_slate, run_contest_ids, run_dir, runs_for_contests, slate_contest_ids)
 
 HERE = Path(__file__).parent
 engine = init_db("nfl")
 runner = JobRunner(log_dir=NFL_DATA_DIR / "jobs", cwd=PROJECT_ROOT)
 
 
-@asynccontextmanager
-async def _lifespan(_app: FastAPI):
+def _prepare() -> None:
+    """A fresh checkout's directories and tables (no-ops otherwise). At import: a sub-application mounted inside ivan.web.main
+    gets no lifespan events of its own."""
+    from ivan.core import archive, slates as slate_status
     WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     WEB_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    NFLBase.metadata.create_all(engine)       # working tables on a fresh server; no-op otherwise
+    NFLBase.metadata.create_all(engine)       # working tables on a fresh server
     add_missing_columns(engine, NFLBase.metadata)   # columns added to the models since the tables were created
-    yield
+    archive.ensure_tables(engine)
+    slate_status.ensure_tables(engine)
 
 
-app = FastAPI(title="Ivan", docs_url=None, redoc_url=None, lifespan=_lifespan)
-
-
-@app.middleware("http")
-async def _public_only_the_desk(request, call_next):
-    """
-    Requests from the internet arrive through the Cloudflare tunnel (deploy/cloudflared), which forwards /nba only. This is
-    the second lock on the same door: anything carrying Cloudflare's headers gets the NBA desk (behind its password) and
-    nothing else of this app, which has no login of its own; the bare hostname goes to the desk.
-    """
-    if request.headers.get("cf-ray") or request.headers.get("cf-connecting-ip"):
-        path = request.url.path
-        if path in ("", "/"):
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse("/nba/", status_code=302)
-        if not (path == "/nba" or path.startswith("/nba/")):
-            from fastapi.responses import PlainTextResponse
-            return PlainTextResponse("not found", status_code=404)
-    return await call_next(request)
-
+_prepare()
+app = FastAPI(title="Ivan · NFL", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
-try:                                                          # the NBA desk at /nba, when its database and deps are present
-    from ivan.web.nba_desk import app as _nba_desk
-    app.mount("/nba", _nba_desk, name="nba")
-except Exception as _e:   # noqa: BLE001
-    print(f"nba desk not mounted: {type(_e).__name__}: {_e}")
 templates = Jinja2Templates(directory=HERE / "templates")
+KEY, LABEL = "nfl", "NFL"
+VIEWS = [("pipeline", "pipeline"), ("players", "players"), ("contests", "contests"), ("choose", "choose"), ("exposures", "exposures"),
+         ("downloads", "downloads"), ("backtest", "backtest")]
+TOOLS = [("Backtest runs", "/backtest"), ("Models", "/models"), ("Validation", "/validate"), ("Dupes", "/dupes"), ("Jobs", "/jobs")]
+SPORT: Optional[Sport] = None                                 # set by sport(); the frame's context reads it
 
 
 # ------------------------------------------------------------------ helpers
@@ -157,13 +159,21 @@ def _session():
         s.close()
 
 
-def _ctx(request: Request, **extra) -> dict:
-    return {"request": request, "steps": STEPS, "active": runner.active(),
-            "msg": request.query_params.get("msg"), **extra}
+def _ctx(request: Request, page: Optional[str] = None, slate: Optional[SlateInfo] = None, **extra) -> dict:
+    """Every page's context: the steps, the running jobs, the flash, the frame (sport › day › slate › view). A page about one
+    slate passes it; the flat pages are about the working slate."""
+    now = datetime.now()
+    days = nfl_days(now)
+    if slate is None:
+        slate = next((x for d in days for x in d.slates if x.loaded), None)
+    return {"request": request, "steps": STEPS, "active": runner.active(), "root": auth.root_of(request),
+            "msg": request.query_params.get("msg"), "frame": frame.ctx(request, SPORT, days, None, slate, page, now), "slate": slate,
+            "notice": extra.pop("notice", None), **extra}
 
 
-def _redirect(to: str, msg: Optional[str] = None) -> RedirectResponse:
+def _redirect(request: Request, to: str, msg: Optional[str] = None) -> RedirectResponse:
     from urllib.parse import quote
+    to = auth.root_of(request) + to
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}msg={quote(msg)}" if msg else to, status_code=303)
 
 
@@ -195,11 +205,21 @@ def favicon():
     return FileResponse(HERE / "static" / "favicon.svg", media_type="image/svg+xml")
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/pipeline", response_class=HTMLResponse)
 def index(request: Request):
+    """The working slate's pipeline (the flat address; /<day>/<key>/ shows the same for that slate)."""
+    return _pipeline_page(request, None)
+
+
+def _pipeline_page(request: Request, slate: Optional[SlateInfo]):
     entries = entries_summary()
+    notice = None
+    if slate is not None and not slate.loaded:
+        notice = (f"This is not the working slate. Step 1 is set to ingest it ({slate.label}); the status, lineups and sims below "
+                  f"belong to the slate in the database now.")
     return templates.TemplateResponse(request, "index.html", _ctx(
-        request, status=_with_db(slate_status), entries=entries, weights_rows=choose_rows(entries),
+        request, page="pipeline", slate=slate, notice=notice, pick=(slate.key if slate is not None and not slate.loaded else None),
+        status=_with_db(slate_status), entries=entries, weights_rows=choose_rows(entries),
         weight_keys=WEIGHT_KEYS, weight_labels=WEIGHT_LABELS, outputs=_outputs()[:3], **_job_view(None, 40)))
 
 
@@ -214,27 +234,28 @@ def partial_job(request: Request, id: Optional[str] = None, tail: int = 40):
 
 
 @app.get("/partials/slates", response_class=HTMLResponse)
-def partial_slates(request: Request, refresh: int = 0):
+def partial_slates(request: Request, refresh: int = 0, pick: Optional[str] = None):
+    """The ingest step's slate list; ?pick= preselects one (the slate page of a lobby slate)."""
     try:
         items, err = slates(max_age=0 if refresh else 120), None
     except Exception as e:
         items, err = [], f"Couldn't load slates from DraftKings: {e}"
-    return templates.TemplateResponse(request, "_slates.html", _ctx(request, slates=items, slates_error=err))
+    return templates.TemplateResponse(request, "_slates.html", {"request": request, "root": auth.root_of(request), "slates": items, "slates_error": err, "pick": pick})
 
 
 @app.post("/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(request: Request, file: UploadFile = File(...)):
     data = await file.read()
     if not data:
-        return _redirect("/", "That file was empty.")
+        return _redirect(request, "/pipeline", "That file was empty.")
     WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     (WEB_INPUT_DIR / f"entries.{stamp}.csv").write_bytes(data)
     CURRENT_ENTRIES.write_bytes(data)
     summary = entries_summary()
     if summary and summary["error"]:
-        return _redirect("/", summary["error"])
-    return _redirect("/", f"Uploaded {file.filename}: {summary['total']} entries across {len(summary['contests'])} contest(s).")
+        return _redirect(request, "/pipeline", summary["error"])
+    return _redirect(request, "/pipeline", f"Uploaded {file.filename}: {summary['total']} entries across {len(summary['contests'])} contest(s).")
 
 
 @app.post("/run/{key}")
@@ -243,36 +264,46 @@ async def run_step(key: str, request: Request):
     if not step:
         raise HTTPException(404, "unknown step")
     if step.needs_entries and not CURRENT_ENTRIES.exists():
-        return _redirect("/", f"'{step.title}' needs an entries file. Upload one first.")
+        return _redirect(request, "/pipeline", f"'{step.title}' needs an entries file. Upload one first.")
     form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
     try:
         cmds = step.build(form)
     except ValueError as e:
-        return _redirect("/", str(e))
+        return _redirect(request, "/pipeline", str(e))
     ahead = len(runner.active())
     for i, cmd in enumerate(cmds):
         name = step.title if len(cmds) == 1 else f"{step.title} ({i + 1}/{len(cmds)})"
         runner.submit(name, cmd, meta={"step": key, "form": form})
     note = f"Started: {step.title}." if ahead == 0 else f"Queued: {step.title} (behind {ahead} job{'s' if ahead > 1 else ''})."
-    return _redirect("/", note)
+    return _redirect(request, "/pipeline", note)
 
 
 @app.post("/reset/{what}")
-def reset(what: str):
+def reset(request: Request, what: str):
     if what not in RESETS:
         raise HTTPException(404)
     if runner.active():
-        return _redirect("/", "A job is running; wait for it to finish (or cancel it) before clearing.")
+        return _redirect(request, "/pipeline", "A job is running; wait for it to finish (or cancel it) before clearing.")
     counts = _with_db(lambda s: reset_working(s, what))
-    return _redirect("/", "Cleared " + ", ".join(f"{n:,} rows from {t}" for t, n in counts.items()) + ".")
+    return _redirect(request, "/pipeline", "Cleared " + ", ".join(f"{n:,} rows from {t}" for t, n in counts.items()) + ".")
 
 
 @app.get("/players", response_class=HTMLResponse)
-def players(request: Request):
-    df = _with_db(players_frame)
+def players(request: Request, slate: Optional[SlateInfo] = None, notice: Optional[str] = None):
+    if slate is not None and not slate.loaded:
+        found = projections_for_slate(slate.lock, slate.day)
+        if found is None:
+            df = pd.DataFrame()
+            notice = f"{slate.label}: no projections artifact on file for this slate (output/projections/ holds one per ingest since 2026-10-11)."
+        else:
+            path, df = found
+            df = df.rename(columns={"slot_label": "slot"}).sort_values(["team", "fpts_mean"], ascending=[True, False])
+            notice = f"{slate.label}: the projections as ingested, from {path.name} (the working tables hold another slate)."
+    else:
+        df = _with_db(players_frame)
     cols = [c for c in ["slot", "name", "team", "opponent", "position", "salary", "status", "fpts_mean", "fpts_std",
                         "fpts_p10", "fpts_p50", "fpts_p90", "ownership_proj"] if c in df.columns]
-    return templates.TemplateResponse(request, "players.html", _ctx(request, cols=cols, rows=df[cols].to_dict("records") if len(df) else [],
+    return templates.TemplateResponse(request, "players.html", _ctx(request, page="players", slate=slate, notice=notice, cols=cols, rows=df[cols].to_dict("records") if len(df) else [],
                                                                       total=len(df), status=_with_db(slate_status)))
 
 
@@ -295,34 +326,41 @@ def job_detail(request: Request, job_id: str):
 
 
 @app.post("/jobs/{job_id}/cancel")
-def job_cancel(job_id: str):
+def job_cancel(request: Request, job_id: str):
     ok = runner.cancel(job_id)
-    return _redirect(f"/jobs/{job_id}", "Cancelled." if ok else "Nothing to cancel.")
+    return _redirect(request, f"/jobs/{job_id}", "Cancelled." if ok else "Nothing to cancel.")
 
 
 @app.get("/exposures", response_class=HTMLResponse)
-def exposures(request: Request, run: Optional[str] = None, contest: Optional[str] = None, file: Optional[str] = None):
-    runs = [r for r in chosen_runs() if "lineups" in r["files"] or "exposures" in r["files"]]
+def exposures(request: Request, run: Optional[str] = None, contest: Optional[str] = None, file: Optional[str] = None,
+              slate: Optional[SlateInfo] = None, notice: Optional[str] = None):
+    runs, notice = _slate_runs(slate, notice)
+    runs = [r for r in runs if "lineups" in r["files"] or "exposures" in r["files"]]
     if not runs:
-        return templates.TemplateResponse(request, "exposures.html", _ctx(request, runs=[], picked=None, view=None))
+        return templates.TemplateResponse(request, "exposures.html", _ctx(request, page="exposures", slate=slate, notice=notice, runs=[], picked=None, view=None))
     picked = next((r for r in runs if r["stamp"] == run or (file and file in r["files"].values())), runs[0])
     if "lineups" in picked["files"]:
-        view = chosen_view(WEB_OUTPUT_DIR / picked["files"]["lineups"], (contest or "").strip() or None)
+        view = chosen_view(run_dir(picked) / picked["files"]["lineups"], (contest or "").strip() or None)
     else:
-        view = legacy_exposures_view(WEB_OUTPUT_DIR / picked["files"]["exposures"])
-    uploads = [(OUTPUT_KINDS[k], picked["files"][k]) for k in ("showdown", "classic") if k in picked["files"]]
-    return templates.TemplateResponse(request, "exposures.html", _ctx(request, runs=runs, picked=picked, view=view, uploads=uploads))
+        view = legacy_exposures_view(run_dir(picked) / picked["files"]["exposures"])
+    uploads = [(OUTPUT_KINDS[k], picked["files"][k]) for k in ("showdown", "classic") if k in picked["files"]] if run_dir(picked) == WEB_OUTPUT_DIR else []
+    return templates.TemplateResponse(request, "exposures.html", _ctx(request, page="exposures", slate=slate, notice=notice, runs=runs, picked=picked, view=view, uploads=uploads))
 
 
 @app.get("/contests", response_class=HTMLResponse)
-def contests(request: Request, id: Optional[int] = None):
+def contests(request: Request, id: Optional[int] = None, slate: Optional[SlateInfo] = None, notice: Optional[str] = None):
     rows = _with_db(contest_reports)
+    if slate is not None and not slate.loaded:
+        ids = _with_db(lambda s: slate_contest_ids(s, slate.key))
+        rows = [r for r in rows if int(r["id"]) in ids]
+        notice = (f"{slate.label}: the sim reports of its contests ({len(rows)} on file; a later sim of the same contest replaces its report)."
+                  if ids else f"{slate.label}: DraftKings' contests for this slate are not stored, so no sim report can be tied to it.")
     if not rows:
-        return templates.TemplateResponse(request, "contests.html", _ctx(request, contests=[], picked=None, report=None))
+        return templates.TemplateResponse(request, "contests.html", _ctx(request, page="contests", slate=slate, notice=notice, contests=[], picked=None, report=None))
     picked = next((r for r in rows if r["id"] == id), rows[0])
     report = _with_db(lambda s: contest_report(s, picked["id"])) or {}
     return templates.TemplateResponse(request, "contests.html", _ctx(
-        request, contests=rows, picked=picked, report=report, view=report_view(report)))
+        request, page="contests", slate=slate, notice=notice, contests=rows, picked=picked, report=report, view=report_view(report)))
 
 
 @app.get("/contests/{contest_id}.json")
@@ -334,14 +372,15 @@ def contest_json(contest_id: int):
 
 
 @app.get("/choose", response_class=HTMLResponse)
-def choose_page(request: Request, run: Optional[str] = None, contest: Optional[str] = None):
-    runs = [r for r in chosen_runs() if "choose" in r["files"]]
+def choose_page(request: Request, run: Optional[str] = None, contest: Optional[str] = None, slate: Optional[SlateInfo] = None, notice: Optional[str] = None):
+    runs, notice = _slate_runs(slate, notice)
+    runs = [r for r in runs if "choose" in r["files"]]
     if not runs:
-        return templates.TemplateResponse(request, "choose.html", _ctx(request, runs=[], picked=None, view=None))
+        return templates.TemplateResponse(request, "choose.html", _ctx(request, page="choose", slate=slate, notice=notice, runs=[], picked=None, view=None))
     picked = next((r for r in runs if r["stamp"] == run), runs[0])
-    lineups = WEB_OUTPUT_DIR / picked["files"]["lineups"] if "lineups" in picked["files"] else None
-    view = choose_view(WEB_OUTPUT_DIR / picked["files"]["choose"], lineups, (contest or "").strip() or None)
-    return templates.TemplateResponse(request, "choose.html", _ctx(request, runs=runs, picked=picked, view=view))
+    lineups = run_dir(picked) / picked["files"]["lineups"] if "lineups" in picked["files"] else None
+    view = choose_view(run_dir(picked) / picked["files"]["choose"], lineups, (contest or "").strip() or None)
+    return templates.TemplateResponse(request, "choose.html", _ctx(request, page="choose", slate=slate, notice=notice, runs=runs, picked=picked, view=view))
 
 
 @app.get("/backtest", response_class=HTMLResponse)
@@ -353,8 +392,8 @@ def backtest_page(request: Request):
 
 
 @app.get("/backtest/open")
-def backtest_open(name: str):
-    return _redirect(f"/backtest/{name}")
+def backtest_open(request: Request, name: str):
+    return _redirect(request, f"/backtest/{name}")
 
 
 @app.post("/backtest/new")
@@ -363,8 +402,23 @@ async def backtest_new(request: Request):
     try:
         run = hub.new_run(form.get("name", ""), form.get("since", "").strip(), form.get("until", "").strip())
     except ValueError as e:
-        return _redirect("/backtest", f"Could not start the run: {e}")
-    return _redirect(f"/backtest/{run['name']}")
+        return _redirect(request, "/backtest", f"Could not start the run: {e}")
+    return _redirect(request, f"/backtest/{run['name']}")
+
+
+def _slate_runs(slate: Optional[SlateInfo], notice: Optional[str]) -> tuple[list[dict], Optional[str]]:
+    """The step-5 runs a page lists: every run for the working slate; for another slate, the runs that chose for its contests."""
+    if slate is None or slate.loaded:
+        return chosen_runs(), notice
+    ids = _with_db(lambda s: slate_contest_ids(s, slate.key))
+    runs = runs_for_contests(ids)
+    if not ids:
+        notice = f"{slate.label}: DraftKings' contests for this slate are not stored, so no chooser run can be tied to it."
+    elif not runs:
+        notice = f"{slate.label}: no chooser run on file chose for its contests."
+    else:
+        notice = f"{slate.label}: the chooser runs that chose for its contests ({len(runs)})."
+    return runs, notice
 
 
 def _run_jobs(name: str, tail: int = 14) -> list[dict]:
@@ -391,7 +445,7 @@ def backtest_slate_page(request: Request, key: str):
     with _session() as session:
         view = hub.slate_view(session, key)
     if view is None:
-        return _redirect("/backtest", f"No run has replayed slate {key}.")
+        return _redirect(request, "/backtest", f"No run has replayed slate {key}.")
     return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, view=view))
 
 
@@ -400,18 +454,23 @@ async def backtest_pin(request: Request, name: str):
     """Keep (or stop keeping) the run's heavy files past the retention window (scripts/nfl/retention.py --pin / --unpin)."""
     run = hub.load_run(name)
     if run is None:
-        return _redirect("/backtest", f"No run named {name!r}.")
+        return _redirect(request, "/backtest", f"No run named {name!r}.")
     form = {k: str(v) for k, v in (await request.form()).items()}
     pinned = form.get("pinned") == "1"
     hub.set_pinned(run, pinned)
-    return _redirect(f"/backtest/{name}?step=results", f"{name} {'pinned: its repeats and database copy are kept' if pinned else 'unpinned: the sweep takes its heavy files 30 days after its last write'}.")
+    return _redirect(request, f"/backtest/{name}?step=results", f"{name} {'pinned: its repeats and database copy are kept' if pinned else 'unpinned: the sweep takes its heavy files 30 days after its last write'}.")
 
 
 @app.get("/backtest/{name}", response_class=HTMLResponse)
 def backtest_run_page(request: Request, name: str, step: Optional[str] = None):
+    if name == "tax":                                   # the fixed pages registered after this route; FastAPI matches in order
+        return backtest(request, r=request.query_params.get("r"))
+    if name == "plan":
+        q = request.query_params
+        return backtest_plan_page(request, since=q.get("since"), until=q.get("until"), menu=q.get("menu"))
     run = hub.load_run(name)
     if run is None:
-        return _redirect("/backtest", f"No run named {name!r}.")
+        return _redirect(request, "/backtest", f"No run named {name!r}.")
     step = hub.step_for(run, step)
     ctx = {"run": run, "step": step, "runs": [], "data": None, "slates": [], "models": {}, "view": None, "jobs": _run_jobs(name),
            "msg": request.query_params.get("msg")}
@@ -431,7 +490,7 @@ def backtest_run_page(request: Request, name: str, step: Optional[str] = None):
                     hub.save_run(run)
                     ctx["run"] = run
     except ValueError as e:
-        return _redirect("/backtest", f"Could not read the run: {e}")
+        return _redirect(request, "/backtest", f"Could not read the run: {e}")
     return templates.TemplateResponse(request, "backtest_hub.html", _ctx(request, **ctx))
 
 
@@ -439,7 +498,7 @@ def backtest_run_page(request: Request, name: str, step: Optional[str] = None):
 async def backtest_fetch(request: Request, name: str):
     run = hub.load_run(name)
     if run is None:
-        return _redirect("/backtest", f"No run named {name!r}.")
+        return _redirect(request, "/backtest", f"No run named {name!r}.")
     form = await request.form(max_fields=100000, max_files=10)
     keys = [str(k) for k in form.getlist("key")]
     with _session() as session:
@@ -451,37 +510,37 @@ async def backtest_fetch(request: Request, name: str):
         run.setdefault("jobs", []).append({"id": j.id, "name": label, "at": datetime.now().isoformat(timespec="seconds")})
     run["status"] = "data"
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}", f"Started {len(jobs)} fetch job(s) (see Jobs). Reload this page to re-check the window." if jobs else "Nothing ticked.")
+    return _redirect(request, f"/backtest/{name}", f"Started {len(jobs)} fetch job(s) (see Jobs). Reload this page to re-check the window." if jobs else "Nothing ticked.")
 
 
 @app.post("/backtest/{name}/settle")
 async def backtest_settle(request: Request, name: str):
     run = hub.load_run(name)
     if run is None:
-        return _redirect("/backtest", f"No run named {name!r}.")
+        return _redirect(request, "/backtest", f"No run named {name!r}.")
     form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
     j = runner.submit(f"{name}: settle {run['since']}..{run['until']}", hub.settle_command(run, form.get("username") or None, scrape=bool(form.get("scrape"))),
                       meta={"step": "settle", "run": name})
     run.setdefault("jobs", []).append({"id": j.id, "name": "settle", "at": datetime.now().isoformat(timespec="seconds")})
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}", "Settling the window (see Jobs); reload to re-check.")
+    return _redirect(request, f"/backtest/{name}", "Settling the window (see Jobs); reload to re-check.")
 
 
 @app.post("/backtest/{name}/continue")
 async def backtest_continue(request: Request, name: str):
     run = hub.load_run(name)
     if run is None:
-        return _redirect("/backtest", f"No run named {name!r}.")
+        return _redirect(request, "/backtest", f"No run named {name!r}.")
     run["status"] = "contests"
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}?step=contests")
+    return _redirect(request, f"/backtest/{name}?step=contests")
 
 
 @app.post("/backtest/{name}/contests")
 async def backtest_contests(request: Request, name: str):
     run = hub.load_run(name)
     if run is None:
-        return _redirect("/backtest", f"No run named {name!r}.")
+        return _redirect(request, "/backtest", f"No run named {name!r}.")
     form = await request.form(max_fields=100000, max_files=10)
     picks = {}
     for cid in form.getlist("pick"):
@@ -490,14 +549,14 @@ async def backtest_contests(request: Request, name: str):
         except ValueError:
             picks[str(int(cid))] = 1
     if not picks:
-        return _redirect(f"/backtest/{name}?step=contests", "Tick at least one contest.")
+        return _redirect(request, f"/backtest/{name}?step=contests", "Tick at least one contest.")
     with _session() as session:
         limits = {str(c["contest_id"]): int(c["max_entries"]) for sl in hub.contests_view(session, run, top=10 ** 6) for c in sl["contests"]}
     picks = {cid: min(n, limits.get(cid, n)) for cid, n in picks.items()}
     run["picks"] = picks
     run["status"] = "params"
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}?step=params")
+    return _redirect(request, f"/backtest/{name}?step=params")
 
 
 def _replay_in_progress(name: str) -> Optional[str]:
@@ -513,10 +572,10 @@ async def backtest_rerun(request: Request, name: str):
     """Run the saved parameters again (after a fix, or when the replay found nothing)."""
     run = hub.load_run(name)
     if run is None or not run.get("picks") or not run.get("params"):
-        return _redirect(f"/backtest/{name}", "Nothing to rerun: choose contests and parameters first.")
+        return _redirect(request, f"/backtest/{name}", "Nothing to rerun: choose contests and parameters first.")
     busy = _replay_in_progress(name)
     if busy:
-        return _redirect(f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
+        return _redirect(request, f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
     form = {k: str(v) for k, v in (await request.form()).items()}
     resume = form.get("mode") == "resume"
     hub.write_selection(run)
@@ -528,7 +587,7 @@ async def backtest_rerun(request: Request, name: str):
                                        {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
     run["status"] = "running"
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}?step=results", f"Running {name} again (see the progress below).")
+    return _redirect(request, f"/backtest/{name}?step=results", f"Running {name} again (see the progress below).")
 
 
 @app.post("/backtest/{name}/resettle")
@@ -536,21 +595,21 @@ async def backtest_resettle(request: Request, name: str):
     """Re-settle the replayed slates against the live database and re-run the checks; no re-run of the pipeline."""
     run = hub.load_run(name)
     if run is None or not (hub.run_root(name) / "nfl").is_dir():
-        return _redirect(f"/backtest/{name}", "Nothing to settle yet.")
+        return _redirect(request, f"/backtest/{name}", "Nothing to settle yet.")
     j1 = runner.submit(f"{name}: settle results", hub.resettle_command(run), meta={"step": "resettle", "run": name})
     j2 = runner.submit(f"{name}: assumptions vs actuals", hub.validate_command(run), meta={"step": "validate", "run": name})
     run.setdefault("jobs", []).extend([{"id": j1.id, "name": "resettle", "at": datetime.now().isoformat(timespec="seconds")},
                                        {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
     run["status"] = "running"
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}?step=results", "Settling the results again against the current database (see the progress below).")
+    return _redirect(request, f"/backtest/{name}?step=results", "Settling the results again against the current database (see the progress below).")
 
 
 @app.post("/backtest/{name}/run")
 async def backtest_run(request: Request, name: str):
     run = hub.load_run(name)
     if run is None or not run.get("picks"):
-        return _redirect(f"/backtest/{name}?step=contests", "Choose contests first.")
+        return _redirect(request, f"/backtest/{name}?step=contests", "Choose contests first.")
     form = {k: str(v) for k, v in (await request.form(max_fields=100000, max_files=10)).items()}
     try:
         params = {"repeats": max(1, int(form.get("repeats") or 1)), "workers": max(1, int(form.get("workers") or 1)),
@@ -564,10 +623,10 @@ async def backtest_run(request: Request, name: str):
         if params["method"] not in ("greedy", "portfolio", "slate"):
             raise ValueError(params["method"])
     except ValueError:
-        return _redirect(f"/backtest/{name}?step=params", "The parameters must be numbers (and the chooser greedy, portfolio or slate).")
+        return _redirect(request, f"/backtest/{name}?step=params", "The parameters must be numbers (and the chooser greedy, portfolio or slate).")
     busy = _replay_in_progress(name)
     if busy:
-        return _redirect(f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
+        return _redirect(request, f"/backtest/{name}?step=results", f"A replay of this run is still going (job {busy}); cancel it on the Jobs page before starting another.")
     run["params"] = params
     hub.write_selection(run)
     hub.mark_launched(run)
@@ -577,7 +636,7 @@ async def backtest_run(request: Request, name: str):
                                        {"id": j2.id, "name": "validate", "at": datetime.now().isoformat(timespec="seconds")}])
     run["status"] = "running"
     hub.save_run(run)
-    return _redirect(f"/backtest/{name}?step=results", f"Running {name}: {len(run['picks'])} contests, {params['repeats']} repeat(s) (see Jobs).")
+    return _redirect(request, f"/backtest/{name}?step=results", f"Running {name}: {len(run['picks'])} contests, {params['repeats']} repeat(s) (see Jobs).")
 
 
 @app.get("/backtest/tax", response_class=HTMLResponse)
@@ -611,10 +670,10 @@ async def backtest_report(request: Request):
         bankroll = float(form.get("bankroll") or 0)
         tax_year = int(form["tax_year"]) if form.get("tax_year") else None
     except (ValueError, KeyError):
-        return _redirect("/backtest/tax", "Since / until must be dates (YYYY-MM-DD); bankroll and tax year numbers.")
+        return _redirect(request, "/backtest/tax", "Since / until must be dates (YYYY-MM-DD); bankroll and tax year numbers.")
     cmd = bv.report_command(root, since, until, bankroll, tax_year)
     runner.submit(f"Backtest report: {root.name} {since}..{until}", cmd, meta={"step": "backtest_report", "form": form})
-    return _redirect("/backtest/tax", f"Building the report for {root.name} {since}..{until}; it appears here when the job finishes (see Jobs).")
+    return _redirect(request, "/backtest/tax", f"Building the report for {root.name} {since}..{until}; it appears here when the job finishes (see Jobs).")
 
 
 @app.get("/validate", response_class=HTMLResponse)
@@ -648,7 +707,7 @@ async def validate_run(request: Request):
                 datetime.fromisoformat(v)
         repeat = int(form.get("repeat") or 0)
     except ValueError:
-        return _redirect("/validate", "Since / until must be dates (YYYY-MM-DD); repeat a number.")
+        return _redirect(request, "/validate", "Since / until must be dates (YYYY-MM-DD); repeat a number.")
     root = None
     if mode.startswith("replay:"):
         root = vv.OUTPUT_DIR / Path(mode.split(":", 1)[1]).name
@@ -657,7 +716,7 @@ async def validate_run(request: Request):
     cmd = vv.validate_command("replay" if root else "live", since, until, root, repeat)
     label = f"replay {root.name} repeat {repeat}" if root else f"live {since}..{until}"
     runner.submit(f"Validation: {label}", cmd, meta={"step": "validate", "form": form})
-    return _redirect("/validate", f"Running the validation ({label}); it appears here when the job finishes (see Jobs).")
+    return _redirect(request, "/validate", f"Running the validation ({label}); it appears here when the job finishes (see Jobs).")
 
 
 @app.get("/dupes", response_class=HTMLResponse)
@@ -696,17 +755,17 @@ async def models_run(request: Request):
         params = {k: int(form.get(k) or mv.DEFAULTS[k]) for k in mv.STAGE_PARAMS[comp["through"]]}
         run = mv.new_run(comp["key"], since, until, params, label=form.get("label", ""))
     except ValueError:
-        return _redirect(back, "Since / until must be dates (YYYY-MM-DD); the parameters numbers.")
+        return _redirect(request, back, "Since / until must be dates (YYYY-MM-DD); the parameters numbers.")
     busy = next((j for j in runner.active() if (j.meta or {}).get("step") == "replay"), None)
     if busy is not None:                   # two replays at once doubled the memory and froze the machine once
-        return _redirect(back, f"A replay is already queued or running ({busy.name}); wait for it or cancel it on the Jobs page.")
+        return _redirect(request, back, f"A replay is already queued or running ({busy.name}); wait for it or cancel it on the Jobs page.")
     j1 = runner.submit(f"models {comp['key']}: replay through {comp['through']} {since}..{until}", mv.replay_command(run),
                        meta={"step": "replay", "run": f"models/{comp['key']}/{run['name']}"})
     j2 = runner.submit(f"models {comp['key']}: score {run['name']}", mv.validate_command(run),
                        meta={"step": "validate", "run": f"models/{comp['key']}/{run['name']}"})
     run["jobs"] = [{"id": j1.id, "name": "replay"}, {"id": j2.id, "name": "validate"}]
     mv.save_run(run)
-    return _redirect(f"{back}&r={run['name']}", f"Running the {comp['label'].lower()} test through the {comp['through']} stage (see Jobs).")
+    return _redirect(request, f"{back}&r={run['name']}", f"Running the {comp['label'].lower()} test through the {comp['through']} stage (see Jobs).")
 
 
 @app.get("/backtest/plan", response_class=HTMLResponse)
@@ -735,36 +794,41 @@ async def backtest_plan_run(request: Request):
     try:
         datetime.fromisoformat(since); datetime.fromisoformat(until)
     except ValueError:
-        return _redirect("/backtest/plan", "Since / until must be dates (YYYY-MM-DD).")
+        return _redirect(request, "/backtest/plan", "Since / until must be dates (YYYY-MM-DD).")
     back = f"/backtest/plan?since={since}&until={until}"
     if action == "replay":
         root = pv.replay_root(since, until)
         runner.submit(f"Replay {since}..{until}", pv.replay_command(since, until, root), meta={"step": "replay", "form": form})
         runner.submit(f"Validation: replay {root.name}", pv.validate_replay_command(root, f"replay {since}..{until}"), meta={"step": "validate", "form": form})
-        return _redirect(back, f"Replaying the window into {root.name}, then validating it (see Jobs; the report appears under Validation).")
+        return _redirect(request, back, f"Replaying the window into {root.name}, then validating it (see Jobs; the report appears under Validation).")
     if action == "fetch_actuals":
         runner.submit("Fetch actuals (schedule, box scores, DST)", pv.fetch_actuals_command(), meta={"step": "fetch_actuals"})
-        return _redirect(back, "Fetching box scores (see Jobs). nflverse publishes a day or two after the games.")
+        return _redirect(request, back, "Fetching box scores (see Jobs). nflverse publishes a day or two after the games.")
     if action == "scrape":
         with _session() as session:
             plan = pv.plan_view(session, since, until, form.get("menu", ""))
         ids = plan["unscraped_ids"]
         if not ids:
-            return _redirect(back, "Nothing to scrape: every contest in the pool is already scraped.")
+            return _redirect(request, back, "Nothing to scrape: every contest in the pool is already scraped.")
         runner.submit(f"Scrape {len(ids)} contests", pv.scrape_command(ids, form.get("username") or None), meta={"step": "scrape"})
-        return _redirect(back, f"Scraping {len(ids)} contests through the saved Chrome profile (see Jobs). A 403 in the log means DraftKings wants a fresh login there.")
+        return _redirect(request, back, f"Scraping {len(ids)} contests through the saved Chrome profile (see Jobs). A 403 in the log means DraftKings wants a fresh login there.")
     if action == "build_models":
         runner.submit(f"Build models as of {since}", pv.build_models_command(since), meta={"step": "build_models"})
-        return _redirect(back, f"Building the as-of {since} model version (see Jobs).")
+        return _redirect(request, back, f"Building the as-of {since} model version (see Jobs).")
     if action == "backfill":
         runner.submit(f"Backfill captures {since}..{until}", pv.backfill_command(since, until), meta={"step": "backfill"})
-        return _redirect(back, "Backfilling captures from projection snapshots and stored game lines (no props; add --odds on the command line to buy them).")
-    return _redirect(back, f"Unknown action {action!r}.")
+        return _redirect(request, back, "Backfilling captures from projection snapshots and stored game lines (no props; add --odds on the command line to buy them).")
+    return _redirect(request, back, f"Unknown action {action!r}.")
 
 
 @app.get("/downloads", response_class=HTMLResponse)
-def downloads(request: Request):
-    return templates.TemplateResponse(request, "downloads.html", _ctx(request, files=_outputs()))
+def downloads(request: Request, slate: Optional[SlateInfo] = None, notice: Optional[str] = None):
+    files = _outputs()
+    if slate is not None and not slate.loaded:
+        runs, notice = _slate_runs(slate, notice)
+        stamps = {r["stamp"] for r in runs}
+        files = [f for f in files if f["stamp"] in stamps]
+    return templates.TemplateResponse(request, "downloads.html", _ctx(request, page="downloads", slate=slate, notice=notice, files=files))
 
 
 @app.get("/downloads/{name}")
@@ -775,3 +839,125 @@ def download(name: str):
     if not path.is_file():
         raise HTTPException(404)
     return FileResponse(path, media_type="text/csv" if name.endswith(".csv") else "application/json", filename=name)
+
+
+# ------------------------------------------------------------------ the slate index (ivan.web.sports) and the slate page
+def _working() -> tuple[Optional[str], Optional[datetime], str, int]:
+    """(slate key, first lock, mode, players) of the slate in the working tables: its lock is the pool's first game time and its
+    key the ingest capture archived at that lock (nfl_player carries no draft group)."""
+    from ivan.core import archive
+    with _session() as session:
+        from sqlalchemy import text
+        n, lock, cpt = session.execute(text("SELECT count(*), min(gametime), sum(CASE WHEN roster_slot_id = 511 OR slot_label = 'CPT' THEN 1 ELSE 0 END) FROM nfl_player")).one()
+        if not n:
+            return None, None, "", 0
+        lock = datetime.fromisoformat(lock) if isinstance(lock, str) else lock
+        caps = [c for c in archive.captures(session, "nfl", since=lock - timedelta(minutes=1), until=lock + timedelta(minutes=1)) if c.source == "ingest"] if lock else []
+        key = max(caps, key=lambda c: c.captured_at).slate_key if caps else (f"lock-{lock:%Y%m%d-%H%M}" if lock else "working")
+        mode = (caps[-1].mode if caps else ("showdown" if cpt else "classic"))
+        return str(key), lock, mode, int(n)
+
+
+def nfl_days(now: datetime) -> list[Day]:
+    """Every NFL slate by day: the DraftKings lobby (showdown and classic), the archive's captures with the settle job's status,
+    the slates the backtest runs replayed, and the working slate (loaded)."""
+    from ivan.core import archive, slates as slate_status
+    out: dict[str, SlateInfo] = {}
+    try:
+        for s in slates():
+            if not s.get("supported"):
+                continue
+            key = str(s["id"])
+            out[key] = SlateInfo(key=key, day=lobby_day(s.get("start"), s.get("start_utc"), now), lock=lobby_lock(s.get("start_utc")),
+                                 label=f"{s.get('game_type')} · {str(s.get('name') or '')[:40]}", source="lobby", mode=str(s.get("game_type") or "").lower(),
+                                 detail=f"{s.get('contests') or 0} contests in the lobby")
+    except Exception as e:   # noqa: BLE001 - the lobby is a convenience
+        print(f"nfl: lobby unavailable: {type(e).__name__}: {e}", flush=True)
+    with _session() as session:
+        rows = archive.slates(session, "nfl")
+        status = slate_status.by_key(session, "nfl", [r.slate_key for r in rows]) if rows else {}
+        for r in rows:
+            st = status.get(r.slate_key)
+            bits = [f"{r.n_players} players captured"]
+            if st is not None:
+                if st.our_entries:
+                    bits.append(f"{st.our_entries} of our entries")
+                if st.played:
+                    bits.append(f"{len(json.loads(st.played) or [])} contests played")
+            key = str(r.slate_key)
+            if key in out:
+                out[key].source = "archive"; out[key].detail = " · ".join(bits); out[key].status = st.status if st else ""
+                out[key].lock = out[key].lock or r.lock
+                continue
+            out[key] = SlateInfo(key=key, day=r.lock.date(), lock=r.lock, label=f"{r.mode} · {r.lock:%H:%M}", source="archive", mode=r.mode,
+                                 detail=" · ".join(bits), status=st.status if st else "")
+    try:
+        for s in hub.slate_index():                              # slates a run replayed whose capture is elsewhere (or gone)
+            key = str(s["slate_key"])
+            if key in out:
+                continue
+            lock = datetime.fromisoformat(s["lock"])
+            out[key] = SlateInfo(key=key, day=lock.date(), lock=lock, label=f"{s['mode']} · {lock:%H:%M}", source="archive", mode=s["mode"],
+                                 detail=f"replayed in {s.get('runs', '?')} run(s); no capture on this machine")
+    except Exception:   # noqa: BLE001
+        pass
+    key, lock, mode, n = _working()
+    if key is not None:
+        if key not in out:
+            out[key] = SlateInfo(key=key, day=(lock or now).date(), lock=lock, label=f"{mode} · {lock:%H:%M}" if lock else "working slate", mode=mode,
+                                 source="working", detail=f"{n} players in the working tables")
+        out[key].loaded = True
+        out[key].source = "working"
+    return group_days(list(out.values()), now)
+
+
+def nfl_summary(now: datetime) -> dict:
+    days = nfl_days(now)
+    loaded = next((s for d in days for s in d.slates if s.loaded), None)
+    cur = runner.current()
+    ahead = [d for d in days if d.day >= now.date()]
+    nxt = min(ahead, key=lambda d: d.day) if ahead else None
+    return {"loaded": loaded, "job": cur.name if cur else None, "note": "", "n_days": len(days), "next": nxt.label if nxt else ""}
+
+
+def _default_view(slate: SlateInfo, now: datetime) -> str:
+    return "pipeline" if (slate.loaded or slate.day >= now.date()) else "backtest"
+
+
+def _slate_backtest_page(request: Request, slate: SlateInfo):
+    """The slate's builds (ivan.sports.nfl.run_index, scripts/nfl/slate_runs.py) and what the archive holds for it."""
+    with _session() as session:
+        view = hub.slate_view(session, slate.key)
+    return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, page="backtest", slate=slate, view=view))
+
+
+@app.get("/{day}/{key}/", response_class=HTMLResponse)
+def slate_page(request: Request, day: str, key: str, view: Optional[str] = None):
+    """One slate: sport › day › slate › view. The working slate's views are the flat pages; a lobby slate opens on the pipeline with
+    step 1 set to ingest it; a past slate opens on its backtest."""
+    d = frame.parse_day(day)
+    now = datetime.now()
+    s = find_slate(nfl_days(now), key) or SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
+    view = view if view in dict(VIEWS) else _default_view(s, now)
+    if view == "backtest":
+        return _slate_backtest_page(request, s)
+    if view == "pipeline":
+        return _pipeline_page(request, s)
+    notice = None if s.loaded else f"{s.label} is not the working slate: this page shows the working slate's data. Its own builds are under backtest."
+    if view == "players":
+        return players(request, slate=s, notice=notice)
+    if view == "contests":
+        return contests(request, slate=s, notice=notice)
+    if view == "choose":
+        return choose_page(request, slate=s, notice=notice)
+    if view == "exposures":
+        return exposures(request, slate=s, notice=notice)
+    return downloads(request, slate=s, notice=notice)
+
+
+def sport() -> Sport:
+    """The description ivan.web.main mounts: the NFL sub-app with the picker at its root."""
+    global SPORT
+    SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nfl_days, summary=nfl_summary, tools=TOOLS, default_view=_default_view, app=app)
+    frame.install_picker(app, SPORT)
+    return SPORT

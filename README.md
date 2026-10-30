@@ -34,17 +34,16 @@ against the repository root, so scripts run from anywhere.
 
 ```bash
 # NBA: a slate day on the laptop (docs/nba/game-day.md)
-python scripts/nba/serve.py                                  # the desk at http://127.0.0.1:8001: load the slate, work the teams, Publish
+python scripts/serve.py                                      # the UI at http://127.0.0.1:8000: NBA, then the day, then the slate; work the teams, Publish
 python scripts/nba/generate_lineups.py 10000 8 && python scripts/nba/sim.py && python scripts/nba/choose.py --no-prompt
 python scripts/nba/lateswap.py                               # after lock
 
-# NFL: the five steps (docs/nfl/pipeline.md), or the same five as buttons at http://localhost:8000
+# NFL: the five steps (docs/nfl/pipeline.md), or the same five as buttons under http://127.0.0.1:8000/nfl/
 python scripts/nfl/ingest.py -p --update-odds true
 python scripts/nfl/get_contest_ids.py && python scripts/nfl/get_payouts.py
 python scripts/nfl/generate_lineups.py 10000 8
 python scripts/nfl/sim.py
 python scripts/nfl/choose.py --no-prompt
-python scripts/nfl/serve.py                                  # the web UI
 
 # MMA (docs/mma/README.md)
 python scripts/mma/ingest.py                                 # then fill the two odds CSVs and run it again

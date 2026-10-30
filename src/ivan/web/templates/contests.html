@@ -12,7 +12,7 @@
       {% for x in contests %}<option value="{{ x.id }}" {% if x.id == picked.id %}selected{% endif %}>{{ x.name }}{% if x.counts.bad %} — {{ x.counts.bad }} failed check(s){% elif x.counts.warn %} — {{ x.counts.warn }} warning(s){% endif %}</option>{% endfor %}
     </select></label>
   </form>
-  <span class="small muted"> · simulated {{ picked.created_at|dt }} · <a href="/contests/{{ picked.id }}.json">raw report (JSON)</a></span>
+  <span class="small muted"> · simulated {{ picked.created_at|dt }} · <a href="{{ root }}/contests/{{ picked.id }}.json">raw report (JSON)</a></span>
   <div class="tiles">
     <div class="tile"><div class="v">{{ c.mode }}</div><div class="l">{{ c.contest_type }} · id {{ c.id }}</div></div>
     <div class="tile"><div class="v">{{ c.entry_fee|money }}</div><div class="l">entry fee</div></div>

@@ -1,15 +1,34 @@
-# The NFL web app
+# The NFL screens
 
-`src/ivan/web/app.py` with `pipeline_nfl.py` (the five steps as the UI sees them), `jobs.py` (one job at a
-time), `backtest_hub.py` and the `*_view.py` readers. Served by `scripts/nfl/serve.py` (port 8000 on the
-laptop; the server's `ivan-web` unit). No login: bind it to a LAN or Tailscale address. Uploads go to
-`data/nfl/input/web/`, outputs to `data/nfl/output/web/`, job logs to `data/nfl/jobs/`. Everything the UI
-runs is a script from `scripts/nfl/`, so the job log is the script's output.
+`src/ivan/web/nfl_app.py` with `pipeline_nfl.py` (the five steps as the UI sees them), `jobs.py` (one job at a
+time), `backtest_hub.py` and the `*_view.py` readers, mounted at `/nfl` inside the one Ivan UI
+(`scripts/serve.py`, [README.md](README.md)); the login is the site's. Uploads go to `data/nfl/input/web/`,
+outputs to `data/nfl/output/web/`, job logs to `data/nfl/jobs/`. Everything the UI runs is a script from
+`scripts/nfl/`, so the job log is the script's output.
 
 ## Getting in (for a user on the server)
 
-The site is reachable through Tailscale only. Accept the invite, install Tailscale, connect, open
-**http://ivan.prattflix.com**. No Tailscale, no site.
+Through Tailscale: accept the invite, install Tailscale, connect, open **http://ivan.prattflix.com** and
+sign in with the site's password. The Cloudflare tunnel (`nba.prattflix.com`) reaches the same site.
+
+## The slate
+
+`/nfl/` lists the days with slates, `/nfl/<day>/` a day's slates, `/nfl/<day>/<key>/` one slate with the view
+dropdown: **pipeline**, **players**, **contests**, **choose**, **exposures**, **downloads**, **backtest**.
+
+- The **working slate** (the one in the database's working tables, marked *loaded*) shows the pages below as they
+  are. The flat addresses (`/nfl/pipeline`, `/nfl/players`, ...) are the same pages for the working slate.
+- A **lobby slate** not yet ingested opens on the pipeline with step 1 set to ingest it; ingesting makes it the
+  working slate (the old one's lineups and sims go with the reset buttons, as before).
+- A **past slate** opens on its **backtest**: the slate's builds page (every run that replayed it, with the commit,
+  the parameters and the result; `scripts/nfl/slate_runs.py <key>`, [../nfl/backtest-and-validation.md](../nfl/backtest-and-validation.md))
+  and what the archive holds for it. Its other views read what the pipeline left on disk for it, tied to the
+  slate through DraftKings' contest list (`historical_contest_information`): **players** is the projections
+  artifact written at its ingest (`output/projections/projections.<stamp>.csv`, the newest before its lock on its
+  day); **contests** the sim reports of its contests (a later sim of the same contest replaces its report);
+  **choose** and **exposures** the chooser runs that chose for its contests, the web runs and the terminal's
+  (`output/chosen_entries.*`); **downloads** the web runs' files. A notice at the top says which slate the
+  page is about and what was found.
 
 ## The front page: the five steps
 

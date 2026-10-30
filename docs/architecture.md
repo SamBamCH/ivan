@@ -7,7 +7,8 @@ scripts per sport. Every sport follows the same pipeline shape and shares the sa
 scripts/<sport>/*.py          command-line entry points: argparse around one function in the package
 scripts/replay.py             replay archived slates with today's code (any sport with an adapter)
 scripts/feed_server.py        serve the data feed over HTTP
-scripts/desk_password.py      hash a desk password into .env
+scripts/serve.py              the web UI (ivan.web.main): every sport, one password
+scripts/password.py           hash the site's password into .env
 src/ivan/
 ├── core/                     sport-agnostic infrastructure (below)
 ├── database/                 engine/session factory (init_db, get_session, read_sql, safe_commit, add_missing_columns)
@@ -82,7 +83,7 @@ with the date and the measurement that set it. `.env` at the repository root (gi
 | `IVAN_SEED`, `IVAN_AS_OF`, `IVAN_RUN_DIR` | reproducibility, the replay clock, the run directory (set by the replay driver) |
 | `IVAN_SYNC_HOST`, `IVAN_REMOTE_ROOT`, `IVAN_NFL_DB` | the NFL reference sync to the server |
 | `IVAN_FEED_PUSH`, `IVAN_FEED_URL`, `IVAN_FEED_TOKEN` | the NBA feed (producer destination; consumer source) |
-| `IVAN_DESK_PASSWORD_HASH`, `IVAN_DESK_PASSWORD`, `IVAN_DESK_PUBLIC` | the desk login |
+| `IVAN_PASSWORD_HASH`, `IVAN_PASSWORD`, `IVAN_PUBLIC`, `IVAN_SPORTS` | the site's login (the old `IVAN_DESK_*` names still work); which sports `serve.py` mounts |
 | `IVAN_DK_USERNAME` | the DraftKings scrapes through the Chrome profile |
 | `GLPK_PATH` | the ILP solver (`glpsol`); otherwise PATH, otherwise PuLP's CBC |
 

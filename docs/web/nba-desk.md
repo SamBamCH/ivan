@@ -2,25 +2,28 @@
 
 `src/ivan/web/nba_desk.py` (FastAPI + Jinja + htmx, templates `src/ivan/web/templates/nba_desk.html`
 and `_nba_*.html`). One page to manage a slate in the last minutes before lock, plus the pipeline
-panel, the exposures and the late swap. Served on its own by `scripts/nba/serve.py` (port 8001)
-or mounted at `/nba` inside the NFL app (`ivan.web.app`), which is how the server runs it. Every link
-carries the mount prefix (`root`). The flow of a day is [../nba/game-day.md](../nba/game-day.md); this
-page is what is on the screen.
+panel, the exposures and the late swap. Mounted at `/nba` inside the one Ivan UI (`scripts/serve.py`,
+[README.md](README.md)); the login is the site's. Every link carries the mount prefix (`root`). The flow of
+a day is [../nba/game-day.md](../nba/game-day.md); this page is what is on the screen.
 
 ## Header
 
-- **Slate picker**: a day, then that day's classic draft groups (from the DK lobby for today and
-  tomorrow, from the archive for past days; the loaded slate is always listed). Picking a slate goes at once, and
-  the ‹ › arrows step through every slate in time order. A slate of **today or tomorrow loads** into the desk (fetched,
-  projected; the slate it replaces keeps its lineups, sims and edits for when it comes back). A slate of an
-  **earlier day opens its backtest** (below), read only: nothing is loaded or deleted. The backtest's **Restore into
-  the desk** button loads a past slate from its archive capture when it is to be re-worked.
-  While a load or a refresh runs the board shows its progress; when it is done the whole page reloads, so the
-  picker and the header counts show the new slate.
-- **View** dropdown beside the picker: **pre-lock** (the slate view below, `view=games`), **post-lock** (the late swap,
-  `view=lateswap`), **backtest**. Opening the desk with no view picks one from the loaded slate
+The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README.md)) with the desk's own items after it.
+
+- **Slate**: `/nba/` lists the days, `/nba/<day>/` a day's classic draft groups (from the DK lobby for today and
+  tomorrow, from the archive for past days; the loaded slate is always listed), `/nba/<day>/<draft group>/` one slate.
+  In the bar the day and slate dropdowns and the ‹ › arrows step through every slate in time order. A slate of
+  **today or tomorrow** that is not loaded **loads** when picked in the bar (fetched, projected; the slate it replaces
+  keeps its lineups, sims and edits for when it comes back; its page shows a load button instead when opened by its
+  address, so a link never fetches). A slate of an **earlier day opens its backtest** (below), read only: nothing is
+  loaded or deleted. The backtest's **Restore into the desk** button loads a past slate from its archive capture when
+  it is to be re-worked. While a load or a refresh runs the board shows its progress; when it is done the whole page
+  reloads. Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
+- **View** dropdown: **pre-lock** (the slate view below, `view=games`), **post-lock** (the late swap,
+  `view=lateswap`), **backtest**. Opening the loaded slate with no view picks one from its lock
   (`slate_backtest.mode_for`): before its first lock pre-lock, after it post-lock, and a slate of an earlier day its
   backtest. The old `view=players` and `view=exposures` links open pre-lock, where both are sections now.
+- **locks in / locked**: the loaded slate's countdown (prefixed "loaded slate" on another slate's page).
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
   fetches props at the offsets and publishes + pushes every 15 minutes while nobody is editing here; the
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See
@@ -282,13 +285,14 @@ Refresh and compares what the desk shows with the bundle the laptop published.
 
 ## Trying a branch's desk before it is merged
 
-A worktree has no venv, `.env` or `data/`. Run its desk on another port with the main checkout's interpreter and
-database, and `PYTHONPATH=src` so the worktree's code wins over the editable install:
+A worktree has no venv, `.env` or `data/`. Run the site on another port with the main checkout's interpreter and
+database, and `PYTHONPATH=src` so the worktree's code wins over the editable install ([README.md](README.md) has
+the read-only form):
 
 ```bash
 cd ~/ivan/.claude/worktrees/<branch>
 IVAN_NBA_DB_URL=sqlite:////home/sam-pratt/ivan/data/nba/nba_history.sqlite PYTHONPATH=src \
-  ~/ivan/venv/bin/python scripts/nba/serve.py --port 8002      # http://127.0.0.1:8002/
+  ~/ivan/venv/bin/python scripts/serve.py --sports nba --port 8002      # http://127.0.0.1:8002/nba/
 ```
 
 Views that read the raw archive (a past game's score strip reads the stored play-by-play) need the main checkout's:
@@ -305,11 +309,8 @@ of the sqlite file (2.7 GB) for a free hand. A Refresh also reads the news, whic
 
 ## Login and public access
 
-`ivan.web.auth` puts a login page at `<root>/login` when `IVAN_DESK_PASSWORD_HASH` (or the plain
-`IVAN_DESK_PASSWORD`) is set: pbkdf2 hash, a signed cookie (secret in `data/.desk_secret`), per-address
-and global throttling of guesses. On the server the desk is also on the internet through a Cloudflare
-tunnel that forwards `/nba` only (`deploy/setup_cloudflare_tunnel.sh`); the NFL app's middleware
-answers 404 to any other path that arrives with Cloudflare's headers, and the desk refuses to serve
-through the tunnel without a password. The tunnel can cache a `.csv` URL at the edge: the CSV routes
-send no-store headers (fix of 2026-10-26, see the memory note on the desk CSV cache); a bypass-cache
+The site's one password (`ivan.web.auth`, [README.md](README.md#login-and-public-access)): `IVAN_PASSWORD_HASH`
+in `.env`, the login page at `/login`. On the server the whole site is also on the internet through the
+Cloudflare tunnel (`deploy/setup_cloudflare_tunnel.sh`), which refuses to serve without a password. The tunnel
+can cache a `.csv` URL at the edge: the CSV routes send `no-store` headers (fix of 2026-10-26); a bypass-cache
 rule for the hostname is the belt and braces.

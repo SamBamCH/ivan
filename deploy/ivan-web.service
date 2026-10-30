@@ -1,7 +1,7 @@
 # Rendered and installed by deploy/harden_server.sh (or bootstrap_server.sh --service).
 # The service runs as an unprivileged user and can only write under data/ and its cache.
 [Unit]
-Description=Ivan NFL web UI
+Description=Ivan web UI (every sport)
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
@@ -12,7 +12,7 @@ Group=__USER__
 WorkingDirectory=__ROOT__
 # host/port are rendered by deploy/install_unit.sh: the Tailscale IP on port 80, so the app is
 # only reachable over the tailnet regardless of firewall state, and http://<name>/ needs no port.
-ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nfl/serve.py --host __HOST__ --port __PORT__
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/serve.py --host __HOST__ --port __PORT__
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

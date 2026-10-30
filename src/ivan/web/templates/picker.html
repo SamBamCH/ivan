@@ -1,0 +1,60 @@
+{% from "_frame.html" import bar %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ivan · {{ frame.sport.label }}{% if day %} · {{ day.label }}{% endif %}</title>
+<link rel="icon" type="image/svg+xml" href="{{ frame.site }}/static/favicon.svg">
+<link rel="stylesheet" href="{{ frame.site }}/static/ivan.css">
+</head>
+<body class="plain">
+<header>{{ bar(frame) }}</header>
+<main>
+  <h1>{{ frame.sport.label }} <span class="muted small">pick a date, then a slate</span></h1>
+  <div class="picker">
+    <div class="days">
+      {% set ns = namespace(past=false) %}
+      {% for d in days %}
+        {% if d.day < frame.now.date() and not ns.past %}{% set ns.past = true %}{% if not loop.first %}<div class="gap"></div>{% endif %}{% endif %}
+        <a href="{{ frame.root }}/{{ d.iso }}/" class="{{ 'on' if day and d.day == day.day }}">
+          <span>{{ d.label }}</span><span class="n">{{ d.slates|length }} slate{{ '' if d.slates|length == 1 else 's' }}{% if d.slates|selectattr('loaded')|list %} · loaded{% endif %}</span>
+        </a>
+      {% else %}
+        <p class="empty small">no slates known: the DraftKings lobby lists none and the archive is empty</p>
+      {% endfor %}
+    </div>
+    <div>
+      {% if day %}
+      <h2>{{ day.label }}</h2>
+      <div class="slates">
+        {% for s in day.slates %}
+        <div class="slate {{ 'loaded' if s.loaded }}">
+          <div class="when">{{ s.lock.strftime('%H:%M') if s.lock else 'no lock time' }}</div>
+          <div class="what">{{ s.label }}</div>
+          {% if s.detail %}<div class="detail">{{ s.detail }}</div>{% endif %}
+          <div class="badges">
+            {% if s.loaded %}<span class="badge loaded">loaded</span>{% endif %}
+            <span class="badge {{ s.source }}">{{ s.source }}</span>
+            {% if s.mode %}<span class="badge">{{ s.mode }}</span>{% endif %}
+            {% if s.status %}<span class="badge {{ s.status }}">{{ s.status }}</span>{% endif %}
+          </div>
+          <div class="acts">
+            <a class="primary" href="{{ s.path(frame.root) }}">open</a>
+            {% if s.load %}
+            <form method="post" action="{{ frame.root }}{{ s.load.url }}" style="display:inline">{% for k, v in s.load.fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button type="submit" title="{{ s.load.title or 'load this slate into the workspace' }}">{{ s.load.label or 'load' }}</button></form>
+            {% endif %}
+            <span class="small muted">slate {{ s.key }}</span>
+          </div>
+        </div>
+        {% else %}
+        <p class="empty">no slates on this day</p>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty">pick a day</p>
+      {% endif %}
+    </div>
+  </div>
+</main>
+</body>
+</html>

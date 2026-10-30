@@ -7,7 +7,17 @@
   .kv { display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:13px } .kv b { font-weight:500; color:#444 }
   table.runs td, table.runs th { font-size:12px; white-space:nowrap } table.runs td.wrap { white-space:normal }
 </style>
-<h1>Slate {{ view.slate_key }} <span class="muted small">{{ view.mode }} · lock {{ view.lock.strftime('%Y-%m-%d %H:%M') }} · <a href="/backtest">runs</a></span></h1>
+{% if not view %}
+<h1>Slate {{ slate.key if slate else '' }} <span class="muted small">{% if slate %}{{ slate.mode }} · {{ slate.day.strftime('%a %m-%d') }}{% if slate.lock %} {{ slate.lock.strftime('%H:%M') }}{% endif %} · {% endif %}<a href="{{ root }}/backtest">runs</a></span></h1>
+<div class="card">
+  <h2>Backtest</h2>
+  <p class="muted">No run has replayed this slate yet{% if slate and slate.detail %} ({{ slate.detail }}){% endif %}. A backtest of it is a run on the
+    <a href="{{ root }}/backtest">runs page</a> whose window covers {{ slate.day.strftime('%Y-%m-%d') if slate else 'its day' }}: the run's data step
+    says what the window still lacks (the capture, the contests, the standings, the box scores) and fetches it; the results come back here as the
+    slate's builds. Terminal: <code>scripts/nfl/slate_runs.py {{ slate.key if slate else '' }}</code>.</p>
+</div>
+{% else %}
+<h1>Slate {{ view.slate_key }} <span class="muted small">{{ view.mode }} · lock {{ view.lock.strftime('%Y-%m-%d %H:%M') }} · <a href="{{ root }}/backtest">runs</a></span></h1>
 
 <div class="card">
   <h2>What the archive holds <span class="muted small">the inputs every build of this slate replays from; kept for good</span></h2>
@@ -50,4 +60,5 @@
   </table>
   <p class="muted small">Sim and actual are this slate's contests in the run's report (the run page has the per-contest rows). A commit with * ran with uncommitted changes. "purged" runs kept their manifests, projections and report; the repeats and the database copy went in the 30-day sweep. Terminal: <code>scripts/nfl/slate_runs.py {{ view.slate_key }}</code>.</p>
 </div>
+{% endif %}
 {% endblock %}

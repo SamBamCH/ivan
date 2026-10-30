@@ -11,7 +11,7 @@
     {% else %}
       <p class="muted">None yet.</p>
     {% endif %}
-    <form method="post" action="/upload" enctype="multipart/form-data">
+    <form method="post" action="{{ root }}/upload" enctype="multipart/form-data">
       <input type="file" name="file" accept=".csv,text/csv" required>
       <button>Upload</button>
     </form>
@@ -23,7 +23,7 @@
 
 <h2>Pipeline — run top to bottom</h2>
 {% for step in steps %}
-<form class="card step" method="post" action="/run/{{ step.key }}">
+<form class="card step" method="post" action="{{ root }}/run/{{ step.key }}">
   <h3><span class="num">{{ loop.index }}</span>{{ step.title }}</h3>
   <p class="muted">{{ step.blurb }}</p>
   <div class="fields">
@@ -35,7 +35,7 @@
       {% endif %}
     {% endfor %}
     {% if step.key == 'ingest' %}
-      <div id="slates" hx-get="/partials/slates" hx-trigger="load" hx-swap="outerHTML"><span class="muted small">Loading slates from DraftKings…</span></div>
+      <div id="slates" hx-get="{{ root }}/partials/slates{% if pick %}?pick={{ pick }}{% endif %}" hx-trigger="load" hx-swap="outerHTML"><span class="muted small">Loading slates from DraftKings…</span></div>
     {% endif %}
     {% if step.key == 'choose' and weights_rows %}
       <div class="wide" style="flex-basis:100%">
@@ -69,8 +69,8 @@
 {% if outputs %}
 <div class="card">
   <h2>Latest output</h2>
-  <ul class="plain">{% for o in outputs %}<li><a href="/downloads/{{ o.name }}">{{ o.name }}</a> <span class="muted small">{{ o.kind }} · {{ o.mtime|time }}</span></li>{% endfor %}</ul>
-  <p class="small"><a href="/exposures">View exposures</a> · <a href="/downloads">All downloads</a></p>
+  <ul class="plain">{% for o in outputs %}<li><a href="{{ root }}/downloads/{{ o.name }}">{{ o.name }}</a> <span class="muted small">{{ o.kind }} · {{ o.mtime|time }}</span></li>{% endfor %}</ul>
+  <p class="small"><a href="{{ root }}/exposures">View exposures</a> · <a href="{{ root }}/downloads">All downloads</a></p>
 </div>
 {% endif %}
 {% endblock %}

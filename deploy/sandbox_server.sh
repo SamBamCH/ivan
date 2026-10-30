@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A sandbox consumer on the server: a second copy of the app in consumer mode, on its own port with its own data, fed by
 # the SAME directory the laptop pushes to (/opt/ivan/app/data/feed). Everything the brother's desk does happens here the
-# same way (the rsync push, the pull from disk, the server's code, the /nba mount, the consumer limits) except the
+# same way (the rsync push, the pull from disk, the server's code, the /nba mount, the one password, the consumer limits) except the
 # Cloudflare tunnel and his login: you reach it over an ssh tunnel with the password "sandbox". Break it freely; his desk
 # and his data are untouched.
 #
@@ -36,7 +36,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 [[ -e venv ]] || ln -s /opt/ivan/app/venv venv            # the same dependencies; PYTHONPATH below makes THIS tree's code win over the editable install
 mkdir -p data/nba/{input/rotations,output,models,jobs,logs,diagnostics/scorecard,derived,raw} data/feed-state \
          data/nfl/{input/web,output/web,models,jobs,sync,diagnostics}
-[[ -f .env ]] || printf 'IVAN_FEED_URL=%s\nIVAN_DESK_PASSWORD=sandbox\nIVAN_DESK_LIMITS=1\n' "$FEED" > .env
+[[ -f .env ]] || printf 'IVAN_FEED_URL=%s\nIVAN_PASSWORD=sandbox\nIVAN_DESK_LIMITS=1\n' "$FEED" > .env
 export PYTHONPATH="$SB/src"
 venv/bin/python scripts/nfl/create_db.py >/dev/null
 venv/bin/python - <<'PY'
@@ -47,7 +47,7 @@ PY
 venv/bin/python scripts/nba/feed.py pull --no-project 2>&1 | tail -2
 systemctl --user stop ivan-sandbox.service ivan-sandbox-pull.service 2>/dev/null || true
 systemd-run --user --unit ivan-sandbox --collect -p WorkingDirectory="$SB" -E PYTHONPATH="$SB/src" -E PYTHONUNBUFFERED=1 \
-  "$SB/venv/bin/python" "$SB/scripts/nfl/serve.py" --host 127.0.0.1 --port "$PORT" >/dev/null
+  "$SB/venv/bin/python" "$SB/scripts/serve.py" --host 127.0.0.1 --port "$PORT" >/dev/null
 # his 5-minute pull timer, as a loop: the sandbox picks up a push on its own and shows "new data · load" like his desk does
 systemd-run --user --unit ivan-sandbox-pull --collect -p WorkingDirectory="$SB" -E PYTHONPATH="$SB/src" -E PYTHONUNBUFFERED=1 \
   "$SB/venv/bin/python" "$SB/scripts/nba/feed.py" pull --loop 5 >/dev/null

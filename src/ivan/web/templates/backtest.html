@@ -30,7 +30,7 @@
     </table>
     {% if r.log_tail %}<pre class="log" style="margin-top:8px">{{ r.log_tail }}</pre>{% endif %}
   </details>
-  <form method="post" action="/backtest/report" style="margin-top:10px">
+  <form method="post" action="{{ root }}/backtest/report" style="margin-top:10px">
     <input type="hidden" name="root" value="{{ r.name }}">
     <div class="fields">
       <label>Since <input type="text" name="since" value="{{ r.since }}" style="width:120px;padding:5px 8px;font:inherit;border:1px solid #cfcfcf;border-radius:5px"></label>
@@ -55,7 +55,7 @@
       {% for x in reports %}<option value="{{ x.id }}" {% if x.id == view.id %}selected{% endif %}>{{ x.label }}</option>{% endfor %}
     </select></label>
   </form>
-  <span class="small muted"> · written {{ view.mtime|time }} · {% for f in view.files %}<a href="/backtest/file/{{ view.id }}/{{ f }}">{{ f }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>
+  <span class="small muted"> · written {{ view.mtime|time }} · {% for f in view.files %}<a href="{{ root }}/backtest/file/{{ view.id }}/{{ f }}">{{ f }}</a>{{ ' · ' if not loop.last }}{% endfor %}</span>
   <p class="muted small" style="margin:8px 0 0">{{ view.title }} · tax year {{ s.tax_year }} · {{ s.config }}{% if s.start_bankroll %} · bankroll {{ s.start_bankroll|money(0) }}{% endif %}</p>
   {% if y %}
   <div class="tiles">
@@ -120,7 +120,7 @@
       <td class="num">{% if loo %}{{ loo.mean_P|smoney }} ({{ loo.p_profit|pct1(0) }}){% endif %}</td></tr>{% endfor %}
   </table></div>
   {% endif %}
-  {% if 'repeats.png' in view.images %}<img class="plot" src="/backtest/file/{{ view.id }}/repeats.png" alt="repeats">{% endif %}
+  {% if 'repeats.png' in view.images %}<img class="plot" src="{{ root }}/backtest/file/{{ view.id }}/repeats.png" alt="repeats">{% endif %}
 </div>
 {% endif %}
 
@@ -181,7 +181,7 @@
       <td class="num">{{ r.est_tax|money(0) }}</td><td class="num">{{ r.phantom|money(0) }}</td><td class="num {{ r.after_tax_profit|scss }}">{{ r.after_tax_profit|smoney(0) }}</td>
       <td class="num">{{ r.after_tax_p10|smoney(0) }}</td><td class="num">{{ r.after_tax_p90|smoney(0) }}</td><td class="num">{{ r.p_aftertax_loss|pct1(0) }}</td><td class="num">{{ r.p_tax_exceeds_bankroll|pct1(0) }}</td></tr>{% endfor %}
   </table></div>
-  {% if 'volume_sweep.png' in view.images %}<img class="plot" src="/backtest/file/{{ view.id }}/volume_sweep.png" alt="volume sweep">{% endif %}
+  {% if 'volume_sweep.png' in view.images %}<img class="plot" src="{{ root }}/backtest/file/{{ view.id }}/volume_sweep.png" alt="volume sweep">{% endif %}
 </div>
 {% endif %}
 

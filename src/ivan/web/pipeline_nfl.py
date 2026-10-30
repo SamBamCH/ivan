@@ -335,29 +335,36 @@ OUTPUT_KINDS = {"showdown": "DraftKings upload (showdown)", "classic": "DraftKin
 CLASSIC_SLOT_ORDER = ["QB", "RB", "WR", "TE", "FLEX", "DST"]
 
 
-def output_files() -> list[dict]:
-    """Every CSV step 5 has written to the web output dir, newest first."""
-    files = sorted(list(WEB_OUTPUT_DIR.glob("*.csv")) + list(WEB_OUTPUT_DIR.glob("*.json")),
-                   key=lambda p: p.stat().st_mtime, reverse=True)
+def output_files(include_terminal: bool = False) -> list[dict]:
+    """Every CSV step 5 has written to the web output dir, newest first. With include_terminal, the chooser's terminal runs too
+    (scripts/nfl/choose.py writes chosen_entries.* at the output root); each file carries its `dir`."""
+    found = [(p, WEB_OUTPUT_DIR) for p in list(WEB_OUTPUT_DIR.glob("*.csv")) + list(WEB_OUTPUT_DIR.glob("*.json"))]
+    if include_terminal:
+        found += [(p, OUTPUT_DIR) for p in list(OUTPUT_DIR.glob("chosen_entries.*.csv")) + list(OUTPUT_DIR.glob("chosen_entries.*.json"))]
+    files = sorted(found, key=lambda pd_: pd_[0].stat().st_mtime, reverse=True)
     out = []
-    for p in files:
+    for p, d in files:
         parts = p.name.split(".")
         kind = parts[1] if len(parts) >= 4 else ""
         out.append({"name": p.name, "kind": OUTPUT_KINDS.get(kind, kind), "key": kind, "size": p.stat().st_size,
-                    "mtime": p.stat().st_mtime, "stamp": parts[2] if len(parts) >= 4 else ""})
+                    "mtime": p.stat().st_mtime, "stamp": parts[2] if len(parts) >= 4 else "", "dir": str(d)})
     return out
 
 
-def chosen_runs() -> list[dict]:
-    """Step 5 runs (one per timestamp) with the files each produced, newest first."""
+def chosen_runs(include_terminal: bool = False) -> list[dict]:
+    """Step 5 runs (one per timestamp) with the files each produced, newest first; `dir` is where the files are."""
     runs: dict[str, dict] = {}
-    for f in output_files():
+    for f in output_files(include_terminal):
         if not f["stamp"]:
             continue
-        r = runs.setdefault(f["stamp"], {"stamp": f["stamp"], "mtime": f["mtime"], "files": {}})
+        r = runs.setdefault(f["stamp"], {"stamp": f["stamp"], "mtime": f["mtime"], "files": {}, "dir": f["dir"]})
         r["files"][f["key"]] = f["name"]
         r["mtime"] = max(r["mtime"], f["mtime"])
     return sorted(runs.values(), key=lambda r: r["mtime"], reverse=True)
+
+
+def run_dir(run: dict) -> Path:
+    return Path(run.get("dir") or WEB_OUTPUT_DIR)
 
 
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
@@ -523,3 +530,58 @@ def choose_view(choose_json: Path, lineups_csv: Optional[Path], contest_id: Opti
             "top": {"cash": _mean([p["cash"] for p in tops]), "roi": _mean([p["roi"] for p in tops]), "n": len(tops)},
             "overlap": overlap, "spread": d["spread"], "explained_variance": evr, "rooting": d.get("rooting"),
             "quality_svg": quality_svg, "map_svg": map_svg, "walk_svg": walk_svg, "rows": rows}
+
+
+# ------------------------------------------------------------------ a past slate's artifacts (the slate page, ivan.web.nfl_app)
+def slate_contest_ids(session, slate_key: str) -> set[int]:
+    """The contests DraftKings listed for a draft group (historical_contest_information): how a sim report, a chooser run or an
+    upload file is tied to its slate."""
+    from ivan.sports.nfl.models import HistoricalContest
+    if not str(slate_key).isdigit():
+        return set()
+    return {int(r[0]) for r in session.query(HistoricalContest.contest_id).filter(HistoricalContest.draft_group_id == int(slate_key)).all()}
+
+
+def run_contest_ids(run: dict) -> set[int]:
+    """The contests a step-5 run chose for: the chooser json's keys, else the lineups file's contest column."""
+    files = run.get("files", {})
+    try:
+        if "choose" in files:
+            return {int(k) for k in json.loads((run_dir(run) / files["choose"]).read_text()) if str(k).isdigit()}
+        if "lineups" in files:
+            col = pd.read_csv(run_dir(run) / files["lineups"], usecols=["contest_id"], dtype={"contest_id": str})["contest_id"]
+            return {int(x) for x in col.dropna().unique() if str(x).isdigit()}
+    except (OSError, ValueError, KeyError):
+        pass
+    return set()
+
+
+def runs_for_contests(contest_ids: set[int]) -> list[dict]:
+    """The step-5 runs whose contests are the slate's, newest first (a run that touched none of them is another slate's)."""
+    if not contest_ids:
+        return []
+    return [r for r in chosen_runs(include_terminal=True) if run_contest_ids(r) & contest_ids]
+
+
+def projections_for_slate(lock, day) -> Optional[tuple[Path, pd.DataFrame]]:
+    """The newest projections artifact written before the slate's lock whose games are on the slate's day (ivan.core.artifacts
+    writes one per ingest under output/projections/): the players page of a slate that is no longer in the working tables."""
+    from ivan.core.artifacts import find_projection_files
+    if lock is None:
+        return None
+    for f in reversed(find_projection_files([OUTPUT_DIR])):
+        if f.when > lock + pd.Timedelta(hours=6):
+            continue
+        if f.when < lock - pd.Timedelta(days=7):
+            break
+        try:
+            df = pd.read_csv(f.path)
+        except (OSError, ValueError):
+            continue
+        if "gametime" not in df.columns or df.empty:
+            continue
+        first = pd.to_datetime(df["gametime"], errors="coerce").min()
+        if pd.isna(first) or first.date() != day:
+            continue
+        return f.path, df
+    return None

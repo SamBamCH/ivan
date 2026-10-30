@@ -7,8 +7,8 @@ What a machine needs before the NBA side runs. The shared install (venv, `pip in
 
 | Role | Machine | Fetches | Runs |
 |---|---|---|---|
-| **Producer** | the laptop | DraftKings, Rotowire, the-odds-api, nba_api, the DK standings scrape | the desk on port 8001, the pipeline, the timers, `feed.publish` + `push` |
-| **Consumer** | the server | nothing; takes the feed the producer pushes | the same desk at `/nba` inside the NFL web app, `feed.pull` on a timer |
+| **Producer** | the laptop | DraftKings, Rotowire, the-odds-api, nba_api, the DK standings scrape | the desk (`scripts/serve.py`, `/nba`), the pipeline, the timers, `feed.publish` + `push` |
+| **Consumer** | the server | nothing; takes the feed the producer pushes | the same desk at `/nba` in the server's Ivan site, `feed.pull` on a timer |
 
 A machine is a consumer when `IVAN_FEED_URL` is set in `.env`; the desk then never fetches and
 its Refresh button pulls the feed instead (`src/ivan/web/nba_desk.py`, `CONSUMER`).
@@ -20,8 +20,8 @@ its Refresh button pulls the feed instead (`src/ivan/web/nba_desk.py`, `CONSUMER
 | `ODDS_API_KEY` | producer | the-odds-api key; player props cost about 12 credits per game, game lines about 3 per fetch |
 | `IVAN_FEED_PUSH` | producer | where `feed.push` rsyncs the bundles, e.g. `ivan-server:/opt/ivan/app/data/feed` |
 | `IVAN_FEED_URL` | consumer | `file:///opt/ivan/app/data/feed` when the producer pushes to this disk, or `http://host:8790` for a feed server (then `IVAN_FEED_TOKEN` too) |
-| `IVAN_DESK_PASSWORD_HASH` | consumer | the desk login, made by `scripts/desk_password.py --set`; `IVAN_DESK_PASSWORD` plain text is the fallback |
-| `IVAN_DESK_PUBLIC=1` | consumer | required when the desk is reached through the Cloudflare tunnel; refuses to serve without a password |
+| `IVAN_PASSWORD_HASH` | consumer | the site's one login, made by `scripts/password.py --set`; `IVAN_PASSWORD` plain text is the fallback (the old `IVAN_DESK_*` names still work) |
+| `IVAN_PUBLIC=1` | consumer | required when the site is reached through the Cloudflare tunnel; refuses to serve without a password |
 | `IVAN_DK_USERNAME` | producer | the DraftKings login the standings scrape and the late swap use through the Chrome profile |
 | `IVAN_NBA_DB_URL` | any | SQLAlchemy URL overriding `sqlite:///data/nba/nba_history.sqlite` |
 | `IVAN_ENTRIES_CSV` | any | the entries file, overriding `config/nba.json → paths.entries_csv` |
@@ -67,12 +67,12 @@ only with `sudo loginctl enable-linger <user>`. Details in [overnight.md](overni
 ## The desk
 
 ```bash
-venv/bin/python scripts/nba/serve.py                 # http://127.0.0.1:8001, open, no login
-venv/bin/python scripts/nba/serve.py --host 0.0.0.0  # on the LAN; set IVAN_DESK_PASSWORD_HASH first
+venv/bin/python scripts/serve.py                     # http://127.0.0.1:8000/nba/, open, no login (every sport; --sports nba for the desk alone)
+venv/bin/python scripts/serve.py --host 0.0.0.0      # on the LAN; set IVAN_PASSWORD_HASH first
 ```
 
-On the server the desk is mounted at `/nba` inside the NFL app (`scripts/nfl/serve.py`, unit
-`ivan-web`), so a code push is `deploy/push.sh` and the one-time NBA setup there is
+The desk is the NBA part of the one Ivan UI ([../web/README.md](../web/README.md)). On the server the same
+`scripts/serve.py` is the unit `ivan-web`, so a code push is `deploy/push.sh` and the one-time NBA setup there is
 `deploy/setup_nba_server.sh`. The server has no autoreload and neither does the laptop's `serve.py`:
 restart the process to see code changes.
 

@@ -49,7 +49,7 @@ from ivan.core.utils import PROJECT_ROOT, normalize_name
 
 PUBLIC = "https://nba.prattflix.com/nba"
 TAILNET = "http://ivan.prattflix.com/nba"
-COOKIE = "ivan_desk"
+COOKIE = "ivan"
 SLOTS = ("PG", "SG", "SF", "PF", "C", "G", "F", "UTIL")
 ELIGIBLE = {"PG": {"PG"}, "SG": {"SG"}, "SF": {"SF"}, "PF": {"PF"}, "C": {"C"}, "G": {"PG", "SG"}, "F": {"SF", "PF"}, "UTIL": {"PG", "SG", "SF", "PF", "C"}}
 SALARY_CAP = 50000

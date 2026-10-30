@@ -29,17 +29,17 @@
 </style>
 <h1>Models <span class="muted small">test one piece of the pipeline against what happened, without running the rest</span></h1>
 
-<div class="tabs">{% for c in components %}<a href="/models?c={{ c.key }}" class="{{ 'on' if c.key == comp.key }}">{{ c.label }}</a>{% endfor %}</div>
+<div class="tabs">{% for c in components %}<a href="{{ root }}/models?c={{ c.key }}" class="{{ 'on' if c.key == comp.key }}">{{ c.label }}</a>{% endfor %}</div>
 
 <div class="card">
   <h2>{{ comp.label }} <span class="muted small">replay through the <b>{{ comp.through }}</b> stage · {{ comp.cost }}</span></h2>
   <div class="kv" style="margin-bottom:10px">
     <b>Predicts</b><span>{{ comp.predicts }}</span>
     <b>Scored against</b><span>{{ comp.against }}</span>
-    {% if comp.key == 'dupes' %}<b>Lineup level</b><span>The <a href="/dupes">Dupes page</a> scores the dupe model on every scraped field's own lineups, no replay needed: calibration, residuals by feature, the most duplicated lineups.</span>{% endif %}
-    {% if comp.key == 'chooser' %}<b>Full runs</b><span>A chooser test is the whole pipeline; the <a href="/backtest">Backtest page</a> runs it with contest selection, repeats and the settlement report.</span>{% endif %}
+    {% if comp.key == 'dupes' %}<b>Lineup level</b><span>The <a href="{{ root }}/dupes">Dupes page</a> scores the dupe model on every scraped field's own lineups, no replay needed: calibration, residuals by feature, the most duplicated lineups.</span>{% endif %}
+    {% if comp.key == 'chooser' %}<b>Full runs</b><span>A chooser test is the whole pipeline; the <a href="{{ root }}/backtest">Backtest page</a> runs it with contest selection, repeats and the settlement report.</span>{% endif %}
   </div>
-  <form method="post" action="/models/run">
+  <form method="post" action="{{ root }}/models/run">
     <input type="hidden" name="component" value="{{ comp.key }}">
     <div class="fields">
       <label>Since <input type="text" name="since" value="{{ default_since }}" placeholder="YYYY-MM-DD" style="width:120px"></label>
@@ -63,7 +63,7 @@
     <tr><th>Run</th><th>Window</th><th>Code</th><th>Models</th><th class="num">Contests</th><th class="num">Stage score</th>{% for col in B.columns %}<th>{{ col }}</th>{% endfor %}<th></th></tr>
     {% for row in B.rows %}{% set r = row.run %}
     <tr {% if view and view.name == r.name %}style="background:#f6f6f3"{% endif %}>
-      <td><a href="/models?c={{ comp.key }}&r={{ r.name }}">{{ r.created_at[:16]|replace('T', ' ') }}</a>{% if r.label %} <span class="muted small">{{ r.label }}</span>{% endif %}
+      <td><a href="{{ root }}/models?c={{ comp.key }}&r={{ r.name }}">{{ r.created_at[:16]|replace('T', ' ') }}</a>{% if r.label %} <span class="muted small">{{ r.label }}</span>{% endif %}
         {% if r.status == 'running' %}<span class="badge running">running</span>{% elif r.status == 'failed' %}<span class="badge failed">failed</span>{% elif r.status == 'no report' %}<span class="badge queued">no report</span>{% endif %}</td>
       <td class="small">{{ r.since }} .. {{ r.until }}</td>
       <td><span class="commit" title="{{ r.git.subject }}">{{ r.git.commit }}{% if r.git.dirty %}+{% endif %}</span></td>
@@ -82,8 +82,8 @@
 {% set V = view.report %}
 <div class="card">
   <h2>{{ view.created_at[:16]|replace('T', ' ') }}{% if view.label %} · {{ view.label }}{% endif %}
-    <span class="muted small">{{ view.since }} .. {{ view.until }} · commit {{ view.git.commit }}{% if view.git.dirty %}+{% endif %} · {{ view.params.items()|map('join', ' ')|join(', ') }}{% if view.validation_id %} · <a href="/validate?r={{ view.validation_id|urlencode }}">full report</a>{% endif %}</span></h2>
-  {% if view.jobs %}<p class="small muted">Jobs: {% for j in view.jobs %}<a href="/jobs/{{ j.id }}">{{ j.name }}</a> {{ j.status or '' }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+    <span class="muted small">{{ view.since }} .. {{ view.until }} · commit {{ view.git.commit }}{% if view.git.dirty %}+{% endif %} · {{ view.params.items()|map('join', ' ')|join(', ') }}{% if view.validation_id %} · <a href="{{ root }}/validate?r={{ view.validation_id|urlencode }}">full report</a>{% endif %}</span></h2>
+  {% if view.jobs %}<p class="small muted">Jobs: {% for j in view.jobs %}<a href="{{ root }}/jobs/{{ j.id }}">{{ j.name }}</a> {{ j.status or '' }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
   {% if view.checks %}
   <table class="compact">
     <tr><th></th><th>Check</th><th>Finding</th></tr>
