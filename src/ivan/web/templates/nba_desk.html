@@ -252,9 +252,10 @@
   .newsbox table:not(.show-old) tr.old-out { display:none }
   .contests-box table.contests tr.other td { background:#fee2e2 } .contests-box .ok { color:var(--ok) } .bad { color:var(--bad) } .contests-box .dash-side { border-left:0; padding-left:0; max-height:none }
   /* the games strip: one table, four fixed columns per tip time (away, home, spread, total), row N = each tip's Nth game */
-  .menu table.tips { table-layout:fixed; border-collapse:separate; border-spacing:0; background:#fff; border:1px solid var(--line); border-radius:8px; flex:0 0 auto }
-  .menu table.tips col.team { width:58px } .menu table.tips col.line { width:78px } .menu table.tips col.total { width:56px }
-  .menu table.tips th, .menu table.tips td { height:28px; padding:0 6px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; border-bottom:1px solid #f0f0f0; font-size:12px; vertical-align:middle }
+  .menu table.tips { table-layout:fixed; width:auto; margin:0; border-collapse:separate; border-spacing:0; background:#fff; border:1px solid var(--line); border-radius:8px; flex:0 0 auto }   /* width:auto: the page's table { width:100% } stretched it */
+  .menu table.tips col.team { width:48px } .menu table.tips col.line { width:66px } .menu table.tips col.total { width:50px }
+  .menu table.tips a.chip { padding:2px 6px }
+  .menu table.tips th, .menu table.tips td { height:28px; padding:0 4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; border-bottom:1px solid #f0f0f0; font-size:12px; vertical-align:middle }
   .menu table.tips tbody tr:last-child td { border-bottom:0 }
   .menu table.tips .first { border-left:1px solid var(--line) } .menu table.tips tr > .first:first-child { border-left:0 }
   .menu table.tips th.tip { text-align:left; font-weight:700; background:#f3f3f1; border-bottom:1px solid var(--line); border-left:1px solid var(--line) } .menu table.tips th.tip:first-child { border-left:0 }
