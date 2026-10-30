@@ -35,8 +35,9 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
 
 ## The slate view (pre-lock), top to bottom
 
-1. **Games strip**: one column per tip time across the row above the actions (the columns wrap when there are many),
-   each game a row: away, home, spread ("DET -7.5", "PK" for a pick'em), total. Each team is a chip coloured by its
+1. **Games strip**: one table above the actions, fixed column widths and row heights: each tip time heads four
+   columns (away, home, spread as "DET -7.5" or "PK" for a pick'em, total), and row N holds every tip's Nth game
+   (the strip scrolls sideways when the tips outgrow the row). Each team is a chip coloured by its
    map state (green mapped, yellow an open question, red changed since mapped, grey unmapped; a dot for news or for
    what the last refresh moved); a chip opens the team's card, the open game's row is shaded, a started game is
    faded. Its first slot is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
