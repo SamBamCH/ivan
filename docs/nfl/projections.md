@@ -73,7 +73,7 @@ uncalibrated value. The `factor` form is kept.
 Per team a Spearman matrix over the slots QB, RB1-2, WR1-3, TE1-2, K, DST plus team points, shrunk
 toward the league by `LEAGUE_SHRINK_GAMES` (300; recency weighting was backtested and dropped
 2026-10-06); cross-team correlation pooled over every opponent; DST is the takeaway part only, its
-bracket comes from the opponent's points. Sampling is a Gaussian copula (Spearman → Pearson, near-SPD
+bracket comes from the opponent's points. History is in nflverse team codes, mapped to DraftKings' (`actuals.TEAM_TO_DK`: LA → LAR) when the slot table is built. Sampling is a Gaussian copula (Spearman → Pearson, near-SPD
 fix) through each player's own marginal. `generate_lineups.py` prints a per-game check that the sampled
 correlation matches the target; the Contests page's Correlation tab shows it per contest.
 `scripts/nfl/backtest_correlation.py --shrink ...` chooses the shrink strength.

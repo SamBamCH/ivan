@@ -41,6 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ivan.database.session import read_sql
+from ivan.sports.nfl.actuals import TEAM_TO_DK
 from ivan.sports.nfl.models import NFLStat
 from ivan.sports.nfl.refactor.dst import pa_bonus_vec
 
@@ -132,6 +133,8 @@ def league_slot_table(session: Session) -> pd.DataFrame:
         parts.extend([home, away])
 
     table = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
+    # history is in nflverse codes (LA), the pool in DraftKings' (LAR): every lookup is by the pool's code
+    table[['team', 'opponent']] = table[['team', 'opponent']].replace(TEAM_TO_DK)
     table = table.drop_duplicates(['season', 'week', 'team', 'slot'])
     _SLOT_TABLE_CACHE[key] = table
     return table
