@@ -31,7 +31,7 @@ cat "$HOME/.ssh/id_ed25519.pub"
 if ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$HOST" publish nba >/dev/null 2>&1; then
   venv/bin/python scripts/nba/feed.py pull --no-project | tail -3
 else
-  echo "!! $HOST does not answer 'publish' yet: run install_feed_key.sh on the laptop with the key above (and sudo systemctl enable --now ssh there), then scripts/nba/feed.py pull here"
+  echo "!! $HOST does not answer 'publish' yet: run install_feed_key.sh on the laptop with the key above (and sudo apt install openssh-server there), then scripts/nba/feed.py pull here"
 fi
 # the consumer runs no NBA timers of its own (the laptop's capture, archive and nightly timers are the producer's)
 systemctl --user disable --now ivan-nba-pull.timer ivan-nba-capture.timer ivan-nba-nightly.timer 2>/dev/null || true

@@ -3,7 +3,7 @@
 #   deploy/install_feed_key.sh "ssh-ed25519 AAAA... ivan@pratt-server"      the consumer's public key (deploy/setup_nba_server.sh prints it)
 # Appends one line to ~/.ssh/authorized_keys that binds the key to deploy/feed_serve.sh (publish the live bundle, or
 # read data/feed through rrsync; nothing else), with no shell, pty or forwarding. Idempotent: a key already bound is left alone.
-# sshd must be running on this machine (sudo systemctl enable --now ssh) and reachable from the consumer (the tailnet).
+# sshd must be running on this machine (sudo apt install openssh-server) and reachable from the consumer (the tailnet).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KEY="${1:-}"
@@ -19,6 +19,6 @@ else
 fi
 chmod +x "$ROOT/deploy/feed_serve.sh"
 if ! systemctl is-active --quiet ssh 2>/dev/null && ! systemctl is-active --quiet sshd 2>/dev/null; then
-  echo "!! sshd is not running here: sudo systemctl enable --now ssh"
+  echo "!! sshd is not running here: sudo apt install openssh-server (installs and starts it)"
 fi
 echo "on the consumer: IVAN_FEED_SSH=$(id -un)@$(hostname) in .env, then scripts/nba/feed.py pull"

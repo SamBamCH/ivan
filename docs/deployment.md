@@ -33,7 +33,7 @@ Then from the laptop, with an ssh alias `ivan-server` for the service user:
 ```bash
 ssh ivan-server /opt/ivan/app/deploy/setup_nba_server.sh   # NBA dirs, schema, prints the server's ssh public key, tries the pull, restarts ivan-web
 deploy/install_feed_key.sh "<that public key line>"  # on the laptop: binds the key to deploy/feed_serve.sh (publish + read-only rsync of data/feed)
-sudo systemctl enable --now ssh                      # on the laptop, once: the server reaches it over the tailnet
+sudo apt install openssh-server                      # on the laptop, once (installs and starts sshd): the server reaches it over the tailnet
 ssh ivan-server 'cd /opt/ivan/app && for s in nba nfl mma; do venv/bin/python scripts/$s/feed.py pull; done'   # the first pulls (what each sport's Refresh from laptop does)
 ```
 
@@ -95,7 +95,7 @@ travels once a day), then applies the bundles. A publish whose content did not c
 with nothing new says so. The manifest carries a producer note (the autopilot switch, the last tick) that the
 consumer's header shows. The key is the server's `~/.ssh/id_ed25519` (`deploy/setup_nba_server.sh` makes and prints
 it), bound on the laptop by `deploy/install_feed_key.sh` with no shell, pty or forwarding; the laptop's sshd must be on
-(`sudo systemctl enable --now ssh`) and reachable on the tailnet (`main-thinkpad`). Table lists and the consumer's
+(`sudo apt install openssh-server`, which starts it) and reachable on the tailnet (`main-thinkpad`). Table lists and the consumer's
 layering of its own edits are in [nba/overnight.md](nba/overnight.md). `scripts/nba/consumer_check.py` drives the
 consumer's desk from the producer (through the tunnel or the tailnet) and checks the round trip. The older sources
 still work when `IVAN_FEED_SSH` is unset: `IVAN_FEED_URL` as a directory (`file://`) or `ivan-feed.service`
