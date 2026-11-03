@@ -81,8 +81,8 @@ with the date and the measurement that set it. `.env` at the repository root (gi
 | `ODDS_API_KEY` | every ingest that fetches odds |
 | `IVAN_ENTRIES_CSV`, `IVAN_<SPORT>_DB_URL` | overrides of the entries file and the database |
 | `IVAN_SEED`, `IVAN_AS_OF`, `IVAN_RUN_DIR` | reproducibility, the replay clock, the run directory (set by the replay driver) |
-| `IVAN_SYNC_HOST`, `IVAN_REMOTE_ROOT`, `IVAN_NFL_DB` | the NFL reference sync to the server |
-| `IVAN_FEED_SSH`, `IVAN_FEED_SSH_KEY`, `IVAN_FEED_URL`, `IVAN_FEED_TOKEN` | the NBA feed: how the consumer reaches the producer (ssh, or the older URL) |
+| `IVAN_REMOTE_ROOT` | the server's checkout for `deploy/push.sh` |
+| `IVAN_FEED_SSH`, `IVAN_FEED_SSH_KEY`, `IVAN_FEED_URL`, `IVAN_FEED_TOKEN` | the feed, every sport: how the consumer reaches the producer (ssh, or the older URL) |
 | `IVAN_PASSWORD_HASH`, `IVAN_PASSWORD`, `IVAN_PUBLIC`, `IVAN_SPORTS` | the site's login (the old `IVAN_DESK_*` names still work); which sports `serve.py` mounts |
 | `IVAN_DK_USERNAME` | the DraftKings scrapes through the Chrome profile |
 | `GLPK_PATH` | the ILP solver (`glpsol`); otherwise PATH, otherwise PuLP's CBC |

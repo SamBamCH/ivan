@@ -44,7 +44,7 @@ after the games: nightly.py (timer) → box scores, DST table, settle (standings
 | A contest's sim looks wrong | the Contests page Checks tab; `data/nfl/diagnostics/contest_*/report.json`; [simulation.md](simulation.md) |
 | The chooser stacked one game script | [chooser.md](chooser.md); the Choose page; `compare_choosers.py` |
 | A slate will not settle | [overnight.md](overnight.md): `data/nfl/logs/nightly.log`, the slate's status on `/backtest/plan` (`login_needed` means log in to DraftKings in the scraper's Chrome window) |
-| The server has old reference data | `scripts/nfl/sync_to_server.sh` ([../deployment.md](../deployment.md)) |
+| The server has old reference data | its NFL desk's **Refresh from laptop** (`scripts/nfl/feed.py pull`, [../deployment.md](../deployment.md)) |
 
 ## Status (2026-10-27)
 

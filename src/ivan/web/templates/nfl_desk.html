@@ -55,6 +55,8 @@
   <div class="actions" id="actions">
     <div class="act-row">
       <span class="brand-sm">Actions</span>
+      {% if consumer %}<form method="post" action="{{ root }}/run/pull" class="step"><i>0</i>
+        <button title="the laptop's reference data over ssh: history, captures, settled contests and the model pickles (scripts/nfl/feed.py pull); this machine's slate, lineups and sims are untouched">Refresh from laptop</button></form>{% endif %}
       <form method="post" action="{{ root }}/run/ingest" class="step has-knobs"><i>1</i>
         <button class="{{ 'primary' if pick or not n_players else '' }}" title="DraftKings players + salaries, odds, fitted distributions, projected ownership (scripts/nfl/ingest.py -p --draft-group ID --update-odds). Re-run near lock for fresh odds.">Ingest</button>
         <div class="knobs"><div class="knobs-title">ingest</div>

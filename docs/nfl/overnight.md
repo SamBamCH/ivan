@@ -25,7 +25,8 @@ log in once in the scraper's Chrome window (it waits up to ten minutes) and the 
 The new-slate reset, not for the timer: the same fetches, then deletes `lineup` and
 `lineup_simulation_results`, runs `VACUUM` when more than a quarter of the file is free pages (the file
 once reached 18 GB around 600 MB of data), runs `settle.py --days 3` (`--no-scrape` unless
-`IVAN_DK_USERNAME` and a display are set), and `sync_to_server.sh $IVAN_SYNC_HOST` when that is set.
+`IVAN_DK_USERNAME` and a display are set), and `scripts/nfl/feed.py publish` (the reference bundle the server pulls,
+[../deployment.md](../deployment.md)).
 
 ## Producer-only work
 
@@ -40,7 +41,7 @@ Needs the full `requirements.txt` and, for the scrapes, the logged-in Chrome pro
 | `scripts/nfl/build_models.py [--cutoff YYYY-MM-DD] [--only dst_table,dst,classic,dupe,sd,ownership_calibration,ownership_model] [--sd-since]` | every model the pipeline reads → `data/nfl/models/` (live) or `models/asof/<cutoff>/`; one function per model in `model_build.py` |
 | `scripts/nfl/build_dupe_model.py backtest\|build`, `build_ownership_calibration.py`, `build_ownership_model.py backtest\|build` | the individual fits |
 | `scripts/nfl/backfill_archive.py --since --until [--odds]` | captures for slates that predate the archive (odds-api history, billed) |
-| `scripts/nfl/sync_to_server.sh [host]` | reference tables + models to the server ([../deployment.md](../deployment.md)) |
+| `scripts/nfl/feed.py publish` | the reference bundle + models under `data/feed/nfl/` for the server's Refresh from laptop ([../deployment.md](../deployment.md)) |
 
 Memory of the house: no live sim or model change without the backtest's field checks passing;
 exposures are a symptom, not a target; revert when unsure.

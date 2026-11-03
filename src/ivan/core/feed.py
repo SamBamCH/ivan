@@ -59,7 +59,58 @@ TABLES = {
         "live_mirror": ["data/nba/derived/projection"],
         "db": "data/nba/nba_history.sqlite",
     },
+    # the NFL: the server runs its own slates (ingest, generate, sim, choose on its own working tables) and takes the laptop's
+    # reference tables (history, captures, settled contests, models) when its desk's Refresh from laptop is pressed. No live part.
+    "nfl": {
+        "reference": "*",                                  # every table but the working set below (and sqlite's own, and MLB's)
+        "reference_exclude": ["nfl_player", "odds", "projection_snapshot", "lineup", "lineup_simulation_results", "contest_sim_report"],
+        "reference_exclude_like": ["mlb_%"],
+        "files": ["data/nfl/models"],
+        "files_exclude": ["archive"],                      # the models' archive folder stays on the laptop
+        "db": "data/nfl/nfl_history.sqlite",
+    },
+    # MMA: the whole card (fights, fighters, contests, lineups, sims) and the hand-entered inputs; the server only looks at it
+    "mma": {
+        "reference": "*",
+        "reference_exclude": [],
+        "files": ["data/mma/models", "data/mma/input", "data/mma/derived"],
+        "db": "data/mma/mma_history.sqlite",
+    },
 }
+
+
+def parts_of(sport: str, which: Optional[str] = None) -> List[str]:
+    """The bundle parts a sport has ("live" and/or "reference"), or the one asked for; `both` / None = every part the sport has."""
+    spec = TABLES[sport]
+    have = [p for p in ("live", "reference") if p in spec]
+    if which in (None, "both"):
+        return have
+    return [which] if which in have else []
+
+
+def resolve_tables(db_path: Path, sport: str, part: str) -> List[str]:
+    """The part's table list: as written, or every table in the database when the spec says "*" minus the excludes."""
+    spec = TABLES[sport]; want = spec[part]
+    if want != "*":
+        return list(want)
+    con = sqlite3.connect(db_path)
+    try:
+        names = [r[0] for r in con.execute("select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")]
+    finally:
+        con.close()
+    out = []
+    for n in names:
+        if n in spec.get("reference_exclude", []):
+            continue
+        if any(_like(n, pat) for pat in spec.get("reference_exclude_like", [])):
+            continue
+        out.append(n)
+    return out
+
+
+def _like(name: str, pattern: str) -> bool:
+    import fnmatch
+    return fnmatch.fnmatchcase(name, pattern.replace("%", "*"))
 
 
 def _sha(path: Path) -> str:
@@ -87,9 +138,9 @@ def dump_tables(db_path: Path, tables: List[str], out_gz: Path) -> int:
     return out_gz.stat().st_size
 
 
-def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log = print, db_path: Optional[Path] = None,
+def publish(sport: str, out_dir: Path = FEED_DIR, which: Optional[str] = None, log: Log = print, db_path: Optional[Path] = None,
             producer: Optional[dict] = None, root: Path = PROJECT_ROOT) -> dict:
-    """Write the sport's `which` bundle (live | reference | both) and refresh the manifest. Returns the manifest.
+    """Write the sport's `which` bundle (live | reference | both; None = every part the sport has, parts_of) and refresh the manifest. Returns the manifest.
     `producer` is a note about who published (the desk, the autopilot tick, the nightly) that the consumer shows in its header.
     `root` is the checkout the spec's file paths are read from (the repository; tests pass a temporary one)."""
     spec = TABLES[sport]
@@ -97,7 +148,7 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
     d = Path(out_dir) / sport; d.mkdir(parents=True, exist_ok=True)
     manifest = _read_manifest(d)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S.%f")     # to the microsecond: two publishes in one second are two stamps (a pull compares them)
-    parts = ["live", "reference"] if which == "both" else [which]
+    parts = parts_of(sport, which)
     def stamped(prev: Optional[dict], listing_digest: str) -> str:
         """The part's stamp: the previous one when the content is the same (a pull compares stamps, so an unchanged publish
         is nothing new to the consumer), else this publish's."""
@@ -105,9 +156,10 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
 
     for part in parts:
         gz = d / f"{part}.sql.gz"
-        n = dump_tables(db_path, spec[part], gz)
+        tables = resolve_tables(db_path, sport, part)
+        n = dump_tables(db_path, tables, gz)
         sha = _sha(gz)
-        manifest[part] = {"stamp": stamped(manifest.get(part), sha), "sha256": sha, "bytes": n, "tables": spec[part]}
+        manifest[part] = {"stamp": stamped(manifest.get(part), sha), "sha256": sha, "bytes": n, "tables": tables}
         log(f"feed {sport} {part}: {n / 1e6:.1f} MB")
         if part == "live" and spec.get("live_files"):
             lf = d / "live_files"; shutil.rmtree(lf, ignore_errors=True); lf.mkdir(parents=True)
@@ -137,10 +189,11 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
             log(f"feed {sport} mirrored files: {len(listing)} (the projection store)")
         if part == "reference":
             files = d / "files"; shutil.rmtree(files, ignore_errors=True)
-            for rel in spec["files"]:
+            ignore = shutil.ignore_patterns(*spec["files_exclude"]) if spec.get("files_exclude") else None
+            for rel in spec.get("files", []):
                 src = root / rel
                 if src.is_dir():
-                    shutil.copytree(src, files / rel, dirs_exist_ok=True)
+                    shutil.copytree(src, files / rel, dirs_exist_ok=True, ignore=ignore)
                 elif src.exists():
                     (files / rel).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, files / rel)
             listing = {str(p.relative_to(files)): _sha(p) for p in files.rglob("*") if p.is_file()}
@@ -286,7 +339,7 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
                          "live_stamp": (manifest.get("live") or {}).get("stamp")}
     state["checked_at"] = datetime.now().isoformat(timespec="seconds")
     changed = {}
-    parts = ["live", "reference"] if which == "both" else [which]
+    parts = parts_of(sport, which)
     def is_new(key: str) -> bool:
         m = manifest.get(key)
         return bool(m) and state.get(key, {}).get("stamp") != m["stamp"]
@@ -320,7 +373,7 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
                 fetch(f"{base}/live_mirror/{rel}", token, root / rel)
             log(f"feed {sport}: {len(listing)} mirrored file(s) (the projection store)"); changed["live_mirror"] = len(listing)
             state["live_mirror"] = {"stamp": manifest["live_mirror"]["stamp"]}
-        if part == "reference" and is_new("files"):
+        if part == "reference" and is_new("files"):   # the reference files (models, inputs) beside the tables
             listing = json.loads(fetch(f"{base}/files.json", token, tmp / "files.json").read_text())
             n = 0
             for rel, sha in listing.items():

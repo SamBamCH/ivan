@@ -42,6 +42,9 @@ or "locked") and its mode.
 2. **Actions**, the steps in order; each button submits its script as a job (`/run/<step>`, one at a time, queued behind a
    running one). Resting the pointer on **Ingest**, **Generate** or **Sim** opens its knobs under the button (they stay
    open while the pointer is in them or a field has focus):
+   0 **Refresh from laptop** (the server only, `IVAN_FEED_SSH` set): the laptop's reference tables and model pickles
+   over ssh (`scripts/nfl/feed.py pull`, `ivan.core.feed.pull_ssh`, [../deployment.md](../deployment.md)); this
+   machine's slate, lineups and sims are untouched. A job like the others, so its log shows below.
    1 **Ingest**: the slate (showdown and classic draft groups from DraftKings), re-fetch players, update odds
    (`ingest.py -p --draft-group ID --update-odds`). Re-run near lock for fresh odds.
    2 **Contests + payouts** (`get_contest_ids.py`, `get_payouts.py`).

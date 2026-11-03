@@ -59,3 +59,9 @@ players.csv). `diagnostics/` is defined in `paths.py` but not created yet.
 
 Settle, validation, replay (phase after lock in the port plan); the generator docstring still omits
 `--universe`. Plan memory: standings scraper + fitted dupe model were the 2026-10-17 work.
+
+## The server
+
+The server's MMA slate page only reads: its **Refresh from laptop** button (`scripts/mma/feed.py pull`, `ivan.core.feed.pull_ssh`) copies the
+whole card as the laptop holds it over ssh (every table, `data/mma/input`, `models`, `derived`), the same way the NBA and NFL pull
+([../deployment.md](../deployment.md)). Nothing is fetched or run there.

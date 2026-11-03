@@ -25,7 +25,7 @@ its load form instead of navigating, like the desk's old picker did.
 | the frame | `ivan.web.frame` | the bar's context (`ctx`), the picker pages installed at every sport's root (`install_picker`), the shared Jinja environment |
 | NBA | `ivan.web.nba` (package; model in `ivan.sports.nba.desk`) | the desk: pre-lock, players, post-lock (late swap), backtest, the team page. [nba-desk.md](nba-desk.md) |
 | NFL | `ivan.web.nfl_app` + `pipeline_nfl.py`, `backtest_hub.py`, `*_view.py` | the desk (the NBA desk's look: games strip, actions, contests, the open game's correlation check, the pool), sim report, choose, exposures, backtest (the slate's builds); tools: the backtest runs hub, models, validation, dupes, jobs. [nfl-app.md](nfl-app.md) |
-| MMA | `ivan.web.mma_slot` | the slot only: the days and cards (the DraftKings lobby and the stored contests), a slate card, a backtest view that says what settle has not built. The pipeline runs from `scripts/mma/` ([../mma/README.md](../mma/README.md)). |
+| MMA | `ivan.web.mma_slot` | the slot only: the days and cards (the DraftKings lobby and the stored contests), a slate card (on the server with a **Refresh from laptop** button, `scripts/mma/feed.py pull`), a backtest view that says what settle has not built. The pipeline runs from `scripts/mma/` ([../mma/README.md](../mma/README.md)). |
 
 Shared pieces: `ivan.web.jobs.JobRunner` (one job at a time per sport, `nice`d, logs under
 `data/<sport>/jobs/`), `ivan.web.auth` (the password), `ivan.web.charts` (dependency-free SVG),

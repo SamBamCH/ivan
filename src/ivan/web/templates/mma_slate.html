@@ -22,6 +22,11 @@
     {% if contests %}<p class="small muted">{{ contests|length }} contests of this card are stored; the settle step would read their standings.</p>{% endif %}
   </div>
   {% else %}
+  {% if msg %}<div class="card" style="border-left:3px solid var(--accent)"><p class="small">{{ msg }}</p></div>{% endif %}
+  {% if consumer %}<div class="card">
+    <form method="post" action="{{ frame.root }}/pull"><button title="the whole card as the laptop holds it, over ssh: fights, fighters, contests, lineups, sims, the hand-entered inputs (scripts/mma/feed.py pull)">Refresh from laptop</button>
+      <span class="small muted">this desk reads the laptop's MMA data; nothing is fetched or run here</span></form>
+  </div>{% endif %}
   <div class="card">
     <h2>The slate</h2>
     <p>{{ slate.detail or 'nothing on file for this slate' }}{% if slate.loaded %} · the fighter pool on file holds {{ fighters }} fighters{% endif %}.</p>

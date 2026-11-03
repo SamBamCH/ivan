@@ -163,13 +163,15 @@ def _session():
 def _ctx(request: Request, page: Optional[str] = None, slate: Optional[SlateInfo] = None, **extra) -> dict:
     """Every page's context: the steps, the running jobs, the flash, the frame (sport › day › slate › view). A page about one
     slate passes it; the flat pages are about the working slate."""
+    from ivan.core import feed
     now = datetime.now()
     days = nfl_days(now)
     if slate is None:
         slate = next((x for d in days for x in d.slates if x.loaded), None)
-    return {"request": request, "steps": STEPS, "active": runner.active(), "root": auth.root_of(request),
-            "msg": request.query_params.get("msg"), "frame": frame.ctx(request, SPORT, days, None, slate, page, now), "slate": slate,
-            "notice": extra.pop("notice", None), **extra}
+    consumer = feed.producer_source() is not None                       # the server: its Refresh from laptop pulls the reference data over ssh
+    return {"request": request, "steps": [s for s in STEPS if consumer or not s.consumer_only], "consumer": consumer, "active": runner.active(),
+            "root": auth.root_of(request), "msg": request.query_params.get("msg"), "frame": frame.ctx(request, SPORT, days, None, slate, page, now),
+            "slate": slate, "notice": extra.pop("notice", None), **extra}
 
 
 def _redirect(request: Request, to: str, msg: Optional[str] = None) -> RedirectResponse:

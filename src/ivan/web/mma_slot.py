@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 
 from ivan.database.session import get_session, init_db
@@ -100,7 +100,24 @@ def sport() -> Sport:
             fighters = session.query(func.count(MMAPlayer.id)).scalar() if s.loaded else 0
         finally:
             session.close()
+        from ivan.core import feed
         return frame.templates.TemplateResponse(request, "mma_slate.html", {"frame": frame.ctx(request, sp, ds, None, s, view, now), "slate": s, "view": view,
-                                                                            "contests": contests, "fighters": fighters})
+                                                                            "contests": contests, "fighters": fighters, "consumer": feed.producer_source() is not None,
+                                                                            "msg": request.query_params.get("msg")})
+
+    @app.post("/pull")
+    def pull(request: Request):
+        """Refresh from laptop (a consumer): the whole card as the laptop holds it, over ssh (scripts/mma/feed.py pull). Small, so it runs here."""
+        import subprocess, sys
+        from urllib.parse import quote
+        from ivan.core import feed
+        from ivan.core.utils import PROJECT_ROOT
+        from ivan.web import auth
+        back = auth.root_of(request) + (request.headers.get("referer", "").split(auth.root_of(request), 1)[-1].split("?")[0] if request.headers.get("referer") else "/")
+        if feed.producer_source() is None:
+            return RedirectResponse(back + "?msg=" + quote("this machine is the producer: nothing to pull"), status_code=303)
+        r = subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "mma" / "feed.py"), "pull"], capture_output=True, text=True, timeout=600)
+        tail = (r.stdout.strip().splitlines() or [""])[-1] if r.returncode == 0 else ((r.stderr.strip().splitlines() or ["pull failed"])[-1])
+        return RedirectResponse(back + "?msg=" + quote(tail), status_code=303)
 
     return sp

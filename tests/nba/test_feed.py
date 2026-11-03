@@ -85,6 +85,34 @@ def test_pull_ssh_asks_the_producer_to_publish_then_rsyncs_then_applies(tmp_path
     assert {k: v for k, v in changed2.items() if k != "published"} == {}
 
 
+def test_every_sport_has_a_spec_and_the_nfl_reference_is_every_table_but_the_working_set(tmp_path):
+    """The same pull for every sport: the NBA has a live part, the NFL and MMA a reference part only; the NFL's "*" resolves to
+    every table except its per-slate working tables and MLB's, the MMA's to everything."""
+    assert feed.parts_of("nba") == ["live", "reference"] and feed.parts_of("nfl") == ["reference"] and feed.parts_of("mma") == ["reference"]
+    assert feed.parts_of("nfl", "live") == [] and feed.parts_of("nba", "live") == ["live"]
+    db = tmp_path / "nfl.sqlite"; con = sqlite3.connect(db)
+    for t in ("nfl_stats", "nfl_player", "odds", "lineup", "mlb_stats", "historical_contest_information", "contest_entry_result"):
+        con.execute(f"create table {t} (id integer primary key)")
+    con.commit(); con.close()
+    assert feed.resolve_tables(db, "nfl", "reference") == ["contest_entry_result", "historical_contest_information", "nfl_stats"]
+    assert feed.resolve_tables(db, "mma", "reference") == sorted(["nfl_stats", "nfl_player", "odds", "lineup", "mlb_stats", "historical_contest_information", "contest_entry_result"])
+    assert feed.resolve_tables(db, "nba", "live") == feed.TABLES["nba"]["live"]
+    # publish for the NFL: the reference bundle and the models directory, minus its archive; a pull applies both
+    prod = tmp_path / "producer"; cons = tmp_path / "consumer"
+    (prod / "data" / "nfl" / "models" / "archive").mkdir(parents=True); (cons / "data" / "nfl").mkdir(parents=True)
+    shutil.copy(db, prod / "data" / "nfl" / "nfl_history.sqlite")
+    (prod / "data" / "nfl" / "models" / "dst.json").write_text("{}"); (prod / "data" / "nfl" / "models" / "archive" / "old.json").write_text("{}")
+    m = feed.publish("nfl", out_dir=tmp_path / "feed", log=lambda s: None, root=prod)
+    assert "live" not in m and m["reference"]["tables"] == ["contest_entry_result", "historical_contest_information", "nfl_stats"]
+    assert m["files"]["count"] == 1                                                              # the archive stayed home
+    cdb = cons / "data" / "nfl" / "nfl_history.sqlite"; c2 = sqlite3.connect(cdb); c2.execute("create table nfl_player (id integer primary key)"); c2.execute("insert into nfl_player values (5)"); c2.commit(); c2.close()
+    changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nfl", tmp_path / "state", log=lambda s: None, root=cons)
+    assert set(changed["reference"]) == {"contest_entry_result", "historical_contest_information", "nfl_stats"} and changed["files"] == 1
+    c2 = sqlite3.connect(cdb)
+    assert c2.execute("select id from nfl_player").fetchall() == [(5,)]                           # the consumer's working table survives
+    assert (cons / "data" / "nfl" / "models" / "dst.json").exists() and not (cons / "data" / "nfl" / "models" / "archive").exists()
+
+
 def test_producer_source_reads_the_environment(monkeypatch):
     monkeypatch.delenv(feed.SSH_ENV, raising=False); monkeypatch.delenv(feed.URL_ENV, raising=False)
     assert feed.producer_source() is None

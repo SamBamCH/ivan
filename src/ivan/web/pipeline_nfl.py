@@ -58,6 +58,7 @@ class Step:
     fields: list[Field] = field(default_factory=list)
     needs_entries: bool = False
     progress: Optional[Callable[[object], str]] = None   # (session) -> one-line status
+    consumer_only: bool = False                          # shown only on a consumer (the server pulling the laptop's reference data)
 
 
 def _num(form: dict, name: str, default, cast=int):
@@ -114,6 +115,13 @@ def _contests_progress(s) -> str:
 
 
 STEPS: list[Step] = [
+    Step(
+        key="pull", title="Refresh from laptop",
+        blurb="The laptop's reference data: history, captures, settled contests and the model pickles, pulled over ssh (ivan.core.feed.pull_ssh); "
+              "this machine's slate, lineups and sims are untouched.",
+        build=lambda f: [_script("feed.py") + ["pull"]],
+        consumer_only=True,
+    ),
     Step(
         key="ingest", title="Ingest the slate",
         blurb="Pulls players and salaries from DraftKings and player odds from the-odds-api, fits each player's fantasy-point distribution, then projects ownership by sampling a field of lineups. Run this first, and again close to lock for fresh odds and ownership.",

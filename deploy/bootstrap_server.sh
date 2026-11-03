@@ -5,8 +5,8 @@
 #   ~/ivan/deploy/bootstrap_server.sh            # venv, thin deps, dirs, empty DB
 #   ~/ivan/deploy/bootstrap_server.sh --service  # ...and install + start the systemd unit
 #
-# Afterwards, from the machine that owns the models and history:
-#   scripts/nfl/sync_to_server.sh <ssh host>
+# Afterwards the server pulls the laptop's reference data itself: each sport's "Refresh from laptop" (ivan.core.feed.pull_ssh,
+# scripts/<sport>/feed.py pull), once deploy/setup_nba_server.sh has made its key and deploy/install_feed_key.sh bound it on the laptop.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

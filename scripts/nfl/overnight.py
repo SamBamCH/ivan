@@ -60,10 +60,8 @@ else:
     print("[overnight] settling recent slates without the scrape (set IVAN_DK_USERNAME and run with a display to scrape the contests we played)")
     subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "nfl" / "settle.py"), "--days", "3", "--no-scrape"], check=False)
 
-# Push reference tables + model pickles to the server. No-op unless
-# IVAN_SYNC_HOST is set (in .env or the environment); the server's per-slate
-# working tables are never touched, see scripts/nfl/sync_to_server.sh.
-sync_host = os.environ.get("IVAN_SYNC_HOST")
-if sync_host:
-    print(f"[overnight] syncing reference data to {sync_host}")
-    subprocess.run([str(PROJECT_ROOT / "scripts" / "nfl" / "sync_to_server.sh"), sync_host], check=True)
+# The reference bundle for the server (ivan.core.feed): every table but the working set, plus data/nfl/models. Nothing is
+# pushed: the server's NFL desk pulls it over ssh when its "Refresh from laptop" is pressed (scripts/nfl/feed.py pull), and
+# that pull also asks for a fresh bundle, so this nightly publish only saves it the wait.
+print("[overnight] publishing the NFL reference bundle (data/feed/nfl)")
+subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "nfl" / "feed.py"), "publish", "--quiet"], check=False)
