@@ -64,7 +64,7 @@ launches are `nice`d by the runner. `journalctl -u ivan-web -f` is the log.
 ## Pushing code
 
 ```bash
-deploy/push.sh [ivan-server]     # rsync the working tree (not git; minus venv, data, .env) → bootstrap (deps, dirs, new tables) → kill the main pid → wait → curl 200
+deploy/push.sh [ivan-server]     # rsync the working tree (not git; minus venv, data, .env) → bootstrap (deps, dirs, new tables) → kill the main pid → wait → curl answers (200, or 303 to /login)
 ```
 
 It restarts `ivan-web`, which drops any running job and the desk's in-memory state. Push between

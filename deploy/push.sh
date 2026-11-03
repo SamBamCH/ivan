@@ -33,10 +33,12 @@ for _ in $(seq 1 30); do
 done
 URL=$(systemctl show ivan-web -p ExecStart --value | grep -o -- '--host [^ ]* --port [^ ]*' | awk '{print "http://" $2 ":" $4 "/"}')
 echo "service: $(systemctl is-active ivan-web), pid $OLD -> $NEW, started $(systemctl show ivan-web -p ExecMainStartTimestamp --value)"
-for i in 1 2 3 4 5; do
+# the site's root sends an anonymous visitor to /login (303), so either answer means the UI is up; the app imports every
+# sport at start, so give it up to 30 s
+for i in $(seq 1 10); do
   code=$(curl -s -o /dev/null -w '%{http_code}' "$URL" || true)
-  [[ "$code" == "200" ]] && { echo "UI answers 200 at $URL"; exit 0; }
-  sleep 2
+  [[ "$code" == "200" || "$code" == "303" ]] && { echo "UI answers $code at $URL"; exit 0; }
+  sleep 3
 done
 echo "!! UI not answering at $URL (last status: $code); check: journalctl -u ivan-web -n 50" >&2
 exit 1
