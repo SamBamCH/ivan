@@ -1,7 +1,7 @@
 # NFL: the pre-lock pipeline
 
 Five scripts, run top to bottom from the repository root; the web UI's five buttons run the same
-scripts (`src/ivan/web/pipeline_nfl.py`). Each is argparse around one function in
+scripts (`src/ivan/web/nfl/pipeline.py`). Each is argparse around one function in
 `ivan.sports.nfl`, so the replay runs the same code in process.
 
 | # | Step | Command | What it does |

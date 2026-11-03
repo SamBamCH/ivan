@@ -1,4 +1,4 @@
-# src/ivan/web/mma_slot.py
+# src/ivan/web/mma/core.py
 """
 MMA in the one UI: the slot only. The picker lists the cards (the DraftKings lobby's MMA slates and
 every draft group whose contests ingest.py stored), a slate page says what is on file for it, and
@@ -21,7 +21,7 @@ from ivan.sports.mma.models import HistoricalContest, MMABase, MMAPlayer
 from ivan.web import frame
 from ivan.web.sports import Day, SlateInfo, Sport, find_slate, group_days, lobby_day, lobby_lock
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).parent.parent                               # ivan/web: the shared templates and static files
 KEY, LABEL = "mma", "MMA"
 VIEWS = [("slate", "slate"), ("backtest", "backtest")]
 engine = init_db(KEY)

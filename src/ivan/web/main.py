@@ -15,8 +15,8 @@ site is not public), one frame (ivan.web.frame). Each sport is a sub-application
     /<sport>/...          the sport's own actions, partials, exports and tools
 
     nba   ivan.web.nba        the desk: pre-lock, post-lock (late swap), backtest, the team page
-    nfl   ivan.web.nfl_app    the pipeline and its report pages, the slate's builds (backtest)
-    mma   ivan.web.mma_slot   the slates only (dates, the picker, a backtest placeholder): no workspace yet
+    nfl   ivan.web.nfl        the desk, the pipeline and its report pages, the slate's builds (backtest)
+    mma   ivan.web.mma        the slates only (dates, the picker, a backtest placeholder): no workspace yet
 
 A sport whose module fails to import (a missing dependency, no database) is still listed on the
 home page with the error; the rest of the site runs. IVAN_SPORTS (or --sports) limits what is
@@ -39,7 +39,7 @@ from ivan.web.sports import REGISTRY, Sport
 
 HERE = Path(__file__).parent
 ALL_SPORTS = ("nba", "nfl", "mma")
-MODULES = {"nba": "ivan.web.nba", "nfl": "ivan.web.nfl_app", "mma": "ivan.web.mma_slot"}
+MODULES = {"nba": "ivan.web.nba", "nfl": "ivan.web.nfl", "mma": "ivan.web.mma"}
 LABELS = {"nba": "NBA", "nfl": "NFL", "mma": "MMA"}
 
 

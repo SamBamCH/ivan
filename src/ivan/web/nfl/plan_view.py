@@ -1,4 +1,4 @@
-# src/ivan/web/plan_view.py
+# src/ivan/web/nfl/plan_view.py
 """
 The backtest plan page: a window of slates and a contest pool, what each
 slate has and lacks for an honest replay, and the commands that fill the

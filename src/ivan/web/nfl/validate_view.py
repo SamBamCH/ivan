@@ -1,4 +1,4 @@
-# src/ivan/web/validate_view.py
+# src/ivan/web/nfl/validate_view.py
 """
 The Validation page: projected vs actual per component, read back from the
 summary.json that scripts/nfl/validate.py writes (ivan.sports.nfl.validate

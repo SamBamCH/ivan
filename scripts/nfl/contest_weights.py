@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from ivan.web.pipeline_nfl import DEFAULT_WEIGHTS, WEIGHT_KEYS, load_weights, set_contest_weights
+from ivan.web.nfl.pipeline import DEFAULT_WEIGHTS, WEIGHT_KEYS, load_weights, set_contest_weights
 
 
 def main(argv=None) -> int:

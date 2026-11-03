@@ -138,7 +138,7 @@ def test_nfl_desk_renders(open_site):
 def test_nfl_contest_weights_save_own_knobs(open_site, monkeypatch, tmp_path):
     """A contest's knobs save as typed: a value is its own, a blank drops back to the default, a bad value is refused."""
     import json
-    from ivan.web import pipeline_nfl as P
+    from ivan.web.nfl import pipeline as P
     monkeypatch.setattr(P, "WEIGHTS_FILE", tmp_path / "weights.json")
     monkeypatch.setattr(P, "WEB_INPUT_DIR", tmp_path)
     r = open_site.post("/nfl/contest/123/weights", data={"method": "portfolio", "bankroll": "4", "cash_pct": ""})

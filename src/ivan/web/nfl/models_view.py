@@ -1,4 +1,4 @@
-# src/ivan/web/models_view.py
+# src/ivan/web/nfl/models_view.py
 """
 The Models page: test one piece of the pipeline against what happened,
 without running the pieces after it.
@@ -28,7 +28,7 @@ from typing import Callable, Optional
 from ivan.core.gitinfo import git_state  # noqa: F401 - the page's runs are labelled with the commit
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nfl.paths import OUTPUT_DIR
-from ivan.web import validate_view as vv
+from ivan.web.nfl import validate_view as vv
 
 MODELS_OUT = OUTPUT_DIR / "models"
 MENU_PATH = PROJECT_ROOT / "config" / "replay" / "nfl.json"

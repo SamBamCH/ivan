@@ -3,7 +3,7 @@
 `src/ivan/sports/nfl/choose.py` with the shared numerics in `ivan.core.chooser` and
 `ivan.core.portfolio`; `lineup_export.py` writes the files; `scripts/nfl/choose.py` is the command
 line and the web UI's step 5 the form. Defaults (`lineup_export.DEFAULT_WEIGHTS`, also
-`web/pipeline_nfl.py`): `cash_pct` .5, `avg_roi_win` .5, `diversity_lambda` .1, `method` greedy,
+`web/nfl/pipeline.py`): `cash_pct` .5, `avg_roi_win` .5, `diversity_lambda` .1, `method` greedy,
 `bankroll` 3.0, `bankroll_dollars` 1000. Weights are per contest (prompt, flags, `--weights-json`, or the
 web page's remembered weights file).
 

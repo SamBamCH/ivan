@@ -1,4 +1,4 @@
-# src/ivan/web/nfl_app.py
+# src/ivan/web/nfl/core.py
 """
 The NFL screens of the one Ivan UI (ivan.web.main mounts this at /nfl): the desk (one page for the working slate, the NBA
 desk's look: the games strip, the pipeline steps as buttons over scripts/nfl/*, the contests with their chooser knobs, the
@@ -35,23 +35,23 @@ from ivan.core.utils import PROJECT_ROOT
 from ivan.database.session import add_missing_columns, get_session, init_db
 from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import NFL_DATA_DIR
-from ivan.web import backtest_view as bv
-from ivan.web import validate_view as vv
-from ivan.web import dupes_view as dv
-from ivan.web import models_view as mv
-from ivan.web import plan_view as pv
-from ivan.web import backtest_hub as hub
+from ivan.web.nfl import backtest_view as bv
+from ivan.web.nfl import validate_view as vv
+from ivan.web.nfl import dupes_view as dv
+from ivan.web.nfl import models_view as mv
+from ivan.web.nfl import plan_view as pv
+from ivan.web.nfl import backtest_hub as hub
 from ivan.web import auth, frame
 from ivan.web.jobs import JobRunner
 from ivan.web.sports import Day, SlateInfo, Sport, find_slate, group_days, lobby_day, lobby_lock
-from ivan.web.pipeline_nfl import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR,
+from ivan.web.nfl.pipeline import (CURRENT_ENTRIES, STEP_BY_KEY, STEPS, WEB_INPUT_DIR, WEB_OUTPUT_DIR,
                                    RESETS, choose_view, chosen_runs, chosen_view, contest_report,
                                    contest_reports, corr_css, entries_summary, legacy_exposures_view, output_files,
                                    players_frame, report_view, reset_working, slate_status, slates, OUTPUT_KINDS,
                                    projections_for_slate, run_contest_ids, run_dir, runs_for_contests, slate_contest_ids,
                                    WEIGHT_METHODS, DEFAULT_WEIGHTS, desk_contests, desk_players, set_contest_weights)
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).parent.parent                               # ivan/web: the shared templates and static files
 engine = init_db("nfl")
 runner = JobRunner(log_dir=NFL_DATA_DIR / "jobs", cwd=PROJECT_ROOT)
 

@@ -1,4 +1,4 @@
-# src/ivan/web/pipeline_nfl.py
+# src/ivan/web/nfl/pipeline.py
 """
 The NFL pre-lock pipeline as the web UI sees it: ordered steps, each a thin
 wrapper around one of the CLI scripts in scripts/nfl/. Nothing here knows how
@@ -542,7 +542,7 @@ def choose_view(choose_json: Path, lineups_csv: Optional[Path], contest_id: Opti
             "quality_svg": quality_svg, "map_svg": map_svg, "walk_svg": walk_svg, "rows": rows}
 
 
-# ------------------------------------------------------------------ a past slate's artifacts (the slate page, ivan.web.nfl_app)
+# ------------------------------------------------------------------ a past slate's artifacts (the slate page, ivan.web.nfl.core)
 def slate_contest_ids(session, slate_key: str) -> set[int]:
     """The contests DraftKings listed for a draft group (historical_contest_information): how a sim report, a chooser run or an
     upload file is tied to its slate."""

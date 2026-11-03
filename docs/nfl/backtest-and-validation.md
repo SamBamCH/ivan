@@ -56,7 +56,7 @@ sd calibration, the ownership calibration and model, each trained only before th
 manifest; `ivan.core.model_store` resolves the newest version whose cutoff precedes the slate, falling
 back to the live models while saying so.
 
-## The Backtest hub (`/backtest`, `ivan.web.backtest_hub`, `readiness.py`)
+## The Backtest hub (`/backtest`, `ivan.web.nfl.backtest_hub`, `readiness.py`)
 
 One page per **run** (`data/nfl/output/backtests/<name>/`: `run.json`, `selection.json`, the replayed
 slates). Steps: **Data** (what the window lacks, grouped by the fetch that fills it with its cost: box

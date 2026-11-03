@@ -1,4 +1,4 @@
-# src/ivan/web/backtest_hub.py
+# src/ivan/web/nfl/backtest_hub.py
 """
 The Backtest page, organised around a *run*:
 
@@ -32,8 +32,8 @@ from ivan.core.replay import Menu
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nfl import retention, run_index
 from ivan.sports.nfl.paths import MODELS_DIR, OUTPUT_DIR
-from ivan.web import backtest_view as bv
-from ivan.web import validate_view as vv
+from ivan.web.nfl import backtest_view as bv
+from ivan.web.nfl import validate_view as vv
 
 MENU_PATH = PROJECT_ROOT / "config" / "replay" / "nfl.json"
 SCRIPTS = PROJECT_ROOT / "scripts" / "nfl"

@@ -1,4 +1,4 @@
-# src/ivan/web/dupes_view.py
+# src/ivan/web/nfl/dupes_view.py
 """
 The Dupes page: the dupe model's predicted copies against the copies real
 fields held (ivan.sports.nfl.dupe_analysis), with the charts and tables laid

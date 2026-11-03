@@ -1,7 +1,7 @@
 # The NFL screens
 
-`src/ivan/web/nfl_app.py` with `pipeline_nfl.py` (the five steps as the UI sees them), `jobs.py` (one job at a
-time), `backtest_hub.py` and the `*_view.py` readers, mounted at `/nfl` inside the one Ivan UI
+`src/ivan/web/nfl/` (`core.py` the app and pages, `pipeline.py` the steps as the UI sees them, `backtest_hub.py` and
+the `*_view.py` readers; `ivan.web.jobs` runs one job at a time), mounted at `/nfl` inside the one Ivan UI
 (`scripts/serve.py`, [README.md](README.md)); the login is the site's. Uploads go to `data/nfl/input/web/`,
 outputs to `data/nfl/output/web/`, job logs to `data/nfl/jobs/`. Everything the UI runs is a script from
 `scripts/nfl/`, so the job log is the script's output.
