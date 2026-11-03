@@ -60,16 +60,16 @@ def test_producer_note_travels_in_the_manifest_and_the_pull_state(tmp_path, monk
     ap.set_on(True, by="test", path=tmp_path / "autopilot.json")
     note = ap.producer_info("autopilot")
     assert note["source"] == "autopilot" and note["autopilot"] is True and note["host"]
-    m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, producer=note)
+    m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, producer=note, root=tmp_path / "ckout")
     assert m["producer"]["source"] == "autopilot"
-    m2 = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src)
+    m2 = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, root=tmp_path / "ckout")
     assert "producer" not in m2                                                        # a silent publisher leaves no stale note
-    m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, producer=note)
+    m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, db_path=src, producer=note, root=tmp_path / "ckout")
     dst = tmp_path / "c.sqlite"
-    feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None)
+    feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None, root=tmp_path / "ckout")
     st = feed.status("nba", state_dir=tmp_path / "state")
     assert st["producer"]["autopilot"] is True and st["published_at"] and st["pulled_at"] and st["checked_at"] and st["new"] is False
     # a second pull with nothing new still records the check
     before = st["checked_at"]; time.sleep(1.1)
-    feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None)
+    feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None, root=tmp_path / "ckout")
     assert feed.status("nba", state_dir=tmp_path / "state")["checked_at"] > before

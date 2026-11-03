@@ -165,6 +165,13 @@ files plus the assumptions read off them. `scripts/nba/news.py "Name"` builds th
 scratch from the terminal; `--conditional` scales teammates toward their "without him" per-minute
 history (opt-in: those samples are small and confounded).
 
+Every projection runs through `ingest.project_team`: one team, the frame, the history-only comparison
+frame (`n_sims=0`, no market) and the rotation grid behind it, written to the team's `nba_player` rows
+and to the projection store (`data/nba/derived/projection/<TEAM>.pkl`, `projection.store`). The
+generator is seeded per team, so a team's numbers depend only on its inputs: an edit on the desk and a
+full `project_slate` give the same projection. The sims count is one number, `config/nba.json →
+projection.n_sims` (4000; the draws cost nothing next to the solve, 0.15 s a team either way).
+
 ## Where to look first when a projection is off
 
 1. `scripts/nba/validate.py review --team XXX`: every player's minutes with where they came from

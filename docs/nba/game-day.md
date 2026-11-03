@@ -187,8 +187,8 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 
 | Action | Fetches | Writes the pool |
 |---|---|---|
-| paint, pin, starter call, Re-fill | no | no (desk copy + the override files) |
-| Publish | no | yes |
+| paint + Apply, pin, starter call, Re-fill, a late-news call | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
+| Publish | no | yes (every team again, plus the capture rows, the projections CSV and the feed) |
 | Refresh dk / props, pick a slate | yes | yes |
 | Generate / Sim / Late swap / All from the desk | no | yes (publish first) |
 | Choose from the desk | no | no |

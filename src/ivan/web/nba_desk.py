@@ -44,7 +44,8 @@ from ivan.core.config import config_path
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, refresh_public_projection, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, project_team, refresh_public_projection, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
 from ivan.web.jobs import JobRunner
@@ -193,11 +194,25 @@ class Desk:
             self.session.rollback()
 
     def lobby_slates(self) -> dict:
-        """Today's classic slates in the DraftKings lobby (cached two minutes), labelled with DK's start string; the loaded
-        slate is always present. Falls back to the slates the capture state knows when the lobby is unreachable."""
+        """Today's classic slates in the DraftKings lobby, labelled with DK's start string; the loaded slate is always present.
+        Fetched once at start, then refreshed in a background thread when older than two minutes: a page render never waits
+        on DraftKings (2026-11-03: the header blocked up to 2.5 s on this call). Falls back to the slates the capture state
+        knows when the lobby is unreachable."""
         now = time.time()
         if now - self._lobby[0] < 120:
             return self._lobby[1]
+        if self._lobby[0] == 0.0:                              # never fetched: the picker needs it now
+            self._lobby = (now, self._fetch_lobby())
+            return self._lobby[1]
+        th = getattr(self, "_lobby_thread", None)
+        if th is None or not th.is_alive():
+            def run():
+                out = self._fetch_lobby()
+                self._lobby = (time.time(), out or self._lobby[1])
+            self._lobby_thread = threading.Thread(target=run, name="ivan-lobby", daemon=True); self._lobby_thread.start()
+        return self._lobby[1]
+
+    def _fetch_lobby(self) -> dict:
         out = {}
         try:
             from ivan.sports.nba.ingest import classic_slates
@@ -207,7 +222,6 @@ class Desk:
                                           games=sl.get("games"), lock=sl.get("lock"))
         except Exception as e:   # noqa: BLE001 - the lobby is a convenience
             self.flash.append(f"could not list the lobby's slates ({type(e).__name__}); showing the known ones")
-        self._lobby = (now, out)
         return out
 
     def slate_games(self, key: str) -> Optional[int]:
@@ -304,13 +318,16 @@ class Desk:
         self._auto_pending = True                         # scenarios are matched once the rest of the rebuild is done (see end of rebuild)
         if getattr(self, "_calls_dg", None) != self.pool_stamp[2]:
             self._calls, self._calls_dg = {}, self.pool_stamp[2]   # typed calls belong to their slate
-        self.season = self.season_averages(self.slate.box)
-        from ivan.sports.nba import pbp as PBP
-        try:
-            self.fouls = PBP.fouls_per_game(self.session)
-        except Exception:   # noqa: BLE001 - no foul table yet
-            self.fouls = {}
-        self.recent = self.recent_games(self.slate.box, fouls=self.fouls)
+        hist_key = getattr(self, "_hist_key", None)
+        if getattr(self, "_season_key", None) != hist_key:     # per-player season and recent-game tables: only when the box scores grew
+            self.season = self.season_averages(self.slate.box)
+            from ivan.sports.nba import pbp as PBP
+            try:
+                self.fouls = PBP.fouls_per_game(self.session)
+            except Exception:   # noqa: BLE001 - no foul table yet
+                self.fouls = {}
+            self.recent = self.recent_games(self.slate.box, fouls=self.fouls)
+            self._season_key = hist_key
         self.market_rows = {}
         for r in self.session.query(NBAMarketRate).all():
             self.market_rows.setdefault(r.player_name, {})[r.stat] = dict(mean=float(r.market_mean), line=r.line, books=r.books, rate=float(r.rate), basis=float(r.basis_minutes),
@@ -318,8 +335,7 @@ class Desk:
         for (name, stat), txt in self.consensus_odds().items():
             if name in self.market_rows and stat in self.market_rows[name]:
                 self.market_rows[name][stat]["odds"] = txt
-        for t in self.slate.teams():
-            self.reproject(t)
+        self.load_frames()
 
         if getattr(self, "_auto_pending", False):
             self._auto_pending = False
@@ -343,7 +359,19 @@ class Desk:
         return out
 
     def consensus_odds(self) -> dict:
-        """(player, stat) -> 'o-112 / u-108': the books' prices at the consensus line averaged in probability, the vig left in."""
+        """(player, stat) -> 'o-112 / u-108': the books' prices at the consensus line averaged in probability, the vig left in.
+        Cached until the odds table or the market lines change (0.6 s over 150k rows otherwise, on every rebuild)."""
+        from sqlalchemy import text as _t
+        key = (tuple(self.session.execute(_t("select count(*), max(last_update) from odds")).one()),
+               tuple(sorted((n, st, str(v.get("line"))) for n, d in self.market_rows.items() for st, v in d.items())))
+        cache = getattr(self, "_consensus_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        out = self._consensus_odds()
+        self._consensus_cache = (key, out)
+        return out
+
+    def _consensus_odds(self) -> dict:
         from ivan.sports.nba.projection.market import MARKET_TO_STAT, american_to_prob
         odds = pd.read_sql("select player, market, sportsbook, side, point, price from odds", self.session.get_bind())
         if odds.empty:
@@ -388,25 +416,48 @@ class Desk:
 
     def maybe_reload(self):
         """
-        The pool changed on disk (capture tick, feed pull). New projections for the same players: say so and keep the page
-        as it is until Refresh. Different players (another slate, a player added or removed): the rows the page was built
-        from are gone, so it has to reload, and says why.
+        The pool changed on disk (a capture tick, a feed pull, a script, an edit from another desk process): reload it. A
+        rebuild reads the projection store, so this costs milliseconds; a different set of players (another slate, a roster
+        change) says so, new numbers for the same players load quietly.
         """
         now = self._stamp()
         if now == self.pool_stamp:
-            self.stale = False
-        elif now[1:] != self.pool_stamp[1:]:
+            return
+        if now[1:] != self.pool_stamp[1:]:
             self.rebuild()
             self.flash.append("the player pool changed on disk (a capture tick moved to another slate or the roster changed); reloaded")
         else:
-            self.stale = True
+            self.rebuild()
 
-    def reproject(self, team: str, n_sims: int = 600):
-        rng = np.random.default_rng(0)
-        self.proj[team] = self.slate.project(team, self.overrides, set(), ProjectionParams.from_config(n_sims=n_sims), rng=rng)
-        self.rot[team] = dict(getattr(self.slate, "_last_rotation", {}).get(team) or {})      # the grid behind this projection
-        self.hist_only[team] = self.slate.project(team, self.overrides, set(),
-                                                  ProjectionParams.from_config(n_sims=0, market_weight=0.0), rng=rng)
+    def load_frames(self) -> None:
+        """
+        The desk's frames from the projection store (projection.store): what the last projection of each team wrote, whoever
+        wrote it. A team with no record (a pool written before the store existed, a record from another version) is projected
+        now, through the same path an edit takes, so the pool and the store agree afterwards.
+        """
+        recs = PSTORE.load_all(self.pool_stamp[2])
+        self.proj, self.hist_only, self.rot = {}, {}, {}
+        missing = []
+        for t in self.slate.teams():
+            rec = recs.get(t)
+            if rec is None:
+                missing.append(t); continue
+            self.proj[t], self.hist_only[t], self.rot[t] = rec["frame"], rec["hist"], dict(rec.get("rot") or {})
+        for t in missing:
+            self.reproject(t)
+        if missing:
+            self.flash.append(f"projected {len(missing)} team(s) with no stored projection ({', '.join(missing[:6])}{'…' if len(missing) > 6 else ''})")
+
+    def reproject(self, team: str):
+        """
+        Re-project one team and write it through: its nba_player rows, committed, and its store record (ingest.project_team,
+        the same path a publish takes, seeded per team so the numbers are those a publish would give). The desk's frame is
+        the record just written; nothing downstream can see a projection the desk does not show.
+        """
+        rec = project_team(self.session, self.slate, team, self.overrides, ProjectionParams.from_config())
+        self.session.commit()
+        self.proj[team], self.hist_only[team], self.rot[team] = rec["frame"], rec["hist"], dict(rec.get("rot") or {})
+        self.pool_stamp = self._stamp()                        # our own write is not "new data"
 
     # ---------------------------------------------------------------- views
     def players(self, team: str) -> list[NBAPlayer]:
@@ -2081,7 +2132,7 @@ def _start_restore(draft_group: int) -> None:
         log = []
         sess = get_session(engine)
         try:
-            info = restore_from_archive(sess, int(draft_group), n_sims=1000, log=log.append)
+            info = restore_from_archive(sess, int(draft_group), log=log.append)
             msg = f"slate {draft_group} restored from its {info['source']} capture of {info['captured_at']:%m-%d %H:%M} ({info['players']} players, {info['odds']} prop rows)"
         except IngestError as e:
             msg = f"restore failed: {e}"
@@ -2103,7 +2154,7 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Option
         log = []
         sess = get_session(engine)
         try:
-            _, _, news, moved = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, n_sims=1000, log=log.append, lines=lines)
+            _, _, news, moved = refresh_pool(sess, int(draft_group), update_odds=update_odds, starters=True, log=log.append, lines=lines)
             desk.changes = dict(at=datetime.now(), teams=moved or {})
             msg = f"{what}: done" + (_news_note(news) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
         except IngestError as e:
@@ -2387,12 +2438,12 @@ def publish(request: Request, pins: str = Form("")):
         desk.write_local()
         try:
             if CONSUMER:
-                r = consumer_publish(desk.session, n_sims=2000, log=desk.flash.append)
+                r = consumer_publish(desk.session, log=desk.flash.append)
                 desk.flash.append(("published: the laptop's projection restored" if r["restored"] else "published")
                                   + (f", {r['players']} players re-projected with your edits on {', '.join(sorted(r['teams']))}; the other teams exactly as published"
                                      if r["teams"] else "; no pins or grids of your own on this slate, so the laptop's projection stands"))
             else:
-                info = project_slate(desk.session, n_sims=2000, log=desk.flash.append)
+                info = project_slate(desk.session, log=desk.flash.append)
                 desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
             autopilot.touch("publish")                       # the edits are published: the autopilot tick may run again
             _push_feed(desk.flash.append)
@@ -2534,7 +2585,7 @@ def refresh(request: Request, what: str = Form("dk")):
                 changed = feed.pull(feed_url, os.environ.get("IVAN_FEED_TOKEN"), "nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
                 if changed:
                     desk.session.expire_all()                        # the pool was replaced underneath this session
-                    r = after_pull(desk.session, dg, n_sims=2000, log=desk.flash.append)
+                    r = after_pull(desk.session, dg, log=desk.flash.append)
                     desk.changes = dict(at=datetime.now(), teams=CH.diff(before, CH.snapshot(desk.session)))
                     if r["moved"]:
                         desk.flash.append(f"the laptop moved to slate {r['draft_group']}: your edits of the previous slate are filed, this slate's are back, the previous slate's lineups cleared")
@@ -2915,12 +2966,12 @@ async def pipeline_run(request: Request, step: str):
                 desk.write_local()
                 try:
                     if CONSUMER:
-                        r = consumer_publish(desk.session, n_sims=2000, log=lambda m: None)
+                        r = consumer_publish(desk.session, log=lambda m: None)
                         desk.flash.append((f"published: the laptop's projection with your edits on {', '.join(sorted(r['teams']))}" if r["teams"]
                                            else "published: the laptop's projection as it stands (no pins or grids of your own on this slate)")
                                           + (f" ({typed} typed values applied first)" if typed else "") + f", then queued {step}")
                     else:
-                        info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
+                        info = project_slate(desk.session, log=lambda m: None)
                         desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits" + (f" ({typed} typed values applied first)" if typed else "") + f", then queued {step}")
                     autopilot.touch("publish")
                     _push_feed(desk.flash.append)
@@ -3081,7 +3132,7 @@ def late_news(request: Request, team: str, player: str = Form(...), call: str = 
         except Exception as e:   # noqa: BLE001
             desk.flash.append(f"scenario pick failed: {type(e).__name__}: {e}")
         try:
-            info = project_slate(desk.session, n_sims=2000, log=lambda m: None)
+            info = project_slate(desk.session, log=lambda m: None)
             desk.flash.append(f"{team}: {player} {call}: published {info.players} players with {len(desk.overrides)} edits")
             _push_feed(desk.flash.append)
         except IngestError as e:

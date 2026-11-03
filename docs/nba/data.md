@@ -64,6 +64,8 @@ data/nba/
 │   ├── nba_api/pbp/<game id>/
 │   └── nba_live/{scoreboard,boxscore}/   (late swap --live)
 ├── derived/
+│   ├── projection/<TEAM>.pkl       the projection store: the loaded slate's projection per team (frame, history-only frame, the grid behind it),
+│   │                               written by whatever projects (ingest.project_team), read by the desk; travels with the live feed bundle
 │   ├── contests/<id>/              lineups.parquet, players.csv, field.json from a standings export
 │   ├── field_cache/                the two-group field per public-projection key
 │   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
@@ -87,8 +89,11 @@ cookie secret is `data/.desk_secret` (delete it to log everyone out).
 
 ## Which copy is the truth
 
-- **Before lock**: `nba_player` is what the pipeline reads; the desk's memory is what you see; the
-  override files are what both are rebuilt from. [game-day.md](game-day.md) has the table.
+- **Before lock**: `nba_player` is what the pipeline reads and what the desk shows: every projection
+  (a refresh, an edit on the desk, `project.py`) writes the team's rows and its record in the projection
+  store (`derived/projection/`, `ivan.sports.nba.projection.store`) in the same step, through
+  `ingest.project_team`; the desk only reads the store. The override files (pins, grids) are what any
+  projection is rebuilt from. [game-day.md](game-day.md) has the table.
 - **After lock**: the `at_tip` capture is the record of what we projected (the pool may change later
   by a refresh); the `ours` capture before lock is what the scorecard scores.
 - **The field**: the derived contest folders are the real fields; everything under `models/` about

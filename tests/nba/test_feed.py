@@ -30,6 +30,27 @@ def test_publish_pull_from_directory_replaces_only_feed_tables(tmp_path):
     assert feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None) == {}   # nothing new
 
 
+def test_live_bundle_mirrors_the_projection_store_whole(tmp_path):
+    """The producer's projection store travels with the live bundle and replaces the consumer's copy whole: a team the producer
+    dropped is dropped on the consumer too."""
+    prod = tmp_path / "producer"; cons = tmp_path / "consumer"
+    (prod / "data" / "nba").mkdir(parents=True); (cons / "data" / "nba").mkdir(parents=True)
+    _db(prod / "data" / "nba" / "nba_history.sqlite", [(1, "a")]); _db(cons / "data" / "nba" / "nba_history.sqlite", [(9, "stale")])
+    store = prod / "data" / "nba" / "derived" / "projection"; store.mkdir(parents=True)
+    (store / "BOS.pkl").write_bytes(b"bos-1"); (store / "NYK.pkl").write_bytes(b"nyk-1")
+    cstore = cons / "data" / "nba" / "derived" / "projection"; cstore.mkdir(parents=True); (cstore / "LAL.pkl").write_bytes(b"old")
+    m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, root=prod)
+    assert m["live_mirror"]["count"] == 2 and m["live_mirror"]["dirs"] == ["data/nba/derived/projection"]
+    changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", which="live", log=lambda s: None, root=cons)
+    assert changed["live_mirror"] == 2
+    assert sorted(p.name for p in cstore.iterdir()) == ["BOS.pkl", "NYK.pkl"] and (cstore / "BOS.pkl").read_bytes() == b"bos-1"
+    # the next publish without NYK removes it from the consumer on the next pull
+    (store / "NYK.pkl").unlink()
+    feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, root=prod)
+    feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", which="live", log=lambda s: None, root=cons)
+    assert sorted(p.name for p in cstore.iterdir()) == ["BOS.pkl"]
+
+
 def test_push_is_a_no_op_without_a_destination(tmp_path, monkeypatch):
     monkeypatch.delenv(feed.PUSH_ENV, raising=False)
     assert feed.push("nba", out_dir=tmp_path, log=lambda s: None) is False

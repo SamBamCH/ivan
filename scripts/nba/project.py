@@ -65,7 +65,7 @@ def main():
     ap.add_argument("--out", action="append", default=[], help="treat this player as OUT (repeatable)")
     ap.add_argument("--no-starters", action="store_true", help="ignore starting_lineups")
     ap.add_argument("--no-market", action="store_true", help="ignore stored market rates")
-    ap.add_argument("--sims", type=int, default=4000)
+    ap.add_argument("--sims", type=int, default=None, help="Monte Carlo draws (default config/nba.json projection.n_sims, the number every path projects at)")
     args = ap.parse_args()
 
     console = Console()
@@ -75,18 +75,27 @@ def main():
     slate = LiveSlate(session, use_starters=not args.no_starters, use_market=not args.no_market)
     if not slate.players:
         raise SystemExit("no players in nba_player; run ingest.py -p first")
-    overrides = read_overrides(Path(args.overrides) if args.overrides else None)
+    from ivan.sports.nba.ingest import project_team
+    from ivan.sports.nba.projection.live import read_overrides_full
+    overrides = read_overrides(Path(args.overrides)) if args.overrides else read_overrides_full()
     forced_out = {normalize_name(n) for n in args.out}
-    params = ProjectionParams(n_sims=args.sims)
+    params = ProjectionParams.from_config() if args.sims is None else ProjectionParams.from_config(n_sims=args.sims)
     rng = np.random.default_rng(0)
+    adhoc = bool(forced_out or args.dry_run or args.overrides or args.no_starters or args.no_market)   # a look, not the projection
 
     written = 0
     teams = [args.team] if args.team else slate.teams()
     for team in teams:
-        proj = slate.project(team, overrides, forced_out, params, rng=rng)
-        team_table(slate, team, proj, console)
-        if not args.dry_run:
-            written += slate.write(team, proj)
+        if adhoc:
+            proj = slate.project(team, overrides, forced_out, params, rng=rng)
+            team_table(slate, team, proj, console)
+            if not args.dry_run:
+                written += slate.write(team, proj)
+        else:
+            # the desk's own path (ingest.project_team): the team's pool rows and its projection store record, so the desk shows it
+            rec = project_team(session, slate, team, overrides, params)
+            team_table(slate, team, rec["frame"], console)
+            written += int(len(rec["frame"]))
     pool = {normalize_name(p.name) for p in slate.players}
     missing = sorted(set(overrides) - pool)
     if missing:

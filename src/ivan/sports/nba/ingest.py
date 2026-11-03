@@ -15,7 +15,7 @@ Nothing here prompts; scripts/nba/ingest.py and capture.py pass the draft group.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Callable, Optional
@@ -35,6 +35,7 @@ from ivan.sports.common.odds import get_game_odds, get_odds, parse_game_odds, pa
 from ivan.sports.nba.historical.data_fetch import fetch_rotowire_html, parse_rotowire, store_starting_lineups
 from ivan.sports.nba.models import (NBABase, NBAGameOdds, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
 from ivan.sports.nba.paths import INPUT_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR
+from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
 from ivan.sports.nba.projection.market import NBA_MARKETS, market_means
@@ -315,7 +316,7 @@ def locally_edited_teams(session: Session) -> set:
     return teams
 
 
-def after_pull(session: Session, previous_draft_group: Optional[int], *, n_sims: int = 2000, log: Log = print) -> dict:
+def after_pull(session: Session, previous_draft_group: Optional[int], *, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """
     A consumer, after feed.pull replaced the pool. When the published slate moved to another draft group, this machine's own
     edits of the old slate are filed and the new slate's come back (retire_edits: a pin on a name must not follow him onto
@@ -343,7 +344,7 @@ def after_pull(session: Session, previous_draft_group: Optional[int], *, n_sims:
 PULLED_LIVE_BUNDLE = PROJECT_ROOT / "data" / "feed-state" / "tmp" / "live.sql.gz"     # what feed.pull last fetched and applied
 
 
-def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) -> dict:
+def consumer_publish(session: Session, *, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """
     A consumer's Publish. The live bundle last pulled is applied again, so the pool holds the laptop's projection exactly as
     published, then only the slate's teams this machine edited (its own pins and grids) are projected on top. Clearing an
@@ -367,7 +368,7 @@ def consumer_publish(session: Session, *, n_sims: int = 2000, log: Log = print) 
     return dict(restored=restored, teams=mine, players=players)
 
 
-def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: int = 1000,
+def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: Optional[int] = None,
                  log: Log = print, field: bool = False, news: bool = True, lines: Optional[bool] = None) -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
@@ -503,27 +504,52 @@ def refresh_ownership(session: Session, log: Log = print) -> dict:
         session.rollback(); log(f"public refresh failed: {type(e).__name__}: {e}"); return {}
 
 
-def project_slate(session: Session, *, n_sims: int = 4000, write_capture: bool = True, write_csv: bool = True,
+def project_team(session: Session, slate: LiveSlate, team: str, overrides: dict, params: Optional[ProjectionParams] = None,
+                 *, write: bool = True) -> dict:
+    """
+    THE way a team is projected: the frame, the grid behind it and the history-only comparison, written to the team's
+    nba_player rows (not committed: the caller's transaction) and to the projection store (projection.store), which the
+    desk reads. Every path that projects goes through here (project_slate for the whole slate, the desk's edits for one
+    team), so an edit on the desk and a publish give the same numbers: the generator is seeded per team, so a team's
+    projection depends only on its inputs. Returns the store record.
+    """
+    params = params or ProjectionParams.from_config()
+    rng = np.random.default_rng(0)
+    proj = slate.project(team, overrides, set(), params, rng=rng)
+    rot = dict(getattr(slate, "_last_rotation", {}).get(team) or {})      # the grid, targets and zero-minute players behind this frame
+    hist = slate.project(team, overrides, set(), replace(params, n_sims=0, market_weight=0.0), rng=rng)
+    if write:
+        slate.write(team, proj)
+    dg = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
+    rec = PSTORE.record(team, proj, hist, rot, dg, params.n_sims)
+    if write:
+        PSTORE.save(rec)
+    return rec
+
+
+def project_slate(session: Session, *, n_sims: Optional[int] = None, write_capture: bool = True, write_csv: bool = True,
                   log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = False,
                   teams: Optional[Iterable[str]] = None) -> ProjectInfo:
+    """Project the slate (or `teams` of it) through project_team, commit, then the capture rows and the projections CSV.
+    n_sims defaults to config/nba.json projection.n_sims: the one number every path projects at."""
     info = ProjectInfo()
     slate = LiveSlate(session)
     if not slate.players:
         raise IngestError("no players in nba_player")
     overrides = read_overrides_full()
-    params = params or ProjectionParams.from_config(n_sims=n_sims)
-    rng = np.random.default_rng(0)
+    params = params or (ProjectionParams.from_config() if n_sims is None else ProjectionParams.from_config(n_sims=n_sims))
     now = datetime.now()
     frames = []
     only = None if teams is None else {str(t) for t in teams}
     for team in slate.teams():
         if only is not None and team not in only:
             continue                                        # a consumer re-projects only the teams it edited: the rest stay as published
-        proj = slate.project(team, overrides, set(), params, rng=rng)
-        slate.write(team, proj)
+        proj = project_team(session, slate, team, overrides, params)["frame"]
         proj = proj.copy(); proj["team"] = team
         frames.append(proj)
     session.commit()
+    dg0 = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
+    PSTORE.prune(dg0, slate.teams())                        # records of another slate, or of a team no longer on this one, go
     if not frames:                                          # the requested teams are not on this slate: nothing to project, nothing changed
         log(f"no team of the slate among {sorted(only) if only else 'none'}; the projection stands")
         return info
@@ -605,7 +631,7 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: int = 4000, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
+               n_sims: Optional[int] = None, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
                lines: Optional[bool] = None) -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
@@ -662,7 +688,7 @@ def check_news(session, log: Log = print) -> Optional[dict]:
         return None
 
 
-def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: int = 1000, log: Log = print) -> dict:
+def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """
     Load a past slate onto the desk from its archive capture (the last one taken before lock, else the last one; or
     `capture_id`): the pool as it was (salaries, statuses, starters), its props and game lines, then the projection with

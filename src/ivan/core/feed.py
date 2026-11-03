@@ -54,6 +54,9 @@ TABLES = {
         "live_files": ["data/nba/input/minutes_overrides.csv", "data/nba/input/rotations"],
         "live_files_root": "data/nba/input",
         "published_dir": "data/nba/input/published",
+        # the projection store (projection.store): the producer's per-team frames, mirrored to the same path on the consumer,
+        # so its desk shows the producer's projection exactly and re-projects only the teams it edited
+        "live_mirror": ["data/nba/derived/projection"],
         "db": "data/nba/nba_history.sqlite",
     },
 }
@@ -85,14 +88,15 @@ def dump_tables(db_path: Path, tables: List[str], out_gz: Path) -> int:
 
 
 def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log = print, db_path: Optional[Path] = None,
-            producer: Optional[dict] = None) -> dict:
+            producer: Optional[dict] = None, root: Path = PROJECT_ROOT) -> dict:
     """Write the sport's `which` bundle (live | reference | both) and refresh the manifest. Returns the manifest.
-    `producer` is a note about who published (the desk, the autopilot tick, the nightly) that the consumer shows in its header."""
+    `producer` is a note about who published (the desk, the autopilot tick, the nightly) that the consumer shows in its header.
+    `root` is the checkout the spec's file paths are read from (the repository; tests pass a temporary one)."""
     spec = TABLES[sport]
-    db_path = Path(db_path or PROJECT_ROOT / spec["db"])
+    db_path = Path(db_path or root / spec["db"])
     d = Path(out_dir) / sport; d.mkdir(parents=True, exist_ok=True)
     manifest = _read_manifest(d)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S.%f")     # to the microsecond: two publishes in one second are two stamps (a pull compares them)
     parts = ["live", "reference"] if which == "both" else [which]
     for part in parts:
         gz = d / f"{part}.sql.gz"
@@ -101,21 +105,32 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
         log(f"feed {sport} {part}: {n / 1e6:.1f} MB")
         if part == "live" and spec.get("live_files"):
             lf = d / "live_files"; shutil.rmtree(lf, ignore_errors=True); lf.mkdir(parents=True)
-            root = PROJECT_ROOT / spec["live_files_root"]
+            lroot = root / spec["live_files_root"]
             for rel in spec["live_files"]:
-                src = PROJECT_ROOT / rel
+                src = root / rel
                 if src.is_dir():
-                    shutil.copytree(src, lf / src.relative_to(root), dirs_exist_ok=True)
+                    shutil.copytree(src, lf / src.relative_to(lroot), dirs_exist_ok=True)
                 elif src.exists():
-                    (lf / src.relative_to(root)).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, lf / src.relative_to(root))
+                    (lf / src.relative_to(lroot)).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, lf / src.relative_to(lroot))
             listing = {str(q.relative_to(lf)): _sha(q) for q in lf.rglob("*") if q.is_file()}
             (d / "live_files.json").write_text(json.dumps(listing, indent=0))
             manifest["live_files"] = {"stamp": stamp, "count": len(listing)}
             log(f"feed {sport} live files: {len(listing)} (the producer's pins and grids)")
+        if part == "live" and spec.get("live_mirror"):
+            # directories mirrored to the same path on the consumer (the projection store), replaced whole on a pull
+            mir = d / "live_mirror"; shutil.rmtree(mir, ignore_errors=True); mir.mkdir(parents=True)
+            for rel in spec["live_mirror"]:
+                src = root / rel
+                if src.is_dir():
+                    shutil.copytree(src, mir / rel, dirs_exist_ok=True)
+            listing = {str(q.relative_to(mir)): _sha(q) for q in mir.rglob("*") if q.is_file()}
+            (d / "live_mirror.json").write_text(json.dumps(listing, indent=0))
+            manifest["live_mirror"] = {"stamp": stamp, "count": len(listing), "dirs": list(spec["live_mirror"])}
+            log(f"feed {sport} mirrored files: {len(listing)} (the projection store)")
         if part == "reference":
             files = d / "files"; shutil.rmtree(files, ignore_errors=True)
             for rel in spec["files"]:
-                src = PROJECT_ROOT / rel
+                src = root / rel
                 if src.is_dir():
                     shutil.copytree(src, files / rel, dirs_exist_ok=True)
                 elif src.exists():
@@ -209,14 +224,15 @@ def fetch(url: str, token: Optional[str], out: Path, timeout: int = 300) -> Path
 
 
 def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_path: Optional[Path] = None, which: str = "both",
-         log: Log = print) -> dict:
+         log: Log = print, root: Path = PROJECT_ROOT) -> dict:
     """
     Fetch the feed's manifest and apply every bundle whose stamp is newer than
     the last pull (state in state_dir/<sport>.json): live tables, reference
-    tables, and the reference files into this checkout. Returns what changed.
+    tables, and the reference files into this checkout (`root`). Returns what changed.
     """
     base = base_url.rstrip("/") + f"/{sport}"
     spec = TABLES[sport]
+    db_path = Path(db_path or root / spec["db"])         # the database under `root`, never another checkout's
     state_dir = Path(state_dir); state_dir.mkdir(parents=True, exist_ok=True)
     state_p = state_dir / f"{sport}.json"
     state = json.loads(state_p.read_text()) if state_p.exists() else {}
@@ -242,16 +258,25 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
         if part == "live" and manifest.get("live_files") and spec.get("published_dir"):
             # the producer's edits become this machine's published base layer (replaced whole: a pin the producer lifted is lifted here too)
             listing = json.loads(fetch(f"{base}/live_files.json", token, tmp / "live_files.json").read_text())
-            pub = PROJECT_ROOT / spec["published_dir"]; shutil.rmtree(pub, ignore_errors=True); pub.mkdir(parents=True, exist_ok=True)
+            pub = root / spec["published_dir"]; shutil.rmtree(pub, ignore_errors=True); pub.mkdir(parents=True, exist_ok=True)
             for rel in listing:
                 fetch(f"{base}/live_files/{rel}", token, pub / rel)
             log(f"feed {sport}: {len(listing)} published edit file(s) (the producer's pins and grids)"); changed["live_files"] = len(listing)
             state["live_files"] = {"stamp": manifest["live_files"]["stamp"]}
+        if part == "live" and manifest.get("live_mirror"):
+            # the mirrored directories (the projection store) replaced whole: the consumer's frames are the producer's until it edits a team
+            listing = json.loads(fetch(f"{base}/live_mirror.json", token, tmp / "live_mirror.json").read_text())
+            for rel_dir in manifest["live_mirror"].get("dirs") or spec.get("live_mirror") or []:
+                shutil.rmtree(root / rel_dir, ignore_errors=True); (root / rel_dir).mkdir(parents=True, exist_ok=True)
+            for rel in listing:
+                fetch(f"{base}/live_mirror/{rel}", token, root / rel)
+            log(f"feed {sport}: {len(listing)} mirrored file(s) (the projection store)"); changed["live_mirror"] = len(listing)
+            state["live_mirror"] = {"stamp": manifest["live_mirror"]["stamp"]}
         if part == "reference" and manifest.get("files"):
             listing = json.loads(fetch(f"{base}/files.json", token, tmp / "files.json").read_text())
             n = 0
             for rel, sha in listing.items():
-                dst = PROJECT_ROOT / rel
+                dst = root / rel
                 if dst.exists() and _sha(dst) == sha:
                     continue
                 fetch(f"{base}/files/{rel}", token, dst); n += 1
