@@ -15,8 +15,8 @@ it on a click (a different slate reloads by itself).
 import argparse
 import logging
 
-from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import IngestError, classic_slates, ensure_schema, project_slate, record_external_projections, run_ingest
+from ivan.sports.nba.ingest import IngestError, classic_slates, project_slate, record_external_projections, run_ingest
+from ivan.sports.nba import slates as S
 
 
 def main() -> int:
@@ -35,9 +35,7 @@ def main() -> int:
     ap.add_argument("--field", action="store_true", help="also build the public field and write ownership after the pool is stored (scripts/nba/field_ownership.py does it alone)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
-    engine = init_db("nba")
-    ensure_schema(engine)
-    session = get_session(engine)
+    dg, session = S.open(args.draft_group, create=True)
     try:
         if args.list:
             for s in classic_slates():

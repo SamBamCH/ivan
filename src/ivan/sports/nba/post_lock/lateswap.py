@@ -53,7 +53,7 @@ from ivan.core.utils import normalize_name
 from ivan.sports.nba import contests as C
 from ivan.sports.nba.lineup_export import BASE_COLS, POSITION_ORDER, assign_player_order_classic, read_entries
 from ivan.sports.nba.models import NBAPlayer
-from ivan.sports.nba.paths import OUTPUT_DIR
+from ivan.sports.nba import slates as S
 from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
 from ivan.sports.nba.pre_lock.lineup_generation import SLOT_NAMES, FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.pre_lock.player import generate_player_samples
@@ -673,10 +673,10 @@ def format_exposure(rows: Sequence[dict], n_entries: Optional[int] = None, chang
 
 
 # ----------------------------------------------------------------------------- outputs
-def write_outputs(session: Session, report: dict, entries_csv, out_dir: Path = OUTPUT_DIR, stamp: Optional[str] = None, log: Log = print) -> Dict[str, str]:
+def write_outputs(session: Session, report: dict, entries_csv, out_dir: Optional[Path] = None, stamp: Optional[str] = None, log: Log = print) -> Dict[str, str]:
     """The upload CSV (the entries export with every improved entry's new lineup, slot order by eligibility) and the json report."""
     stamp = stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(out_dir) if out_dir else S.output_dir(); out_dir.mkdir(parents=True, exist_ok=True)
     fps = slate_players(session)
     meta = {int(p.id): p for p in session.query(NBAPlayer).all()}
     best_by_entry = {str(e["entry_id"]): e for c in report["contests"] for e in c["entries"]}
@@ -770,7 +770,8 @@ def _slot(players: List[FieldPlayer], slots: List[str]) -> List[FieldPlayer]:
     return out
 
 
-def latest_report(out_dir: Path = OUTPUT_DIR) -> Optional[dict]:
+def latest_report(out_dir: Optional[Path] = None) -> Optional[dict]:
+    out_dir = Path(out_dir) if out_dir else S.output_dir()
     for js in sorted(out_dir.glob("lateswap.*.json"), reverse=True):
         try:
             return json.loads(js.read_text())

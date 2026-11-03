@@ -9,16 +9,12 @@ from pathlib import Path
 from typing import Optional
 import pandas as pd
 from ivan.core.utils import PROJECT_ROOT
-from ivan.sports.nba.paths import OUTPUT_DIR, INPUT_DIR
+from ivan.sports.nba import slates as S
 from .core import desk
 
 
 def _entries_path() -> Path:
-    try:
-        from ivan.core.config import load_config
-        return Path(load_config("nba")["paths"]["entries_csv"])
-    except Exception:   # noqa: BLE001
-        return INPUT_DIR / "entries.csv"
+    return S.entries_csv()                                   # the slate's entries file (slates/<dg>/input/entries.csv)
 
 
 def _entries_info() -> dict:
@@ -50,9 +46,9 @@ def _latest_outputs() -> Optional[dict]:
     summary from its choose json, and the exposures recomputed over this slate's entries only.
     """
     mine = _slate_contest_ids()
-    for classic in sorted(OUTPUT_DIR.glob("chosen_entries.classic.*.csv"), reverse=True):
+    for classic in sorted(S.output_dir().glob("chosen_entries.classic.*.csv"), reverse=True):
         stamp = classic.name.split(".")[2]
-        js = OUTPUT_DIR / f"chosen_entries.choose.{stamp}.json"
+        js = S.output_dir() / f"chosen_entries.choose.{stamp}.json"
         if not js.exists():
             continue
         try:
@@ -68,7 +64,7 @@ def _latest_outputs() -> Optional[dict]:
                                     top_roi=v.get("top_quality_roi"), book=(v.get("book") or {}).get("chosen") or {}) for v in hit.values()]
             up = pd.read_csv(classic); up = up[up["Contest ID"].astype(int).isin(mine)]
             out["rows"] = int(len(up))
-            lu = OUTPUT_DIR / f"chosen_entries.lineups.{stamp}.csv"
+            lu = S.output_dir() / f"chosen_entries.lineups.{stamp}.csv"
             if lu.exists() and len(up):
                 L = pd.read_csv(lu); L = L[L["contest_id"].astype(int).isin(mine)]
                 n_entries = L["entry_id"].nunique()

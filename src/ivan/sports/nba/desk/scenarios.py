@@ -9,6 +9,7 @@ from typing import Optional
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.projection import rotation as ROT
 from .state import QUESTION_STATUSES
+from ivan.sports.nba import slates as S
 
 
 class ScenarioMixin:
@@ -83,10 +84,10 @@ class ScenarioMixin:
         """
         msgs = []
         seen = self.__dict__.setdefault("_facts_seen", {})
-        if not SC.SCENARIOS_DIR.is_dir():
+        if not S.scenarios_dir().is_dir():
             return msgs
         teams = {p.team for p in self.slate.players if p.team}
-        for d in SC.SCENARIOS_DIR.iterdir():
+        for d in S.scenarios_dir().iterdir():
             team = d.name
             if not d.is_dir() or team not in teams:
                 continue

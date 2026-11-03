@@ -22,9 +22,8 @@ from pathlib import Path
 
 from ivan.core import raw
 from ivan.core.config import load_config
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import standings as S
-from ivan.sports.nba.ingest import ensure_schema
+from ivan.sports.nba import slates as SL
 
 
 def entries_path() -> Path:
@@ -36,6 +35,7 @@ def entries_path() -> Path:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    SL.add_arg(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("status", "scrape"):
         p = sub.add_parser(name)
@@ -46,8 +46,8 @@ def main() -> int:
     sub.choices["scrape"].add_argument("--no-derive", action="store_true")
     d = sub.add_parser("derive"); d.add_argument("--contest-ids", default=None)
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
-    raw.ensure_tables(engine)
+    dg, session = SL.open(a.slate)
+    raw.ensure_tables(session.get_bind())
     now = datetime.now()
 
     if a.cmd in ("status", "scrape") and not getattr(a, "contest_ids", None):

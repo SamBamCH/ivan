@@ -156,18 +156,19 @@ to **pub**.
 
 ## Late news and overrides (`live.py`, `scenarios.py`)
 
-`data/nba/input/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, starter calls; 0
-minutes is a scratch); `data/nba/input/rotations/<TEAM>.json` the painted grid with its locked rows.
-Both are read by every projection, by any entry point. On a consumer the producer's published copies
-sit under `data/nba/input/published/` as the base layer and the consumer's own files on top
-(`override_layers`). Scenarios (`data/nba/input/scenarios/<TEAM>/`) are named copies of a team's two
+Under the slate's directory (`data/nba/slates/<dg>/`, `ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds
+the pins (minutes, fppm, band, fpts, starter calls; 0 minutes is a scratch); `edits/rotations/<TEAM>.json` the painted
+grid with its locked rows. Both are read by every projection of that slate, by any entry point (the slate is the current
+one in context: a script's `--slate`, the web's address). On a consumer the laptop's copies sit under the slate's
+`published/` as the base layer and the consumer's own files on top (`override_layers`). Scenarios
+(`edits/scenarios/<TEAM>/`) are named copies of a team's two
 files plus the assumptions read off them. `scripts/nba/news.py "Name"` builds the overrides for one
 scratch from the terminal; `--conditional` scales teammates toward their "without him" per-minute
 history (opt-in: those samples are small and confounded).
 
 Every projection runs through `ingest.project_team`: one team, the frame, the history-only comparison
 frame (`n_sims=0`, no market) and the rotation grid behind it, written to the team's `nba_player` rows
-and to the projection store (`data/nba/derived/projection/<TEAM>.pkl`, `projection.store`). The
+and to the slate's projection store (`data/nba/slates/<dg>/projection/<TEAM>.pkl`, `projection.store`). The
 generator is seeded per team, so a team's numbers depend only on its inputs: an edit on the desk and a
 full `project_slate` give the same projection. The sims count is one number, `config/nba.json →
 projection.n_sims` (4000; the draws cost nothing next to the solve, 0.15 s a team either way).

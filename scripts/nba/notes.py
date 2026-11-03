@@ -13,20 +13,20 @@ A note belongs to its slate and stands until cleared; the slate's scorecard list
 import argparse
 
 from ivan.core.utils import normalize_name
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import notes as N
-from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.models import NBAPlayer
+from ivan.sports.nba import slates as S
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list"); ls.add_argument("--draft-group", type=int); ls.add_argument("--all", action="store_true")
     st = sub.add_parser("set"); st.add_argument("player"); st.add_argument("text")
     cl = sub.add_parser("clear"); cl.add_argument("player")
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     pool = session.query(NBAPlayer).all()
     dg = getattr(a, "draft_group", None) or next((p.draft_group_id for p in pool if p.draft_group_id), None)
     if dg is None:

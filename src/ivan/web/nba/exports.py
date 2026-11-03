@@ -10,9 +10,9 @@ import numpy as np
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.models import Lineup
-from ivan.sports.nba.paths import OUTPUT_DIR
+from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection.live import override_of
-from .core import CONSUMER, LOCK, app, desk
+from .core import CONSUMER, desk, LOCK, slate
 from ivan.sports.nba.desk import backfill_lineup_slates, lineup_names, lineup_slates
 
 
@@ -36,7 +36,7 @@ def _csv_response(body, filename: str) -> StreamingResponse:
                                       "Pragma": "no-cache", "Expires": "0"})
 
 
-@app.get("/export/projections.csv")
+@slate.get("/export/projections.csv")
 def export_projections():
     """Every player in the current pool with our projection (after the desk's edits) and the public one, one row each."""
     with LOCK:
@@ -76,7 +76,7 @@ def export_projections():
     return _csv_response(iter([body]), f"nba_projections_{stamp}.csv")
 
 
-@app.get("/export/lineups.csv")
+@slate.get("/export/lineups.csv")
 def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
     """
     The generated lineups of one slate, one row each, the eight players in DraftKings roster order (PG SG SF PF C G F
@@ -122,9 +122,9 @@ def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
     return _csv_response(gen(), f'nba_lineups_{dg}_{stamp}{"_ids" if ids else ""}.csv')
 
 
-@app.get("/download/{name}")
+@slate.get("/download/{name}")
 def download(name: str):
-    p = OUTPUT_DIR / Path(name).name
+    p = S.output_dir() / Path(name).name
     if not p.exists() or not p.name.startswith(("chosen_entries.", "lateswap.")):
         return HTMLResponse("not found", status_code=404)
     return FileResponse(p, filename=p.name, media_type="text/csv")

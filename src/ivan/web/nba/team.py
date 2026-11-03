@@ -12,22 +12,23 @@ from fastapi import Form, Request
 from fastapi.responses import HTMLResponse
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.ingest import refresh_public_projection
-from ivan.sports.nba.projection.live import PUBLISHED_OVERRIDES_CSV, override_of
+from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
-from .core import LOCK, _busy, _render, app, desk, runner
+from .core import _active, _busy, _render, desk, LOCK, slate
 from .edits import _apply_pin_rows, _num
 from .knobs import pipeline_form
 from .pipeline import _submit
+from ivan.sports.nba import slates as S
 
 
-@app.get("/team/{team}", response_class=HTMLResponse)
+@slate.get("/team/{team}", response_class=HTMLResponse)
 def team(request: Request, team: str):
     with LOCK:
         desk.maybe_reload()
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/pin", response_class=HTMLResponse)
+@slate.post("/team/{team}/pin", response_class=HTMLResponse)
 def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form(""),
         fpts: str = Form(""), pub: str = Form("")):
     """One row's hand values: blank clears that field. Minutes 0 scratches."""
@@ -71,7 +72,7 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/refigure", response_class=HTMLResponse)
+@slate.post("/team/{team}/refigure", response_class=HTMLResponse)
 async def refigure(request: Request, team: str):
     """
     Body: JSON {rows: [{player, minutes, fppm, fpts, pub}, ...]}: every typed value of the team's grid, applied in one go (blank
@@ -96,7 +97,7 @@ async def refigure(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/note", response_class=HTMLResponse)
+@slate.post("/team/{team}/note", response_class=HTMLResponse)
 def player_note(request: Request, team: str, player: str = Form(...), text: Optional[str] = Form(None)):
     """A note next to a player on this slate (ivan.sports.nba.notes = scripts/nba/notes.py): the text comes from the form or
     the prompt (HX-Prompt); a blank text clears it. It shows while this slate is loaded and goes into its scorecard."""
@@ -114,7 +115,7 @@ def player_note(request: Request, team: str, player: str = Form(...), text: Opti
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/starter", response_class=HTMLResponse)
+@slate.post("/team/{team}/starter", response_class=HTMLResponse)
 def starter_toggle(request: Request, team: str, player: str = Form(...)):
     """Click the st cell: a bench player becomes a starter, a starter goes to the bench; a second click on a hand call clears it
     back to Rotowire's lineup. Saved with the other edits; the team re-projects (the start shift and the rotation proposal move)."""
@@ -134,13 +135,13 @@ def starter_toggle(request: Request, team: str, player: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.get("/team/{team}/rotation", response_class=HTMLResponse)
+@slate.get("/team/{team}/rotation", response_class=HTMLResponse)
 def rotation_view(request: Request, team: str):
     with LOCK:
         return _render(request, "_nba_rotation.html", rot=desk.rotation(team))
 
 
-@app.post("/team/{team}/rotation", response_class=HTMLResponse)
+@slate.post("/team/{team}/rotation", response_class=HTMLResponse)
 async def rotation_apply(request: Request, team: str):
     """Body: JSON {players: [...], grid: [[0/1 x 48], ...], locked: [...]} from the desk's grid; the locked rows are held, the rest re-filled."""
     body = await request.json()
@@ -153,7 +154,7 @@ async def rotation_apply(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
+@slate.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
 def rotation_propose(request: Request, team: str, source: str = Form("propose"), game_id: str = Form("")):
     """source=propose: tonight's grid with every lock lifted (the top panel, nothing saved); source=last: a played game for the panel under it."""
     with LOCK:
@@ -162,7 +163,7 @@ def rotation_propose(request: Request, team: str, source: str = Form("propose"),
         return _render(request, "_nba_rotation.html", rot=desk.rotation(team, source="propose"))
 
 
-@app.post("/team/{team}/rotation/add", response_class=HTMLResponse)
+@slate.post("/team/{team}/rotation/add", response_class=HTMLResponse)
 def rotation_add(request: Request, team: str, player: str = Form(...)):
     """A player the rotation left off the floor, back in: a minutes pin at his history; the grid schedules him."""
     with LOCK:
@@ -171,7 +172,7 @@ def rotation_add(request: Request, team: str, player: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/rotation/drop", response_class=HTMLResponse)
+@slate.post("/team/{team}/rotation/drop", response_class=HTMLResponse)
 def rotation_drop(request: Request, team: str, player: str = Form(...)):
     """No minutes tonight: the player leaves the grid and the pool (a minutes pin of 0; the + beside his name brings him back)."""
     with LOCK:
@@ -181,7 +182,7 @@ def rotation_drop(request: Request, team: str, player: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/rotation/restore", response_class=HTMLResponse)
+@slate.post("/team/{team}/rotation/restore", response_class=HTMLResponse)
 def rotation_restore(request: Request, team: str, player: str = Form(...)):
     """Lift a hand drop: the minutes pin goes and the model fills him again."""
     with LOCK:
@@ -190,16 +191,16 @@ def rotation_restore(request: Request, team: str, player: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/rotation/clear", response_class=HTMLResponse)
+@slate.post("/team/{team}/rotation/clear", response_class=HTMLResponse)
 def rotation_clear(request: Request, team: str):
     with LOCK:
         n = desk.clear_rotation(team)
-        back = "the published grid and pins" if ROT.drawn_source(team) == "published" or PUBLISHED_OVERRIDES_CSV.exists() else "the model's"
+        back = "the published grid and pins" if ROT.drawn_source(team) == "published" or S.published_overrides_csv().exists() else "the model's"
         desk.flash.append(f"{team}: locks cleared" + (f", {n} typed minutes lifted" if n else "") + f"; the grid is {back}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/clear", response_class=HTMLResponse)
+@slate.post("/team/{team}/clear", response_class=HTMLResponse)
 def clear_team(request: Request, team: str):
     with LOCK:
         for p in desk.players(team):
@@ -209,7 +210,7 @@ def clear_team(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/scenario/save", response_class=HTMLResponse)
+@slate.post("/team/{team}/scenario/save", response_class=HTMLResponse)
 def scenario_save(request: Request, team: str, name: str = Form(...)):
     """Save the team's current edits (pins + grid) under a name; the assumptions are read off the calls in them."""
     if (b := _busy(request)) is not None:
@@ -222,7 +223,7 @@ def scenario_save(request: Request, team: str, name: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/scenario/activate", response_class=HTMLResponse)
+@slate.post("/team/{team}/scenario/activate", response_class=HTMLResponse)
 def scenario_activate(request: Request, team: str, slug: str = Form(...)):
     if (b := _busy(request)) is not None:
         return b
@@ -232,7 +233,7 @@ def scenario_activate(request: Request, team: str, slug: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/scenario/delete", response_class=HTMLResponse)
+@slate.post("/team/{team}/scenario/delete", response_class=HTMLResponse)
 def scenario_delete(request: Request, team: str, slug: str = Form(...)):
     if (b := _busy(request)) is not None:
         return b
@@ -241,7 +242,7 @@ def scenario_delete(request: Request, team: str, slug: str = Form(...)):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@app.post("/team/{team}/news", response_class=HTMLResponse)
+@slate.post("/team/{team}/news", response_class=HTMLResponse)
 def late_news(request: Request, team: str, player: str = Form(...), call: str = Form("out"), then: str = Form("sim")):
     """
     Late news in one move: the call (out / starts / bench / back), the team re-allocated around it, the pool published, and
@@ -273,7 +274,7 @@ def late_news(request: Request, team: str, player: str = Form(...), call: str = 
             desk.flash.append(f"scenario pick failed: {type(e).__name__}: {e}")
         desk.flash.append(f"{team}: {player} {call}: the team is re-projected and written to the pool ({len(desk.overrides)} edits on the slate)")
         if then in ("sim", "lateswap"):
-            if runner.active():
+            if _active():
                 desk.flash.append("a job is already running: nothing queued (cancel it or wait, then run Sim / Late swap)")
             else:
                 try:

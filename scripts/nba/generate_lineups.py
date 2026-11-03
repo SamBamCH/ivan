@@ -14,13 +14,13 @@ import argparse
 from multiprocessing import freeze_support
 
 from ivan.core.config import config_path
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba.field_generation import clear_lineups, generate_field
-from ivan.sports.nba.ingest import ensure_schema
+from ivan.sports.nba import slates as S
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Generate and store NBA classic field lineups (multi-job)")
+    S.add_arg(p)
     p.add_argument("num_lineups", type=int, help="total number of lineups to generate")
     p.add_argument("num_jobs", type=int, help="how many parallel jobs to split across")
     p.add_argument("-c", "--config", default=str(config_path("nba")), help="path to the nba json config file")
@@ -29,7 +29,7 @@ def main() -> int:
     p.add_argument("--randomness", type=float, default=None, help="spread of the sampled worlds around the mean, 0-1 (default: config generate.randomness, 0.25)")
     p.add_argument("--no-progress", action="store_true", help="plain log lines instead of progress bars")
     a = p.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     if a.fresh:
         n_lineups, n_sims = clear_lineups(session)
         print(f"cleared {n_lineups} lineups and {n_sims} simulation results")

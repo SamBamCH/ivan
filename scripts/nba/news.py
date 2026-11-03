@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -33,17 +32,16 @@ from rich.console import Console
 from rich.table import Table
 
 from ivan.core.utils import normalize_name
-from ivan.database.session import init_db, get_session, add_missing_columns
-from ivan.sports.nba.models import NBABase
-from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.history import without_player
 from ivan.sports.nba.projection.live import LiveSlate, read_overrides, write_overrides
+from ivan.sports.nba import slates as S
 
 COND_PRIOR_GAMES = 3.0   # games without him before the conditional rate carries half the weight
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("player", nargs="+", help="player(s) ruled out")
     ap.add_argument("--accept", action="store_true", help="take the model's minutes without prompting")
     ap.add_argument("--conditional", action="store_true", help="scale teammates' rates toward their 'without him' history")
@@ -52,9 +50,7 @@ def main():
     args = ap.parse_args()
 
     console = Console()
-    engine = init_db("nba")
-    add_missing_columns(engine, NBABase.metadata)
-    session = get_session(engine)
+    dg, session = S.open(args.slate)
     slate = LiveSlate(session)
     by_name = {normalize_name(p.name): p for p in slate.players}
     outs = {normalize_name(n) for n in args.player}

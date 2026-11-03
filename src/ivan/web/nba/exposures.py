@@ -11,13 +11,13 @@ import pandas as pd
 from fastapi import Form, Request
 from fastapi.responses import HTMLResponse
 from ivan.sports.nba.models import HistoricalContest, Lineup, NBAPlayer
-from ivan.sports.nba.paths import OUTPUT_DIR
-from .core import LOCK, _render, app, desk
+from ivan.sports.nba import slates as S
+from .core import _render, desk, LOCK, slate
 from .outputs import _slate_contest_ids
 from ivan.sports.nba.desk import QUESTION_STATUSES
 
 
-@app.get("/exposures", response_class=HTMLResponse)
+@slate.get("/exposures", response_class=HTMLResponse)
 def exposures_section(request: Request, set: str = "pool", metric: str = "proj", bins: str = ""):
     """The exposures section of pre-lock and post-lock (loaded when opened; its switches reload only the section)."""
     with LOCK:
@@ -35,9 +35,9 @@ def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:
     number, status (a chosen player now OUT is the first thing to see), value. Per team: the entries' exposure summed.
     """
     mine = _slate_contest_ids() if mine is None else mine
-    for classic in sorted(OUTPUT_DIR.glob("chosen_entries.classic.*.csv"), reverse=True):
+    for classic in sorted(S.output_dir().glob("chosen_entries.classic.*.csv"), reverse=True):
         stamp = classic.name.split(".")[2]
-        lu = OUTPUT_DIR / f"chosen_entries.lineups.{stamp}.csv"
+        lu = S.output_dir() / f"chosen_entries.lineups.{stamp}.csv"
         if not lu.exists():
             continue
         try:
@@ -112,7 +112,7 @@ def _side_ctx() -> dict:
     return dict(mode=mode, pool=None, entries=ex)
 
 
-@app.post("/pipeline/exposures", response_class=HTMLResponse)
+@slate.post("/pipeline/exposures", response_class=HTMLResponse)
 def pipeline_exposures(request: Request, mode: str = Form("entries")):
     """Flip the side panel between the candidate pool's exposures and the chosen entries'."""
     with LOCK:
@@ -147,9 +147,9 @@ def _pool_lineups() -> list:
 def _entries_lineups(contest: Optional[int] = None) -> Optional[dict]:
     """The chosen entries of the newest run covering this slate: {stamp, when, contests: [(id, name, n)], lineups: [[ids]], frame}."""
     mine = _slate_contest_ids()
-    for classic in sorted(OUTPUT_DIR.glob("chosen_entries.classic.*.csv"), reverse=True):
+    for classic in sorted(S.output_dir().glob("chosen_entries.classic.*.csv"), reverse=True):
         stamp = classic.name.split(".")[2]
-        lu = OUTPUT_DIR / f"chosen_entries.lineups.{stamp}.csv"
+        lu = S.output_dir() / f"chosen_entries.lineups.{stamp}.csv"
         if not lu.exists():
             continue
         try:
@@ -190,7 +190,7 @@ def _sim_fields() -> dict:
     if not mine:
         return {}
     names = {int(c.contest_id): str(c.name or "") for c in desk.session.query(HistoricalContest).filter(HistoricalContest.contest_id.in_(list(mine))).all()}
-    base = OUTPUT_DIR / "sim"
+    base = S.output_dir() / "sim"
     if not base.is_dir():
         return {}
     for d in sorted(base.iterdir(), reverse=True):

@@ -23,13 +23,12 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from ivan.sports.nba.paths import NBA_DATA_DIR
+from ivan.sports.nba import slates as S
 
-STORE_DIR = NBA_DATA_DIR / "derived" / "projection"
 
 
 def path(team: str) -> Path:
-    return STORE_DIR / f"{team}.pkl"
+    return S.store_dir() / f"{team}.pkl"
 
 
 def record(team: str, frame: pd.DataFrame, hist: pd.DataFrame, rot: dict, draft_group: Optional[int], n_sims: int) -> dict:
@@ -39,7 +38,7 @@ def record(team: str, frame: pd.DataFrame, hist: pd.DataFrame, rot: dict, draft_
 
 def save(rec: dict) -> Path:
     """Write the record atomically (a reader never sees a half-written file)."""
-    STORE_DIR.mkdir(parents=True, exist_ok=True)
+    S.store_dir().mkdir(parents=True, exist_ok=True)
     p = path(rec["team"]); tmp = p.with_suffix(".pkl.tmp")
     with open(tmp, "wb") as f:
         pickle.dump(rec, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -62,9 +61,9 @@ def load(team: str) -> Optional[dict]:
 def load_all(draft_group: Optional[int] = None) -> dict[str, dict]:
     """{team: record} of every record on disk, only the slate's when draft_group is given (another slate's are ignored, not deleted)."""
     out = {}
-    if not STORE_DIR.is_dir():
+    if not S.store_dir().is_dir():
         return out
-    for p in sorted(STORE_DIR.glob("*.pkl")):
+    for p in sorted(S.store_dir().glob("*.pkl")):
         rec = load(p.stem)
         if rec is None:
             continue
@@ -78,9 +77,9 @@ def prune(draft_group: Optional[int], teams: Iterable[str]) -> int:
     """Remove the records that are not the slate's (another draft group, or a team no longer on it). Returns how many went."""
     keep = {str(t) for t in teams}
     n = 0
-    if not STORE_DIR.is_dir():
+    if not S.store_dir().is_dir():
         return 0
-    for p in STORE_DIR.glob("*.pkl"):
+    for p in S.store_dir().glob("*.pkl"):
         rec = load(p.stem)
         stale = rec is None or p.stem not in keep or (draft_group is not None and rec.get("draft_group") is not None
                                                       and int(rec["draft_group"]) != int(draft_group))
@@ -91,15 +90,15 @@ def prune(draft_group: Optional[int], teams: Iterable[str]) -> int:
 
 def clear() -> int:
     n = 0
-    if STORE_DIR.is_dir():
-        for p in STORE_DIR.glob("*.pkl"):
+    if S.store_dir().is_dir():
+        for p in S.store_dir().glob("*.pkl"):
             p.unlink(missing_ok=True); n += 1
     return n
 
 
 def stamp() -> tuple:
     """(newest record's mtime, record count): changes whenever any process writes a team."""
-    if not STORE_DIR.is_dir():
+    if not S.store_dir().is_dir():
         return (None, 0)
-    ps = list(STORE_DIR.glob("*.pkl"))
+    ps = list(S.store_dir().glob("*.pkl"))
     return (max((p.stat().st_mtime for p in ps), default=None), len(ps))

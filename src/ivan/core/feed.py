@@ -45,17 +45,16 @@ FEED_DIR = PROJECT_ROOT / "data" / "feed"
 
 TABLES = {
     "nba": {
-        "live": ["nba_player", "odds", "nba_market_rate", "game_odds", "starting_lineups", "historical_contest_information", "payouts", "nba_news"],
-        "reference": ["nba_stats", "nba_stint", "nba_projection_capture", "archived_slate", "projection_snapshot", "classic_contest_metadata"],
+        # the history database's live part: facts about the day's games every slate shares (the props, the lines, the headlines
+        # and which slate each headline was seen on)
+        "live": ["odds", "game_odds", "nba_news", "nba_slate_news"],
+        "reference": ["nba_stats", "nba_stint", "nba_projection_capture", "archived_slate"],
         "files": ["data/nba/models", "data/nba/input/historical_lines.csv", "data/nba/derived", "data/nba/diagnostics/scorecard"],
-        # the producer's edits (minutes pins, the sim / public overrides, the painted grids) travel with every live bundle;
-        # the consumer keeps them under data/nba/input/published/ as the base layer its own edits sit on (projection.live)
-        "live_files": ["data/nba/input/minutes_overrides.csv", "data/nba/input/rotations"],
-        "live_files_root": "data/nba/input",
-        "published_dir": "data/nba/input/published",
-        # the projection store (projection.store): the producer's per-team frames, mirrored to the same path on the consumer,
-        # so its desk shows the producer's projection exactly and re-projects only the teams it edited
-        "live_mirror": ["data/nba/derived/projection"],
+        # one bundle per held slate (ivan.sports.nba.slates: data/nba/slates/<dg>/): the feed tables of its slate.sqlite (the pool,
+        # starters, market rates, contests, payouts; the consumer's lineups and sims are its own), its edits as the consumer's
+        # published layer, its projection store mirrored, its record (slate.json). Published with the live part.
+        "slates": {"dir": "data/nba/slates", "tables": ["nba_player", "starting_lineups", "nba_market_rate", "historical_contest_information", "payouts", "classic_contest_metadata"],
+                   "edits": "edits", "published": "published", "mirror": "projection", "meta": "slate.json"},
         "db": "data/nba/nba_history.sqlite",
     },
     # the NFL: the server runs its own slates (ingest, generate, sim, choose on its own working tables) and takes the laptop's
@@ -138,10 +137,12 @@ def dump_tables(db_path: Path, tables: List[str], out_gz: Path) -> int:
 
 
 def publish(sport: str, out_dir: Path = FEED_DIR, which: Optional[str] = None, log: Log = print, db_path: Optional[Path] = None,
-            producer: Optional[dict] = None, root: Path = PROJECT_ROOT) -> dict:
+            producer: Optional[dict] = None, root: Path = PROJECT_ROOT, slate: Optional[int] = None) -> dict:
     """Write the sport's `which` bundle (live | reference | both; None = every part the sport has, parts_of) and refresh the manifest. Returns the manifest.
     `producer` is a note about who published (the desk, the autopilot tick, the nightly) that the consumer shows in its header.
-    `root` is the checkout the spec's file paths are read from (the repository; tests pass a temporary one)."""
+    `root` is the checkout the spec's file paths are read from (the repository; tests pass a temporary one). A sport with slate
+    bundles (the NBA) writes one per held slate with the live part, or only `slate`'s when given; a slate bundle whose content
+    did not change keeps its stamp."""
     spec = TABLES[sport]
     db_path = Path(db_path or root / spec["db"])
     d = Path(out_dir) / sport; d.mkdir(parents=True, exist_ok=True)
@@ -199,6 +200,8 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: Optional[str] = None, l
             (d / "files.json").write_text(json.dumps(listing, indent=0))
             fdig = hashlib.sha256(json.dumps(listing, sort_keys=True).encode()).hexdigest()
             manifest["files"] = {"stamp": stamped(manifest.get("files"), fdig), "sha256": fdig, "count": len(listing)}
+    if spec.get("slates") and "live" in parts:
+        manifest["slates"] = _publish_slates(spec, d, manifest.get("slates") or {}, stamp, root, log, only=slate)
     manifest["published_at"] = datetime.now().isoformat(timespec="seconds")
     if producer is not None:
         manifest["producer"] = producer
@@ -206,6 +209,56 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: Optional[str] = None, l
         manifest.pop("producer", None)                 # a publisher that says nothing must not leave the previous publisher's note standing
     (d / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return manifest
+
+
+def _dir_listing(src: Path, dst: Path) -> tuple[dict, str]:
+    """Copy a directory into the feed (replaced whole) and return its listing {relative path: sha} and the listing's digest."""
+    shutil.rmtree(dst, ignore_errors=True)
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        dst.mkdir(parents=True, exist_ok=True)
+    listing = {str(q.relative_to(dst)): _sha(q) for q in dst.rglob("*") if q.is_file()}
+    return listing, hashlib.sha256(json.dumps(listing, sort_keys=True).encode()).hexdigest()
+
+
+def _publish_slates(spec: dict, d: Path, prev: dict, stamp: str, root: Path, log: Log, only: Optional[int] = None) -> dict:
+    """The slate bundles under <feed>/<sport>/slates/<dg>/: slate.sql.gz (the feed tables), edits/ (the producer's pins, grids and
+    scenarios), projection/ (the store), slate.json. The manifest entry per slate carries the stamps of each; a slate the
+    producer no longer holds leaves the manifest (the consumer keeps its copy)."""
+    from ivan.sports.nba import slates as S
+    sdir = root / spec["slates"]["dir"]
+    out = {} if only is None else dict(prev)
+    held = S.held(sdir)
+    if only is not None:
+        held = [int(only)] if int(only) in held else []
+    for dg in held:
+        sp = S.paths(dg, sdir)
+        dd = d / "slates" / str(dg); dd.mkdir(parents=True, exist_ok=True)
+        p0 = prev.get(str(dg)) or {}
+        gz = dd / "slate.sql.gz"
+        tables = [t for t in spec["slates"]["tables"] if t in {r[0] for r in sqlite3.connect(sp.db).execute("select name from sqlite_master where type='table'").fetchall()}]
+        n = dump_tables(sp.db, tables, gz)
+        sha = _sha(gz)
+        ed_listing, ed_dig = _dir_listing(sp.edits, dd / "edits")
+        (dd / "edits.json").write_text(json.dumps(ed_listing, indent=0))
+        mi_listing, mi_dig = _dir_listing(sp.store, dd / "projection")
+        (dd / "projection.json").write_text(json.dumps(mi_listing, indent=0))
+        meta = S.read_meta(dg, sdir)
+        entry = {"stamp": p0["stamp"] if p0.get("sha256") == sha else stamp, "sha256": sha, "bytes": n, "tables": tables,
+                 "edits": {"stamp": (p0.get("edits") or {}).get("stamp") if (p0.get("edits") or {}).get("sha256") == ed_dig else stamp, "sha256": ed_dig, "count": len(ed_listing)},
+                 "mirror": {"stamp": (p0.get("mirror") or {}).get("stamp") if (p0.get("mirror") or {}).get("sha256") == mi_dig else stamp, "sha256": mi_dig, "count": len(mi_listing)},
+                 "meta": {k: meta.get(k) for k in ("lock", "day", "label", "games", "refreshed_at", "refreshed_by", "created_at")}}
+        if entry["stamp"] == stamp or entry["edits"]["stamp"] == stamp or entry["mirror"]["stamp"] == stamp:
+            S.touch(dg, "published", root=sdir)
+        entry["meta"]["published_at"] = S.read_meta(dg, sdir).get("published_at")
+        (dd / "slate.json").write_text(json.dumps(S.read_meta(dg, sdir), indent=1, sort_keys=True))
+        out[str(dg)] = entry
+        log(f"feed nba slate {dg}: {n / 1e6:.1f} MB, {len(ed_listing)} edit files, {len(mi_listing)} store records")
+    if only is None:
+        for gone in set(prev) - set(out):                  # a slate the producer dropped: its bundle leaves the feed
+            shutil.rmtree(d / "slates" / gone, ignore_errors=True)
+    return out
 
 
 SSH_ENV = "IVAN_FEED_SSH"        # the consumer's .env: the producer as ssh reaches it, e.g. sam-pratt@100.91.103.23 (the laptop's tailnet IP; the server does not resolve MagicDNS names)
@@ -242,9 +295,9 @@ def pull_ssh(host: str, sport: str, state_dir: Path, db_path: Optional[Path] = N
     command answers rsync with rrsync, read only, rooted at the producer's data/feed; only what changed travels, so the
     reference bundle moves once a night), then the usual pull from that directory replaces the feed's tables, the published
     edits and the projection store here. Nothing is pushed from the producer and nothing runs there but on this request.
-    With `slate` (a draft group) the command is `publish <sport> <slate>`: the producer loads that slate into its pool first
-    when it holds another (the NBA: ingest.refresh_pool, what its desk's slate pick does), so the consumer's pick of a slate
-    moves both desks to it; the ssh waits up to ten minutes for the load.
+    With `slate` (a draft group) the command is `publish <sport> <slate>`: the producer publishes that slate's bundle, fetching
+    the slate into its own directory first when it does not hold it (the NBA: ingest.refresh_pool); the ssh waits up to ten
+    minutes for that. The rsync and the pull then bring every slate bundle that changed, that one among them.
     Returns what pull returned (what changed), plus "published": the producer's answer to publish.
     """
     local = Path(root) / "data" / "feed"
@@ -380,6 +433,10 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
                 fetch(f"{base}/live_mirror/{rel}", token, root / rel)
             log(f"feed {sport}: {len(listing)} mirrored file(s) (the projection store)"); changed["live_mirror"] = len(listing)
             state["live_mirror"] = {"stamp": manifest["live_mirror"]["stamp"]}
+        if part == "live" and spec.get("slates"):
+            changed_slates = _pull_slates(spec, base, token, tmp, manifest.get("slates") or {}, state, root, log)
+            if changed_slates:
+                changed["slates"] = changed_slates
         if part == "reference" and is_new("files"):   # the reference files (models, inputs) beside the tables
             listing = json.loads(fetch(f"{base}/files.json", token, tmp / "files.json").read_text())
             n = 0
@@ -392,6 +449,49 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
             state["files"] = {"stamp": manifest["files"]["stamp"]}
     state_p.write_text(json.dumps(state, indent=1))
     return changed
+
+
+def _pull_slates(spec: dict, base: str, token: Optional[str], tmp: Path, manifest_slates: dict, state: dict, root: Path, log: Log) -> dict:   # noqa: C901
+    """Every slate bundle whose stamps moved, applied into this machine's own slate directory (created when new): the feed tables
+    replaced in its slate.sqlite (its lineups, sims and edits untouched), the producer's edits as its published layer, the
+    projection store mirrored, the producer's record merged into slate.json with pulled_at. Returns {dg: {tables, edits, mirror}}."""
+    from ivan.sports.nba import slates as S
+    sdir = root / spec["slates"]["dir"]
+    st = state.setdefault("slates", {})
+    out = {}
+    for key, m in sorted(manifest_slates.items(), key=lambda kv: -int(kv[0])):
+        dg = int(key); p0 = st.get(key) or {}
+        got = {}
+        new_tables = p0.get("stamp") != m["stamp"]
+        new_edits = (p0.get("edits") or {}).get("stamp") != (m.get("edits") or {}).get("stamp")
+        new_mirror = (p0.get("mirror") or {}).get("stamp") != (m.get("mirror") or {}).get("stamp")
+        if not (new_tables or new_edits or new_mirror):
+            continue
+        sp = S.create(dg, root=sdir, history=root / spec["db"])
+        if new_tables:
+            gz = fetch(f"{base}/slates/{key}/slate.sql.gz", token, tmp / f"slate-{key}.sql.gz")
+            if _sha(gz) != m["sha256"]:
+                raise RuntimeError(f"slate {key} bundle digest mismatch; try again")
+            got["tables"] = apply("nba", gz, sp.db, log)
+        if new_edits:
+            listing = json.loads(fetch(f"{base}/slates/{key}/edits.json", token, tmp / f"edits-{key}.json").read_text())
+            shutil.rmtree(sp.published, ignore_errors=True); sp.published.mkdir(parents=True, exist_ok=True)
+            for rel in listing:
+                fetch(f"{base}/slates/{key}/edits/{rel}", token, sp.published / rel)
+            got["edits"] = len(listing)
+        if new_mirror:
+            listing = json.loads(fetch(f"{base}/slates/{key}/projection.json", token, tmp / f"projection-{key}.json").read_text())
+            shutil.rmtree(sp.store, ignore_errors=True); sp.store.mkdir(parents=True, exist_ok=True)
+            for rel in listing:
+                fetch(f"{base}/slates/{key}/projection/{rel}", token, sp.store / rel)
+            got["mirror"] = len(listing)
+        meta = m.get("meta") or {}
+        S.write_meta(dg, sdir, **{k: v for k, v in meta.items() if v is not None}, pulled_at=datetime.now())
+        st[key] = {"stamp": m["stamp"], "edits": {"stamp": (m.get("edits") or {}).get("stamp")}, "mirror": {"stamp": (m.get("mirror") or {}).get("stamp")},
+                   "pulled_at": datetime.now().isoformat(timespec="seconds")}
+        out[dg] = got
+        log(f"feed nba slate {key}: " + ", ".join(f"{k} {len(v) if isinstance(v, list) else v}" for k, v in got.items()))
+    return out
 
 
 def status(sport: str, state_dir: Path = PROJECT_ROOT / "data" / "feed-state") -> dict:

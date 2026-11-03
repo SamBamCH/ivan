@@ -27,10 +27,9 @@ from rich.console import Console
 from rich.table import Table
 
 from ivan.core.utils import normalize_name
-from ivan.database.session import init_db, get_session, add_missing_columns
-from ivan.sports.nba.models import NBABase
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, read_overrides
+from ivan.sports.nba import slates as S
 
 
 def team_table(slate: LiveSlate, team: str, proj, console: Console, title_extra: str = ""):
@@ -59,6 +58,7 @@ def team_table(slate: LiveSlate, team: str, proj, console: Console, title_extra:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--team", help="only this team (DK abbreviation)")
     ap.add_argument("--dry-run", action="store_true", help="print, do not write")
     ap.add_argument("--overrides", default=None, help="minutes CSV (default data/nba/input/minutes_overrides.csv if present)")
@@ -69,9 +69,7 @@ def main():
     args = ap.parse_args()
 
     console = Console()
-    engine = init_db("nba")
-    add_missing_columns(engine, NBABase.metadata)
-    session = get_session(engine)
+    dg, session = S.open(args.slate)
     slate = LiveSlate(session, use_starters=not args.no_starters, use_market=not args.no_market)
     if not slate.players:
         raise SystemExit("no players in nba_player; run ingest.py -p first")

@@ -14,9 +14,9 @@ from sqlalchemy.orm import Session
 
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.models import NBAPlayer, StartingLineups, NBAMarketRate, NBABase
-from ivan.sports.nba.paths import MINUTES_OVERRIDES_CSV
 from .history import load_box_scores, build_history, HistoryState
 from .engine import project_team, RosterPlayer, ProjectionParams
+from ivan.sports.nba import slates as S
 
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 
@@ -48,8 +48,6 @@ def apply_fpts_overrides(proj: pd.DataFrame, overrides: dict) -> pd.DataFrame:
     return proj
 
 
-PUBLISHED_DIR = MINUTES_OVERRIDES_CSV.parent / "published"      # a consumer's base layer: the producer's edits as pulled (core.feed)
-PUBLISHED_OVERRIDES_CSV = PUBLISHED_DIR / "minutes_overrides.csv"
 
 
 def read_overrides_full(path: Path | None = None, layered: bool = True) -> dict[str, dict]:
@@ -58,9 +56,9 @@ def read_overrides_full(path: Path | None = None, layered: bool = True) -> dict[
     published base layer (the producer's pins, when this machine pulls a feed) under this machine's own file: a local
     value wins per field, a blank local field falls back to the published one. `layered=False` reads one file as is.
     """
-    if path is None and layered and PUBLISHED_OVERRIDES_CSV.exists():
-        base = read_overrides_full(PUBLISHED_OVERRIDES_CSV, layered=False)
-        local = read_overrides_full(MINUTES_OVERRIDES_CSV, layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}
+    if path is None and layered and S.published_overrides_csv().exists():
+        base = read_overrides_full(S.published_overrides_csv(), layered=False)
+        local = read_overrides_full(S.overrides_csv(), layered=False) if S.overrides_csv().exists() else {}
         out = {n: dict(v) for n, v in base.items()}
         for n, v in local.items():
             rec = out.setdefault(n, {k: None for k in OVERRIDE_KEYS})
@@ -68,7 +66,7 @@ def read_overrides_full(path: Path | None = None, layered: bool = True) -> dict[
                 if v.get(k) is not None:
                     rec[k] = v[k]
         return out
-    path = Path(path) if path else MINUTES_OVERRIDES_CSV
+    path = Path(path) if path else S.overrides_csv()
     if not path.exists():
         return {}
     df = pd.read_csv(path, comment="#")
@@ -93,7 +91,7 @@ def read_overrides(path: Path | None = None) -> dict[str, float]:
 
 def write_overrides(overrides: dict, path: Path | None = None) -> Path:
     """Write the overrides file. Values are a minutes pin (float) or a dict with any of minutes, fppm, min_low, min_high; floats keep the player's other columns from the file."""
-    path = Path(path) if path else MINUTES_OVERRIDES_CSV
+    path = Path(path) if path else S.overrides_csv()
     path.parent.mkdir(parents=True, exist_ok=True)
     old = read_overrides_full(path, layered=False) if path.exists() else {}     # this machine's own file only: the published layer is never copied in
     rows = []
@@ -111,8 +109,8 @@ def write_overrides(overrides: dict, path: Path | None = None) -> Path:
 
 def override_layers(name: str) -> tuple[dict, dict]:
     """(published, local) overrides for a player: what the producer pinned and what this machine typed on top (empty dicts when none)."""
-    pub = read_overrides_full(PUBLISHED_OVERRIDES_CSV, layered=False).get(name, {}) if PUBLISHED_OVERRIDES_CSV.exists() else {}
-    loc = read_overrides_full(MINUTES_OVERRIDES_CSV, layered=False).get(name, {}) if MINUTES_OVERRIDES_CSV.exists() else {}
+    pub = read_overrides_full(S.published_overrides_csv(), layered=False).get(name, {}) if S.published_overrides_csv().exists() else {}
+    loc = read_overrides_full(S.overrides_csv(), layered=False).get(name, {}) if S.overrides_csv().exists() else {}
     return ({k: v for k, v in pub.items() if v is not None}, {k: v for k, v in loc.items() if v is not None})
 
 

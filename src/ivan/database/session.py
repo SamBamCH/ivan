@@ -89,17 +89,20 @@ def safe_commit(session, max_tries=5):
     raise RuntimeError("Could not commit after retries—DB still locked")
 
 
-def add_missing_columns(engine, metadata) -> list:
+def add_missing_columns(engine, metadata, only=None) -> list:
     """
     Add columns the models declare that an existing table lacks (there is no
     migration tool here; SQLite's ALTER TABLE ADD COLUMN is a metadata-only
-    change). Tables that do not exist are left to create_all. Returns the
-    "table.column" names added.
+    change). Tables that do not exist are left to create_all. `only`: a set of
+    table names to consider (the NBA splits its tables between the history
+    database and a file per slate). Returns the "table.column" names added.
     """
     from sqlalchemy import inspect
     insp = inspect(engine)
     added = []
     for table in metadata.sorted_tables:
+        if only is not None and table.name not in only:
+            continue
         if not insp.has_table(table.name):
             continue
         existing = {c["name"] for c in insp.get_columns(table.name)}

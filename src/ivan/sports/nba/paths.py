@@ -7,18 +7,15 @@ from ivan.core.utils import PROJECT_ROOT
 
 NBA_DATA_DIR = PROJECT_ROOT / "data" / "nba"
 INPUT_DIR    = NBA_DATA_DIR / "input"
-OUTPUT_DIR   = NBA_DATA_DIR / "output"
+OUTPUT_DIR   = NBA_DATA_DIR / "output"      # cross-slate outputs only (scorecards, backtests); a slate's files are under slates/<dg>/output
 MODELS_DIR   = NBA_DATA_DIR / "models"
 DIAG_DIR     = NBA_DATA_DIR / "diagnostics"
 LOGS_DIR     = NBA_DATA_DIR / "logs"
 
-DEFAULT_ENTRIES_CSV   = INPUT_DIR / "entries.csv"
 PROJECTIONS_CSV       = INPUT_DIR / "stok.csv"
-MINUTES_OVERRIDES_CSV = INPUT_DIR / "minutes_overrides.csv"
-CHOSEN_ENTRIES_CSV    = OUTPUT_DIR / "chosen_entries.csv"      # base name; lineup_export stamps the files
-LATESWAP_BEST_CSV     = OUTPUT_DIR / "lateswap_best.csv"
-ACTIVE_SLATE_JSON     = NBA_DATA_DIR / "active_slate.json"     # the slate picked on the desk: the capture tick ends on it while it is open
 FIELD_MODEL_PKL       = MODELS_DIR / "field_distribution_model.pkl"
+# Everything that belongs to one slate (its pool database, edits, grids, projection store, entries, outputs) lives under
+# data/nba/slates/<draft group>/ and is reached through ivan.sports.nba.slates (paths of the current slate), not here.
 
 # Logged-in DK Chrome profile used only by the historical contest scraper.
 CHROME_PROFILE_DIR = PROJECT_ROOT / "chrome-selenium" / "dk-profile"

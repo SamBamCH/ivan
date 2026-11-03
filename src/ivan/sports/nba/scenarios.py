@@ -21,10 +21,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from ivan.sports.nba.paths import INPUT_DIR
-from ivan.sports.nba.projection.rotation import ROTATIONS_DIR, drawn_path
+from ivan.sports.nba.projection.rotation import drawn_path
+from ivan.sports.nba import slates as S
 
-SCENARIOS_DIR = INPUT_DIR / "scenarios"
 CALLS = ("out", "in", "starts", "bench")
 
 
@@ -34,7 +33,7 @@ def slugify(name: str) -> str:
 
 
 def team_dir(team: str) -> Path:
-    return SCENARIOS_DIR / team
+    return S.scenarios_dir() / team
 
 
 def _active_path(team: str) -> Path:
@@ -178,7 +177,7 @@ def activate(team: str, slug: str, overrides_all: Dict[str, dict], team_players:
         new[n] = dict(ov)
     gp = drawn_path(team)
     if s.get("grid"):
-        ROTATIONS_DIR.mkdir(parents=True, exist_ok=True)
+        S.rotations_dir().mkdir(parents=True, exist_ok=True)
         gp.write_text(json.dumps(s["grid"], indent=0))
     else:
         gp.unlink(missing_ok=True)

@@ -71,14 +71,3 @@ def test_engine_solve_allocation_holds_pins_and_sums(monkeypatch):
     assert set(alloc.columns) >= {"baseline", "minutes", "pinned"} and book == {}
 
 
-def test_a_new_slate_files_the_old_slates_edits_away(tmp_path, monkeypatch):
-    from ivan.sports.nba import ingest as I
-    from ivan.sports.nba.projection import rotation as R
-    inp = tmp_path / "input"; inp.mkdir(); rot = inp / "rotations"; rot.mkdir()
-    ov = inp / "minutes_overrides.csv"; ov.write_text("player,minutes\nsteven adams,15.4\n"); (rot / "HOU.json").write_text("{}")
-    monkeypatch.setattr(I, "INPUT_DIR", inp); monkeypatch.setattr(I, "MINUTES_OVERRIDES_CSV", ov); monkeypatch.setattr(R, "ROTATIONS_DIR", rot)
-    monkeypatch.setattr(I, "PROJECT_ROOT", tmp_path)
-    msgs = []; I.retire_edits(155553, log=msgs.append)
-    assert not ov.exists() and not (rot / "HOU.json").exists()
-    assert (inp / "edits" / "155553" / "minutes_overrides.csv").read_text().startswith("player") and (inp / "edits" / "155553" / "HOU.json").exists()
-    assert msgs and "155553" in msgs[0]

@@ -7,50 +7,80 @@ from ivan.core import feed
 
 
 def _db(path, rows):
+    """A history database: the shared live tables (odds carries `rows`) and a reference table."""
     con = sqlite3.connect(path)
-    con.execute("create table nba_player (id integer primary key, name text)")
-    con.executemany("insert into nba_player values (?, ?)", rows)
-    con.execute("create index ix_player_name on nba_player(name)")
+    con.execute("create table odds (id integer primary key, player text)")
+    con.executemany("insert into odds values (?, ?)", rows)
+    con.execute("create index ix_odds_player on odds(player)")
+    for t in ("game_odds", "nba_news", "nba_slate_news"):
+        con.execute(f"create table {t} (id integer primary key, x text)")
     con.execute("create table nba_stats (id integer primary key, pts real)"); con.execute("insert into nba_stats values (1, 30.0)")
     con.commit(); con.close()
+
+
+def _slate(root, dg, rows, history):
+    """A held slate under root/data/nba/slates/<dg>/: its database (the pool rows), a pin and a store record."""
+    from ivan.sports.nba import slates as S
+    sdir = root / "data" / "nba" / "slates"
+    sp = S.create(dg, lock=__import__("datetime").datetime(2026, 11, 4, 18, 0), games=4, root=sdir, history=history)
+    con = sqlite3.connect(sp.db)
+    con.executemany("insert into nba_player (id, name, team, position, roster_slot_id, gametime, salary, draft_group_id) values (?, ?, 'BOS', 'PG', 1, '2026-11-04 18:00:00', 5000, ?)", [(i, n, dg) for i, n in rows])
+    con.commit(); con.close()
+    sp.overrides_csv.write_text("player,minutes\na,36\n"); (sp.store / "BOS.pkl").write_bytes(b"bos-1")
+    return sp
 
 
 def test_publish_pull_from_directory_replaces_only_feed_tables(tmp_path):
     src = tmp_path / "producer.sqlite"; _db(src, [(1, "a"), (2, "b")])
     m = feed.publish("nba", out_dir=tmp_path / "feed", which="both", log=lambda s: None, db_path=src)
-    assert m["live"]["bytes"] > 0 and m["reference"]["bytes"] > 0 and "nba_player" in m["live"]["tables"]
+    assert m["live"]["bytes"] > 0 and m["reference"]["bytes"] > 0 and "odds" in m["live"]["tables"]
     dst = tmp_path / "consumer.sqlite"
     con = sqlite3.connect(dst)
-    con.execute("create table lineup (id integer primary key)"); con.execute("insert into lineup values (7)")
-    con.execute("create table nba_player (id integer primary key, name text)"); con.execute("insert into nba_player values (9, 'stale')"); con.commit(); con.close()
+    con.execute("create table my_own (id integer primary key)"); con.execute("insert into my_own values (7)")
+    con.execute("create table odds (id integer primary key, player text)"); con.execute("insert into odds values (9, 'stale')"); con.commit(); con.close()
     changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None)
-    assert "nba_player" in changed["live"] and "nba_stats" in changed["reference"]
+    assert "odds" in changed["live"] and "nba_stats" in changed["reference"]
     con = sqlite3.connect(dst)
-    assert con.execute("select name from nba_player order by id").fetchall() == [("a",), ("b",)]
-    assert con.execute("select id from lineup").fetchall() == [(7,)]                      # the consumer's own table survives
-    assert con.execute("select count(*) from sqlite_master where name='ix_player_name'").fetchone()[0] == 1
+    assert con.execute("select player from odds order by id").fetchall() == [("a",), ("b",)]
+    assert con.execute("select id from my_own").fetchall() == [(7,)]                      # the consumer's own table survives
+    assert con.execute("select count(*) from sqlite_master where name='ix_odds_player'").fetchone()[0] == 1
     assert feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None) == {}   # nothing new
 
 
-def test_live_bundle_mirrors_the_projection_store_whole(tmp_path):
-    """The producer's projection store travels with the live bundle and replaces the consumer's copy whole: a team the producer
-    dropped is dropped on the consumer too."""
+def test_a_bundle_per_held_slate_lands_in_the_consumers_slate_directory(tmp_path):
+    """The producer publishes one bundle per held slate (its feed tables, its edits, its store, its record); the consumer makes the
+    slate's directory, replaces the feed tables in its own slate database (its lineups survive), takes the edits as the published
+    layer and mirrors the store, and notes pulled_at. An unchanged publish is nothing new; an edit alone travels alone."""
+    from ivan.sports.nba import slates as S
     prod = tmp_path / "producer"; cons = tmp_path / "consumer"
     (prod / "data" / "nba").mkdir(parents=True); (cons / "data" / "nba").mkdir(parents=True)
     _db(prod / "data" / "nba" / "nba_history.sqlite", [(1, "a")]); _db(cons / "data" / "nba" / "nba_history.sqlite", [(9, "stale")])
-    store = prod / "data" / "nba" / "derived" / "projection"; store.mkdir(parents=True)
-    (store / "BOS.pkl").write_bytes(b"bos-1"); (store / "NYK.pkl").write_bytes(b"nyk-1")
-    cstore = cons / "data" / "nba" / "derived" / "projection"; cstore.mkdir(parents=True); (cstore / "LAL.pkl").write_bytes(b"old")
+    _slate(prod, 155, [(1, "a"), (2, "b")], prod / "data" / "nba" / "nba_history.sqlite")
     m = feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, root=prod)
-    assert m["live_mirror"]["count"] == 2 and m["live_mirror"]["dirs"] == ["data/nba/derived/projection"]
+    e = m["slates"]["155"]
+    assert "nba_player" in e["tables"] and e["edits"]["count"] == 1 and e["mirror"]["count"] == 1 and e["meta"]["games"] == 4 and e["meta"]["published_at"]
+    assert (tmp_path / "feed" / "nba" / "slates" / "155" / "slate.sql.gz").exists()
     changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", which="live", log=lambda s: None, root=cons)
-    assert changed["live_mirror"] == 2
-    assert sorted(p.name for p in cstore.iterdir()) == ["BOS.pkl", "NYK.pkl"] and (cstore / "BOS.pkl").read_bytes() == b"bos-1"
-    # the next publish without NYK removes it from the consumer on the next pull
-    (store / "NYK.pkl").unlink()
+    assert changed["slates"][155]["tables"] and changed["slates"][155]["edits"] == 1 and changed["slates"][155]["mirror"] == 1
+    csd = cons / "data" / "nba" / "slates"
+    sp = S.paths(155, csd)
+    con = sqlite3.connect(sp.db)
+    assert con.execute("select name from nba_player order by id").fetchall() == [("a",), ("b",)]
+    con.execute("insert into lineup (id, draft_group_id, player_ids_list) values (1, 155, '[1, 2]')"); con.commit(); con.close()   # the consumer's own work
+    assert sp.published_overrides_csv.read_text().startswith("player") and (sp.store / "BOS.pkl").read_bytes() == b"bos-1"
+    meta = S.read_meta(155, csd)
+    assert meta["games"] == 4 and meta["lock"] == "2026-11-04T18:00:00" and meta["pulled_at"] and not sp.overrides_csv.exists()
+    # nothing changed on the producer: nothing new
     feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, root=prod)
-    feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", which="live", log=lambda s: None, root=cons)
-    assert sorted(p.name for p in cstore.iterdir()) == ["BOS.pkl"]
+    assert feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", which="live", log=lambda s: None, root=cons) == {}
+    # a pin lifted on the producer: only the edits travel, the consumer's lineup is untouched, the pin is gone from the published layer
+    S.paths(155, prod / "data" / "nba" / "slates").overrides_csv.unlink()
+    feed.publish("nba", out_dir=tmp_path / "feed", which="live", log=lambda s: None, root=prod)
+    changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", which="live", log=lambda s: None, root=cons)
+    assert changed["slates"][155] == {"edits": 0}
+    con = sqlite3.connect(sp.db)
+    assert con.execute("select count(*) from lineup").fetchone()[0] == 1 and not sp.published_overrides_csv.exists()
+    con.close()
 
 
 def test_pull_ssh_asks_the_producer_to_publish_then_rsyncs_then_applies(tmp_path, monkeypatch):
@@ -77,9 +107,9 @@ def test_pull_ssh_asks_the_producer_to_publish_then_rsyncs_then_applies(tmp_path
     monkeypatch.setattr(feed.subprocess, "run", fake_run)
     changed = feed.pull_ssh("laptop", "nba", tmp_path / "state", log=lambda s: None, root=cons)
     assert [c[0] for c in calls] == ["ssh", "rsync"]
-    assert "nba_player" in changed["live"] and changed["published"].startswith("live 20261103")
+    assert "odds" in changed["live"] and changed["published"].startswith("live 20261103")
     con = sqlite3.connect(cons / "data" / "nba" / "nba_history.sqlite")
-    assert con.execute("select name from nba_player order by id").fetchall() == [("a",), ("b",)]
+    assert con.execute("select player from odds order by id").fetchall() == [("a",), ("b",)]
     # nothing new on the producer: the pull says so without touching the tables
     changed2 = feed.pull_ssh("laptop", "nba", tmp_path / "state", log=lambda s: None, root=cons)
     assert {k: v for k, v in changed2.items() if k != "published"} == {}

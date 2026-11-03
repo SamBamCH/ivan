@@ -13,15 +13,16 @@ from __future__ import annotations
 
 import argparse
 
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import IngestError, capture_pool
+from ivan.sports.nba import slates as S
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--no-csv", action="store_true", help="capture rows only, no projections CSV")
     args = ap.parse_args()
-    session = get_session(init_db("nba"))
+    dg, session = S.open(args.slate)
     try:
         info = capture_pool(session, log=print, write_csv=not args.no_csv)
     except IngestError as e:

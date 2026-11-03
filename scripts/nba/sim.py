@@ -17,28 +17,27 @@ import argparse
 
 from ivan.core import artifacts
 from ivan.core.config import config_path, load_config
-from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import ensure_schema
-from ivan.sports.nba.paths import OUTPUT_DIR
+from ivan.sports.nba import slates as S
 from ivan.sports.nba.simulate_contest import clean_old_diagnostics, simulate_entries
 from ivan.sports.nba.utils import _cfg
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Run NBA contest simulations for each contest in the entries CSV")
+    S.add_arg(p)
     p.add_argument("--config", default=str(config_path("nba")), help="path to the nba json config file")
     p.add_argument("--entries", default=None, help="entries CSV (default: paths.entries_csv from config, or $IVAN_ENTRIES_CSV)")
     p.add_argument("-n", type=int, default=None, help="simulations per contest (default: config sim.n_sims, 1000)")
     p.add_argument("-c", type=int, default=None, help="field cap: largest field size to simulate (default: config field.cap, 10000)")
     a = p.parse_args()
     cfg = load_config("nba", a.config)
-    engine = init_db("nba", cfg.get("database_url")); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     removed = clean_old_diagnostics(days_to_keep=7)
     if removed:
         print(f"Removed {removed} old diagnostics folder(s).")
-    r = simulate_entries(session, a.entries or cfg["paths"]["entries_csv"], a.config,
+    r = simulate_entries(session, a.entries or str(S.entries_csv()), a.config,
                          n_sims=a.n or int(_cfg(cfg, "sim.n_sims", 1000)), field_cap=a.c or int(_cfg(cfg, "field.cap", 10000)),
-                         artifact_dir=artifacts.sim_dir(OUTPUT_DIR))
+                         artifact_dir=artifacts.sim_dir(S.output_dir()))
     return 1 if r["failed"] else 0
 
 

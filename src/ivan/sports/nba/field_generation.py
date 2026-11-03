@@ -155,9 +155,9 @@ def pool_draft_group(session: Session) -> Optional[int]:
 
 
 def slate_lineups(session: Session, *columns):
-    """The loaded slate's lineups (Lineup.draft_group_id = the pool's draft group): what generate, the field sampler and the
-    sim work on. Other slates' lineups stay in the table (ingest.isolate_slate keeps the recent ones) and are never read
-    as this slate's. Rows without a draft group (older than the column) count as the loaded slate's."""
+    """The slate's lineups (Lineup.draft_group_id = the pool's draft group): what generate, the field sampler and the sim work
+    on. Every slate has its own database now (ivan.sports.nba.slates), so the table holds this slate's alone; the filter stays
+    for rows without a draft group (older than the column), which count as the slate's."""
     q = session.query(*columns) if columns else session.query(Lineup)
     dg = pool_draft_group(session)
     return q if dg is None else q.filter((Lineup.draft_group_id == dg) | (Lineup.draft_group_id.is_(None)))

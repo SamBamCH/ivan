@@ -31,7 +31,7 @@ sudo loginctl enable-linger ivan           # user timers survive logout
 Then from the laptop, with an ssh alias `ivan-server` for the service user:
 
 ```bash
-ssh ivan-server /opt/ivan/app/deploy/setup_nba_server.sh   # NBA dirs, schema, prints the server's ssh public key, tries the pull, restarts ivan-web
+ssh ivan-server /opt/ivan/app/deploy/setup_nba_server.sh   # NBA dirs, schema, the 30-minute pull timer, the one-time move to slate directories (migrate_slates.py), prints the server's ssh public key, tries the pull, restarts ivan-web
 deploy/install_feed_key.sh "<that public key line>"  # on the laptop: binds the key to deploy/feed_serve.sh (publish + read-only rsync of data/feed)
 sudo apt install openssh-server                      # on the laptop, once (installs and starts sshd): the server reaches it over the tailnet
 ssh ivan-server 'cd /opt/ivan/app && for s in nba nfl mma; do venv/bin/python scripts/$s/feed.py pull; done'   # the first pulls (what each sport's Refresh from laptop does)
@@ -86,17 +86,17 @@ import cannot get the lock in 30 s it fails loudly, run it again.
 **MMA** (`scripts/mma/feed.py`; the slate page's **Refresh from laptop**): the whole card as the laptop holds it,
 every table, with `data/mma/input`, `models` and `derived`. The server only reads it.
 
-**NBA** (`ivan.core.feed`): the consumer pulls, nothing is pushed. Its desk's **Refresh from laptop**
-(`feed.pull_ssh`, `scripts/nba/feed.py pull`) runs one ssh command on the laptop, `publish`, which the key's forced
-command (`deploy/feed_serve.sh`) answers by writing the live bundle fresh (the pool as it stands, the published edits,
-the projection store, the headlines), then rsyncs the laptop's `data/feed/nba/` here (the forced command serves rsync
-through `rrsync`, read only, rooted at `data/feed`; only changed files move, so the reference bundle the nightly writes
-travels once a day), then applies the bundles. A publish whose content did not change keeps its stamp, so a Refresh
-with nothing new says so. When the consumer's bar picks a slate the laptop does not hold, the command is
-`publish nba <draft group>` (`scripts/nba/feed.py pull --slate DG` there, `publish --slate DG` here): the laptop loads
-that slate into its pool first (the same load as its own desk's slate pick, remembered in `active_slate.json`), so both
-desks move to it; the ssh waits up to ten minutes for the load. The manifest carries a producer note (the autopilot switch, the last tick) that the
-consumer's header shows. The key is the server's `~/.ssh/id_ed25519` (`deploy/setup_nba_server.sh` makes and prints
+**NBA** (`ivan.core.feed`): the consumer pulls, nothing is pushed. The server's `ivan-nba-pull.timer` pulls every 30
+minutes and a slate page's **Refresh from laptop** pulls that slate now (`feed.pull_ssh`, `scripts/nba/feed.py pull
+[--slate DG]`): one ssh command on the laptop, `publish nba [DG]`, which the key's forced command (`deploy/feed_serve.sh`)
+answers by writing the bundles fresh (one per held slate: its pool as it stands, its edits, its projection store, its
+record; the shared props, lines and headlines; `DG` publishes one slate, fetching it into its own directory first when
+the laptop does not hold it, up to ten minutes), then rsyncs the laptop's `data/feed/nba/` here (the forced command
+serves rsync through `rrsync`, read only, rooted at `data/feed`; only changed files move, so the reference bundle the
+nightly writes travels once a day), then applies every bundle whose stamps moved into the matching slate directory here.
+A publish whose content did not change keeps its stamp, so a pull with nothing new says so. The manifest carries a
+producer note (the autopilot switch, the last tick) that the consumer's header shows, and each slate's record (when the
+laptop refreshed it and by what), which the slate page shows beside its own pulled time. The key is the server's `~/.ssh/id_ed25519` (`deploy/setup_nba_server.sh` makes and prints
 it), bound on the laptop by `deploy/install_feed_key.sh` with no shell, pty or forwarding; the laptop's sshd must be on
 (`sudo apt install openssh-server`, which starts it) and reachable on the tailnet (`main-thinkpad`). Table lists and the consumer's
 layering of its own edits are in [nba/overnight.md](nba/overnight.md). `scripts/nba/consumer_check.py` drives the
@@ -113,7 +113,8 @@ still work when `IVAN_FEED_SSH` is unset: `IVAN_FEED_URL` as a directory (`file:
 | `ivan-nba-archive.timer` | NBA | every 5 min, 09:00–23:59 | same |
 | `ivan-nba-capture.timer` | NBA | every 15 min, 09:00–23:45; acts only with the autopilot switch on (`scripts/nba/autopilot.py`) | same |
 
-All are **user** units rendered with this checkout's path. The NFL nightly needs the desktop session's
+On the server (the consumer) one NBA timer, `ivan-nba-pull.timer` (every 30 minutes, `deploy/setup_nba_server.sh`
+installs it). All are **user** units rendered with this checkout's path. The NFL nightly needs the desktop session's
 display for the DraftKings scrape (`PassEnvironment=DISPLAY ...`). Both nightly jobs are idempotent and
 catch up after sleep. Because the live timers and the laptop's `serve.py` processes run from the working
 tree, **the checkout must stay on `master`**: a review branch left checked out broke the desk and the
@@ -126,8 +127,8 @@ archive timer for two days in October 2026.
 | `/opt/ivan/app/data/<sport>/<sport>_history.sqlite` | the server's databases |
 | `/opt/ivan/app/data/nfl/input/web/`, `output/web/`, `jobs/` | NFL uploads, outputs, job logs |
 | `/opt/ivan/app/data/feed/nba/`, `data/feed-state/` | the laptop's feed as last pulled; what was last applied |
-| `/opt/ivan/app/data/nba/input/published/` | the laptop's pins and grids as the base layer |
-| `journalctl -u ivan-web` | logs (the pull runs inside ivan-web, on Refresh) |
+| `/opt/ivan/app/data/nba/slates/<dg>/` | the server's copy of each slate: `slate.sqlite` (the laptop's pool with the server's own lineups and sims), `published/` (the laptop's pins and grids), its own `edits/`, `slate.json` (refreshed / pulled times) |
+| `journalctl -u ivan-web`, `journalctl --user -u ivan-nba-pull` | logs (a slate page's Refresh pulls inside ivan-web; the timer pulls every 30 minutes) |
 
 ## Sizing
 

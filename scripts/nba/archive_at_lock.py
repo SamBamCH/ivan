@@ -2,8 +2,8 @@
 """
 scripts/nba/archive_at_lock.py
 
-Keep the record at every lock without touching anything live. At each game's tip on the slate the desk holds
-(the first tip is the slate lock) this writes, as they stand at that moment:
+Keep the record at every lock without touching anything live. At each game's tip of every slate this machine holds
+(data/nba/slates/<dg>/; the first tip is the slate lock) this writes, as they stand at that moment:
   - nba_projection_capture rows (source "at_tip", lock = that tip) from nba_player: the published projections,
     minutes, ownership, status, starters;
   - an archived_slate capture (source "at_tip") of the pool, the stored props and the game lines.
@@ -22,12 +22,12 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 
 from ivan.core.archive import archive_slate
-from ivan.database.session import get_session, init_db
+from ivan.database.session import init_db
 from ivan.sports.nba.ingest import GAME_LINE_COLS, ensure_schema
 from ivan.sports.nba.models import NBAPlayer, NBAProjectionCapture, StartingLineups
 from ivan.sports.nba.paths import LOGS_DIR, NBA_DATA_DIR
@@ -92,23 +92,30 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S",
                         handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(LOGS_DIR / "archive.log")])
     now = datetime.fromisoformat(a.now) if a.now else datetime.now()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
-    players = session.query(NBAPlayer).all()
-    if not players:
-        log.info("no pool loaded; nothing to archive"); return 0
-    dg = next((p.draft_group_id for p in players if p.draft_group_id), None)
-    tips = sorted({p.gametime for p in players if p.gametime})
+    ensure_schema(init_db("nba"))
+    from ivan.sports.nba import slates as S
     st = load_state(); done = set(st.get("done", []))
-    due = [t for t in tips if 0 <= (now - t).total_seconds() / 60 <= a.window and f"{dg}@{t.isoformat()}" not in done]
-    if not due:
-        log.info(f"slate {dg}: {len(tips)} tips, none due at {now:%H:%M} (window {a.window} min)"); return 0
-    for t in due:
-        key = f"{dg}@{t.isoformat()}"
-        if a.dry_run:
-            log.info(f"would archive slate {dg} at tip {t:%a %H:%M}: {len(players)} players, {sum(1 for p in players if p.fpts_mean)} projected"); continue
-        info = archive_tip(session, players, t, now, dg)
-        done.add(key)
-        log.info(f"archived slate {dg} at tip {t:%a %H:%M}: {info['capture_rows']} capture rows, archive {info['archive_id']}, {info['odds']} prop rows, {info['lines']} line rows")
+    held = S.held()
+    if not held:
+        log.info("no slate held; nothing to archive"); return 0
+    for dg in held:
+        with S.using(dg):
+            session = S.session(dg)
+            try:
+                players = session.query(NBAPlayer).all()
+                tips = sorted({p.gametime for p in players if p.gametime})
+                due = [t for t in tips if 0 <= (now - t).total_seconds() / 60 <= a.window and f"{dg}@{t.isoformat()}" not in done]
+                if not due:
+                    continue
+                for t in due:
+                    key = f"{dg}@{t.isoformat()}"
+                    if a.dry_run:
+                        log.info(f"would archive slate {dg} at tip {t:%a %H:%M}: {len(players)} players, {sum(1 for p in players if p.fpts_mean)} projected"); continue
+                    info = archive_tip(session, players, t, now, dg)
+                    done.add(key)
+                    log.info(f"archived slate {dg} at tip {t:%a %H:%M}: {info['capture_rows']} capture rows, archive {info['archive_id']}, {info['odds']} prop rows, {info['lines']} line rows")
+            finally:
+                session.close()
     if not a.dry_run:
         st["done"] = sorted(done)[-400:]; STATE.write_text(json.dumps(st))
     return 0

@@ -12,20 +12,20 @@ Player news from Rotowire (ivan.sports.nba.newsfeed): fetch on demand, store wha
 """
 import argparse
 
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import newsfeed as NF
-from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.models import NBAPlayer
+from ivan.sports.nba import slates as S
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")
     sh = sub.add_parser("show"); sh.add_argument("--hours", type=float, default=24.0); sh.add_argument("--all", action="store_true")
     sub.add_parser("slate")
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     if a.cmd == "check":
         r = NF.check(session)
         pool = {p.name for p in session.query(NBAPlayer).all()}

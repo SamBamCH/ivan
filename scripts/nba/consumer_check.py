@@ -250,6 +250,8 @@ def main() -> int:
     ap.add_argument("--cookie", default=None, help="a login cookie value; default: minted over ssh")
     ap.add_argument("--refresh", action="store_true", help="press Refresh on the consumer and report what it said")
     ap.add_argument("--sandbox", action="store_true", help="the sandbox consumer on the server (deploy/sandbox_server.sh) through the ssh tunnel at 127.0.0.1:8002")
+    from ivan.sports.nba import slates as S
+    S.add_arg(ap)
     args = ap.parse_args()
     if args.sandbox:
         args.url = args.url or "http://127.0.0.1:8002/nba"
@@ -332,9 +334,8 @@ def main() -> int:
         rep.add("feed", None, f"his own edits unknown: {e}")
     if rs == ls and rs:
         try:
-            from ivan.database.session import get_session, init_db
             from ivan.sports.nba.models import NBAPlayer
-            sess = get_session(init_db("nba"))
+            _dg, sess = S.open(args.slate)                                     # this machine's copy of the slate (--slate; default: today's main)
             mine = {normalize_name(p.name): (p.fpts_mean, p.team) for p in sess.query(NBAPlayer).all()}
             his_teams = (his_teams or set()) | {mine[n][1] for n in his_edit_names if n in mine}
             if his_teams:

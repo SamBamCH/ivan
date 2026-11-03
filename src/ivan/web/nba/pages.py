@@ -11,7 +11,9 @@ from ivan.database.session import get_session
 from ivan.web import frame
 from ivan.web.sports import SlateInfo, find_slate
 from . import core as A
-from .core import LOCK, _days_of, _render, _team_url, app, desk, engine
+from .core import LOADING, LOCK, _days_of, _render, _team_url, app, bound, desk, engine, slate, slate_url
+from ivan.sports.nba import slates as S
+from ivan.sports.nba.desk import LOBBY, CONSUMER
 from .lateswap import _lateswap_ctx
 from .pipeline import _contests_ctx, _pipeline_ctx, begin_switch
 from ivan.sports.nba.desk import NEAR_TIP_MIN
@@ -80,119 +82,140 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
     return sorted(games, key=lambda g: (g["locked"], g["tip"] or now))
 
 
+def _blank_header(now: datetime) -> dict:
+    """The header of a page outside a held slate (a slate being fetched, a past slate's backtest): the shared index, no pool."""
+    from ivan.sports.nba import autopilot
+    from ivan.core import feed
+    return dict(draft_group=None, lock=None, mins_to_lock=None, n_lineups=0, pool_at=None, n_players=0, n_priced=0, starters_at=None, odds_at=None,
+                stale=False, fresh=[], slate_days=LOBBY.slate_days(now), meta={}, refreshed_at=None, refreshed_by=None, pulled_at=None, published_at=None,
+                mapped={}, questions={}, news={}, team_states=[], overrides=0, overrides_path="",
+                autopilot=None if CONSUMER else autopilot.state(), feed=feed.status("nba") if CONSUMER else None)
+
+
+def _header(now: datetime) -> dict:
+    d = bound()
+    return d.header(now) if d is not None else _blank_header(now)
+
+
 def _shell(request: Request, view: Optional[str], team: Optional[str], page: Optional[SlateInfo], now: datetime, header: dict,
            note: Optional[str] = None):
     """
-    The page shell for the loaded slate (page is None or the loaded one) or for another slate (its backtest, or a load card).
-    `team` set = the team page: the same shell with the team's card as its body (the slate's pre-lock view is the bar's view).
+    The page shell for a slate: held (its desk is bound: the board, or the team's card when `team` is set) or not (its backtest
+    when its day has passed, else the loading state while it is fetched, else the load card). A held slate being refreshed
+    renders as usual with a banner (its edits wait); only a slate with no desk yet shows the spinner alone.
     `note` is why a load did not start (the load card says so).
     """
     from ivan.sports.nba.slate_backtest import mode_for
-    loaded = header.get("draft_group")
+    d = bound()
     days = _days_of(header["slate_days"], now)
-    if desk.busy:
-        # a load or restore is replacing the pool: the bar keeps the slate asked for (2026-10-30: it showed the slate being
-        # replaced, so a load of today's read as yesterday's loading) and the board shows the progress; its poll reloads the
-        # page when the load is done, and the page is then the new loaded slate
-        fr = frame.ctx(request, A.SPORT, days, None, page if page is not None else next((s for d in days for s in d.slates if s.loaded), None), None, now)
-        return _render(request, "nba_desk.html", header=header, team=None, game=None, view="games", busy=desk.busy, dg=None, frame=fr,
+    if page is None and d is not None:
+        page = next((s for dd in days for s in dd.slates if s.key == str(d.dg)), None)
+    dg = int(page.key) if page is not None and str(page.key).isdigit() else None
+    loading = LOADING.get(dg) if dg is not None else None
+    if d is None and loading:
+        # the slate is being fetched for the first time: the bar keeps the slate asked for and the board shows the progress; its
+        # poll reloads the page when the load is done, and the page is then the slate's desk
+        fr = frame.ctx(request, A.SPORT, days, None, page, None, now)
+        return _render(request, "nba_desk.html", header=header, team=None, game=None, view="games", busy=loading, dg=dg, frame=fr,
                        page_slate=fr["slate"], is_loaded=False)
-    if page is None:
-        page = next((s for d in days for s in d.slates if s.loaded), None)
-    dg = None
     game = None
-    if page is None or (loaded is not None and str(page.key) == str(loaded)):          # the loaded slate
+    if d is not None:                                                                  # a held slate: its desk
         if view is None:
             lock = header.get("lock")
             view = {"lateswap": "lateswap", "backtest": "backtest"}.get(mode_for(lock.date() if lock else None, lock, now), "games")
         view = VIEW_ALIAS.get(view, view)
-        if view == "backtest":
-            dg = loaded
         if team is not None:
             if team not in desk.slate.teams():
-                raise HTTPException(404, f"{team} is not on the loaded slate")
+                raise HTTPException(404, f"{team} is not on this slate")
             for t in desk.slate.teams():
                 desk.slate.spread(t)
             game = next((g for grp in games_menu(now) for g in grp["games"] if any(c["team"] == team for c in g["teams"])), None)
             view = "games"
-    else:                                                                              # another slate: its backtest, or load it first
+        is_loaded = True
+    else:                                                                              # not held: its backtest, or load it first
         team = None
         if view not in ("backtest", "load"):
-            view = "backtest" if (page.source == "archive" or page.day < now.date()) else "load"
-        dg = int(page.key) if str(page.key).isdigit() else None
+            view = "backtest" if (page is None or page.source == "archive" or page.day < now.date()) else "load"
+        is_loaded = False
     fr = frame.ctx(request, A.SPORT, days, None, page, view if view != "load" else None, now)
-    return _render(request, "nba_desk.html", header=header, team=team, game=game, view=view, busy=desk.busy, dg=dg, frame=fr, page_slate=page,
-                   is_loaded=(page is None or (loaded is not None and str(page.key) == str(loaded))), load_note=note)
+    return _render(request, "nba_desk.html", header=header, team=team, game=game, view=view, busy=None, dg=dg, frame=fr, page_slate=page,
+                   is_loaded=is_loaded, load_note=note)
 
 
 @app.get("/desk/", response_class=HTMLResponse)
 def index(request: Request, view: Optional[str] = None, dg: Optional[int] = None, open: Optional[str] = None):
-    """The loaded slate, wherever it is: the flat address actions and old links use. view=games (pre-lock), players, lateswap
-    (post-lock), backtest (dg = a past slate). With no view the loaded slate's mode picks it (slate_backtest.mode_for).
-    open=TEAM (old links) goes to the team's page."""
-    with LOCK:
-        if not desk.busy:
-            desk.maybe_reload()
-        now = datetime.now()
-        header = desk.header(now)
-        if open and not desk.busy and open in desk.slate.teams():
-            return RedirectResponse(_team_url(request, open), status_code=303)
-        if view == "backtest" and dg is not None and str(dg) != str(header.get("draft_group")):
-            page = find_slate(_days_of(header["slate_days"], now), str(dg))
-            return _shell(request, "backtest", None, page, now, header)
-        return _shell(request, view, None, None, now, header)
+    """The flat address old links use: today's main held slate's page (the picker when none is held). view= and dg= go to that
+    slate's page with the view; open=TEAM to its team page."""
+    now = datetime.now()
+    target = dg if dg is not None else S.main_slate_today(now)
+    if target is None:
+        return RedirectResponse(auth_root(request) + "/", status_code=303)
+    url = slate_url(request, int(target))
+    if open:
+        return RedirectResponse(url + f"{open.upper()}/", status_code=303)
+    return RedirectResponse(url + (f"?view={view}" if view else ""), status_code=303)
+
+
+def auth_root(request: Request) -> str:
+    from ivan.web import auth
+    return auth.root_of(request)
 
 
 @app.get("/{day}/{key}/", response_class=HTMLResponse)
 def slate_page(request: Request, day: str, key: str, view: Optional[str] = None):
-    """One slate: sport › day › slate › view. The page shows the slate in its address, so the desk follows the bar: the loaded
-    slate is the desk (pre-lock, or post-lock once it locked); a slate of an earlier day its backtest (read only; Restore loads
-    it); a lobby slate of today or later that the desk does not hold starts loading when the page is opened (begin_switch: the
-    producer fetches it, the consumer asks the laptop for it), the page shows the progress and reloads on it when it is in.
-    When a job holds the pool the page says so and offers the load as a button instead."""
+    """One slate: sport › day › slate › view. The page shows the slate in its address, so the desk follows the bar: a held slate
+    is its desk (pre-lock, post-lock once it locked, backtest once its day passed); a slate of an earlier day not held is its
+    backtest (read only; Restore loads it); a lobby slate of today or later that this machine does not hold starts loading when
+    the page is opened (begin_switch: the producer fetches it into its own directory, the consumer asks the laptop for it), the
+    page shows the progress and reloads on it when it is in. When that cannot start the page says why and offers a button."""
     d = frame.parse_day(day)
-    with LOCK:
-        if not desk.busy:
-            desk.maybe_reload()
-        now = datetime.now()
-        header = desk.header(now)
-        page = find_slate(_days_of(header["slate_days"], now), key)
-        if page is None:
-            page = SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
-        loaded = header.get("draft_group")
-        why = None
-        if (page.load is not None and not page.loaded and page.day >= now.date() and not desk.busy and view in (None, "games", "load")
-                and (loaded is None or str(page.key) != str(loaded))):
-            why = begin_switch(int(page.key), "lobby")
-        return _shell(request, view, None, page, now, header, note=why)
+    now = datetime.now()
+    desk_ = bound()
+    if desk_ is not None:
+        with LOCK:
+            if not desk.busy:
+                desk.maybe_reload()
+            header = _header(now)
+            page = find_slate(_days_of(header["slate_days"], now), key)
+            return _shell(request, view, None, page, now, header)
+    header = _header(now)
+    page = find_slate(_days_of(header["slate_days"], now), key)
+    if page is None:
+        page = SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
+    why = None
+    if page.load is not None and not page.loaded and page.day >= now.date() and view in (None, "games", "load") and not LOADING.get(int(page.key)):
+        why = begin_switch(int(page.key), "lobby")
+    return _shell(request, view, None, page, now, header, note=why)
 
 
 @app.get("/{day}/{key}/{team}/", response_class=HTMLResponse)
 def team_page(request: Request, day: str, key: str, team: str):
-    """One team of the loaded slate: sport › day › slate › TEAM. The rotation card (the grid, the rows, pins, scenarios, the
-    played game) on a page of its own; every edit here writes the team's projection into the pool at once, so leaving the page
+    """One team of a held slate: sport › day › slate › TEAM. The rotation card (the grid, the rows, pins, scenarios, the played
+    game) on a page of its own; every edit here writes the team's projection into the slate's pool at once, so leaving the page
     loses nothing. The slate page shows the result and links here from the games strip and the news table."""
     frame.parse_day(day)
+    if bound() is None:
+        raise HTTPException(404, "a team page belongs to a held slate; open the slate first")
     with LOCK:
         if not desk.busy:
             desk.maybe_reload()
         now = datetime.now()
-        header = desk.header(now)
+        header = _header(now)
         page = find_slate(_days_of(header["slate_days"], now), key)
-        if page is None or (header.get("draft_group") is not None and str(page.key) != str(header["draft_group"])):
-            raise HTTPException(404, "a team page belongs to the loaded slate")
         return _shell(request, "games", team.upper(), page, now, header)
 
 
 def _backtest_board(request: Request, dg: Optional[int]):
-    """A past slate, read only (ivan.sports.nba.slate_backtest = scripts/nba/backtest_slate.py): nothing is loaded or deleted."""
+    """A slate's backtest, read only (ivan.sports.nba.slate_backtest = scripts/nba/backtest_slate.py): nothing is loaded or deleted.
+    A held slate is read through its own database (its contests, lineups and sims), another through the history (its captures)."""
     from ivan.sports.nba import slate_backtest as SB
     if dg is None:
         return _render(request, "_nba_board.html", busy=None, view="backtest", bt=None, bt_error="no slate picked", menu=[], games=[], players=[],
                        lateswap=None, exposures=None, card=None, game=None, open_team=None)
-    sess = get_session(engine)                                     # its own session: the page never waits on the desk's lock
+    sess = S.session(dg) if S.holds(dg) else get_session(engine)      # its own session: the page never waits on the desk's lock
     try:
-        bt, err = SB.slate_backtest(sess, int(dg)), None
+        with S.using(int(dg)):
+            bt, err = SB.slate_backtest(sess, int(dg)), None
     except Exception as e:   # noqa: BLE001 - show what failed instead of a blank page
         bt, err = None, f"{type(e).__name__}: {e}"
     finally:
@@ -204,22 +227,26 @@ def _backtest_board(request: Request, dg: Optional[int]):
 VIEW_ALIAS = {"exposures": "games"}                           # the exposures are a section of pre-lock
 
 
-@app.get("/board", response_class=HTMLResponse)
+@slate.get("/board", response_class=HTMLResponse)
 def board(request: Request, view: str = "games", after: str = "", dg: Optional[int] = None):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view.
-    after=busy is the loading poll's request: once the load or refresh is done the whole page reloads (HX-Refresh), because
-    the header (the slate picker, the counts) was built from the slate before it; swapping only the board left the picker
-    showing the old slate as loaded (2026-10-29)."""
-    if after == "busy" and not desk.busy:
-        from fastapi.responses import Response
+    after=busy is the loading poll's request: once the slate's first load is done the whole page reloads (HX-Refresh), because
+    the header (the slate picker, the counts) was built before it. A held slate being refreshed renders its board as usual."""
+    key = getattr(request.state, "dg", None)
+    from fastapi.responses import Response
+    if after == "busy" and bound() is not None:
+        if desk.busy:
+            return Response(status_code=204)                     # still refreshing: the page keeps what it shows
+        return Response(status_code=200, headers={"HX-Refresh": "true"})
+    if after == "busy" and bound() is None and key is not None and not LOADING.get(key) and S.holds(key):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     if view == "backtest":
-        return _backtest_board(request, dg)
+        return _backtest_board(request, dg if dg is not None else key)
     view = VIEW_ALIAS.get(view, view)
+    if bound() is None:
+        return _render(request, "_nba_board.html", busy=LOADING.get(key) or "this slate is not held here", view=view, games=[], menu=[], players=[], lateswap=None, exposures=None)
     with LOCK:
         now = datetime.now()
-        if desk.busy:
-            return _render(request, "_nba_board.html", busy=desk.busy, view=view, games=[], menu=[], players=[], lateswap=None, exposures=None)
         for t in desk.slate.teams():
             desk.slate.spread(t)                            # loads the lines once
         menu = games_menu(now)                               # the games strip: tip, line, one chip per team (its state, the questions on hover)

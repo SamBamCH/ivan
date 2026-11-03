@@ -22,7 +22,7 @@ import pandas as pd
 
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.projection.engine import ProjectionParams, project_team
-from ivan.sports.nba.projection.groups import group_of, position_map, rotation_depth
+from ivan.sports.nba.projection.groups import position_map, rotation_depth
 from ivan.sports.nba.projection.history import build_history, load_box_scores
 from ivan.sports.nba.projection.minutes import salary_prior_minutes
 from ivan.sports.nba.projection.rotation import boundary_spreads, curves, last_game_pool, propose

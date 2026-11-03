@@ -8,7 +8,7 @@
 {% else %}{% set sm = bt.summary %}
   <div class="bt-head">
     <h2>{{ bt.day.strftime('%a %m-%d') if bt.day else '' }} · slate {{ bt.draft_group }}{% if bt.lock %} <span class="muted">lock {{ bt.lock.strftime('%H:%M') }}</span>{% endif %}</h2>
-    <form method="post" action="{{ root }}/slate" onsubmit="return confirm('Restore slate {{ bt.draft_group }} into the desk? It replaces the loaded slate (whose lineups, sims and edits are kept for it).')">
+    <form method="post" action="{{ sport_root }}/slate" onsubmit="return confirm('Restore slate {{ bt.draft_group }} into the desk? It replaces the loaded slate (whose lineups, sims and edits are kept for it).')">
       <input type="hidden" name="draft_group" value="{{ bt.draft_group }}"><input type="hidden" name="source" value="archive">
       <button type="submit" title="load this slate's archive capture into the desk to re-work it (the old desk restore)">Restore into the desk</button></form>
   </div>

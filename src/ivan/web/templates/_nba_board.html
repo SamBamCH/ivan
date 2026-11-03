@@ -2,6 +2,7 @@
    the chain, the news table, the contests, the exposures; the players view is every team's rows. Loaded into #board after the
    page shell, so the page is up at once and shows "loading" while the pool is fetched or projected (ivan.web.nba.pages.index / board /
    the background refresh). Nothing here edits a projection: that is the team page (/<day>/<slate>/<TEAM>/). #}
+{% if refreshing and not busy %}<div id="refresh-poll" hx-get="{{ root }}/board?view={{ view }}&after=busy" hx-trigger="every 3s" hx-swap="none"></div>{% endif %}
 {% if busy %}
 <div id="board-poll" hx-get="{{ root }}/board?view={{ view }}{% if dg %}&dg={{ dg }}{% endif %}&after=busy" hx-trigger="every 2s" hx-target="#board" hx-swap="innerHTML">
   <div class="loading"><span class="spin"></span> {{ busy }}…</div>

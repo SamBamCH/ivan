@@ -407,6 +407,17 @@ class NBANews(NBABase):
     first_seen  = Column(DateTime, nullable=False, index=True)
 
 
+class NBASlateNews(NBABase):
+    """Which headlines a slate's refreshes brought (history database): the slate's pre-lock news is nba_news joined through
+    here. Written by ingest.check_news for every headline of the slate's players that is on the page at the refresh."""
+    __tablename__ = "nba_slate_news"
+    __table_args__ = (UniqueConstraint("draft_group_id", "news_id", name="uq_slate_news"),)
+    id             = Column(Integer,  primary_key=True, autoincrement=True)
+    draft_group_id = Column(Integer,  nullable=False, index=True)
+    news_id        = Column(Integer,  nullable=False, index=True)       # nba_news.id (Rotowire's headline id)
+    seen_at        = Column(DateTime, nullable=False, default=datetime.now)
+
+
 class NBAPlayerNote(NBABase):
     """
     A note typed next to a player on the desk (ivan.sports.nba.notes): it belongs to one slate (draft group and day)

@@ -99,8 +99,8 @@ def test_a_day_opens_on_its_main_slate(open_site, monkeypatch):
 
 
 def test_nba_slate_page_loads_the_slate_it_names(open_site, monkeypatch, tmp_path):
-    """Opening a lobby slate the desk does not hold starts its load (the producer fetches it; a consumer asks the laptop) and
-    the page shows the progress; when a job holds the pool the page says why and offers the load as a button."""
+    """Opening a lobby slate the desk does not hold starts its load into its own directory (the producer fetches it; a consumer
+    asks the laptop) and the page shows the progress; when the slate's jobs run the page says why and offers the load as a button."""
     from datetime import date, datetime
     from ivan.web import nba as D
     from ivan.web.nba import pages as PG, pipeline as P
@@ -109,77 +109,97 @@ def test_nba_slate_page_loads_the_slate_it_names(open_site, monkeypatch, tmp_pat
     lobby = SlateInfo(key="999002", day=d, lock=datetime(2099, 1, 2, 19), label="19:00 · 8 games", source="lobby", games=8,
                       load={"url": "/slate", "fields": {"draft_group": "999002", "source": "lobby", "day": d.isoformat()}, "label": "load into the desk"})
     monkeypatch.setattr(PG, "_days_of", lambda rows, now: [Day(day=d, label="Fri 01-02", tag="", slates=[lobby])])
-    import ivan.sports.nba.paths as PATHS
-    monkeypatch.setattr(PATHS, "ACTIVE_SLATE_JSON", tmp_path / "active.json")
     started = []
 
     def fake_refresh(what, dg, update_odds, lines=None):
-        started.append((what, dg)); D.desk.busy = what
+        started.append((what, dg)); D.LOADING[int(dg)] = what
     monkeypatch.setattr(P, "_start_refresh", fake_refresh)
-    monkeypatch.setattr(P.runner, "active", lambda: None)
-    assert not D.desk.busy
+    monkeypatch.setattr(P, "_active", lambda dg=None: [])
     try:
         r = open_site.get("/nba/2099-01-02/999002/")
         assert r.status_code == 200 and started == [("loading slate 999002", 999002)]
         assert "loading slate 999002" in r.text and 'name="draft_group"' not in r.text
-        assert json.loads((tmp_path / "active.json").read_text())["draft_group"] == 999002
-        # while it loads, opening the page again does not start another
+        # while it loads, opening the page again does not start another; the board poll keeps polling
         r = open_site.get("/nba/2099-01-02/999002/")
         assert len(started) == 1
+        assert open_site.get("/nba/2099-01-02/999002/board?view=games&after=busy").status_code == 200
     finally:
-        D.desk.busy = None
-    # a job holds the pool: the page says so and offers the button
-    monkeypatch.setattr(P.runner, "active", lambda: object())
+        D.LOADING.pop(999002, None)
+    # that slate's jobs run: the page says so and offers the button
+    monkeypatch.setattr(P, "_active", lambda dg=None: [object()])
     r = open_site.get("/nba/2099-01-02/999002/")
     assert r.status_code == 200 and len(started) == 1
-    assert "a job is running on the current slate" in r.text and 'name="draft_group" value="999002"' in r.text
+    assert "a job is running on this slate" in r.text and 'name="draft_group" value="999002"' in r.text
 
 
 def test_nba_bar_keeps_the_slate_being_loaded(open_site, monkeypatch):
-    """While a load runs the desk still holds the old pool; the bar must show the slate asked for, not the one being replaced."""
+    """While a slate's first load runs the bar must show the slate asked for and the board the progress; no other slate is touched."""
     from ivan.web import nba as D
-    monkeypatch.setattr(D.desk, "busy", "loading slate 999001")
-    r = open_site.get("/nba/2099-01-02/999001/")
-    assert r.status_code == 200
-    assert "loading slate 999001" in r.text
-    assert 'value="/nba/2099-01-02/999001/"' not in r.text or 'value="/nba/2099-01-02/999001/" data-day="2099-01-02" selected' in r.text
+    D.LOADING[999001] = "loading slate 999001"
+    try:
+        r = open_site.get("/nba/2099-01-02/999001/")
+        assert r.status_code == 200
+        assert "loading slate 999001" in r.text
+        assert 'value="/nba/2099-01-02/999001/"' not in r.text or 'value="/nba/2099-01-02/999001/" data-day="2099-01-02" selected' in r.text
+    finally:
+        D.LOADING.pop(999001, None)
+
+
+def _held(open_site):
+    """(draft group, day) of the main slate this database holds (today's main, else the newest held), or a skip."""
+    from ivan.sports.nba import slates as S
+    held = S.held()
+    if not held:
+        pytest.skip("no slate held in this database")
+    dg = S.main_slate_today() or held[0]; lock = S.meta_time(S.read_meta(dg), "lock")
+    return dg, (lock or __import__("datetime").datetime.now()).date().isoformat()
 
 
 def test_nba_step_knobs_move_only_their_own(open_site, monkeypatch):
     """Generate and sim send their popover's knobs only; the others, and the fresh-pool box, keep what the desk last had."""
     from ivan.web import nba as D
-    monkeypatch.setattr(D.runner, "active", lambda: [object()])          # "a job is running": the route stores the knobs, starts nothing
+    from ivan.web.nba import pipeline as P
+    dg, day = _held(open_site)
+    monkeypatch.setattr(P, "_active", lambda dg=None: [object()])          # "a job is running": the route stores the knobs, starts nothing
     monkeypatch.setitem(D.pipeline_form, "lineups", "12345")
     monkeypatch.setitem(D.pipeline_form, "fresh", "on")
     monkeypatch.setitem(D.pipeline_form, "sims", "1000")
-    assert open_site.post("/nba/pipeline/sim", data={"sims": "777", "field_cap": "8000"}).status_code == 200
+    assert open_site.post(f"/nba/{day}/{dg}/pipeline/sim", data={"sims": "777", "field_cap": "8000"}).status_code == 200
     assert D.pipeline_form["sims"] == "777" and D.pipeline_form["lineups"] == "12345" and D.pipeline_form["fresh"] == "on"
-    assert open_site.post("/nba/pipeline/generate", data={"cfg_fresh": "1", "lineups": "2000"}).status_code == 200
+    assert open_site.post(f"/nba/{day}/{dg}/pipeline/generate", data={"cfg_fresh": "1", "lineups": "2000"}).status_code == 200
     assert D.pipeline_form["lineups"] == "2000" and D.pipeline_form["fresh"] == "" and D.pipeline_form["sims"] == "777"
 
 
 def test_nba_slate_page_reads_and_the_team_page_edits(open_site):
     """The slate page carries no projection edit control; every team chip and news name is a link to the team's own page, which
-    holds the card. An old /desk/?open=TEAM link lands on the team page."""
+    holds the card. An old /desk/?open=TEAM link lands on the team page. Two held slates' pages serve side by side."""
     from ivan.web import nba as D
-    dg, lock = D._loaded_slate()
-    if dg is None or lock is None or not D.desk.slate.teams():
-        pytest.skip("no slate loaded in this database")
-    day = lock.date().isoformat(); team = D.desk.slate.teams()[0]
-    board = open_site.get("/nba/board?view=games")
+    from ivan.sports.nba import slates as S
+    dg, day = _held(open_site)
+    r = open_site.get(f"/nba/{day}/{dg}/")
+    assert r.status_code == 200 and f'/nba/{day}/{dg}/board' in r.text
+    d = D.desk_for(dg)
+    assert d is not None and d.dg == dg
+    teams = d.slate.teams()
+    if not teams:
+        pytest.skip("the held slate has no teams")
+    team = teams[0]
+    board = open_site.get(f"/nba/{day}/{dg}/board?view=games")
     assert board.status_code == 200
-    assert f"/nba/{day}/{dg}/{team}/" in board.text                          # a chip is a link
-    assert 'name="minutes"' not in board.text and "hx-post=\"/nba/team/" not in board.text   # nothing edits here
-    assert "needs you" in board.text and 'class="chain' in board.text and "Snapshot" in board.text
+    assert 'name="minutes"' not in board.text and f'hx-post="/nba/{day}/{dg}/team/' not in board.text      # read only: no pin inputs, no edit posts
+    assert f"/nba/{day}/{dg}/{team}/" in board.text                                                        # the chip links to the team page
     page = open_site.get(f"/nba/{day}/{dg}/{team}/")
-    assert page.status_code == 200 and f'id="card-{team}"' in page.text and "crumb-team" in page.text
-    card = open_site.get(f"/nba/team/{team}")
-    assert card.status_code == 200 and "rot-grid" in card.text and 'name="minutes"' in card.text
-    assert open_site.get(f"/nba/{day}/{dg}/ZZZ/").status_code == 404
+    assert page.status_code == 200 and f'hx-get="/nba/{day}/{dg}/team/{team}"' in page.text
+    card = open_site.get(f"/nba/{day}/{dg}/team/{team}")
+    assert card.status_code == 200 and 'name="minutes"' in card.text and f'/nba/{day}/{dg}/team/{team}/' in card.text   # the card is where the pins are
     r = open_site.get(f"/nba/desk/?open={team}", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].endswith(f"/{dg}/{team}/")
-    players = open_site.get("/nba/board?view=players")
-    assert players.status_code == 200 and 'class="players sortable"' in players.text and "Snapshot" not in players.text
+    assert r.status_code == 303 and r.headers["location"].endswith(f"/{team}/") and "/nba/" in r.headers["location"]   # the main held slate's team page
+    # a second held slate (when there is one) serves at the same time, its own desk bound
+    others = [x for x in S.held() if x != dg]
+    if others:
+        o = others[0]; oday = (S.meta_time(S.read_meta(o), "lock") or __import__("datetime").datetime.now()).date().isoformat()
+        assert open_site.get(f"/nba/{oday}/{o}/").status_code == 200
+        assert D.desk_for(o).dg == o and D.desk_for(dg).dg == dg
 
 
 def test_nfl_desk_renders(open_site):
@@ -196,7 +216,6 @@ def test_nfl_desk_renders(open_site):
 
 def test_nfl_contest_weights_save_own_knobs(open_site, monkeypatch, tmp_path):
     """A contest's knobs save as typed: a value is its own, a blank drops back to the default, a bad value is refused."""
-    import json
     from ivan.web.nfl import pipeline as P
     monkeypatch.setattr(P, "WEIGHTS_FILE", tmp_path / "weights.json")
     monkeypatch.setattr(P, "WEB_INPUT_DIR", tmp_path)

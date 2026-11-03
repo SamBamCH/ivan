@@ -57,15 +57,17 @@ question answered for one sport usually points at the same file in another.
 | `slates` | one status row per slate from the settle job (open / waiting / login_needed / settled / no_contests) for the Backtest page and the nightly loop. |
 | `chooser` | the choosers' numerics shared by the sports: greedy quality, `shrink_rows` (DerSimonian-Laird empirical Bayes on per-world ROI), `cash_feature`, `cross_fit_book` (select on even worlds, score on odd: honest ROI). |
 | `portfolio` | the book-level choosers: `pick_portfolio` (per-contest log utility over worlds, bankroll in multiples of fees), `pick_book` + `dollar_book_summary` (the NFL "slate" method: one bankroll in dollars across every contest). |
-| `feed` | the data feed between two Ivans: `publish` named tables and files as gzipped bundles with a manifest, `push` them by rsync, `pull`/`apply` on the consumer, which replaces exactly those tables and keeps its own edits. Only NBA has a feed spec today. |
+| `feed` | the data feed between two Ivans: `publish` named tables and files as gzipped bundles with a manifest (the NBA: one bundle per held slate beside the shared tables), `pull` over ssh (`publish` on the producer, rsync, `apply`) on the consumer, which replaces exactly those tables and keeps its own work. One spec per sport. |
 
 ## The database
 
 One SQLite file per sport, `data/<sport>/<sport>_history.sqlite`, WAL mode, created on demand
-(`init_db(sport)` then the sport's `ensure_schema` or `create_all`). Reference tables (history, captures,
-contests) and the machine's working tables (the pool, the lineup pool, sim results, reports) live in the
-same file; the working tables hold one slate at a time and are cleared by the next slate or by
-`clear_all.py`. `add_missing_columns` adds columns a model gained since the file was created, so a
+(`init_db(sport)` then the sport's `ensure_schema` or `create_all`). For the NFL and MMA the reference tables (history,
+captures, contests) and the machine's working tables (the pool, the lineup pool, sim results, reports) live in the same
+file; the working tables hold one slate at a time and are cleared by the next slate or by `clear_all.py`. The NBA keeps
+**one database per slate** beside the history file (`data/nba/slates/<dg>/slate.sqlite`, `ivan.sports.nba.slates`): the
+slate's engine attaches the history as `hist`, so one session reads both with unqualified names, and slates never
+displace each other. `add_missing_columns` adds columns a model gained since the file was created, so a
 schema change is a code change plus a restart. SQLite never returns freed pages on its own; the NFL
 overnight job runs `VACUUM` when the freelist is large, and `VACUUM INTO` makes a consistent compact copy
 for syncing.

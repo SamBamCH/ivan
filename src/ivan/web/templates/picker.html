@@ -17,7 +17,7 @@
       {% for d in days %}
         {% if d.day < frame.now.date() and not ns.past %}{% set ns.past = true %}{% if not loop.first %}<div class="gap"></div>{% endif %}{% endif %}
         <a href="{{ frame.root }}/{{ d.iso }}/?pick" class="{{ 'on' if day and d.day == day.day }}">
-          <span>{{ d.label }}</span><span class="n">{{ d.slates|length }} slate{{ '' if d.slates|length == 1 else 's' }}{% if d.slates|selectattr('loaded')|list %} · loaded{% endif %}</span>
+          <span>{{ d.label }}</span><span class="n">{{ d.slates|length }} slate{{ '' if d.slates|length == 1 else 's' }}{% if d.slates|selectattr('loaded')|list %} · held{% endif %}</span>
         </a>
       {% else %}
         <p class="empty small">no slates known: the DraftKings lobby lists none and the archive is empty</p>
@@ -33,7 +33,7 @@
           <div class="what">{{ s.label }}</div>
           {% if s.detail %}<div class="detail">{{ s.detail }}</div>{% endif %}
           <div class="badges">
-            {% if s.loaded %}<span class="badge loaded">loaded</span>{% endif %}
+            {% if s.loaded %}<span class="badge loaded">held</span>{% endif %}
             <span class="badge {{ s.source }}">{{ s.source }}</span>
             {% if s.mode %}<span class="badge">{{ s.mode }}</span>{% endif %}
             {% if s.status %}<span class="badge {{ s.status }}">{{ s.status }}</span>{% endif %}

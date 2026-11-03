@@ -1,31 +1,31 @@
 # NBA: a slate day, in order
 
 The producer's day. Every step has a desk button and a script; the script is named so the desk's
-job log makes sense. The one rule to remember: **the desk shows its own copy of the projection, the
-pipeline reads the pool (`nba_player`), and only Publish moves the first into the second.**
+job log makes sense. The rules to remember: **every slate is its own directory** (`data/nba/slates/<dg>/`,
+[data.md](data.md)), so the desk holds as many slates as you open and nothing you do on one touches another; and
+**the pool is the projection**: every edit writes the slate's pool at once, the pipeline reads that pool.
 
 ## 1. Load the slate
 
-Desk: the bar's day and slate dropdowns (`/nba/` lists the days, a day its classic draft groups from the
-DraftKings lobby; [../web/README.md](../web/README.md)). Picking one fetches the pool and the Rotowire starters, stores them, projects and
-writes the public projection (the field's numbers). A past day's slate opens its
-backtest instead, read only ([../web/nba-desk.md](../web/nba-desk.md)); its **Restore into the desk** button loads
-it from its archive capture (no fetch, nothing recorded) to re-work it. Switching files the slate you leave (its pins and
-grids) under `data/nba/input/edits/<draft group>/` and brings back the new slate's own.
-
-Loading a slate keeps the slate you leave as it was: each slate keeps its own lineups, sims and contest reports: generate, the field sampler and the sim read only the loaded slate's (`field_generation.slate_lineups`), and a switch (`ingest.isolate_slate`) deletes only the work of slates more than 2 days old (`KEEP_SLATE_DAYS`). Two of today's slates can be worked side by
-side, and coming back to one finds its lineups and sims.
+Desk: the bar's day and slate dropdowns (a day opens its main slate, a slate its page;
+[../web/README.md](../web/README.md)). Opening a slate this machine does not hold fetches its pool and the Rotowire
+starters into its own directory, stores them, projects and writes the public projection (the field's numbers); every
+other slate stays exactly as it was, and flipping back to one is instant. A past day's slate opens its backtest instead,
+read only ([../web/nba-desk.md](../web/nba-desk.md)); its **Restore into the desk** button loads it from its archive
+capture (no fetch, nothing recorded) into its own directory to re-work it. Each slate keeps its own lineups, sims,
+contests and edits in its directory; nothing is filed away or cleared by opening another.
 
 Terminal:
 
 ```bash
 venv/bin/python scripts/nba/ingest.py --list                              # today's classic draft groups
-venv/bin/python scripts/nba/ingest.py --draft-group 155647                # DK pool + Rotowire, project (free)
+venv/bin/python scripts/nba/ingest.py --draft-group 155647                # DK pool + Rotowire, project (free) into slates/155647/
 venv/bin/python scripts/nba/ingest.py --draft-group 155647 --update-odds  # also the player props (credits)
 ```
 
-`ingest.py` and the desk use the same transaction (`ingest.refresh_pool`), so the script can run
-while the desk is up; the desk shows "new data · load".
+`ingest.py` and the desk use the same transaction (`ingest.refresh_pool`) on the slate's own database, so the script can
+run while the desk is up; the desk shows "new data · load". Every other script takes `--slate DG` (default: today's main
+held slate, `slates.resolve`).
 
 ## 2. Refresh through the day
 
@@ -46,14 +46,16 @@ on demand when you want the column fresh before a sim. `ingest.py --field` does 
 
 **Autopilot** (the header box; `scripts/nba/autopilot.py on|off|status`) is for a day you are not
 working the desk but the other desk still plays. With it on, `ivan-nba-capture.timer` runs
-`scripts/nba/capture.py` every 15 minutes: it refreshes the loaded slate (or the one that locks next)
-through the same one-transaction path as Refresh, fetches the props when the slate crosses 360, 180,
-90, 45 and 15 minutes before lock (about 12 credits per game each, at most 20 fetches a day), the
-game lines with them, and projects with the pins and grids on file, so the pool the server pulls (its
-Refresh from laptop) is fresh. It stands down while a desk job is running (`autopilot.desk_hold`; an
-edit counts as published the moment it is written, so edits never hold it). The switch is `data/nba/autopilot.json`; the last tick's result
-shows next to the box and in the other desk's header. Off by default; turn it off when you play.
-`scripts/nba/autopilot.py tick --force` runs one tick from a terminal whatever the switch says.
+`scripts/nba/capture.py` every 15 minutes: it refreshes **every slate this machine holds that has not locked**
+(today's and tomorrow's, each in its own directory) through the same one-transaction path as Refresh, fetches a slate's
+props when it crosses 360, 180, 90, 45 and 15 minutes before its lock (about 12 credits per game each, at most 20
+fetches a day), the game lines with them, and projects with each slate's pins and grids, so the slates the server pulls
+(every 30 minutes, and on its Refresh from laptop) are fresh and every slate's pre-lock record is kept. A slate nobody
+opened is not refreshed. It stands down while a desk job is running (`autopilot.desk_hold`; an edit counts as published
+the moment it is written, so edits never hold it). The switch is `data/nba/autopilot.json`; the last tick's result shows
+next to the box and in the other desk's header. Off by default; turn it off when you play.
+`scripts/nba/autopilot.py tick --force` runs one tick from a terminal whatever the switch says; `capture.py --only DG`
+one slate.
 
 The contests and payout tables for the day are stored by the sim when it meets a contest it does
 not know (`contests.ensure_contest`), and by the autopilot tick for its slate; there is no separate
@@ -66,9 +68,9 @@ players view: `/nba/<day>/<slate>/<TEAM>/`). You open a team to map its minutes,
 list names it (changed since mapped, an open question or no lineup near the tip, a new headline), or when news breaks.
 Everything else stays green and unopened.
 
-**Every edit on a team page writes the team into the pool at once** (`Desk.reproject` = `ingest.project_team`: the
-team's `nba_player` rows and its record in the projection store, `data/nba/derived/projection/<TEAM>.pkl`, about
-0.3 s). There is no publish step after an edit: the slate page, Generate, the sim, the late swap and the other desk
+**Every edit on a team page writes the team into the slate's pool at once** (`Desk.reproject` = `ingest.project_team`: the
+team's `nba_player` rows and its record in the slate's projection store, `data/nba/slates/<dg>/projection/<TEAM>.pkl`,
+about 0.3 s). A refresh of the slate running meanwhile does not close the page: it keeps reading, its edits wait. There is no publish step after an edit: the slate page, Generate, the sim, the late swap and the other desk
 read what you see. Leaving the page loses nothing.
 
 Start each team at its **special considerations** box (rest, starters out, a new five, players back, big
@@ -76,10 +78,10 @@ spread): the things the history-built rotation does not know. `scripts/nba/consi
 Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 
 - **pin** a player's minutes (0 scratches him), his fppm, his 10-90 band, or his projection; blank unpins.
-  Written at once to `data/nba/input/minutes_overrides.csv`; the team re-projects around the pins.
+  Written at once to `data/nba/slates/<dg>/edits/minutes_overrides.csv`; the team re-projects around the pins.
 - **call a starter** (toggle) when Rotowire has not confirmed yet.
 - **paint the rotation grid**: who is on the floor in each of the 48 minutes. The grid autosaves on every
-  stroke to `data/nba/input/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
+  stroke to `data/nba/slates/<dg>/edits/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
   projection, **Re-fill** fills the unlocked rows around the locks, **Hold all** locks the grid as drawn,
   **Clear locks** drops the team's pins and grid. The grid's row sums are the minutes projection
   ([projections.md](projections.md)).
@@ -125,12 +127,12 @@ Desk: steps 4 to 6 of the **actions** bar, with the knobs in the **config** tile
 sims, field cap, fresh pool, and the chooser's weights from `config/nba.json → choose`); **4–6 in a row** runs the
 three. The entries export goes in through the **contests** section, which flags contests of another slate (the sim
 skips them) and takes each contest's own chooser knobs (`scripts/nba/contest_weights.py`; Choose passes them as
-`--weights-json data/nba/input/contest_weights.json`). Jobs run
+`--weights-json data/nba/slates/<dg>/input/contest_weights.json`; every job carries `--slate DG`). Jobs run
 one at a time in the desk's job runner (`ivan.web.jobs`) with logs under `data/nba/jobs/`.
 
 ```bash
 venv/bin/python scripts/nba/generate_lineups.py 10000 8 [--fresh] [--randomness 0.25] [--min-fpts 260]
-venv/bin/python scripts/nba/sim.py [-n 1000] [-c 10000] [--entries data/nba/input/entries.csv]
+venv/bin/python scripts/nba/sim.py --slate DG [-n 1000] [-c 10000] [--entries data/nba/slates/DG/input/entries.csv]
 venv/bin/python scripts/nba/choose.py --no-prompt [--method greedy|portfolio] [--weights-json ...]
 ```
 

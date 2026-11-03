@@ -26,11 +26,11 @@ Read in this order:
                  laptop (producer)                                     server (consumer)
                  ────────────────                                      ─────────────────
  DK lobby ─┐
- Rotowire ─┼─► desk Refresh / ingest.py ─► nba_player (pool) ─┐
+ Rotowire ─┼─► desk Refresh / ingest.py ─► slates/<dg>/slate.sqlite (the slate's pool) ─┐
  odds-api ─┘      (store_slate)                               │
                                                               ▼
                        projection (projection/live.py) ─► minutes_proj, fpts_mean/std, quantiles
-                       desk pins + painted grids ─────────► minutes_overrides.csv, rotations/*.json
+                       desk pins + painted grids ─────────► slates/<dg>/edits/{minutes_overrides.csv, rotations/*.json}
                                                               │
                        every edit / Refresh writes the pool ─┼─◄── ssh: publish + rrsync (feed.pull_ssh) ◄── brother's desk: Refresh from laptop
                                                               │

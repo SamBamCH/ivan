@@ -5,22 +5,23 @@ The NBA data feed between two Ivans (ivan.core.feed, the command line in ivan.co
 producer never pushes.
 Producer (the laptop: runs the desk, fetches from DK and the odds API):
     scripts/nba/feed.py publish [--which live|reference|both] [--slate DG] [--quiet]
-        write data/feed/nba/*: the live bundle (the pool, props, lines, lineups, headlines, the published edits, the
-        projection store), the reference bundle (history, models, captures). The consumer's pull asks for a fresh live
-        bundle itself (deploy/feed_serve.sh runs this); the nightly writes both. --slate DG loads that draft group into
-        the pool first when the pool holds another (ingest.refresh_pool, the same load as picking the slate in the desk's
-        bar; the pick is remembered in data/nba/active_slate.json so the capture tick stays on it): what the consumer's
-        bar asks for when a slate the laptop does not hold is picked there (ssh `publish nba DG`).
+        write data/feed/nba/*: the live bundle (the props, lines and headlines every slate shares) with one bundle per held
+        slate (data/feed/nba/slates/<dg>/: its pool, starters, market rates, contests, its edits, its projection store, its
+        record), and the reference bundle (history, models, captures). The consumer's pull asks for fresh bundles itself
+        (deploy/feed_serve.sh runs this); the nightly writes both. --slate DG publishes that slate only, fetching it into
+        its own directory first when this machine does not hold it (ingest.refresh_pool): what the consumer's bar asks for
+        when a slate the laptop does not hold is picked there (ssh `publish nba DG`).
 Consumer (the server):
     scripts/nba/feed.py pull [--no-project]
-        what the desk's "Refresh from laptop" does (ivan.core.feed.pull_from_producer): with IVAN_FEED_SSH=<user>@<host>
-        in .env, one ssh command has the laptop publish its live bundle, rsync copies its data/feed here (only what
-        changed), and the bundles are applied: the feed's tables replaced in this database (edits, lineups and sims here
-        untouched), the laptop's pins and grids as the published layer, its projection store mirrored; then only the
-        slate's teams this machine edited are re-projected on top (--no-project skips that). The older
-        IVAN_FEED_URL (a directory or a feed server, with IVAN_FEED_TOKEN) still works when IVAN_FEED_SSH is unset.
-    scripts/nba/feed.py pull --slate DG                           ask the laptop to load slate DG first (what picking a slate the
-                                                                  laptop does not hold does in the consumer's bar): both desks move to it
+        what the desk's "Refresh from laptop" and the server's 30-minute timer do (ivan.core.feed.pull_from_producer): with
+        IVAN_FEED_SSH=<user>@<host> in .env, one ssh command has the laptop publish, rsync copies its data/feed here (only
+        what changed), and every bundle that moved is applied: the shared live tables replaced in the history database,
+        each changed slate into its own directory here (its feed tables replaced; this machine's lineups, sims and edits
+        of that slate untouched; the laptop's edits as the published layer, its store mirrored, pulled_at noted); then only
+        the teams this machine edited on each are re-projected on top (--no-project skips that). The older IVAN_FEED_URL
+        (a directory or a feed server, with IVAN_FEED_TOKEN) still works when IVAN_FEED_SSH is unset.
+    scripts/nba/feed.py pull --slate DG                           ask the laptop for slate DG (fetched there first when it does not
+                                                                  hold it): the slate page's Refresh from laptop
     scripts/nba/feed.py pull --loop 15                            keep pulling every 15 minutes
     scripts/nba/feed.py apply DIR                                 seed this database from bundles copied by hand
 """
@@ -30,60 +31,47 @@ from ivan.core import feed_cli
 
 
 def before_publish(a) -> None:
-    """publish --slate DG: the pool holds that draft group before the bundle is written. Nothing when it already does; else the
-    slate is fetched from DraftKings, stored and projected (ingest.refresh_pool, one transaction: the desk's slate pick) and
-    the choice is written to data/nba/active_slate.json (the capture tick's slate). The desk process notices the new pool
-    on its next request (Desk.maybe_reload)."""
-    import json
-    from datetime import datetime
-    from ivan.database.session import get_session, init_db
-    from ivan.sports.nba.ingest import ensure_schema, refresh_pool
-    from ivan.sports.nba.models import NBAPlayer
-    from ivan.sports.nba.paths import ACTIVE_SLATE_JSON
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
-    try:
-        row = session.query(NBAPlayer.draft_group_id).first()
-        held = int(row[0]) if row and row[0] else None
-        if held == int(a.slate):
-            return
-        print(f"loading slate {a.slate} (the pool holds {held})", flush=True)
-        refresh_pool(session, int(a.slate), update_odds=False, starters=True, log=print)
-        ACTIVE_SLATE_JSON.write_text(json.dumps({"draft_group": int(a.slate), "chosen_at": datetime.now().isoformat(timespec="seconds")}))
-    finally:
-        session.close()
+    """publish --slate DG: this machine holds that slate before its bundle is written. Nothing when it already does; else the
+    slate is fetched from DraftKings into its own directory, stored and projected (ingest.refresh_pool, one transaction: what
+    opening the slate on the desk does). The desk makes the slate's desk on its next request."""
+    from ivan.sports.nba import slates as S
+    from ivan.sports.nba.ingest import refresh_pool
+    dg = int(a.slate)
+    if S.holds(dg):
+        return
+    print(f"fetching slate {dg} (not held here yet)", flush=True)
+    with S.using(dg):
+        session = S.session(dg)
+        try:
+            refresh_pool(session, dg, update_odds=False, starters=True, log=print, by="feed")
+        finally:
+            session.close()
 
 
 def before_pull():
-    """The slate this machine holds before the pull: when the laptop moved to another, that slate's edits are filed (ingest.after_pull)."""
-    from ivan.database.session import get_session, init_db
-    from ivan.sports.nba.ingest import ensure_schema
-    from ivan.sports.nba.models import NBAPlayer
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
-    try:
-        row = session.query(NBAPlayer.draft_group_id).first()
-        return int(row[0]) if row and row[0] else None
-    finally:
-        session.close()
+    return None
 
 
 def after_pull(changed: dict, previous) -> None:
-    """The published projection stands as pulled; this machine's own edits of the old slate are filed if the slate moved, and only
-    the slate's teams it edited (its own pins or grids) are re-projected on top (ingest.after_pull)."""
-    if "live" not in changed:
-        return
-    from ivan.database.session import get_session, init_db
+    """The published projection stands as pulled; for every slate the pull brought, this machine's own edits of that slate (its
+    pins or grids) are re-projected on top (ingest.after_pull, on the slate's own session)."""
+    from ivan.sports.nba import slates as S
     from ivan.sports.nba.ingest import after_pull as _after
-    session = get_session(init_db("nba"))
-    try:
-        r = _after(session, previous, log=print)
-        if r["teams"]:
-            print(f"re-projected {r['players']} players of {len(r['teams'])} team(s) with this machine's own edits on top of the published projection")
-        else:
-            print("the published projection stands (no edits of this machine's own on this slate)")
-    except Exception as e:   # noqa: BLE001
-        print(f"re-projection skipped: {type(e).__name__}: {e}")
-    finally:
-        session.close()
+    for dg, got in (changed.get("slates") or {}).items():
+        if not got.get("tables") and not got.get("mirror"):
+            continue
+        with S.using(int(dg)):
+            session = S.session(int(dg))
+            try:
+                r = _after(session, log=print)
+                if r["teams"]:
+                    print(f"slate {dg}: re-projected {r['players']} players of {len(r['teams'])} team(s) with this machine's own edits on top of the published projection")
+                else:
+                    print(f"slate {dg}: the published projection stands (no edits of this machine's own)")
+            except Exception as e:   # noqa: BLE001
+                print(f"slate {dg}: re-projection skipped: {type(e).__name__}: {e}")
+            finally:
+                session.close()
 
 
 if __name__ == "__main__":

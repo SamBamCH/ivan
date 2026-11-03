@@ -9,7 +9,8 @@ running after logout only with `sudo loginctl enable-linger <user>`.
 |---|---|---|---|
 | `ivan-nba-nightly.timer` | 06:45, 12:45, 18:45 (+ up to 5 min), `Persistent=true` so a missed slot runs at wake | `scripts/nba/nightly.py` | `data/nba/logs/nightly.log` |
 | `ivan-nba-archive.timer` | every 5 min, 09:00–23:59 | `scripts/nba/archive_at_lock.py` | `data/nba/logs/archive.log` |
-| `ivan-nba-capture.timer` | every 15 min, 09:00–23:45; does nothing unless the **autopilot** switch is on (`scripts/nba/autopilot.py`, the desk header) | `scripts/nba/capture.py` (one slate through `ingest.run_ingest`, props at the offsets; the server pulls the result on its Refresh) | `data/nba/logs/capture.log` |
+| `ivan-nba-capture.timer` | every 15 min, 09:00–23:45; does nothing unless the **autopilot** switch is on (`scripts/nba/autopilot.py`, the desk header) | `scripts/nba/capture.py` (every held slate that has not locked through `ingest.run_ingest`, each in its own directory, props at the offsets per slate; the server pulls the result every 30 minutes and on its Refresh) | `data/nba/logs/capture.log` |
+| `ivan-nba-pull.timer` (the **server**) | every 30 min, persistent | `scripts/nba/feed.py pull`: every slate the laptop published, the shared props, lines and headlines (installed by `deploy/setup_nba_server.sh`) | `journalctl --user -u ivan-nba-pull` |
 
 ```bash
 systemctl --user list-timers | grep ivan-nba              # next and last runs
@@ -39,27 +40,29 @@ In order, each step guarded so a failure does not stop the next (except the box 
 5. **Experience** (`experience.fetch`, also `scripts/nba/experience.py fetch`): nba_api's all-players list, one
    request, each player's first NBA season into `data/nba/derived/players/experience.json` (the desk's rookie marks).
 6. **Feed**: `feed.publish("nba", which="both")` writes the reference bundle (box scores, stints, captures, models,
-   `data/nba/derived`) into `data/feed/nba/`; the server's next Refresh rsyncs it over (nothing is pushed).
+   `data/nba/derived`) and every held slate's bundle into `data/feed/nba/`; the server's next pull rsyncs it over (nothing is pushed).
 
 A laptop that wakes with no network yet fails at step 1 with a DNS error and nothing else runs; the
 next slot or `systemctl --user start ivan-nba-nightly.service` repeats it. The job is idempotent.
 
 ## Archive at tip (`scripts/nba/archive_at_lock.py`)
 
-At each game's tip on the slate the desk holds (the first tip is the slate lock), within 12 minutes
+At each game's tip of every slate this machine holds (the first tip is the slate lock), within 12 minutes
 after it, it writes as they stand: `nba_projection_capture` rows (source `at_tip`, lock = that tip)
-from `nba_player`, and an `archived_slate` capture (source `at_tip`) of the pool, the stored props and the
-game lines. It never fetches and never writes `nba_player`, so it cannot change what the desk sees. A tip
-is archived once (state in `data/nba/archive_state.json`). `--dry-run` and `--now <ISO>` for testing.
+from the slate's `nba_player`, and an `archived_slate` capture (source `at_tip`) of the pool, the stored props and the
+game lines. It never fetches and never writes a pool, so it cannot change what the desk sees. A tip
+is archived once per slate (state in `data/nba/archive_state.json`). `--dry-run` and `--now <ISO>` for testing.
 The late swap and the backtests read these to see what changed after lock.
 
-## The capture tick (`scripts/nba/capture.py`, disabled)
+## The autopilot tick (`scripts/nba/capture.py`)
 
-The game-day loop from opening week: every classic draft group in today's lobby that has not locked
-gets its DK pool, Rotowire lineups, game lines at the first tick and with props, and player props at
-fixed offsets before lock (360/180/90/45/15 minutes, `--offsets`), plus contests and payouts and a feed
-publish. Disabled 2026-10-23 because it rewrote the pool under the desk; the desk's Refresh is the
-only fetch now. Still runnable by hand (`--only <draft group>`, `--no-props`, `--max-props-per-day 20`).
+With the autopilot switch on (`scripts/nba/autopilot.py on`, the desk header), every 15 minutes: every slate this
+machine holds that has not locked (`slates.open_slates`) gets its DK pool, statuses and Rotowire lineups refreshed
+through `ingest.run_ingest` (one transaction on the slate's own database), the game lines at the first tick and with
+props, player props at fixed offsets before its lock (360/180/90/45/15 minutes, `--offsets`; at most
+`--max-props-per-day 20` fetches a day across slates), and its contests and payouts. Nothing is published by the tick:
+the server pulls. A slate nobody opened (on the desk or with `ingest.py --draft-group`) is not refreshed. It stands
+down while a desk job runs. `--only <draft group>`, `--no-props`, `--force` (ignore the switch) by hand.
 
 ## The real fields: standings scrape (by hand, producer)
 
@@ -86,25 +89,28 @@ without fetching:
 
 | Bundle | Tables | Files | Published |
 |---|---|---|---|
-| `live` | `nba_player`, `odds`, `nba_market_rate`, `game_odds`, `starting_lineups`, `historical_contest_information`, `payouts` | the producer's `minutes_overrides.csv` and `rotations/` (as the consumer's `input/published/` layer) | every Publish on the desk, every nightly |
-| `reference` | `nba_stats`, `nba_stint`, `nba_projection_capture`, `archived_slate`, `projection_snapshot`, `classic_contest_metadata` | `data/nba/models/`, `data/nba/derived/`, `data/nba/diagnostics/scorecard/`, `data/nba/input/historical_lines.csv` | every nightly |
+| `live` | the history's shared live tables: `odds`, `game_odds`, `nba_news`, `nba_slate_news` | | on every pull's request, every nightly |
+| `slates/<dg>/` (one per held slate) | from its `slate.sqlite`: `nba_player`, `starting_lineups`, `nba_market_rate`, `historical_contest_information`, `payouts`, `classic_contest_metadata` | its `edits/` (as the consumer's `published/` layer), its `projection/` store (mirrored), its `slate.json` | with the live part; `publish --slate DG` one slate (fetched first when not held) |
+| `reference` | `nba_stats`, `nba_stint`, `nba_projection_capture`, `archived_slate` | `data/nba/models/`, `data/nba/derived/`, `data/nba/diagnostics/scorecard/`, `data/nba/input/historical_lines.csv` | every nightly |
 
-Never published: the lineup pool, sim results, reports, the consumer's own edits. A bundle is a
-gzipped SQL dump plus a manifest with stamps and digests; the consumer replaces exactly those tables.
+Never published: a slate's lineups, sims and reports, the consumer's own edits. A bundle is a gzipped SQL dump plus a
+manifest with stamps and digests (per slate: the tables', the edits' and the store's); the consumer replaces exactly
+those tables in its own copy of the slate. A slate the producer no longer holds leaves the manifest; the consumer keeps
+its copy.
 
 ```bash
-venv/bin/python scripts/nba/feed.py publish [--which live|reference|both]    # write data/feed/nba/*
-venv/bin/python scripts/nba/feed.py pull [--no-project] [--loop 5]          # the consumer: ssh publish + rsync + apply (IVAN_FEED_SSH), or --url
-venv/bin/python scripts/nba/feed.py apply <dir>                              # apply bundles already on disk
+venv/bin/python scripts/nba/feed.py publish [--which live|reference|both] [--slate DG]   # write data/feed/nba/*
+venv/bin/python scripts/nba/feed.py pull [--no-project] [--slate DG] [--loop 30]        # the consumer: ssh publish + rsync + apply (IVAN_FEED_SSH), or --url
+venv/bin/python scripts/nba/feed.py apply <dir>                                          # apply bundles already on disk
 ```
 
-On the consumer a pull (the timer's, or the desk's Refresh) ends in `ingest.after_pull`: when the
-published slate moved to another draft group, this machine's own edits of the old slate are filed under
-`data/nba/input/edits/<draft group>/` and the new slate's come back (`retire_edits`), and slates more than
-2 days old lose their lineups and sims (`isolate_slate`), as on the producer; then only the slate's teams
-it edited itself are re-projected (its edits on top of the published projection) and the rest stays
-exactly as published. State in `data/feed-state/` (`nba.json`: stamps, the last check, the producer's
-note from the manifest).
+On the consumer a pull (the 30-minute timer's, a slate page's Refresh from laptop, or the bar picking a slate the
+server does not hold) applies every slate bundle whose stamps moved into that slate's own directory (created when new:
+the feed tables replaced, the laptop's edits as `published/`, the store mirrored, `slate.json` merged with
+`pulled_at`), then `ingest.after_pull` re-projects only the teams this machine edited on each (its edits on top of the
+published projection); the rest stays exactly as published. State in `data/feed-state/` (`nba.json`: stamps per part
+and per slate, the last check, the producer's note from the manifest). The slate page's header shows when the laptop
+last refreshed the slate and by what, and when the server last pulled it.
 `scripts/feed_server.py` (unit `ivan-feed`) serves the bundles over HTTP with a bearer token for a
 consumer that cannot receive rsync.
 

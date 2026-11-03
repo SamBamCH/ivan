@@ -8,8 +8,8 @@ The feed's command line, one per sport (scripts/<sport>/feed.py calls main(sport
 `before_pull()` returns what the sport wants to remember from before the pull (the NBA: the slate it held, so a slate move
 files that slate's edits); `after_pull(changed, before)` is its own step after a pull that brought new tables (the NBA
 re-projects the teams this machine edited). `before_publish(args)` runs on the producer before the bundle is written
-(the NBA: `--slate DG` loads that slate into the pool when it holds another; the consumer's `pull --slate DG` asks for it
-over ssh, `publish <sport> DG`). All None for a sport that only reads what it pulled.
+(the NBA: `--slate DG` fetches that slate when it is not held and publishes its bundle; the consumer's `pull --slate DG`
+asks for it over ssh, `publish <sport> DG`). All None for a sport that only reads what it pulled.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def main(sport: str, before_pull: Optional[Callable[[], object]] = None, after_p
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("publish"); p.add_argument("--which", choices=("live", "reference", "both"), default="both")
     p.add_argument("--quiet", action="store_true", help="the stamps on the last line only (the forced command's answer to the consumer)")
-    p.add_argument("--slate", type=int, default=None, help="load this draft group into the pool first when the pool holds another (the sport's before_publish)")
+    p.add_argument("--slate", type=int, default=None, help="publish this slate's bundle only (fetched first when not held: the sport's before_publish)")
     q = sub.add_parser("pull"); q.add_argument("--url", default=None, help="a feed directory or server instead of the .env source"); q.add_argument("--token", default=None)
     q.add_argument("--which", choices=("live", "reference", "both"), default="both")
     q.add_argument("--slate", type=int, default=None, help="ask the producer to load this draft group first (ssh only): both desks move to it")
@@ -82,7 +82,7 @@ def main(sport: str, before_pull: Optional[Callable[[], object]] = None, after_p
         if sport == "nba":
             from ivan.sports.nba import autopilot
             producer = autopilot.producer_info("desk")
-        m = feed.publish(sport, which=a.which, log=(lambda s: None) if a.quiet else print, producer=producer)
+        m = feed.publish(sport, which=a.which, log=(lambda s: None) if a.quiet else print, producer=producer, slate=a.slate)
         stamps = " ".join(f"{part} {m.get(part, {}).get('stamp')}" for part in feed.parts_of(sport))
         print(stamps + ("" if a.quiet else f" -> {feed.FEED_DIR / sport}"))
         return 0

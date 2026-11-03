@@ -48,6 +48,20 @@ The models read history that is not fetched on a slate day:
 
 A consumer gets all of this from the reference bundle of the feed instead (`scripts/nba/feed.py pull`).
 
+### One directory per slate (since 2026-11-03)
+
+Everything that belongs to one slate lives under `data/nba/slates/<draft group>/` (its own `slate.sqlite` with the
+history attached, its edits, published layer, projection store, entries, outputs, `slate.json`; [data.md](data.md)).
+A checkout that still has the one pool is moved once:
+
+```bash
+venv/bin/python scripts/nba/migrate_slates.py --dry-run   # what would move
+venv/bin/python scripts/nba/migrate_slates.py             # the pool and every worked slate into slates/<dg>/; the old tables renamed _migrated_*
+```
+
+Run it on the laptop after the merge and on the server (`deploy/setup_nba_server.sh` runs it). Scripts take `--slate DG`
+(default: today's main held slate); the desk binds the slate from the page's address.
+
 ## Timers (user systemd units)
 
 ```bash
@@ -78,8 +92,8 @@ restart the process to see code changes.
 
 ## Entries file
 
-`data/nba/input/entries.csv` is the DraftKings entries export (`Entry ID, Contest Name, Contest ID,
-Entry Fee, ...`). The sim and the chooser read it; the desk has an upload box for it (`/entries`).
+`data/nba/slates/<dg>/input/entries.csv` is the slate's DraftKings entries export (`Entry ID, Contest Name, Contest ID,
+Entry Fee, ...`). The sim and the chooser read it (`--slate DG`); the slate page has an upload box for it (`/entries`).
 Contests it names that the database lacks are fetched by `sim.py` (`ivan.sports.nba.contests.ensure_contest`).
 
 ## Chrome profile (producer only)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Callable, Optional
 
@@ -27,14 +27,14 @@ from sqlalchemy.orm import Session
 from ivan.core import raw
 from ivan.core.archive import archive_slate, ensure_tables as ensure_archive_tables
 from ivan.core.config import require_env
-from ivan.core.utils import PROJECT_ROOT, normalize_name
+from ivan.core.utils import normalize_name
 from ivan.database.session import add_missing_columns
 from ivan.sports.common.draftkings import (get_players_for_slate, _derive_opponent_for_player,
                                            _parse_gametime_to_local, list_slates)
 from ivan.sports.common.odds import get_game_odds, get_odds, parse_game_odds, parse_odds
 from ivan.sports.nba.historical.data_fetch import fetch_rotowire_html, parse_rotowire, store_starting_lineups
 from ivan.sports.nba.models import (NBABase, NBAGameOdds, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
-from ivan.sports.nba.paths import INPUT_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR
+from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
@@ -49,8 +49,13 @@ class IngestError(RuntimeError):
 
 
 def ensure_schema(engine) -> None:
-    NBABase.metadata.create_all(engine)
-    add_missing_columns(engine, NBABase.metadata)
+    """The history database's tables: every NBA table but a slate's own (slates.SLATE_TABLES live in data/nba/slates/<dg>/slate.sqlite,
+    slates.ensure_slate_schema). A slate table created here would be found by nobody; a history table created in a slate file would
+    shadow the real one, hence the two explicit lists."""
+    from ivan.sports.nba.slates import SLATE_TABLES
+    tables = [t for t in NBABase.metadata.sorted_tables if t.name not in SLATE_TABLES]
+    NBABase.metadata.create_all(engine, tables=tables)
+    add_missing_columns(engine, NBABase.metadata, only={t.name for t in tables})
     ensure_archive_tables(engine)
 
 
@@ -228,121 +233,38 @@ def one_transaction(session: Session):
         raise
 
 
-def retire_edits(old_draft_group: int, log: Log = print, new_draft_group: Optional[int] = None) -> None:
-    """
-    Edits are per slate: when the pool moves to another slate the minute / rate / starter pins and the drawn rotation grids
-    are filed under data/nba/input/edits/<old draft group>/ and the live files start empty (a pin on a name would otherwise
-    follow him onto a slate where he has another role). With `new_draft_group`, that slate's filed edits come back, so
-    switching away and back loses nothing.
-    """
-    import shutil
-    from ivan.sports.nba.projection.rotation import ROTATIONS_DIR
-    keep = INPUT_DIR / "edits" / str(old_draft_group)
-    moved = 0
-    if MINUTES_OVERRIDES_CSV.exists():
-        keep.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(MINUTES_OVERRIDES_CSV), str(keep / MINUTES_OVERRIDES_CSV.name)); moved += 1
-    if ROTATIONS_DIR.exists():
-        for f in ROTATIONS_DIR.glob("*.json"):
-            keep.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(f), str(keep / f.name)); moved += 1
-    if moved:
-        log(f"filed {moved} edit file(s) of slate {old_draft_group} under {keep.relative_to(INPUT_DIR.parent)}")
-    if new_draft_group is not None:
-        back = INPUT_DIR / "edits" / str(new_draft_group)
-        if back.is_dir():
-            n = 0
-            for f in back.iterdir():
-                if f.name == MINUTES_OVERRIDES_CSV.name:
-                    shutil.move(str(f), str(MINUTES_OVERRIDES_CSV)); n += 1
-                elif f.suffix == ".json":
-                    ROTATIONS_DIR.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(f), str(ROTATIONS_DIR / f.name)); n += 1
-            if n:
-                log(f"restored {n} edit file(s) of slate {new_draft_group}")
-
-
-KEEP_SLATE_DAYS = 2   # a switch keeps the lineups and sims of slates this many days back (today's other slates side by side)
-
-
-def isolate_slate(session, draft_group_id: int, log: Log = print, keep_days: int = KEEP_SLATE_DAYS) -> dict:
-    """
-    Loading a slate keeps each slate's own work: lineups, pool snapshots, simulation results and contest reports belong to
-    their draft group, and generate / the field sampler / the sim read only the loaded slate's (field_generation.
-    slate_lineups). What a switch deletes is the work of slates older than `keep_days` (by the day of their contests or
-    their pool snapshot's lock) and rows of no known slate, so two of today's slates can be worked side by side and coming
-    back to one finds its lineups and sims (until 2026-10-29 every other slate's work was deleted, 2026-10-26: Monday's
-    desk still carried Sunday's 12k lineups and sims). The pool, props, captures, news and box scores are never touched.
-    """
-    from sqlalchemy import text
-    from ivan.sports.nba.models import ContestSimReport, Lineup, LineupPool, LineupSimulationResult
-    dg = int(draft_group_id)
-    cutoff = (datetime.now() - timedelta(days=int(keep_days))).date().isoformat()
-    days = {}
-    for d, day in session.execute(text("select draft_group_id, min(date(date)) from historical_contest_information group by draft_group_id")).all():
-        if d is not None and day:
-            days[int(d)] = str(day)
-    for d, day in session.execute(text("select draft_group_id, min(date(lock)) from lineup_pool group by draft_group_id")).all():
-        if d is not None and day and int(d) not in days:
-            days[int(d)] = str(day)
-    have = {int(d) for (d,) in session.execute(text("select distinct draft_group_id from lineup where draft_group_id is not null")).all()}
-    old = sorted(d for d in have | {int(x) for (x,) in session.execute(text("select distinct draft_group_id from lineup_pool")).all() if x is not None}
-                 if d != dg and (d not in days or days[d] < cutoff))
-    n_l = session.query(Lineup).filter(Lineup.draft_group_id.in_(old) | Lineup.draft_group_id.is_(None)).delete(synchronize_session=False)
-    n_p = session.query(LineupPool).filter(LineupPool.draft_group_id.in_(old)).delete(synchronize_session=False) if old else 0
-    n_s = session.execute(text("DELETE FROM lineup_simulation_results WHERE lineup_id NOT IN (SELECT id FROM lineup)")).rowcount
-    n_r = 0
-    if old:
-        n_r = session.execute(text("DELETE FROM contest_sim_report WHERE contest_id IN (SELECT contest_id FROM historical_contest_information WHERE draft_group_id IN ("
-                                   + ",".join(str(int(x)) for x in old) + "))")).rowcount
-    session.commit()
-    out = dict(lineups=int(n_l or 0), pool=int(n_p or 0), sims=int(n_s or 0), reports=int(n_r or 0), slates=old)
-    if any(v for k, v in out.items() if k != "slates"):
-        log(f"cleared older slates' work ({', '.join(map(str, old)) or 'no slate'}): {out['lineups']} lineups, {out['sims']} sim results, "
-            f"{out['reports']} reports, {out['pool']} pool rows")
-    return out
-
-
 def locally_edited_teams(session: Session) -> set:
-    """On a consumer: the teams whose players this machine pinned or whose grid it painted (its own layer, not the published one)."""
-    from ivan.sports.nba.projection.rotation import ROTATIONS_DIR
-    local = read_overrides_full(layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}
+    """On a consumer: the teams whose players this machine pinned or whose grid it painted (its own layer of the current slate,
+    not the published one)."""
+    local = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}
     teams = set()
     if local:
         by_name = {normalize_name(p.name): p.team for p in session.query(NBAPlayer).all()}
         teams |= {by_name[n] for n in local if n in by_name and by_name[n]}
-    if ROTATIONS_DIR.is_dir():
-        teams |= {f.stem for f in ROTATIONS_DIR.glob("*.json")}
+    if S.rotations_dir().is_dir():
+        teams |= {f.stem for f in S.rotations_dir().glob("*.json")}
     return teams
 
 
-def after_pull(session: Session, previous_draft_group: Optional[int], *, n_sims: Optional[int] = None, log: Log = print) -> dict:
+def after_pull(session: Session, *, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """
-    A consumer, after feed.pull replaced the pool. When the published slate moved to another draft group, this machine's own
-    edits of the old slate are filed and the new slate's come back (retire_edits: a pin on a name must not follow him onto
-    another slate, 2026-10-27: the server still held Sunday's pins when Tuesday's slate arrived) and the other slate's lineups
-    and sims are cleared (isolate_slate), exactly as the producer does on a slate switch. Then only the teams this machine
-    edited, among the slate's teams, are re-projected on top of the published projection; the rest stands as published.
-    Returns {moved, teams, players}.
+    A consumer, after the feed replaced a slate's pool (the current slate's session): only the teams this machine edited, among
+    the slate's teams, are re-projected on top of the published projection; the rest stands as published. Slates no longer
+    displace each other (each has its own directory), so nothing is filed or cleared. Returns {teams, players, draft_group}.
     """
     row = session.query(NBAPlayer.draft_group_id).first()
     current = int(row[0]) if row and row[0] else None
-    moved = previous_draft_group is not None and current is not None and int(previous_draft_group) != current
-    if moved:
-        log(f"the published slate moved from {previous_draft_group} to {current}")
-        retire_edits(int(previous_draft_group), log=log, new_draft_group=current)
-        isolate_slate(session, current, log=log)
     slate_teams = {t for (t,) in session.query(NBAPlayer.team).distinct().all() if t}
     mine = locally_edited_teams(session) & slate_teams
     players = 0
     if mine:
         info = project_slate(session, n_sims=n_sims, write_capture=False, write_csv=False, log=log, teams=mine)
         players = info.players
-    return dict(moved=moved, teams=mine, players=players, draft_group=current)
+    return dict(moved=False, teams=mine, players=players, draft_group=current)
 
 
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: Optional[int] = None,
-                 log: Log = print, field: bool = False, news: bool = True, lines: Optional[bool] = None) -> tuple:
+                 log: Log = print, field: bool = False, news: bool = True, lines: Optional[bool] = None, by: str = "desk") -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
     and write its public projection in ONE transaction. Nothing downstream can see a half-written or unprojected pool
@@ -352,7 +274,7 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     (news=False skips it). Returns (StoreInfo, ProjectInfo, the news check's result or None, the changes per team).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
-    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news, lines=lines)
+    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news, lines=lines, by=by)
     return out["stored"], out["projected"], out["news"], out["changes"]
 
 
@@ -608,7 +530,7 @@ def record_projection(session: Session, slate: LiveSlate, frames: list, now: dat
     if write_csv:
         try:
             from ivan.core import artifacts
-            path = artifacts.projections_path(OUTPUT_DIR, now)
+            path = artifacts.projections_path(S.output_dir(), now)
             path.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(rows).to_csv(path, index=False)
             info.projections_path = str(path)
@@ -644,68 +566,93 @@ def record_external_projections(session: Session, csv_path: Path, source: str = 
 # ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
                n_sims: Optional[int] = None, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
-               lines: Optional[bool] = None) -> dict:
+               lines: Optional[bool] = None, by: str = "desk") -> dict:
     """
-    Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the pool is
-    replaced, projected and its public projection written in one transaction, so a desk serving the same database from
-    another process never sees a half-written pool (it notices the new stamp and shows "new data"). The public field and
-    ownership are not built unless field=True (refresh_field after the commit, about 45s at 3,000 entries): the sim
-    builds the field it needs and the desk's "Field + ownership" button builds it on demand. When the pool moves to another draft group the old
-    slate's pins and drawn grids are filed away first (retire_edits). project=False stores only; the desk then shows an
-    unprojected pool until something projects it. `fetched`: a slate already fetched by the caller (the autopilot tick
-    attaches the game lines to it) is stored as given instead of fetching again. news=True (the default) also reads
-    Rotowire's news page after the commit (newsfeed.check, free, about a second; a failure is logged, never raised), so
-    every refresh brings the headlines with the statuses. out["changes"] is what the refresh moved per team
-    (ivan.sports.nba.changes: statuses, the lineups, the pool, projections that moved, new headlines), also logged.
+    Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the slate's pool is
+    replaced, projected and its public projection written in one transaction, so a desk serving the same slate from another
+    process never sees a half-written pool (it notices the new stamp and shows "new data"). `session` is the slate's own
+    session (slates.session(dg): its slate.sqlite with the history attached); the slate is the current one for the call, so the
+    edits, grids and store read and written are its own, and no other slate is touched. The public field and ownership are not
+    built unless field=True (refresh_field after the commit, about 45s at 3,000 entries): the sim builds the field it needs and
+    the desk's "Field + ownership" button builds it on demand. project=False stores only; the desk then shows an unprojected pool
+    until something projects it. `fetched`: a slate already fetched by the caller (the autopilot tick attaches the game lines to
+    it) is stored as given instead of fetching again. news=True (the default) also reads Rotowire's news page after the commit
+    (newsfeed.check, free, about a second; a failure is logged, never raised) and links the slate's headlines to the slate
+    (nba_slate_news), so every refresh brings the headlines with the statuses and the slate's pre-lock news is on record.
+    out["changes"] is what the refresh moved per team (ivan.sports.nba.changes: statuses, the lineups, the pool, projections that
+    moved, new headlines), also logged. The slate's record (slates/<dg>/slate.json) notes the lock, the games and who refreshed
+    it when (`by`: desk | autopilot | script | feed).
     """
     from ivan.sports.nba import changes as CH
-    try:
-        before = CH.snapshot(session)
-    except Exception:   # noqa: BLE001 - the diff is a convenience
-        before = None
-    if fetched is None:
-        fetched = fetch_slate(session, int(draft_group_id), update_odds=update_odds, starters=starters, log=log, lines=lines)
-    current = session.query(NBAPlayer.draft_group_id).first()
-    switching = bool(current and current[0] and int(current[0]) != int(draft_group_id))
-    if switching:
-        retire_edits(int(current[0]), log=log, new_draft_group=int(draft_group_id))   # pins and grids belong to their slate; the new slate's come back
-    try:
+    dg = int(draft_group_id)
+    with S.using(dg):
+        held = session.query(NBAPlayer.draft_group_id).first()
+        if held and held[0] and int(held[0]) != dg:
+            raise IngestError(f"this session holds slate {held[0]}, not {dg}: open the slate's own session (slates.session)")
+        try:
+            before = CH.snapshot(session)
+        except Exception:   # noqa: BLE001 - the diff is a convenience
+            before = None
+        if fetched is None:
+            fetched = fetch_slate(session, dg, update_odds=update_odds, starters=starters, log=log, lines=lines)
         with one_transaction(session):
             stored = store_slate(session, fetched, log=log)
             projected = project_slate(session, n_sims=n_sims, log=log) if project else None
-    except BaseException:
-        if switching:
-            retire_edits(int(draft_group_id), log=log, new_draft_group=int(current[0]))   # the pool did not move: the edits go back where they were
-        raise
-    if switching:
-        isolate_slate(session, int(draft_group_id), log=log)
-    ownership = refresh_field(session, log=log) if field else None
-    news_r = check_news(session, log=log) if news else None
-    try:
-        moved = CH.diff(before, CH.snapshot(session), (news_r or {}).get("new"))
-    except Exception:   # noqa: BLE001
-        moved = {}
-    for team, items in sorted(moved.items()):
-        log(f"changed {team}: " + "; ".join(x["text"] for x in items))
-    return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r, "changes": moved}
+        S.create(dg, lock=fetched.lock, games=len(fetched.teams) // 2 if fetched.teams else None)
+        S.touch(dg, "refreshed", by=by)
+        ownership = refresh_field(session, log=log) if field else None
+        news_r = check_news(session, log=log, draft_group_id=dg) if news else None
+        try:
+            moved = CH.diff(before, CH.snapshot(session), (news_r or {}).get("new"))
+        except Exception:   # noqa: BLE001
+            moved = {}
+        for team, items in sorted(moved.items()):
+            log(f"changed {team}: " + "; ".join(x["text"] for x in items))
+        return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r, "changes": moved}
 
 
-def check_news(session, log: Log = print) -> Optional[dict]:
-    """Rotowire's news page into nba_news (newsfeed.check) for a refresh: None and a log line when it fails."""
+def check_news(session, log: Log = print, draft_group_id: Optional[int] = None) -> Optional[dict]:
+    """Rotowire's news page into nba_news (newsfeed.check) for a refresh: None and a log line when it fails. With a draft group,
+    every headline of the slate's teams now on file is linked to the slate (nba_slate_news, once per headline and slate), so
+    the slate's pre-lock news is nba_news joined through that table."""
     from ivan.sports.nba import newsfeed
     try:
-        return newsfeed.check(session, log=log)
+        out = newsfeed.check(session, log=log)
     except Exception as e:   # noqa: BLE001 - the pool is the refresh; the news is a convenience on top
         log(f"news check failed: {type(e).__name__}: {e}")
         return None
+    if draft_group_id is not None:
+        try:
+            link_slate_news(session, int(draft_group_id))
+        except Exception as e:   # noqa: BLE001
+            log(f"news link skipped: {type(e).__name__}: {e}")
+    return out
+
+
+def link_slate_news(session, draft_group_id: int) -> int:
+    """Link the headlines of the slate's teams to the slate (nba_slate_news). Returns how many links are new."""
+    from ivan.sports.nba.models import NBANews, NBASlateNews
+    teams = {t for (t,) in session.query(NBAPlayer.team).distinct().all() if t}
+    if not teams:
+        return 0
+    have = {int(n) for (n,) in session.query(NBASlateNews.news_id).filter(NBASlateNews.draft_group_id == int(draft_group_id)).all()}
+    now = datetime.now(); n = 0
+    for (nid,) in session.query(NBANews.id).filter(NBANews.team.in_(sorted(teams))).all():
+        if int(nid) in have:
+            continue
+        session.add(NBASlateNews(draft_group_id=int(draft_group_id), news_id=int(nid), seen_at=now)); n += 1
+    if n:
+        session.commit()
+    return n
 
 
 def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """
-    Load a past slate onto the desk from its archive capture (the last one taken before lock, else the last one; or
+    Load a past slate into its own directory from its archive capture (the last one taken before lock, else the last one; or
     `capture_id`): the pool as it was (salaries, statuses, starters), its props and game lines, then the projection with
-    the model as it is now. Nothing is fetched. One transaction, like refresh_pool; the slate's filed edits come back.
-    No capture row is written (the scorecard reads the ones taken before lock).
+    the model as it is now. Nothing is fetched. One transaction, like refresh_pool, on the slate's own session
+    (slates.session(dg)); its edits are where they always were. No capture row is written (the scorecard reads the ones
+    taken before lock).
     """
     from ivan.core import archive
     caps = [c for c in archive.captures(session, "nba") if str(c.slate_key) == str(draft_group_id)]
@@ -722,14 +669,10 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
     players, odds_rows, line_rows = blobs.get("players", []), blobs.get("odds", []), blobs.get("game_lines", [])
     if not players:
         raise IngestError(f"capture {cap.id} holds no players")
-    current = session.query(NBAPlayer.draft_group_id).first()
-    switching = bool(current and current[0] and int(current[0]) != int(draft_group_id))
-    if switching:
-        retire_edits(int(current[0]), log=log, new_draft_group=int(draft_group_id))
     cols = set(NBAPlayer.__table__.columns.keys()) - {"fpts_mean", "fpts_std", "fpts_updated_at", "ownership", "minutes_proj", "fpts_quantiles",
                                                       "minutes_role", "p_out", "rates", "minutes_p10", "minutes_p90", "rotation_cells", "boundary_sd",
                                                       "pub_fpts", "pub_updated_at"}
-    try:
+    with S.using(int(draft_group_id)):
         with one_transaction(session):
             session.query(NBAPlayer).delete(synchronize_session=False)
             for r in players:
@@ -771,12 +714,8 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
                 store_market_rates(session, means, basis)
             refresh_public_projection(session, log=log)        # the field and ownership: the sim or the Field + ownership button
             info = project_slate(session, n_sims=n_sims, log=log, write_capture=False)
-    except BaseException:
-        if switching:
-            retire_edits(int(draft_group_id), log=log, new_draft_group=int(current[0]))   # the pool did not move: the edits go back
-        raise
-    if switching:
-        isolate_slate(session, int(draft_group_id), log=log)
+        S.create(int(draft_group_id), lock=cap.lock, games=len({frozenset((r.get("team"), r.get("opponent"))) for r in players if r.get("team") and r.get("opponent")}) or None)
+        S.touch(int(draft_group_id), "refreshed", by="archive")
     log(f"restored slate {draft_group_id} from capture {cap.id} ({cap.source}, {cap.captured_at:%m-%d %H:%M}): {len(players)} players, "
         f"{n_st} starters, {len(odds_rows)} prop rows, {len(line_rows)} line rows; projected {info.players}")
     return dict(capture=cap.id, source=cap.source, captured_at=cap.captured_at, players=len(players), starters=n_st, odds=len(odds_rows), lines=len(line_rows))

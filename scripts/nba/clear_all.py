@@ -15,8 +15,7 @@ import argparse
 
 from sqlalchemy import text
 
-from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import ensure_schema
+from ivan.sports.nba import slates as S
 
 # children before parents (sim results point at lineups)
 TABLES = [
@@ -29,12 +28,11 @@ TABLES = [
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--yes", "-y", action="store_true", help="delete without asking")
     ap.add_argument("--dry-run", action="store_true", help="print the counts and exit")
     args = ap.parse_args()
-    engine = init_db("nba")
-    ensure_schema(engine)
-    session = get_session(engine)
+    dg, session = S.open(args.slate)
     try:
         counts = {t: int(session.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar() or 0) for t, _ in TABLES}
         for t, label in TABLES:

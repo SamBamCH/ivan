@@ -17,11 +17,9 @@ from __future__ import annotations
 import argparse
 
 from ivan.core.config import config_path, load_config
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import lineup_export as LE
 from ivan.sports.nba.choose import DEFAULT_WEIGHTS
-from ivan.sports.nba.ingest import ensure_schema
-from ivan.sports.nba.paths import CHOSEN_ENTRIES_CSV
+from ivan.sports.nba import slates as S
 
 
 def prompt_float(prompt_text: str, default: float) -> float:
@@ -39,8 +37,9 @@ def prompt_weights(contest_id: int, contest_name: str, last: dict) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Choose NBA lineups and write the DraftKings upload CSV.")
+    S.add_arg(ap)
     ap.add_argument("--config", default=str(config_path("nba")), help="path to the nba json config file")
-    ap.add_argument("-o", "--output_csv", default=str(CHOSEN_ENTRIES_CSV), help="base name of the files written (stamped)")
+    ap.add_argument("-o", "--output_csv", default=None, help="base name of the files written (stamped); default: the slate's output/chosen_entries.csv")
     ap.add_argument("--entries", default=None, help="entries CSV (default: paths.entries_csv from config, or $IVAN_ENTRIES_CSV)")
     w = ap.add_argument_group("weights (any of these disables the interactive prompt)")
     w.add_argument("--cash-pct", type=float, default=None, help="weight on cash_pct for every contest")
@@ -57,8 +56,8 @@ def main() -> int:
                                              "method": a.method, "bankroll": a.bankroll},
                                       overrides=LE.load_weights_json(a.weights_json), no_prompt=a.no_prompt, prompter=prompt_weights,
                                       defaults=defaults)
-    engine = init_db("nba", cfg.get("database_url")); ensure_schema(engine); session = get_session(engine)
-    LE.run_choose(session, a.entries or cfg["paths"]["entries_csv"], a.output_csv, weights_for)
+    dg, session = S.open(a.slate)
+    LE.run_choose(session, a.entries or str(S.entries_csv()), a.output_csv or str(S.chosen_entries_csv()), weights_for)
     return 0
 
 

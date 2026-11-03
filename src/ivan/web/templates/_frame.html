@@ -23,7 +23,7 @@
       {% if not frame.slate %}<option value="" selected>slate…</option>{% endif %}
       {% for d in frame.days %}{% for s in d.slates %}
         <option value="{{ s.path(frame.root) }}" data-day="{{ d.iso }}"
-                {% if frame.slate and s.key == frame.slate.key %}selected{% endif %} {% if frame.day and d.day != frame.day.day %}hidden{% endif %}>{{ s.label }}{% if s.loaded %} · loaded{% endif %}</option>
+                {% if frame.slate and s.key == frame.slate.key %}selected{% endif %} {% if frame.day and d.day != frame.day.day %}hidden{% endif %}>{{ s.label }}{% if s.loaded %} · held{% endif %}</option>
       {% endfor %}{% endfor %}
     </select>
     <button type="button" class="step" data-step="1" title="the slate after">&rsaquo;</button>

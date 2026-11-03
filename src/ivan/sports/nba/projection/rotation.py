@@ -31,10 +31,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ivan.core.utils import normalize_name
-from ivan.sports.nba.paths import INPUT_DIR
+from ivan.sports.nba import slates as S
 
 MINUTES = 48
-ROTATIONS_DIR = INPUT_DIR / "rotations"
 ON_COURT = 5
 HYSTERESIS = 0.15          # a player on the floor stays until someone's curve beats his by this
 MIN_STINT = 2              # minutes: shorter stints are merged away in the proposal
@@ -520,18 +519,17 @@ def last_game_grid(session: Session, team: str, before: Optional[date] = None, s
 
 
 # ----------------------------------------------------------------------------- drawn rotations (the desk's locked rows)
-PUBLISHED_ROTATIONS_DIR = INPUT_DIR / "published" / "rotations"   # a consumer's base layer: the producer's painted grids as pulled
 
 
 def drawn_path(team: str) -> Path:
-    return ROTATIONS_DIR / f"{team}.json"
+    return S.rotations_dir() / f"{team}.json"
 
 
 def drawn_source(team: str) -> Optional[str]:
     """Where the team's grid comes from: 'local' (painted on this machine), 'published' (the producer's, pulled), or None."""
     if drawn_path(team).exists():
         return "local"
-    if (PUBLISHED_ROTATIONS_DIR / f"{team}.json").exists():
+    if (S.published_rotations_dir() / f"{team}.json").exists():
         return "published"
     return None
 
@@ -557,7 +555,7 @@ def load_drawn(team: str) -> Optional[pd.DataFrame]:
     This machine's own grid first, else the producer's published one (a consumer); .attrs["source"] says which."""
     p = drawn_path(team)
     if not p.exists():
-        p = PUBLISHED_ROTATIONS_DIR / f"{team}.json"
+        p = S.published_rotations_dir() / f"{team}.json"
         if not p.exists():
             return None
     d = json.loads(p.read_text())

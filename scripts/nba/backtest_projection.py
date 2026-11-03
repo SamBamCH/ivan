@@ -19,15 +19,14 @@ import argparse
 import itertools
 import json
 from datetime import date, timedelta
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from ivan.database.session import init_db, get_session
 from ivan.sports.nba.paths import MODELS_DIR, DIAG_DIR
-from ivan.sports.nba.projection.history import load_box_scores, build_history, STATS, HistoryState
-from ivan.sports.nba.projection.engine import project_team, RosterPlayer, ProjectionParams
+from ivan.sports.nba.projection.history import load_box_scores, build_history, STATS
+from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.rates import DK_WEIGHTS
 from ivan.sports.nba.projection.walkforward import (ROSTER_WINDOW_GAMES, STAR_BASELINE, build_cases, fmt, metrics, run,  # noqa: F401
                                                     team_games)

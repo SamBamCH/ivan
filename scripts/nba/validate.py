@@ -14,17 +14,15 @@ The minutes / per-minute model against what happened, and what to check before l
 from __future__ import annotations
 
 import argparse
-from datetime import date
 
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import validation as V
-from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, read_overrides
+from ivan.sports.nba import slates as S
 
 
 def cmd_scorecard(session, a) -> int:
@@ -96,6 +94,7 @@ def cmd_replay(session, a) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("scorecard"); s.add_argument("--draft-group", type=int, default=None); s.add_argument("--date", default=None)
     s.add_argument("--force", action="store_true"); s.add_argument("--top", type=int, default=V.TOP_N)
@@ -104,7 +103,7 @@ def main() -> int:
     r = sub.add_parser("review"); r.add_argument("--team", default=None); r.add_argument("--all", action="store_true", help="every team, not only the flagged ones")
     r.add_argument("--min-score", type=int, default=4, help="print teams with at least this alert score (default 4)")
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     return {"scorecard": cmd_scorecard, "history": cmd_history, "review": cmd_review, "replay": cmd_replay}[a.cmd](session, a)
 
 

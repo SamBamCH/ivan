@@ -12,18 +12,18 @@ uses Rotowire's starters only.
 """
 import argparse
 
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import considerations as CN
 from ivan.sports.nba import experience as X
-from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.projection.live import LiveSlate
+from ivan.sports.nba import slates as S
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--team", default=None)
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     slate = LiveSlate(session)
     exp = X.load(); year = X.season_start_year()
     played_before = set(slate.box[(slate.box.game_date < __import__("datetime").date(year, 10, 1)) & slate.box.played].player_name)

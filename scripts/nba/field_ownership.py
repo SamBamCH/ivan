@@ -13,16 +13,16 @@ so a second run after no change is instant; about 45 seconds for 3,000 entries, 
 """
 import argparse
 
-from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.public_field import refresh_field_ownership
+from ivan.sports.nba import slates as S
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--entries", type=int, default=None, help="field entries (default: config field.ownership_entries, 3,000)")
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     r = refresh_field_ownership(session, log=lambda m: print(m, flush=True), size=a.entries)
     print(f"ownership for {r['owned']} players in {r['seconds']}s", flush=True)
     return 0 if r["owned"] else 1

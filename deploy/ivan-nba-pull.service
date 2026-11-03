@@ -1,0 +1,8 @@
+[Unit]
+Description=Ivan NBA pull from the laptop: every published slate, the shared props, lines and headlines (scripts/nba/feed.py pull)
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+ExecStart=__ROOT__/venv/bin/python __ROOT__/scripts/nba/feed.py pull
+Nice=10

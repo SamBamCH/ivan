@@ -1,52 +1,75 @@
 # NBA: data
 
-One SQLite file, raw payloads on disk, derived files per contest, model parameters, and the stamped
-outputs of each run. Layout constants are in `src/ivan/sports/nba/paths.py`; the database is
-`data/nba/nba_history.sqlite` unless `IVAN_NBA_DB_URL` says otherwise. The principle (store the raw
-inputs and outcomes of every slate, derive everything else) is [../data_framework.md](../data_framework.md).
+The history database, **one directory per slate**, raw payloads on disk, derived files per contest, model parameters,
+and the stamped outputs of each run. Layout constants are in `src/ivan/sports/nba/paths.py` and, for everything that
+belongs to one slate, `src/ivan/sports/nba/slates.py`; the history database is `data/nba/nba_history.sqlite` unless
+`IVAN_NBA_DB_URL` says otherwise. The principle (store the raw inputs and outcomes of every slate, derive everything
+else) is [../data_framework.md](../data_framework.md).
+
+**A slate is a directory**, `data/nba/slates/<draft group>/`: its own `slate.sqlite` (the pool, starters, market rates,
+notes, lineups, sims, contests), its edits, its published layer, its projection store, its entries and outputs, and
+`slate.json` (lock, day, games, when it was refreshed and by what, when it was published or pulled). A slate's engine
+opens `slate.sqlite` as *main* and attaches the history database as `hist`; SQLite resolves an unqualified table name
+in main first, then in the attached file, so the same queries read the slate's `nba_player` and the shared `nba_stats`.
+Two slates never displace each other: the desk holds as many as were opened, scripts take `--slate DG`, the autopilot
+refreshes every held slate that has not locked, and a slate's directory is its pre-lock record (nothing deletes it).
+The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-03.md).
 
 ## Tables (`src/ivan/sports/nba/models.py` and the shared `ivan.core` tables)
 
-| Table | What | Written by | Feed |
-|---|---|---|---|
-| `nba_player` | **the pool**: one row per DK player of the loaded slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`; the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), Publish / `project_slate`, `project.py`, `news.py` | live |
-| `starting_lineups` | Rotowire's expected and confirmed starters, with `fetched_at` | the pool refresh | live |
-| `odds` | player props as (book, market, line, prices) | `ingest.fetch_slate` with `--update-odds` / Refresh props | live |
-| `nba_market_rate` | per player and stat: market mean ÷ basis minutes, books, line | `live.store_market_rates` after a props fetch | live |
-| `game_odds` | moneyline, spread, total per book per game | `ingest.store_game_lines` | live |
-| `historical_contest_information`, `payouts` | DK contests and payout tables | `contests.upsert_contests` / `fetch_payouts` / `ensure_contest` (the sim) | live |
-| `nba_stats` | box scores, one row per player-game, both seasons | `nightly.py` (`historical.data_fetch.fetch_boxscores`) | reference |
-| `nba_stint`, `nba_sub`, `nba_foul` | when each player was on the floor, substitution pairs, personal fouls, from the play-by-play | `nightly.py`, `pbp.py` | stints only |
-| `nba_projection_capture` | our projection per player at a moment, keyed by lock: sources `ours` (Publish, ingest), `at_tip` (the archive timer), `dk_avg`, a Stokastic CSV; carries the history context the scorecard needs | `project_slate`, `archive_at_lock.py` | reference |
-| `archived_slate`, `archived_blob` | the slate archive: a capture per ingest/refresh/tip with the pool, the props and the game lines as JSON (`ivan.core.archive`) | `ingest.store_slate`, `archive_at_lock.py` | reference (`archived_slate`) |
-| `projection_snapshot` | last season's Stokastic projections and our own, one `fpts_mean` per player-day | the old pipeline; `ingest.py --stok-csv` | reference |
-| `classic_contest_metadata` | last season's contest bins the old field sampler was fitted on | historical scrape (old) | reference |
-| `nba_player_note` | the desk's player notes: draft group, day, player, text, created / updated / cleared | the note button, `notes.py` | no |
-| `nba_news` | Rotowire headlines with `first_seen` | `newsfeed.check` (every pool refresh, the news auto box, `newsfeed.py check`) | no |
-| `lineup`, `lineup_pool` | the generated candidate pool and the pool snapshot taken at generate | `generate_lineups.py` | no |
-| `lineup_simulation_results` | per unique lineup per contest: fpts / payout / ROI / rank per simulation | `sim.py` (replaces per contest) | no |
-| `contest_sim_report` | one report per simulated contest (field, payouts, scores, checks) | `sim.py` | no |
-| `raw_artifact` | the index of raw payloads (mirror of `raw/index.jsonl`) | `ivan.core.raw.store` | no |
+| Table | Where | What | Written by | Feed |
+|---|---|---|---|---|
+| `nba_player` | slate | **the pool**: one row per DK player of the slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`; the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), `project_slate`, `project.py`, `news.py` | slate bundle |
+| `starting_lineups` | slate | Rotowire's expected and confirmed starters, with `fetched_at` | the pool refresh | slate bundle |
+| `odds` | history | player props as (book, market, line, prices), by game: the day's slates share them | `ingest.fetch_slate` with `--update-odds` / Refresh props | live |
+| `nba_market_rate` | slate | per player and stat: market mean ÷ basis minutes, books, line | `live.store_market_rates` after a props fetch | slate bundle |
+| `game_odds` | history | moneyline, spread, total per book per game | `ingest.store_game_lines` | live |
+| `historical_contest_information`, `payouts`, `classic_contest_metadata` | slate | the slate's DK contests and payout tables | `contests.upsert_contests` / `fetch_payouts` / `ensure_contest` (the sim) | slate bundle |
+| `nba_stats` | history | box scores, one row per player-game, both seasons | `nightly.py` (`historical.data_fetch.fetch_boxscores`) | reference |
+| `nba_stint`, `nba_sub`, `nba_foul` | history | when each player was on the floor, substitution pairs, personal fouls, from the play-by-play | `nightly.py`, `pbp.py` | stints only |
+| `nba_projection_capture` | history | our projection per player at a moment, keyed by slate and lock: sources `ours` (every refresh and Snapshot), `at_tip` (the archive timer), `dk_avg`, a Stokastic CSV; carries the history context the scorecard needs | `project_slate`, `archive_at_lock.py` | reference |
+| `archived_slate`, `archived_blob` | history | the slate archive: a capture per refresh and per tip with the pool, the props and the game lines as JSON (`ivan.core.archive`), by slate key | `ingest.store_slate`, `archive_at_lock.py` | reference (`archived_slate`) |
+| `projection_snapshot` | slate | last season's Stokastic projections and our own, one `fpts_mean` per player-day | the old pipeline; `ingest.py --stok-csv` | no |
+| `nba_player_note` | slate | the desk's player notes: draft group, day, player, text, created / updated / cleared | the note button, `notes.py` | no |
+| `nba_news` | history | Rotowire headlines with `first_seen` | `newsfeed.check` (every pool refresh, the news auto box, `newsfeed.py check`) | live |
+| `nba_slate_news` | history | which headlines each slate's refreshes saw (slate, headline id, seen_at): a slate's pre-lock news is `nba_news` joined through it | `ingest.check_news` at every refresh | live |
+| `lineup`, `lineup_pool` | slate | the generated candidate pool and the pool snapshot taken at generate | `generate_lineups.py` | no |
+| `lineup_simulation_results` | slate | per unique lineup per contest: fpts / payout / ROI / rank per simulation | `sim.py` (replaces per contest) | no |
+| `contest_sim_report` | slate | one report per simulated contest (field, payouts, scores, checks) | `sim.py` | no |
+| `raw_artifact` | history | the index of raw payloads (mirror of `raw/index.jsonl`) | `ivan.core.raw.store` | no |
 
-Working tables (`lineup*`, `lineup_simulation_results`, `contest_sim_report`): each slate keeps its own lineups, sims and contest reports: generate, the field sampler and the sim read only the loaded slate's (`field_generation.slate_lineups`), and a switch (`ingest.isolate_slate`) deletes only the work of slates more than 2 days old (`KEEP_SLATE_DAYS`). `scripts/nba/clear_all.py [--yes|--dry-run]`
-empties them by hand.
+The slate tables (`slates.SLATE_TABLES`) are created in the slate's file by `slates.ensure_slate_schema`, the rest in the
+history file by `ingest.ensure_schema`; a history table created in a slate file would shadow the real one, so the two
+lists are explicit. A slate's lineups, sims and reports are its own and nothing clears them for another slate;
+`scripts/nba/clear_all.py --slate DG [--yes|--dry-run]` empties one slate's by hand. The one-time move from the one pool
+is `scripts/nba/migrate_slates.py` (the old tables stay in the history file as `_migrated_*` until dropped).
 
 ## On disk (`data/nba/`)
 
 ```
 data/nba/
-├── nba_history.sqlite              the database (WAL mode; -wal/-shm beside it)
-├── active_slate.json               the draft group the desk has loaded
+├── nba_history.sqlite              the history database (WAL mode; -wal/-shm beside it)
+├── slates/<draft group>/           one slate (ivan.sports.nba.slates; never deleted by the code)
+│   ├── slate.json                  draft_group, lock, day, label, games, created_at, refreshed_at + refreshed_by (desk | autopilot | script | feed | archive), published_at (producer) / pulled_at (consumer)
+│   ├── slate.sqlite                the slate's tables: the pool, starters, market rates, notes, lineups, sims, contests (the history attached as `hist`)
+│   ├── edits/
+│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
+│   │   ├── rotations/<TEAM>.json   the painted grid per team with its locked rows
+│   │   └── scenarios/<TEAM>/*.json named copies of a team's two files + assumptions; _active.json
+│   ├── published/                  consumer only: the laptop's edits for this slate as the base layer (minutes_overrides.csv, rotations/)
+│   ├── projection/<TEAM>.pkl       the projection store: the slate's projection per team (frame, history-only frame, the grid behind it),
+│   │                               written by whatever projects (ingest.project_team), read by the desk; mirrored to the consumer
+│   ├── input/
+│   │   ├── entries.csv             the DraftKings entries export the sim and chooser read (the desk's upload box)
+│   │   └── contest_weights.json    per-contest chooser knobs set on the desk's contests section (contest_weights.py); Choose passes it as --weights-json
+│   └── output/
+│       ├── projections/projections.<stamp>.csv       the projection artifact of each refresh / Snapshot
+│       ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
+│       ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
+│       └── lateswap.<stamp>.csv + .json
 ├── archive_state.json              which tips archive_at_lock.py has recorded
-├── capture_state.json              the (disabled) capture tick's state
+├── capture_state.json              the autopilot tick's state (props offsets done per slate, the day's fetches)
 ├── input/
-│   ├── entries.csv                 the DraftKings entries export the sim and chooser read
-│   ├── contest_weights.json        per-contest chooser knobs set on the desk's contests section (contest_weights.py); Choose passes it as --weights-json
-│   ├── minutes_overrides.csv       the desk's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
-│   ├── rotations/<TEAM>.json       the painted grid per team with its locked rows
-│   ├── scenarios/<TEAM>/*.json     named copies of a team's two files + assumptions; _active.json
-│   ├── edits/<draft group>/        the above, filed away when another slate is loaded
-│   ├── published/                  consumer only: the producer's pins and grids as the base layer
 │   ├── historical_lines.csv        closing-ish game lines for past days (fetch_historical_lines.py)
 │   └── stok.csv                    a Stokastic export to record as a yardstick (ingest.py --stok-csv)
 ├── models/
@@ -64,17 +87,11 @@ data/nba/
 │   ├── nba_api/pbp/<game id>/
 │   └── nba_live/{scoreboard,boxscore}/   (late swap --live)
 ├── derived/
-│   ├── projection/<TEAM>.pkl       the projection store: the loaded slate's projection per team (frame, history-only frame, the grid behind it),
-│   │                               written by whatever projects (ingest.project_team), read by the desk; travels with the live feed bundle
 │   ├── contests/<id>/              lineups.parquet, players.csv, field.json from a standings export
 │   ├── field_cache/                the two-group field per public-projection key
 │   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
 │   └── props_hist/                 parquet of the historical props
-├── output/
-│   ├── projections/projections.<stamp>.csv       the projection artifact of each Publish / ingest
-│   ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
-│   ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
-│   ├── lateswap.<stamp>.csv + .json
+├── output/                         cross-slate outputs only (a slate's are under slates/<dg>/output)
 │   └── nba_*_for_brother_*.csv                   hand exports
 ├── diagnostics/
 │   ├── <contest name>_<id>/report.json           the sim report per contest
@@ -89,11 +106,14 @@ cookie secret is `data/.desk_secret` (delete it to log everyone out).
 
 ## Which copy is the truth
 
-- **Before lock**: `nba_player` is what the pipeline reads and what the desk shows: every projection
-  (a refresh, an edit on the desk, `project.py`) writes the team's rows and its record in the projection
-  store (`derived/projection/`, `ivan.sports.nba.projection.store`) in the same step, through
-  `ingest.project_team`; the desk only reads the store. The override files (pins, grids) are what any
+- **Before lock**: the slate's `nba_player` is what the pipeline reads and what the desk shows: every projection
+  (a refresh, an edit on the desk, `project.py`) writes the team's rows and its record in the slate's projection
+  store (`slates/<dg>/projection/`, `ivan.sports.nba.projection.store`) in the same step, through
+  `ingest.project_team`; the desk only reads the store. The slate's edit files (pins, grids) are what any
   projection is rebuilt from. [game-day.md](game-day.md) has the table.
+- **The pre-lock record of a slate**, for backtests: its archive captures (the pool, props and lines at every refresh),
+  its `ours` projection captures (one per refresh and Snapshot), its headlines (`nba_slate_news`), and its directory
+  (edits, store, entries, outputs) as it stood.
 - **After lock**: the `at_tip` capture is the record of what we projected (the pool may change later
   by a refresh); the `ours` capture before lock is what the scorecard scores.
 - **The field**: the derived contest folders are the real fields; everything under `models/` about

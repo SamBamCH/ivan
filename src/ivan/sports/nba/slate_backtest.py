@@ -51,7 +51,7 @@ from sqlalchemy.orm import Session
 
 from ivan.core import raw
 from ivan.core.utils import normalize_name
-from ivan.sports.nba.paths import OUTPUT_DIR
+from ivan.sports.nba import slates as S
 
 STAMP = re.compile(r"(\d{8}-\d{6})")
 
@@ -71,8 +71,9 @@ def _stamp_of(path: Path) -> Optional[datetime]:
     return datetime.strptime(m.group(1), "%Y%m%d-%H%M%S") if m else None
 
 
-def our_entry_ids(contest_ids, out_dir: Path = OUTPUT_DIR) -> Dict[int, set]:
+def our_entry_ids(contest_ids, out_dir: Optional[Path] = None) -> Dict[int, set]:
     """{contest id: our Entry IDs}, from every upload file the desk wrote (the chooser's and the late swap's)."""
+    out_dir = Path(out_dir) if out_dir else S.output_dir()          # the slate's output directory (the current slate)
     want = {int(c) for c in contest_ids}
     out: Dict[int, set] = defaultdict(set)
     for f in sorted(list(Path(out_dir).glob("chosen_entries.classic.*.csv")) + list(Path(out_dir).glob("lateswap.*.csv"))):
@@ -93,8 +94,9 @@ def our_entry_ids(contest_ids, out_dir: Path = OUTPUT_DIR) -> Dict[int, set]:
 ID_RX = re.compile(r"\((\d+)\)")
 
 
-def chosen_lineups(contest_ids, lock: Optional[datetime], out_dir: Path = OUTPUT_DIR) -> Dict[str, tuple]:
+def chosen_lineups(contest_ids, lock: Optional[datetime], out_dir: Optional[Path] = None) -> Dict[str, tuple]:
     """{entry id: sorted DK ids of the lineup the chooser gave it}: from the newest chooser upload file before lock that holds it."""
+    out_dir = Path(out_dir) if out_dir else S.output_dir()          # the slate's output directory (the current slate)
     want = {int(c) for c in contest_ids}
     out: Dict[str, tuple] = {}
     files = sorted(Path(out_dir).glob("chosen_entries.classic.*.csv"), key=lambda f: _stamp_of(f) or datetime.min)
@@ -119,8 +121,9 @@ def chosen_lineups(contest_ids, lock: Optional[datetime], out_dir: Path = OUTPUT
     return out
 
 
-def claims(contest_ids, lock: Optional[datetime], out_dir: Path = OUTPUT_DIR) -> Dict[int, dict]:
+def claims(contest_ids, lock: Optional[datetime], out_dir: Optional[Path] = None) -> Dict[int, dict]:
     """{contest id: the chooser's claim}: the run closest before lock that covered the contest (any run when lock is unknown)."""
+    out_dir = Path(out_dir) if out_dir else S.output_dir()          # the slate's output directory (the current slate)
     want = {str(int(c)) for c in contest_ids}
     best: Dict[int, tuple] = {}
     for f in Path(out_dir).glob("chosen_entries.choose.*.json"):
@@ -262,13 +265,8 @@ def archived_cells(session: Session, dg: int) -> tuple[Dict[str, Dict[str, list]
 
 def our_grid(session: Session, dg: int, team: str, cells: Optional[tuple] = None) -> tuple[Optional[pd.DataFrame], str]:
     """(our grid for the team on that slate, where it came from): drawn on the desk, else the archive's grid rows, else None."""
-    from ivan.sports.nba.paths import INPUT_DIR
-    from ivan.sports.nba.projection.rotation import MINUTES, ROTATIONS_DIR
-    from ivan.sports.nba.models import NBAPlayer
-    loaded = session.query(NBAPlayer.draft_group_id).first()
-    paths = [INPUT_DIR / "edits" / str(int(dg)) / f"{team}.json"]
-    if loaded and loaded[0] is not None and int(loaded[0]) == int(dg):
-        paths.insert(0, ROTATIONS_DIR / f"{team}.json")
+    from ivan.sports.nba.projection.rotation import MINUTES
+    paths = [S.paths(dg).rotations / f"{team}.json"]                      # the slate's own drawn grid (slates/<dg>/edits/rotations)
     for p in paths:
         if p.exists():
             try:
@@ -372,8 +370,9 @@ def by_tip(session: Session, dg: int, box_rows: pd.DataFrame) -> List[dict]:
     return sorted(out, key=lambda r: r["tip"])
 
 
-def roi_timeline(results: List[dict], lock: Optional[datetime], day: Optional[date], out_dir: Path = OUTPUT_DIR) -> List[dict]:
+def roi_timeline(results: List[dict], lock: Optional[datetime], day: Optional[date], out_dir: Optional[Path] = None) -> List[dict]:
     """What our entries were expected to make at each point of the night (see the module doc), against the fees."""
+    out_dir = Path(out_dir) if out_dir else S.output_dir()          # the slate's output directory (the current slate)
     fees = sum(r["fees"] for r in results)
     if not fees:
         return []

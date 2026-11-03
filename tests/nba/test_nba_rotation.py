@@ -55,7 +55,16 @@ def test_sample_worlds_conserves_minutes_and_pulls_closers_in_blowouts():
 
 
 def test_drawn_grid_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "ROTATIONS_DIR", tmp_path)
+    from ivan.sports.nba import slates as S
+    monkeypatch.setattr(S, "SLATES_DIR", tmp_path); tok = S.use(1)
+    monkeypatch.setattr(S, "_current", S._current)                # released below
+    try:
+        _drawn_grid_round_trip()
+    finally:
+        S.release(tok)
+
+
+def _drawn_grid_round_trip():
     names = ["a b", "c d"]
     grid = pd.DataFrame([[True] * 24 + [False] * 24, [False] * 24 + [True] * 24], index=names, columns=list(range(48)))
     R.save_drawn("XYZ", grid)

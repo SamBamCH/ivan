@@ -22,8 +22,7 @@ script can be rerun. Game days come from nba_stats.
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
+from datetime import date, datetime, timezone
 
 import pandas as pd
 import requests

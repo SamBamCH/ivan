@@ -22,13 +22,11 @@ one to put in config generate.randomness / generate.min_fpts_frac.
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
 
 import numpy as np
 import pandas as pd
 
-from ivan.core import archive
 from ivan.core.config import load_config
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba import standings as S

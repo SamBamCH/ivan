@@ -28,11 +28,9 @@ import os
 from datetime import datetime
 from multiprocessing import freeze_support
 
-from ivan.core.config import config_path, load_config
-from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import ensure_schema
-from ivan.sports.nba.paths import CHROME_PROFILE_DIR, DEFAULT_ENTRIES_CSV
+from ivan.sports.nba.paths import CHROME_PROFILE_DIR
 from ivan.sports.nba.post_lock import lateswap as LS
+from ivan.sports.nba import slates as S
 
 
 def dk_session(headless_flag: bool):
@@ -46,6 +44,7 @@ def dk_session(headless_flag: bool):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--entries", default=None, help="entries CSV (default: paths.entries_csv from config)")
     ap.add_argument("--source", choices=LS.SOURCES, default="auto",
                     help="auto: the stored export while no game has tipped since it was taken, else download; draftkings: always download; raw: stored only")
@@ -60,13 +59,13 @@ def main() -> int:
     ap.add_argument("--now", default=None, help="pretend it is this time (ISO), for a dry run before lock")
     ap.add_argument("--changed-only", action="store_true", help="the exposure table lists only players whose entry count changed")
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.slate)
     entries = a.entries
     if entries is None:
         try:
-            entries = load_config("nba")["paths"]["entries_csv"]
+            entries = str(S.entries_csv())
         except Exception:   # noqa: BLE001
-            entries = str(DEFAULT_ENTRIES_CSV)
+            entries = str(S.entries_csv())
     now = datetime.fromisoformat(a.now) if a.now else datetime.now()
     http = None
     if a.source in ("draftkings", "auto"):

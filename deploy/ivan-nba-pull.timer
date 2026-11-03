@@ -1,0 +1,11 @@
+[Unit]
+Description=Pull the laptop's NBA feed every 30 minutes (the consumer; a slate page's Refresh from laptop pulls one slate now)
+
+[Timer]
+OnCalendar=*-*-* *:00/30:00
+Persistent=true
+RandomizedDelaySec=60
+Unit=ivan-nba-pull.service
+
+[Install]
+WantedBy=timers.target

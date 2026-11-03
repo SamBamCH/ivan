@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from ivan.core.utils import normalize_name
-from .core import LIMITED, LOCK, _busy, _here, _render, app, desk, runner
+from .core import _active, _busy, _here, _render, desk, LIMITED, LOCK, slate
 from .knobs import pipeline_form
 from .outputs import _entries_info, _entries_path
 from .pipeline import _pipeline_ctx, _submit
@@ -70,7 +70,7 @@ def _lateswap_ctx(now: datetime) -> dict:
     return out
 
 
-@app.post("/lateswap/fetch", response_class=HTMLResponse)
+@slate.post("/lateswap/fetch", response_class=HTMLResponse)
 def lateswap_fetch(request: Request):
     """Download every entries contest's standings export now and keep it (scripts/nba/fetch_standings.py as a job): the late
     swap's fetch step, pressed a minute after a tip; the swap then re-runs on the stored exports until the next tip."""
@@ -79,7 +79,7 @@ def lateswap_fetch(request: Request):
     with LOCK:
         if LIMITED:
             desk.flash.append("no DraftKings login on this desk: upload the standings export instead")
-        elif runner.active():
+        elif _active():
             desk.flash.append("a job is already running; wait for it or cancel it")
         else:
             _submit("fetch_standings", pipeline_form)
@@ -106,7 +106,7 @@ def _standings_text(name: str, data: bytes) -> str:
     raise ValueError("a .zip or .csv from DraftKings' standings export, please")
 
 
-@app.post("/lateswap/standings", response_class=HTMLResponse)
+@slate.post("/lateswap/standings", response_class=HTMLResponse)
 async def standings_upload(request: Request, files: list[UploadFile] = File(...), contest_id: str = Form("")):
     """
     Contest standings exported from DraftKings (the contest page's export, once the contest has locked): the field the late

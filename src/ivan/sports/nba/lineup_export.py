@@ -32,7 +32,7 @@ import pandas as pd
 from ivan.core.utils import coerce_player_ids
 from ivan.sports.nba.choose import DEFAULT_WEIGHTS, choose_lineup_ids, sim_roi_traces
 from ivan.sports.nba.models import Lineup, NBAPlayer
-from ivan.sports.nba.paths import INPUT_DIR
+from ivan.sports.nba import slates as S
 from ivan.sports.nba.pre_lock.lineup_generation import SLOT_ELIGIBILITY, SLOT_NAMES
 from ivan.sports.nba.utils import _coerce_positions
 
@@ -103,20 +103,22 @@ def load_weights_json(raw: Optional[str]) -> dict:
 
 # per-contest weights set on the desk's contests section (scripts/nba/contest_weights.py): {"<contest id>": {knob: value}};
 # the desk's choose job passes the file as --weights-json, so a contest's entry wins over the config panel's knobs
-CONTEST_WEIGHTS_JSON = INPUT_DIR / "contest_weights.json"
+def contest_weights_json() -> Path:
+    """The slate's per-contest chooser knobs (slates/<dg>/input/contest_weights.json)."""
+    return S.contest_weights_json()
 CONTEST_KNOBS = {"method": str, "cash_pct": float, "avg_roi_win": float, "diversity_lambda": float, "bankroll": float}
 
 
 def contest_weights(path: Optional[Path] = None) -> Dict[str, dict]:
     try:
-        return {str(k): v for k, v in json.loads((path or CONTEST_WEIGHTS_JSON).read_text()).items() if v}
+        return {str(k): v for k, v in json.loads((path or contest_weights_json()).read_text()).items() if v}
     except (OSError, ValueError):
         return {}
 
 
 def set_contest_weights(contest_id: int, knobs: dict, path: Optional[Path] = None) -> dict:
     """Set one contest's knobs (blank / None drops a knob back to the panel's value; no knobs left drops the contest)."""
-    path = path or CONTEST_WEIGHTS_JSON
+    path = path or contest_weights_json()
     allw = contest_weights(path)
     cur = dict(allw.get(str(int(contest_id)), {}))
     for k, v in knobs.items():

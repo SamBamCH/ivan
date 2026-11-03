@@ -7,9 +7,11 @@ from ivan.sports.nba.projection import store as S
 
 @pytest.fixture
 def store_dir(tmp_path, monkeypatch):
-    d = tmp_path / "projection"
-    monkeypatch.setattr(S, "STORE_DIR", d)
-    return d
+    from ivan.sports.nba import slates as SL
+    monkeypatch.setattr(SL, "SLATES_DIR", tmp_path)
+    tok = SL.use(155)
+    yield tmp_path / "155" / "projection"
+    SL.release(tok)
 
 
 def _frame(names, fpts):

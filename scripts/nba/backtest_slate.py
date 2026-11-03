@@ -15,9 +15,8 @@ from datetime import date
 
 from sqlalchemy import text
 
-from ivan.database.session import get_session, init_db
 from ivan.sports.nba import slate_backtest as SB
-from ivan.sports.nba.ingest import ensure_schema
+from ivan.sports.nba import slates as S
 
 
 def show(b: dict, n_players: int) -> None:
@@ -42,9 +41,10 @@ def show(b: dict, n_players: int) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    S.add_arg(ap)
     ap.add_argument("--draft-group", type=int); ap.add_argument("--date"); ap.add_argument("--players", type=int, default=10)
     a = ap.parse_args()
-    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
+    dg, session = S.open(a.draft_group)
     if a.draft_group:
         dgs = [a.draft_group]
     elif a.date:

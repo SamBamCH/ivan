@@ -3,7 +3,6 @@ The Desk's state: the session, the LiveSlate, the projection store's frames, the
 """
 from __future__ import annotations
 
-import json
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -20,10 +19,11 @@ from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, project_team
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.models import Lineup, NBAMarketRate, NBAPlayer
-from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV
+from ivan.sports.nba.paths import NBA_DATA_DIR
 from ivan.sports.nba.projection.engine import ProjectionParams
-from ivan.sports.nba.projection.live import LiveSlate, OVERRIDE_KEYS, PUBLISHED_OVERRIDES_CSV, override_layers, read_overrides_full, write_overrides
+from ivan.sports.nba.projection.live import LiveSlate, OVERRIDE_KEYS, override_layers, read_overrides_full, write_overrides
 from .lineups import backfill_lineup_slates
+from ivan.sports.nba import slates as S
 
 
 TEAM_BUDGET = 241.0
@@ -70,27 +70,17 @@ def short_name(name: str) -> str:
 
 load_dotenv(PROJECT_ROOT / ".env")                          # IVAN_FEED_SSH (a consumer: the laptop it pulls from) / IVAN_FEED_URL (older)
 CONSUMER = feed.producer_source() is not None                 # a consumer pulls the laptop's pool on Refresh and never fetches DK, props or news itself
-engine = init_db("nba")                                    # the desk's database (IVAN_NBA_DB_URL or data/nba/nba_history.sqlite)
+engine = init_db("nba")                                    # the history database (IVAN_NBA_DB_URL or data/nba/nba_history.sqlite); a slate's own is slates.engine(dg)
 ensure_schema(engine)
 
 
-class DeskBase:
+class Lobby:
+    """The slate index shared by every desk: the DraftKings lobby (fetched off the request path), the archive's slates and the
+    slates this machine holds. One per process (LOBBY); reads the history database."""
     def __init__(self):
         self.session = get_session(engine)
-        self.slate: Optional[LiveSlate] = None
-        self.pool_stamp = None
-        self.overrides: dict[str, float] = {}
-        self.proj: dict[str, pd.DataFrame] = {}
-        self.rot: dict[str, dict] = {}
-        self.hist_only: dict[str, pd.DataFrame] = {}
         self.flash: list[str] = []
-        self.busy: Optional[str] = None                     # "loading slate 155581" while a background refresh runs; the board polls
         self._lobby: tuple = (0.0, {})
-        self.rebuild()
-        try:
-            backfill_lineup_slates(self.session, log=self.flash.append)
-        except Exception:   # noqa: BLE001 - the export does it again on demand
-            self.session.rollback()
 
     def lobby_slates(self) -> dict:
         """Today's classic slates in the DraftKings lobby, labelled with DK's start string; the loaded slate is always present.
@@ -139,14 +129,16 @@ class DeskBase:
             cache[key] = None
         return cache[key]
 
-    def slate_days(self, now: datetime, dg) -> list:
+    def slate_days(self, now: datetime) -> list:
         """
-        [(date iso, date label, [slate, ...])] newest day first, each slate {id, label, source, loaded}: the DraftKings lobby's
+        [(date iso, date label, [slate, ...])] newest day first, each slate {id, label, source, loaded, games}: the DraftKings lobby's
         draft groups placed on their day (DK gives a weekday + time), then every slate with an archive capture (loadable from
-        the capture: scripts/nba archive at ingest and at tip), the loaded slate always present. The picker: a day, then its slates.
+        the capture: scripts/nba archive at ingest and at tip), and every slate this machine holds (a directory under
+        data/nba/slates; `loaded` = held). The picker: a day, then its slates.
         """
         days: dict = {}
         seen = set()
+        held = S.held_meta()
         wd = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
         for key, v in self.lobby_slates().items():
             start = str(v.get("start") or v.get("label") or "")
@@ -162,7 +154,7 @@ class DeskBase:
                 d = lk.date()
             when = f"{lk:%H:%M}" if lk is not None else (start.split(" ", 1)[1] if " " in start else start)
             days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=when + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
-                                                           source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=str(key) == str(dg),
+                                                           source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=int(key) in held,
                                                            lock=lk.isoformat(timespec="minutes") if lk is not None else None, contests=v.get("contests"), games=ng))
             seen.add(str(key))
         from sqlalchemy import text as _t
@@ -175,20 +167,56 @@ class DeskBase:
                 continue
             ng = self.slate_games(str(key))
             days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else "") + " · archived",
-                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg), lock=t.isoformat(timespec="minutes"), games=ng))
+                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=int(key) in held, lock=t.isoformat(timespec="minutes"), games=ng))
             seen.add(str(key))
-        if dg is not None and str(dg) not in seen:
-            lock = min((p.gametime for p in self.slate.players if p.gametime), default=None)
+        for hdg, m in held.items():                           # held slates the lobby no longer lists and the archive never saw
+            if str(hdg) in seen:
+                continue
+            lock = S.meta_time(m, "lock")
             d = (lock or now).date().isoformat()
-            ng = len({frozenset((p.team, p.opponent)) for p in self.slate.players if p.team and p.opponent})
-            days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M}" if lock else "loaded") + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""), source="loaded", sort="", loaded=True,
+            ng = m.get("games")
+            days.setdefault(d, []).append(dict(id=str(hdg), label=(m.get("label") or (f"{lock:%H:%M}" if lock else "held")) + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
+                                               source="held", sort=(lock.strftime("%H:%M") if lock else ""), loaded=True,
                                                lock=lock.isoformat(timespec="minutes") if lock else None, games=ng))
+            seen.add(str(hdg))
         out = []
         for d in sorted(days, reverse=True):
             dd = date.fromisoformat(d)
             tag = "today" if dd == now.date() else ("tomorrow" if dd == now.date() + timedelta(days=1) else ("yesterday" if dd == now.date() - timedelta(days=1) else ""))
             out.append((d, f"{dd:%a %m-%d}" + (f" · {tag}" if tag else ""), sorted(days[d], key=lambda x: x["sort"])))
         return out
+
+
+
+LOBBY = Lobby()
+_HISTORY: dict = {}
+_HISTORY_LOCK = threading.Lock()
+
+
+class DeskBase:
+    """One slate's desk: `dg` is its draft group, `self.session` its own database (data/nba/slates/<dg>/slate.sqlite with the
+    history attached), `self.lock` what its routes hold. Every method expects the slate to be the current one (slates.use):
+    the web sets it per request, a thread with `with slates.using(desk.dg)`."""
+    def __init__(self, dg: int):
+        self.dg = int(dg)
+        self.lock = threading.RLock()
+        self.engine = S.engine(self.dg)
+        self.session = S.session(self.dg)
+        self.slate: Optional[LiveSlate] = None
+        self.pool_stamp = None
+        self.overrides: dict[str, float] = {}
+        self.proj: dict[str, pd.DataFrame] = {}
+        self.rot: dict[str, dict] = {}
+        self.hist_only: dict[str, pd.DataFrame] = {}
+        self.flash: list[str] = []
+        self.busy: Optional[str] = None                     # "loading slate 155581" while a background refresh runs; the board polls
+        self._lobby: tuple = (0.0, {})
+        with S.using(self.dg):
+            self.rebuild()
+            try:
+                backfill_lineup_slates(self.session, log=self.flash.append)
+            except Exception:   # noqa: BLE001 - the export does it again on demand
+                self.session.rollback()
 
     def _stamp(self):
         """(latest projection time, player count, draft group, hash of the player ids) of the pool on disk. A column query:
@@ -197,21 +225,23 @@ class DeskBase:
         return (max((r[1] for r in rows if r[1]), default=None), len(rows), rows[0][2] if rows else None, hash(frozenset(int(r[0]) for r in rows)))
 
     def history(self):
-        """(box, HistoryState), rebuilt only when nba_stats grew (the nightly box scores)."""
+        """(box, HistoryState), rebuilt only when nba_stats grew (the nightly box scores); one copy per process, every desk shares it."""
         n = self.session.execute(__import__("sqlalchemy").text("select count(*), max(game_date) from nba_stats")).one()
         key = (int(n[0]), str(n[1]))
-        if getattr(self, "_hist_key", None) != key:
-            from ivan.sports.nba.projection.history import build_history, load_box_scores
-            box = load_box_scores(self.session)
-            self._hist = (box, build_history(box)); self._hist_key = key
-        return self._hist
+        with _HISTORY_LOCK:
+            if _HISTORY.get("key") != key:
+                from ivan.sports.nba.projection.history import build_history, load_box_scores
+                box = load_box_scores(self.session)
+                _HISTORY.update(key=key, value=(box, build_history(box)))
+            self._hist_key = key
+            return _HISTORY["value"]
 
     def rebuild(self):
         self.session.expire_all()
         self.slate = LiveSlate(self.session, history=self.history())
         self.pool_stamp = self._stamp(); self.stale = False
         self.overrides = read_overrides_full()            # what the projection reads: the published layer (a consumer) under this machine's own
-        self.local_overrides = read_overrides_full(layered=False) if MINUTES_OVERRIDES_CSV.exists() else {}   # what this machine writes
+        self.local_overrides = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}   # what this machine writes
         self.__dict__.pop("_layers_cache", None); self.__dict__.pop("_published_cache", None)
         self.proj, self.hist_only, self.rot = {}, {}, {}
         self._auto_pending = True                         # scenarios are matched once the rest of the rebuild is done (see end of rebuild)
@@ -324,7 +354,7 @@ class DeskBase:
             return
         if now[1:] != self.pool_stamp[1:]:
             self.rebuild()
-            self.flash.append("the player pool changed on disk (a capture tick moved to another slate or the roster changed); reloaded")
+            self.flash.append("the player pool changed on disk (a refresh from another process changed the roster); reloaded")
         else:
             self.rebuild()
 
@@ -392,7 +422,7 @@ class DeskBase:
         return dict(games=int((sa.get("season") or {}).get("games", 0)))
 
     def draft_group(self) -> Optional[int]:
-        return next((p.draft_group_id for p in self.slate.players if p.draft_group_id), None)
+        return self.dg
 
     def notes(self) -> dict:
         """The loaded slate's player notes, not cleared (ivan.sports.nba.notes): {player: row}."""
@@ -431,7 +461,7 @@ class DeskBase:
 
     def _layer_of(self, name: str) -> dict:
         """{field: 'local' | 'published'} for the player's pins: what this machine typed vs what the producer published (a consumer)."""
-        if not PUBLISHED_OVERRIDES_CSV.exists():
+        if not S.published_overrides_csv().exists():
             return {}
         cache = self.__dict__.setdefault("_layers_cache", {})
         if name not in cache:
@@ -441,7 +471,7 @@ class DeskBase:
 
     def _published_of(self, name: str) -> dict:
         """The producer's published pins for the player (a consumer), {} elsewhere."""
-        if not PUBLISHED_OVERRIDES_CSV.exists():
+        if not S.published_overrides_csv().exists():
             return {}
         cache = self.__dict__.setdefault("_published_cache", {})
         if name not in cache:
@@ -483,40 +513,19 @@ class DeskBase:
 
     def header(self, now: datetime) -> dict:
         ps = self.slate.players
-        dg = next((p.draft_group_id for p in ps if p.draft_group_id), None)
+        dg = self.dg
         lock = min((p.gametime for p in ps if p.gametime), default=None)
-        st = {}
-        if STATE_FILE.exists():
-            try:
-                st = json.loads(STATE_FILE.read_text())
-            except Exception:
-                st = {}
         odds_t = self.session.execute(__import__("sqlalchemy").text("select max(last_update) from odds")).scalar()
-        slates = dict(self.lobby_slates())
-        for k, v in (st.get("slates") or {}).items():
-            if k in slates:
-                continue
-            try:
-                t = datetime.fromisoformat(str(v.get("lock")))
-            except (TypeError, ValueError):
-                continue
-            slates[k] = dict(v, lock_dt=t, label=f"{t:%a %m-%d %H:%M} · " + str(v.get("name", "")).replace("NBA ", "")[:28])
-        if dg is not None and str(dg) not in slates:          # the lobby drops a group near lock and the capture state may never have seen it
-            slates[str(dg)] = dict(lock_dt=lock, label=(f"{lock:%a %m-%d %H:%M} · " if lock else "") + f"loaded slate {dg}")
-        days = sorted({v["lock_dt"].date() for v in slates.values() if v.get("lock_dt") is not None})
-        if days:                                                  # dated slates: today's only (the next day's when today has none); the lobby's
-            ahead = [d for d in days if d >= now.date()]          # (already today's, undated) and the loaded slate always stay
-            day = now.date() if now.date() in days else (ahead[0] if ahead else days[-1])
-            slates = {k: v for k, v in slates.items() if v.get("lock_dt") is None or v["lock_dt"].date() == day or k == str(dg)}
-        slates = dict(sorted(slates.items(), key=lambda kv: (kv[1].get("lock_dt") is None, kv[1].get("lock_dt") or now, kv[1]["label"])))
+        meta = S.read_meta(self.dg)
         try:
             n_lineups = int(self.session.query(Lineup).filter(Lineup.draft_group_id == dg).count()) if dg is not None else 0
         except Exception:   # noqa: BLE001
             n_lineups = 0
-        return dict(draft_group=dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None, n_lineups=n_lineups,
+        return dict(draft_group=self.dg, lock=lock, mins_to_lock=(lock - now).total_seconds() / 60 if lock else None, n_lineups=n_lineups,
                     pool_at=self.pool_stamp[0], n_players=len(ps), n_priced=len(self.slate.market),
                     starters_at=self.slate.starters_fetched_at, odds_at=odds_t, stale=getattr(self, "stale", False), fresh=self.freshness(now),
-                    slates=slates, slate_days=self.slate_days(now, dg), props_fetches=st.get("props_fetches", 0), mapped=self.mapped_summary(),
+                    slate_days=LOBBY.slate_days(now), meta=meta, refreshed_at=S.meta_time(meta, "refreshed_at"), refreshed_by=meta.get("refreshed_by"),
+                    pulled_at=S.meta_time(meta, "pulled_at"), published_at=S.meta_time(meta, "published_at"), mapped=self.mapped_summary(),
                     questions=self.questions_summary(now), news=self.news_status(now), team_states=self.team_states(now),
-                    overrides=len(self.overrides), overrides_path=str(MINUTES_OVERRIDES_CSV.relative_to(PROJECT_ROOT)),
+                    overrides=len(self.overrides), overrides_path=str(S.overrides_csv().relative_to(PROJECT_ROOT)),
                     autopilot=None if CONSUMER else autopilot.state(), feed=feed.status("nba") if CONSUMER else None)

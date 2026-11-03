@@ -10,29 +10,35 @@ a day is [../nba/game-day.md](../nba/game-day.md); this page is what is on the s
 
 The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README.md)) with the desk's own items after it.
 
-- **Slate**: the desk shows the slate in the bar, always. `/nba/` lists the days, `/nba/<day>/` opens the day's **main
-  slate** (the loaded one, else the one with the most games, else its only one; `/nba/<day>/?pick` lists the day's
-  classic draft groups instead: from the DK lobby for today and tomorrow, from the archive for past days, the loaded slate
-  always listed), `/nba/<day>/<draft group>/` one slate. In the bar the day dropdown goes to the day's main slate, the
-  slate dropdown and the ‹ › arrows to any slate in time order, and the page shows what its address names:
-  - a slate of **today or later** that the desk does not hold **loads when its page is opened** (`begin_switch`): the
-    producer fetches it from DraftKings and projects it (the slate it replaces keeps its lineups, sims and edits for when
-    it comes back; the pick is remembered in `data/nba/active_slate.json` so the capture tick stays on it); a consumer
-    asks the laptop for it over ssh (`publish nba <dg>`: the laptop loads the slate if it holds another, then publishes,
-    and the consumer copies it, so both desks move to it; `scripts/nba/feed.py pull --slate DG`). While it loads the bar
-    keeps the slate you picked, the header reads "loading slate N…" (or "asking the laptop for slate N…") and the board
-    shows the progress; when it is done the whole page reloads on the new slate. When a job holds the pool the page says
-    so and offers the load as a button (`POST /slate`, the picker's button).
-  - the **loaded slate** opens on the view its lock picks: **pre-lock** before its first lock, **post-lock** (the late
-    swap) after it, **backtest** once its day has passed (`slate_backtest.mode_for`).
-  - a slate of an **earlier day opens its backtest** (below), read only: nothing is loaded or deleted. Its **Restore
-    into the desk** button loads it from its archive capture when it is to be re-worked.
-  Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
+- **Slate**: the desk shows the slate in the bar, always, and holds as many slates as you open (one directory each,
+  [../nba/data.md](../nba/data.md)). `/nba/` lists the days, `/nba/<day>/` opens the day's **main slate** (the held
+  one, else the one with the most games, else its only one; `/nba/<day>/?pick` lists the day's classic draft groups
+  instead: from the DK lobby for today and tomorrow, from the archive for past days, every held slate marked **held**),
+  `/nba/<day>/<draft group>/` one slate. In the bar the day dropdown goes to the day's main slate, the slate dropdown
+  and the ‹ › arrows to any slate in time order, and the page shows what its address names:
+  - a slate of **today or later** that this machine does not hold **loads when its page is opened** (`begin_switch`):
+    the producer fetches it from DraftKings into its own directory and projects it; a consumer asks the laptop for it
+    over ssh (`publish nba <dg>`: the laptop fetches the slate if it does not hold it, publishes its bundle, and the
+    consumer copies it; `scripts/nba/feed.py pull --slate DG`). Nothing else is touched: flipping back to a held slate
+    is instant. While it loads the bar keeps the slate you picked, the header reads "loading slate N…" (or "asking the
+    laptop for slate N…") and the board shows the progress; when it is done the whole page reloads on the new slate.
+    When that slate's jobs run the page says so and offers the load as a button (`POST /slate`, the picker's button).
+  - a **held slate** opens on the view its lock picks: **pre-lock** before its first lock, **post-lock** (the late
+    swap) after it, **backtest** once its day has passed (`slate_backtest.mode_for`). A refresh of the slate running
+    meanwhile shows as "refreshing the pool…" in the bar; its pages keep reading, its edits answer "wait", and the page
+    reloads when the refresh is done.
+  - a slate of an **earlier day** not held opens its backtest (below), read only: nothing is loaded or deleted. Its
+    **Restore into the desk** button loads it from its archive capture into its own directory when it is to be re-worked.
+  Every action of a slate hangs off its address (`/nba/<day>/<dg>/refresh`, `.../team/<TEAM>/pin`, `.../pipeline/sim`,
+  ...), so two slates' pages serve side by side and a job on one never refuses a refresh of another; `/nba/desk/` goes
+  to today's main held slate.
 - **View** dropdown: **pre-lock** (the slate view below, `view=games`), **players** (every player of the slate,
   `view=players`), **post-lock** (the late swap, `view=lateswap`), **backtest**. With no view in the address the
   slate's lock picks one (above). The old `view=exposures` links open pre-lock, where the exposures are a section.
   A team's page (below) sits one level under the slate: **Ivan › NBA › day › slate › TEAM**.
-- **locks in / locked**: the loaded slate's countdown (prefixed "loaded slate" on another slate's page).
+- **locks in / locked**: the slate's countdown. Next to it, **refreshed HH:MM (desk | autopilot | script)**: when this
+  slate's pool was last refreshed and by what (`slate.json`); on a consumer **laptop autopilot on/off · refreshed HH:MM
+  (by) · pulled HH:MM**: when the laptop last refreshed the slate and when this desk last pulled it.
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
   fetches props at the offsets and re-projects every 15 minutes while no desk job runs, so the server's Refresh finds a fresh pool; the
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See
@@ -100,15 +106,16 @@ while one is open.
 
 ## The team page (`/nba/<day>/<slate>/<TEAM>/`)
 
-The loaded slate's team on a page of its own, reached from a chip in the games strip, a name in the news table or
+A held slate's team on a page of its own, reached from a chip in the games strip, a name in the news table or
 the players view, or an old `/desk/?open=TEAM` link. The bar reads **Ivan › NBA › day › slate › TEAM**; **‹ slate** and
 the bar's slate go back; **the other side** opens the opponent's page. The page shell renders at once and the card
 (`GET /team/<TEAM>`, `_nba_side.html`) loads into it, as the board does on the slate page. Tonight's game heads the
 card: tip, countdown, the line ("DET -7.5 · O/U 228"; "no line" until Refresh lines or Refresh props fetches them).
 
-**Every edit on the page writes the team into the pool at once** (`Desk.reproject` = `ingest.project_team`: the team's
-`nba_player` rows and its projection store record, about 0.3 s): a pin, a starter call, a painted row, a scenario, a
-late-news call. Leaving the page loses nothing and there is nothing to publish afterwards. The card's alert score
+**Every edit on the page writes the team into the slate's pool at once** (`Desk.reproject` = `ingest.project_team`: the
+team's `nba_player` rows and its projection store record, about 0.3 s): a pin, a starter call, a painted row, a scenario, a
+late-news call. Leaving the page loses nothing and there is nothing to publish afterwards. The page stays open while the
+slate's jobs run and while the slate refreshes (edits wait for the refresh; a job never blocks a page). The card's alert score
 (bad 10, warn 3, info 1) colours its frame:
 
 | Level | Fires when |
@@ -284,23 +291,26 @@ standings CSVs exported by hand under the same raw path.
   ownership, status), which is also what the desk shows and what Generate reads (every edit writes the pool), so the
   file, the page and the lineups agree; sent with `Cache-Control: no-store`. The filename's stamp is the pool's
   projection time. `scripts/nba/consumer_check.py` compares the file with the producer's pool.
-- `/export/lineups.csv`: the loaded slate's generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`;
-  when the loaded slate has no lineups the file is one explanatory line, never another slate's lineups (that happened
-  on the server on 2026-10-27); `?draft_group=` exports a named slate explicitly. The filename carries the slate id.
-- `/download/<name>`: files from `data/nba/output/` (the chooser's CSVs, the late swap CSV).
+- `/export/lineups.csv`: the slate's generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`;
+  when the slate has no lineups the file is one explanatory line, never another slate's lineups (each slate's live in its
+  own database). The filename carries the slate id.
+- `/download/<name>`: files from the slate's `output/` (the chooser's CSVs, the late swap CSV).
 
 ## Consumer mode (the server)
 
-Set by `IVAN_FEED_SSH` in `.env` (the laptop as ssh reaches it; the older `IVAN_FEED_URL` still works). The desk never
-fetches DraftKings, the odds API or Rotowire. Its one data button is **Refresh from laptop** (`/refresh` =
-`scripts/nba/feed.py pull`, `feed.pull_ssh`): the laptop publishes its live bundle on request (the pool with every
-edit written into it, the published pins and grids, the projection store, the headlines), the server copies it over
-ssh and applies it; the slate shown is the one the laptop holds, the laptop's pins and grids arrive as
-`data/nba/input/published/` and show as green placeholders; the consumer's own edits (amber) sit on top in its own
-files, a blank box falls back to the published value, Clear locks drops only its own layer, and a pull re-projects
-only the teams it edited. The card says "published" and counts "N of your own". No props, lines or news buttons, no
-news auto box: the headlines come with the pool. When nothing changed on the laptop, Refresh says so. The header
-badge "laptop autopilot on/off · published HH:MM" reads the pull state (`data/feed-state/nba.json`, `feed.status`).
+Set by `IVAN_FEED_SSH` in `.env` (the laptop's tailnet IP as ssh reaches it; the older `IVAN_FEED_URL` still works). The
+desk never fetches DraftKings, the odds API or Rotowire. Every 30 minutes `ivan-nba-pull.timer` pulls every slate the
+laptop published (`scripts/nba/feed.py pull`); a slate page's one data button, **Refresh from laptop** (`/refresh` =
+`scripts/nba/feed.py pull --slate DG`, `feed.pull_ssh`), pulls that slate now, in the background: the laptop publishes
+on request (each held slate's pool with every edit written into it, its pins and grids, its projection store, the shared
+props, lines and headlines), the server copies it over ssh and applies every bundle that moved, each into its own slate
+directory here. Picking a slate the laptop does not hold has the laptop fetch it first. The laptop's pins and grids
+arrive as the slate's `published/` layer and show as green placeholders; the consumer's own edits (amber) sit on top in
+its own files, a blank box falls back to the published value, Clear locks drops only its own layer, and a pull
+re-projects only the teams it edited. The card says "published" and counts "N of your own". No props, lines or news
+buttons, no news auto box: the headlines come with the pool. When nothing changed on the laptop, Refresh says so. The
+header reads "laptop autopilot on/off · refreshed HH:MM (desk | autopilot) · pulled HH:MM" from the slate's record
+(`slate.json`) and the pull state (`data/feed-state/nba.json`, `feed.status`).
 
 To try to break a consumer desk without touching his: `deploy/sandbox_server.sh up` runs a second consumer
 on the server, fed by the same directory his Refresh fills, reached over an ssh tunnel at `http://127.0.0.1:8002/nba/`
@@ -325,7 +335,7 @@ IVAN_NBA_DB_URL=sqlite:////home/sam-pratt/ivan/data/nba/nba_history.sqlite PYTHO
 Views that read the raw archive (a past game's score strip reads the stored play-by-play) need the main checkout's:
 link it once with `mkdir -p data/nba && ln -s ~/ivan/data/nba/raw data/nba/raw` in the worktree. The backtest view
 reads our upload files: link `data/nba/output` the same way. Raw files and outputs the branch's desk then writes land
-in the main folders, as the live desk's would. The filed edits (`data/nba/input`) stay the worktree's own, so the
+in the main folders, as the live desk's would. The slate directories (`data/nba/slates`) stay the worktree's own, so the
 backtest's overlay shows grids drawn on the live desk only after the merge.
 
 It shows the live slate. Its pins, grids, jobs and autopilot switch live under the worktree's own `data/`, so the
