@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ivan · NBA · {{ page_slate.label if page_slate else 'desk' }}</title>
+<title>Ivan · NBA · {% if team %}{{ team }} · {% endif %}{{ page_slate.label if page_slate else 'desk' }}</title>
 <link rel="icon" type="image/svg+xml" href="{{ frame.site }}/static/favicon.svg">
 <link rel="stylesheet" href="{{ frame.site }}/static/ivan.css">
 <script src="{{ frame.site }}/static/htmx.min.js"></script>
@@ -284,6 +284,17 @@
   .newsbox tr.qrow td:first-child { color:#92400e } .newsbox tr.qrow.answered td:first-child { color:var(--ink) } .newsbox .nocall { color:#b45309 }
   .newsbox tr.out td { color:var(--ink); text-decoration:none } .newsbox tr.out td:first-child a { text-decoration:line-through; text-decoration-color:var(--bad) }   /* the page-wide tr.out strikes the whole row; here only the name */
   .newsbox b.warn { color:#b45309 } details.news-out > summary { font-size:13px }
+  /* needs you: the teams to open, nearest tip first; green and empty when the slate reads clean */
+  .needs { margin:0 0 12px; padding:8px 12px; border:1px solid #fecaca; border-left:3px solid var(--bad); border-radius:8px; background:#fff7f7; font-size:13px }
+  .needs.ok { border-color:#bbf7d0; border-left-color:var(--ok); background:#f0fdf4 } .needs ul { list-style:none; margin:4px 0 0; padding:0 } .needs li { padding:2px 0 }
+  .needs a.chip { text-decoration:none; font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px; background:#ececec; color:#555; border:1px solid #ddd; margin-right:4px }
+  .needs a.chip.ready { background:#dcfce7; color:#166534; border-color:#bbf7d0 } .needs a.chip.open { background:#fef3c7; color:#92400e; border-color:#fde68a } .needs a.chip.changed { background:#fee2e2; color:#991b1b; border-color:#fecaca }
+  /* the chain: pool › snapshot › field › lineups › sim › picks, each stage current (green), stale (amber / red) or not run (grey) */
+  .chain { display:inline-flex; gap:4px; align-items:center; font-size:12px; color:var(--muted); flex-wrap:wrap } .chain .arrow { color:#bbb } .chain .stage { padding:1px 7px; border-radius:10px; background:#f1f1f1; white-space:nowrap }
+  .chain .stage.proj { background:#eef4ff; color:var(--accent); font-weight:600 } .chain .stage.cur { background:#dcfce7; color:#166534 } .chain .stage.stale.amber { background:#fef3c7; color:#92400e; font-weight:600 } .chain .stage.stale.red { background:var(--bad); color:#fff; font-weight:600 }
+  .crumb-team { font-size:14px; padding:3px 10px; border-radius:6px; background:#eef4ff; color:var(--accent) }
+  .game.team-page .gh a.back { font:inherit; font-size:13px; padding:4px 11px; border-radius:6px; border:1px solid #cfcfcf; background:#fff; color:var(--ink); text-decoration:none }
+  .game.team-page .gh a.back:hover { border-color:var(--accent); color:var(--accent) }
 </style>
 </head>
 <body>
@@ -308,6 +319,7 @@
 </script>
 <header>
 {% call bar(frame) %}<span class="bar extra">
+  {% if team %}<span class="sep">›</span><b class="crumb-team" title="the team's page: its rotation, pins and late news; the bar's slate goes back">{{ team }}</b>{% endif %}
   {% if busy %}<span class="countdown" title="the desk is replacing its pool; the page reloads on the new slate when it is done">{{ busy }}…</span>
   {% elif header.lock %}
     <span class="countdown {% if header.mins_to_lock is not none and header.mins_to_lock < 60 %}soon{% endif %}" title="{% if not is_loaded %}the loaded slate ({{ header.draft_group }}): {% endif %}slate {{ header.draft_group }} locks {{ header.lock.strftime('%a %H:%M') }} · {{ header.n_players }} players, {{ header.n_priced }} priced · pool {{ header.pool_at.strftime('%H:%M') if header.pool_at else '—' }} · lineups {{ header.starters_at.strftime('%H:%M') if header.starters_at else 'none' }} · props {{ header.odds_at[11:16] if header.odds_at else 'none' }} UTC · {{ header.overrides }} edits">
@@ -333,11 +345,27 @@
     {% if page_slate.load %}<form method="post" action="{{ root }}{{ page_slate.load.url }}">{% for k, v in page_slate.load.fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button class="primary" style="font:inherit;font-size:14px;padding:8px 16px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer">Load into the desk</button></form>
     {% else %}<p class="muted" style="font-size:13px">A consumer desk shows what the laptop publishes: Refresh on the loaded slate pulls it.</p>{% endif %}
   </div>
+  {% elif team %}
+  {# the team page: the rotation card on a page of its own; its body loads after the shell like the board does #}
+  {% set g = game %}
+  <div class="game team-page">
+    <div class="gh">
+      <a class="btn back" href="{{ page_slate.path(root) if page_slate else root ~ '/desk/' }}" title="back to the slate">‹ slate</a>
+      <span class="tip {% if g and g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{% if g %}{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% endif %}{% else %}{{ team }}{% endif %}</span>
+      {% if g and g.fav %}<span class="muted" title="the consensus spread of tonight's game">{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line for tonight's game</span>{% endif %}
+      {% if g and g.teams|length == 2 %}{% set other = (g.teams|rejectattr('team', 'equalto', team)|first).team %}<span class="muted small">· <a class="other" href="{{ page_slate.path(root) if page_slate else root ~ '/desk/' }}{{ other }}/">the other side ({{ other }})</a></span>{% endif %}
+      <span class="spacer"></span>{% include "_nba_minfpts.html" %}
+    </div>
+    <div class="sides">
+      <div class="side" id="card-{{ team }}" hx-get="{{ root }}/team/{{ team }}" hx-trigger="load" hx-swap="innerHTML"><div class="loading"><span class="spin"></span> loading {{ team }}…</div></div>
+    </div>
+    <p class="muted" style="font-size:12px;margin:10px 0 0">Every edit on this page (a pin, a starter call, a painted row, a late-news call) re-projects {{ team }} and writes it into the pool at once: the slate page, the sim, the chooser and the other desk read what you see here. Leaving the page loses nothing.</p>
+  </div>
   {% else %}
   <div id="board" hx-get="{{ root }}/board?view={{ view }}{% if dg %}&dg={{ dg }}{% endif %}" hx-trigger="load" hx-swap="innerHTML">
     <div class="loading"><span class="spin"></span> loading the slate…</div>
-  {% endif %}
   </div>
+  {% endif %}
 </main>
 <script>
   // the fpts filter: every select.minfpts (the game card's, the players table's) holds one value, remembered in this browser

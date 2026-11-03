@@ -1,5 +1,7 @@
-{# the slate's board: everything that needs the team cards. Loaded into #board after the page shell, so the page is up at once
-   and shows "loading" while the pool is fetched or projected (nba_desk.index / board / the background refresh). #}
+{# the slate's board, read only: the games strip (each chip a link to the team's page), what needs a look, the actions bar with
+   the chain, the news table, the contests, the exposures; the players view is every team's rows. Loaded into #board after the
+   page shell, so the page is up at once and shows "loading" while the pool is fetched or projected (nba_desk.index / board /
+   the background refresh). Nothing here edits a projection: that is the team page (/<day>/<slate>/<TEAM>/). #}
 {% if busy %}
 <div id="board-poll" hx-get="{{ root }}/board?view={{ view }}{% if dg %}&dg={{ dg }}{% endif %}&after=busy" hx-trigger="every 2s" hx-target="#board" hx-swap="innerHTML">
   <div class="loading"><span class="spin"></span> {{ busy }}…</div>
@@ -8,7 +10,7 @@
 
 
   {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
-{% if view in ('games', 'lateswap') %}
+{% if view in ('games', 'lateswap', 'players') %}
   <div class="top-row">
 <nav class="menu below">
   {% if mapped and mapped.n %}<div class="slot mapped-slot">
@@ -27,8 +29,8 @@
     {% for i in range(nrows) %}
     <tr>
       {% for grp in menu %}{% set g = grp.games[i] if i < grp.games|length else none %}
-      {% if g %}{% set st = ('locked' if g.locked else '') ~ (' cur' if open_team in g.teams|map(attribute='team') else '') %}
-        {% for c in g.teams %}<td class="{{ st }}{% if loop.first %} first{% endif %}"><a class="chip {{ c.colour or 'unmapped' }} {% if c.team == open_team %}on{% endif %}" hx-get="{{ root }}/board?view=games&team={{ c.team }}" hx-target="#board" hx-swap="innerHTML" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}{% if c.moved %} · since the last refresh: {{ c.moved }}{% endif %}">{{ c.team }}{% if c.new or c.moved %}<i class="dot {% if c.moved %}moved{% endif %}"></i>{% endif %}</a></td>{% endfor %}{% if g.teams|length == 1 %}<td class="{{ st }}"></td>{% endif %}
+      {% if g %}{% set st = 'locked' if g.locked else '' %}
+        {% for c in g.teams %}<td class="{{ st }}{% if loop.first %} first{% endif %}"><a class="chip {{ c.colour or 'unmapped' }}" href="{{ team_url(c.team) }}" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}{% if c.moved %} · since the last refresh: {{ c.moved }}{% endif %} · open the team's page">{{ c.team }}{% if c.new or c.moved %}<i class="dot {% if c.moved %}moved{% endif %}"></i>{% endif %}</a></td>{% endfor %}{% if g.teams|length == 1 %}<td class="{{ st }}"></td>{% endif %}
         <td class="num {{ st }}" title="the favourite and its spread (the consensus line of tonight's game)">{% if g.fav %}{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% else %}<span class="muted">no line</span>{% endif %}</td>
         <td class="num {{ st }}" title="the game total">{{ '%g'|format(g.total) if g.total else '' }}</td>
       {% else %}<td class="first"></td><td></td><td></td><td></td>{% endif %}
@@ -39,33 +41,27 @@
   </table>
 </nav>
   </div>
-  {% include "_nba_pipeline.html" %}
+  {% if view != 'players' %}{% include "_nba_pipeline.html" %}{% endif %}
 {% endif %}
 {% if view == 'games' %}
+  <div class="needs {% if not needs %}ok{% endif %}" id="needs">
+    <b>needs you</b>
+    {% if needs %}<span class="muted small">{{ needs|length }} team{{ '' if needs|length == 1 else 's' }} · nearest tip first · open the team to map or call it</span>
+      <ul>{% for n in needs %}<li><a class="chip {{ n.colour or 'unmapped' }}" href="{{ team_url(n.team) }}">{{ n.team }}</a> <span class="muted small">{% if n.tip %}{{ n.tip.strftime('%H:%M') }}{% if n.mins_to_tip is not none and n.mins_to_tip > 0 %} · in {{ (n.mins_to_tip // 60)|int }}h {{ (n.mins_to_tip % 60)|int }}m{% endif %}{% endif %}</span> {{ n.why|join(' · ') }}</li>{% endfor %}</ul>
+    {% else %}<span class="muted small">nothing: every team is mapped and unchanged, no open question near a tip, no lineup missing. The next refresh may change that.</span>{% endif %}
+  </div>
   {% if news_table %}{% with nt = news_table %}{% include "_nba_news.html" %}{% endwith %}{% endif %}
   {% include "_nba_contests.html" %}
-  {% if card %}{% set g = game %}
-    <div class="game {% if g and g.locked %}locked{% elif card.score >= 10 %}hot{% elif card.score >= 3 %}warm{% endif %}">
-      <div class="gh">
-        <span class="tip {% if g and g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{% if g %}{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% endif %}{% else %}{{ card.team }}{% endif %}</span>
-        {% if g and g.fav %}<span class="muted" title="the consensus spread of tonight's game">{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line for tonight's game</span>{% endif %}
-        {% if g and g.teams|length == 2 %}<span class="muted small">· <a class="other" hx-get="{{ root }}/board?view=games&team={{ (g.teams|rejectattr('team', 'equalto', card.team)|first).team }}" hx-target="#board" hx-swap="innerHTML">the other side</a></span>{% endif %}
-        <span class="spacer"></span>{% include "_nba_minfpts.html" %}
-      </div>
-      <div class="sides">
-        <div class="side" id="card-{{ card.team }}">{% with c=card %}{% include "_nba_side.html" %}{% endwith %}</div>
-      </div>
-    </div>
-  {% endif %}
-  <details class="hist-box players-box" id="players" open><summary>Players <span class="muted">{{ players|length }} on the slate · sorted by ownership, click a header to sort · click a name for his team</span></summary>
-  <div class="players-head">{% include "_nba_minfpts.html" %}</div>
+{% endif %}
+{% if view == 'players' %}
+  <div class="players-head"><span class="muted small">{{ players|length }} players on the slate · sorted by ownership, click a header to sort · a name opens his team's page, where the rows are edited</span> {% include "_nba_minfpts.html" %}</div>
     <table class="players sortable">
       <thead><tr><th>player</th><th>team</th><th>opp</th><th>pos</th><th class="n">sal</th><th>st</th><th class="n">min</th><th class="n">hist min</th><th class="n">fppm</th><th class="n">proj</th><th class="n">value</th><th class="n" title="projected ownership: the field sampler's exposure (the sim's largest contest, else the generate step's generic field)">own</th><th>flags</th></tr></thead>
       <tbody>
       {% for r in players %}
         <tr class="{% if r.out %}out{% elif r.priced %}priced{% else %}unpriced{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
-          <td><a class="plink" hx-get="{{ root }}/board?view=games&team={{ r.team }}" hx-target="#board" hx-swap="innerHTML" style="color:inherit;text-decoration:none;cursor:pointer">{{ r.name }}</a>{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}</td>
-          <td>{{ r.team }}</td><td class="muted">{{ r.opp }}</td><td class="pos">{{ r.pos }}</td><td class="n">{{ r.salary }}</td><td><span class="st">{{ r.starter }}</span></td>
+          <td><a class="plink" href="{{ team_url(r.team) }}" style="color:inherit;text-decoration:none">{{ r.name }}</a>{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}</td>
+          <td><a class="plink" href="{{ team_url(r.team) }}">{{ r.team }}</a></td><td class="muted">{{ r.opp }}</td><td class="pos">{{ r.pos }}</td><td class="n">{{ r.salary }}</td><td><span class="st">{{ r.starter }}</span></td>
           <td class="n">{% if r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% if r.pinned %} <span class="pill">pin</span>{% endif %}{% endif %}</td>
           <td class="n">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% endif %}</td>
           <td class="n {% if r.priced %}mkt{% endif %}">{{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}</td>
@@ -77,7 +73,6 @@
       {% endfor %}
       </tbody>
     </table>
-</details>
 {% endif %}
 {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% include "_nba_contests.html" %}{% endif %}
 {% if view in ('games', 'lateswap') %}
@@ -86,6 +81,6 @@
   </details>
 {% endif %}
 {% if view == 'backtest' %}{% include "_nba_backtest.html" %}{% endif %}
-  {% if view != 'backtest' %}<p class="muted" style="font-size:12px;margin-top:14px">Type into min, the band's low–high, or fppm to override the model for that player (blank restores it); ✕ scratches; the team re-allocates around every edit. Publish saves the edits for the sim and the capture loop. Green rows have book odds behind them (the props set their rates); grey rows are history-only and are the ones to question or remove. Amber cell = worth a look, red = likely wrong; hover for why. Hover a projection for the stat lines behind it. Italic history = last season's.</p>{% endif %}
+  {% if view in ('games', 'players') %}<p class="muted" style="font-size:12px;margin-top:14px">This page reads the slate. A team's minutes, pins, starter calls and late news are edited on its page (a chip in the games strip, a name in the news table or the players view): every edit there writes the team's projection into the pool at once, so what the sim, the chooser and the other desk read is what you see. Green rows have book odds behind them; grey rows are history-only and are the ones to question. Italic history = last season's.</p>{% endif %}
 
 {% endif %}

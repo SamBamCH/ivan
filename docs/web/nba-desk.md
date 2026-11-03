@@ -18,40 +18,47 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
   address, so a link never fetches). A slate of an **earlier day opens its backtest** (below), read only: nothing is
   loaded or deleted. The backtest's **Restore into the desk** button loads a past slate from its archive capture when
   it is to be re-worked. While a load or a refresh runs, the bar keeps the slate you picked, the header reads "loading slate N…" and the board shows the progress; when it is done the whole page reloads on the new slate. Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
-- **View** dropdown: **pre-lock** (the slate view below, `view=games`), **post-lock** (the late swap,
-  `view=lateswap`), **backtest**. Opening the loaded slate with no view picks one from its lock
-  (`slate_backtest.mode_for`): before its first lock pre-lock, after it post-lock, and a slate of an earlier day its
-  backtest. The old `view=players` and `view=exposures` links open pre-lock, where both are sections now.
+- **View** dropdown: **pre-lock** (the slate view below, `view=games`), **players** (every player of the slate,
+  `view=players`), **post-lock** (the late swap, `view=lateswap`), **backtest**. Opening the loaded slate with no view
+  picks one from its lock (`slate_backtest.mode_for`): before its first lock pre-lock, after it post-lock, and a slate
+  of an earlier day its backtest. The old `view=exposures` links open pre-lock, where the exposures are a section.
+  A team's page (below) sits one level under the slate: **Ivan › NBA › day › slate › TEAM**.
 - **locks in / locked**: the loaded slate's countdown (prefixed "loaded slate" on another slate's page).
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
   fetches props at the offsets and publishes + pushes every 15 minutes while nobody is editing here; the
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See
   [../nba/game-day.md](../nba/game-day.md#2-refresh-through-the-day). On a consumer the same spot shows
   the laptop's state instead: autopilot on/off, who published last (desk, autopilot, nightly) and when.
-- **new data · load** appears when the pool changed on disk since the page was built (a terminal
-  ingest or project, a feed pull); it reloads without fetching.
 - **A− fit A+**: the page size. **fit** (the default) scales the whole page so the team grid with its columns fills
   the window's width; A− / A+ set a size by hand. Remembered in this browser only.
 
 ## The slate view (pre-lock), top to bottom
 
+The slate page **reads**. Nothing on it edits a projection: a team's minutes, pins, starter calls and late news are on
+its own page (below), and every edit there writes the team into the pool at once, so this page, the sim, the chooser
+and the other desk all show the same numbers. You open a team only to map its minutes, when **needs you** sends you,
+or when news breaks.
+
 1. **Games strip**: one table above the actions, fixed column widths and row heights: each tip time heads four
    columns (away, home, spread as "DET -7.5" or "PK" for a pick'em, total), and row N holds every tip's Nth game
    (the strip scrolls sideways when the tips outgrow the row). Each team is a chip coloured by its
    map state (green mapped, yellow an open question, red changed since mapped, grey unmapped; a dot for news or for
-   what the last refresh moved); a chip opens the team's card, the open game's row is shaded, a started game is
-   faded. Its first slot is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
+   what the last refresh moved); a chip is a **link to the team's page**; a started game is faded. Its first slot
+   is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
 2. **Actions** (`_nba_pipeline.html`, re-rendered by every `/pipeline/<step>`), the steps of a slate in order:
    1 **Refresh DK** (free) / **Lines** (every game's spread and total, about 3 credits) / **Props** (about 12 credits a
-   game plus the lines; confirm dialog); on a consumer a single **Refresh** pulls the feed. Every refresh reads the
-   news too; the public field and ownership are not rebuilt by it.
+   game plus the lines; confirm dialog); on a consumer a single **Refresh** pulls the laptop's pool. Every refresh
+   reads the news too; the public field and ownership are not rebuilt by it.
    2 **Field + ownership** (`scripts/nba/field_ownership.py`, about 45 s).
-   3 **Publish**: applies any values still typed into the grids first, writes the projection into the pool, records a
-   capture, publishes and pushes the feed (on a consumer `ingest.consumer_publish`: the published bundle again with
-   only its own edited teams projected on top). Beside it, **published HH:MM, N m ago** (the feed manifest; a
-   consumer: the laptop's): amber when there are edits or a refresh since, red when those are older than 10 minutes
-   (publish soon), plain when up to date.
-   4 **Generate**, 5 **Sim**, 6 **Choose**, and **4–6 in a row**: jobs (below); generate, sim and the row publish first.
+   3 **Snapshot** (`/publish` = `scripts/nba/snapshot.py`, `ingest.capture_pool`): records the projection as it stands,
+   the capture rows the scorecard scores (source "ours") and the projections CSV, from the projection store, without
+   projecting anything; values still typed into a grid are applied first. There is nothing to publish: the pool is the
+   projection. Beside it **the chain**: `pool HH:MM › snapshot › field › lineups › sim › picks` (`_chain_info`), the
+   pool's time being its newest write (any edit, refresh or `project.py`) and each stage the time of its last run on
+   this desk (the job runner; the snapshot from the capture table): green when built after the pool's last write,
+   **amber** when the pool moved since (run it again), **red** when the pool moved 10+ minutes ago and the stage never
+   followed, grey when never run here. The late swap appears once it has run.
+   4 **Generate**, 5 **Sim**, 6 **Choose**, and **4–6 in a row**: jobs (below); generate, sim and the row take a snapshot first.
    **Knobs**: resting the pointer on Generate or Sim opens its knobs under the button (`_nba_knobs.html`; they stay open
    while the pointer is in them or a field has focus): generate's fresh pool, lineups, jobs, min salary, max salary per
    team, randomness, min fpts frac, player min fpts; sim's sims and field cap. A button sends only its own knobs
@@ -61,8 +68,12 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
    7 **Late swap** opens the late swap view.
    Under the steps: when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
    the news was read, the slate's lineups and sim rows; then the job status, its log, the exports and the latest picks.
-3. **News** (below).
-4. **Contests** (folded once the entries are on file): **Upload entries CSV** (the DraftKings entries export, saved as
+3. **Needs you** (`_needs_you`): the teams to open, nearest tip first, each with why: mapped but the inputs moved since
+   (a status, the lineup, an out), an open question (a questionable rotation player with no call) within 90 minutes of
+   the tip, a new headline on a questionable player, no Rotowire lineup within 75 minutes of the tip, unmapped within
+   90 minutes. Green and empty when none of that holds: nothing to do until the next refresh.
+4. **News** (below): the slate's questions and outs; a name opens the team's page, where the call is made.
+5. **Contests** (folded once the entries are on file): **Upload entries CSV** (the DraftKings entries export, saved as
    `data/nba/input/entries.csv`; the page reloads), every contest of the file with its fee, field and our entries,
    checked against the loaded slate (`historical_contest_information`): green the loaded slate, red another slate's
    (the sim skips those contests and says so in its log, `simulate_contest.simulate_entries`), grey not stored yet
@@ -71,20 +82,24 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
    as they are typed (`/contest/<id>/weights` = `scripts/nba/contest_weights.py set <id> knob=value`) into
    `data/nba/input/contest_weights.json`, and Choose passes that file as `--weights-json`, so a contest's own knobs
    win over the defaults. Then the exposures panel: the candidate pool or the chosen entries.
-5. **The team card** (below). Its header carries the **show ≥ N fpts** filter: it hides the rows projected below N,
-   on the card and in the players table alike (one value, remembered in this browser).
-6. **Players** (below).
-7. **Exposures** (folded; loaded when opened, below).
+6. **Exposures** (folded; loaded when opened, below).
 
 Hover popups (a projection's stat lines, a player's recent games) open after a short pause on the cell, beside it
 rather than over the rows below, and close as soon as the pointer leaves the cell; the cell and its row are marked
 while one is open.
 
-## The team card (pre-lock)
+## The team page (`/nba/<day>/<slate>/<TEAM>/`)
 
-A games strip with tips and each game's line as "DET -7.5 · 228" (the favourite with its spread, "PK" for a pick'em, the
-total; tonight's game only, "no line" until Refresh lines or Refresh props fetches them), then team cards sorted by an
-alert score (bad 10, warn 3, info 1):
+The loaded slate's team on a page of its own, reached from a chip in the games strip, a name in the news table or
+the players view, or an old `/desk/?open=TEAM` link. The bar reads **Ivan › NBA › day › slate › TEAM**; **‹ slate** and
+the bar's slate go back; **the other side** opens the opponent's page. The page shell renders at once and the card
+(`GET /team/<TEAM>`, `_nba_side.html`) loads into it, as the board does on the slate page. Tonight's game heads the
+card: tip, countdown, the line ("DET -7.5 · O/U 228"; "no line" until Refresh lines or Refresh props fetches them).
+
+**Every edit on the page writes the team into the pool at once** (`Desk.reproject` = `ingest.project_team`: the team's
+`nba_player` rows and its projection store record, about 0.3 s): a pin, a starter call, a painted row, a scenario, a
+late-news call. Leaving the page loses nothing and there is nothing to publish afterwards. The card's alert score
+(bad 10, warn 3, info 1) colours its frame:
 
 | Level | Fires when |
 |---|---|
@@ -94,15 +109,15 @@ alert score (bad 10, warn 3, info 1):
 
 The flags come from `ivan.sports.nba.validation.review_team`, the same ones `scripts/nba/validate.py review` prints.
 
-### News
+### The news table
 
-Under the actions, before the open team's card (`_nba_news.html`, `Desk.news_table` =
+On the slate page under needs-you (`_nba_news.html`, `Desk.news_table` =
 `ivan.sports.nba.newsfeed.slate_news`; terminal: `scripts/nba/newsfeed.py slate`). Its heading carries the counts, the
 **auto every 5 min** box (reads Rotowire's news every 5 minutes while the desk runs; every Refresh reads it too) and
 when the news was last read. One table, one row per player whose night is news, in three groups:
 
 1. **Questions**: DK status Q / GTD / D / P, not ruled out. Columns: player (bold when in the expected lineup;
-   the name opens his team's card), team, opponent and tip, status, salary, usual minutes (the history state),
+   the name opens his team's page, where the call is made), team, opponent and tip, status, salary, usual minutes (the history state),
    the model's minutes now with your call ("no call" in amber until a pin or a starter call answers it), the
    latest headline on file.
 2. **Out tonight, played last game**: DK OUT / O / IR / SUSP and on the floor in his team's last box score. These are
@@ -115,7 +130,7 @@ row for the player within 7 days (its source link; hover for the text), with its
 file" means nothing stored: Refresh reads the news. The team's last game is the newest box score on file, so
 until the nightly brings last night's game the "last game" is the one before it.
 
-## A team card (`/team/<TEAM>`)
+### The card
 
 Rows: starters first, then the players who are out, then the bench, minutes descending. Per player:
 status, Rotowire starter mark, history minutes (and the last games), the model's minutes with its
@@ -124,7 +139,7 @@ salary, value, the rate source (market or history), the ownership, the market-im
 priced players, the flags. Inputs on the row:
 
 - **minutes** pins (0 scratches); **fppm**, **low/high** band, **fpts** pin; blank unpins. Saved to
-  `minutes_overrides.csv` at once; the team re-projects in place (`/team/<TEAM>/pin`).
+  `minutes_overrides.csv` at once; the team re-projects and is written to the pool (`/team/<TEAM>/pin`).
 - **starter** toggle (`/starter`).
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
 - **Clear** (`/clear`): drop the team's pins and grid.
@@ -167,15 +182,16 @@ and the score at each minute on hover (`Desk.score_strip` = `pbp.game_score`, th
 overtime folds into the last cell like the grid; no rows when the game's feed is not on disk).
 
 The **late news form** (`/team/<TEAM>/news`): player, call (out / starts / bench / back), then
-(sim + choose, late swap, publish only). **Scenarios**: save the team's edits under a name, activate,
+(sim + choose, late swap, the call only). One request: the call, the team re-projected and written to the pool, the
+jobs queued; the page reloads in about a second. **Scenarios**: save the team's edits under a name, activate,
 delete (`/scenario/*`); the one whose assumptions hold activates itself when the facts move.
 
 Each card lists its open questions with the latest news on file (headline, source link, first seen).
 
-## Players (a section of pre-lock)
+## Players (view `players`)
 
-The whole pool as one sortable table under the team card, by ownership: team, position, salary, status, minutes,
-proj, value, ownership, flags. A name opens his team's card. The fpts filter applies.
+The whole pool as one sortable table, read only, by ownership: team, position, salary, status, minutes,
+proj, value, ownership, flags. A name or a team opens the team's page. The fpts filter applies.
 
 ## Backtest (view `backtest`, `/?view=backtest&dg=<draft group>`, `_nba_backtest.html`)
 
@@ -216,7 +232,7 @@ The plan this is phase 1 of: [../nba/notes/slate_views_plan_2026-10-29.md](../nb
 ## Jobs (`/pipeline/<step>`)
 
 The actions bar's Generate, Sim, Choose, 4–6 in a row and Field + ownership post to `/pipeline/<step>` with the Config
-tile's knobs; the late swap view's form posts its own (`ls_*`). Generate, sim, late swap and the row publish first.
+tile's knobs; the late swap view's form posts its own (`ls_*`). Generate, sim, late swap and the row take a snapshot first.
 Generate writes no ownership; the sim builds the public field once, at the largest size any contest in the run
 needs, every contest slices it, and the largest contest's field becomes the ownership column.
 **Field + ownership** (`/pipeline/field` = `scripts/nba/field_ownership.py`, about 45s) builds the field on
@@ -255,12 +271,9 @@ standings CSVs exported by hand under the same raw path.
 ## Exports and downloads
 
 - `/export/projections.csv`: the pool's projection (name, team, position, salary, minutes, proj, sd, pub,
-  ownership, status). Rebuilt when the desk is stale; sent with `Cache-Control: no-store`. The producer exports
-  its desk view (edits included, published or not). A consumer exports the **pool**: the laptop's projection as
-  published with the consumer's own edits in it as of its last Publish, which is also what Generate reads, so the
-  file and the lineups agree; an edit typed but not published is not in the file. The desk's own 600-world
-  re-simulation (what the card shows before Publish) differs by a few tenths and is never the file. The filename's
-  stamp is the pool's projection time. `scripts/nba/consumer_check.py` compares the file with the producer's pool.
+  ownership, status), which is also what the desk shows and what Generate reads (every edit writes the pool), so the
+  file, the page and the lineups agree; sent with `Cache-Control: no-store`. The filename's stamp is the pool's
+  projection time. `scripts/nba/consumer_check.py` compares the file with the producer's pool.
 - `/export/lineups.csv`: the loaded slate's generated pool, one row per lineup, PG..UTIL as names, or DraftKings ids with `?ids=1`;
   when the loaded slate has no lineups the file is one explanatory line, never another slate's lineups (that happened
   on the server on 2026-10-27); `?draft_group=` exports a named slate explicitly. The filename carries the slate id.

@@ -3,7 +3,7 @@
    news controls sit in its heading. The player's name opens his team's card. #}
 {% macro news_row(r, kind) %}
     <tr class="{% if kind == 'q' %}qrow{% else %}out{% endif %} {% if r.call %}answered{% endif %} {% if kind == 'old' %}old-out{% endif %}">
-      <td><a class="plink" hx-get="{{ root }}/board?view=games&team={{ r.team }}" hx-target="#board" hx-swap="innerHTML" title="open {{ r.team }}">{% if r.starter %}<b>{{ r.raw }}</b>{% else %}{{ r.raw }}{% endif %}</a> <span class="muted small">{{ r.pos }}</span>{% if r.starter %} <span class="st" title="in the expected lineup">S</span>{% endif %}</td>
+      <td><a class="plink" href="{{ team_url(r.team) }}" title="open {{ r.team }}'s page: the call is made there">{% if r.starter %}<b>{{ r.raw }}</b>{% else %}{{ r.raw }}{% endif %}</a> <span class="muted small">{{ r.pos }}</span>{% if r.starter %} <span class="st" title="in the expected lineup">S</span>{% endif %}</td>
       <td>{{ r.team }}</td>
       <td class="muted small">{% if r.opp %}{{ r.opp }} · {% endif %}{{ r.tip.strftime('%H:%M') if r.tip else '' }}</td>
       <td><span class="status {% if kind == 'q' %}q{% endif %}">{{ r.status }}</span></td>

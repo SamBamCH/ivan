@@ -61,11 +61,19 @@ contest step to run.
 
 ## 3. Work the teams
 
-Start each team at its card's **special considerations** box (rest, starters out, a new five, players back, big
-spread): the things the history-built rotation does not know. `scripts/nba/considerations.py` prints the same.
+The slate page reads; a team is worked on its own page (a chip in the games strip, a name in the news table or the
+players view: `/nba/<day>/<slate>/<TEAM>/`). You open a team to map its minutes, when the slate page's **needs you**
+list names it (changed since mapped, an open question or no lineup near the tip, a new headline), or when news breaks.
+Everything else stays green and unopened.
 
-The board sorts team cards by how far they are from their norm; alerts are listed in
-[../web/nba-desk.md](../web/nba-desk.md). Per team you can:
+**Every edit on a team page writes the team into the pool at once** (`Desk.reproject` = `ingest.project_team`: the
+team's `nba_player` rows and its record in the projection store, `data/nba/derived/projection/<TEAM>.pkl`, about
+0.3 s). There is no publish step after an edit: the slate page, Generate, the sim, the late swap and the other desk
+read what you see. Leaving the page loses nothing.
+
+Start each team at its **special considerations** box (rest, starters out, a new five, players back, big
+spread): the things the history-built rotation does not know. `scripts/nba/considerations.py` prints the same.
+Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 
 - **pin** a player's minutes (0 scratches him), his fppm, his 10-90 band, or his projection; blank unpins.
   Written at once to `data/nba/input/minutes_overrides.csv`; the team re-projects around the pins.
@@ -77,38 +85,39 @@ The board sorts team cards by how far they are from their norm; alerts are liste
   ([projections.md](projections.md)).
 - **Map** a player the rotation left off back onto the grid (he starts at his history or 6 minutes).
 - **late news form**: player + call (out / starts / bench / back) + what to run next (sim and choose
-  before lock, late swap after, or publish only). One request pins, re-allocates, publishes and queues.
+  before lock, late swap after, or the call only). One request pins, re-allocates, writes the pool and queues the
+  jobs; the page is back in about a second.
 - **scenarios**: save the team's edits under a name ("Giannis out"); the scenario whose assumptions all
   hold activates itself when a refresh or a call changes the facts.
 - **News** comes with every Refresh: the pool refresh (`ingest.run_ingest`, so `ingest.py` and the autopilot tick
   too) reads Rotowire's news page after the commit (`ivan.sports.nba.newsfeed`); the news auto box also reads it every
   5 minutes while the desk runs. The header counts the slate's open questions (Q/GTD/D/P players with no call).
-- **the news table** (under the games strip; `scripts/nba/newsfeed.py slate` in a terminal) is where to start:
+- **the news table** (on the slate page; `scripts/nba/newsfeed.py slate` in a terminal) is where to start:
   the slate's questionable players first, one row each with the model's minutes, your call and the last
   headline; then the players out tonight who played their team's last game (the rotations that move tonight);
   then, collapsed, the ones already out. Work it top down: every question gets a call (a pin, a starter call
-  or the late news form) and every new out gets its team's rotation looked at. Columns and rules are in
-  [../web/nba-desk.md](../web/nba-desk.md#the-news-table).
+  or the late news form, on the team's page) and every new out gets its team's rotation looked at. Columns and
+  rules are in [../web/nba-desk.md](../web/nba-desk.md#the-news-table).
 
 Terminal equivalents: `scripts/nba/news.py "Player Name" [--accept] [--conditional]` for one scratch
 (shows the team with and without him, asks minutes player by player, writes the pool for that team);
-`scripts/nba/project.py [--team XXX] [--dry-run]` re-projects the whole pool from the overrides file and
-the grids without recording a capture row; `scripts/nba/validate.py review --team XXX` prints the
-minutes provenance and flags for a team.
+`scripts/nba/project.py [--team XXX] [--dry-run]` re-projects the pool (or one team) from the overrides file and
+the grids through the same `project_team` path, store record included, without a capture row;
+`scripts/nba/validate.py review --team XXX` prints the minutes provenance and flags for a team.
 
-## 4. Publish
+## 4. Snapshot (what Publish became)
 
-**Publish** first applies any value still typed into a grid and not yet refigured (the page sends them along,
-so nothing typed is lost to the reload), then writes the desk's projection into the pool (`nba_player.minutes_proj`, `fpts_mean`,
-`fpts_std`, `fpts_quantiles`), records an `nba_projection_capture` row per player (source "ours"),
-writes a projections CSV artifact under `data/nba/output/projections/`, and runs `feed.publish` +
-`feed.push` (with a producer note: desk, autopilot or nightly, and the autopilot state) so the server's
-desk gets it on its next pull: its timer every 5 minutes, or at once when its Refresh is pressed.
-About 10 to 20 seconds. Terminal: `scripts/nba/project.py` then `scripts/nba/feed.py publish && scripts/nba/feed.py push`.
+The pool is the projection: every edit, every refresh and `project.py` write it. **Snapshot** (`/publish` =
+`scripts/nba/snapshot.py`, `ingest.capture_pool`) records it as it stands, without projecting anything: an
+`nba_projection_capture` row per player (source "ours", the rows the scorecard scores) and a projections CSV under
+`data/nba/output/projections/`, from the projection store; any value still typed into a grid is applied first. Under
+a second. Generate, Sim, Late swap and 4–6 in a row take a snapshot first, so each run has the record of what it was
+built on; Choose does not.
 
-Generate, Sim and Late swap from the desk publish first (since 2026-10-25). Choose does not.
-The scripts run from a terminal do **not** publish: run them after a Publish, or use `news.py` /
-`project.py`, which write the pool themselves.
+The actions bar's **chain** says what is current: `pool HH:MM › snapshot › field › lineups › sim › picks`, each
+stage green when built after the pool's last write, amber when the pool moved since (run it again), red when the
+pool moved 10+ minutes ago and the stage never followed. The server reads this laptop's pool when its own Refresh is
+pressed ([../deployment.md](../deployment.md)); nothing is pushed from here.
 
 ## 5. Generate, simulate, choose
 
@@ -188,9 +197,9 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 | Action | Fetches | Writes the pool |
 |---|---|---|
 | paint + Apply, pin, starter call, Re-fill, a late-news call | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
-| Publish | no | yes (every team again, plus the capture rows, the projections CSV and the feed) |
+| Snapshot | no | no (records the pool: capture rows + the projections CSV) |
 | Refresh dk / props, pick a slate | yes | yes |
-| Generate / Sim / Late swap / All from the desk | no | yes (publish first) |
+| Generate / Sim / Late swap / All from the desk | no | no (a snapshot first, then the job reads the pool) |
 | Choose from the desk | no | no |
 | Fetch standings | yes (DraftKings standings) | no |
 | `news.py`, `project.py`, `ingest.py --project-only` | no | yes |

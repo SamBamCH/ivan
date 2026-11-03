@@ -553,19 +553,58 @@ def project_slate(session: Session, *, n_sims: Optional[int] = None, write_captu
     if not frames:                                          # the requested teams are not on this slate: nothing to project, nothing changed
         log(f"no team of the slate among {sorted(only) if only else 'none'}; the projection stands")
         return info
+    return record_projection(session, slate, frames, now, source=source, write_capture=write_capture, write_csv=write_csv,
+                             write_ownership=write_ownership, minutes_model=params.minutes_model, log=log, info=info)
+
+
+def capture_pool(session: Session, *, log: Log = print, source: str = "ours", write_csv: bool = True) -> ProjectInfo:
+    """
+    Record the projection as it stands: capture rows (source "ours", the ones the scorecard scores) and the projections CSV,
+    from the projection store's frames, without projecting anything (a team with no record is projected first through
+    project_team). What the desk's Snapshot button and the pipeline's first step do: the pool is already the projection
+    (every edit writes it), so there is nothing to publish, only to record.
+    """
+    info = ProjectInfo()
+    slate = LiveSlate(session)
+    if not slate.players:
+        raise IngestError("no players in nba_player")
+    dg = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
+    recs = PSTORE.load_all(dg)
+    overrides = None
+    frames = []
+    for team in slate.teams():
+        rec = recs.get(team)
+        if rec is None:
+            overrides = overrides if overrides is not None else read_overrides_full()
+            rec = project_team(session, slate, team, overrides, ProjectionParams.from_config()); session.commit()
+            log(f"{team}: no stored projection, projected")
+        proj = rec["frame"].copy(); proj["team"] = team
+        frames.append(proj)
+    return record_projection(session, slate, frames, datetime.now(), source=source, write_capture=True, write_csv=write_csv,
+                             minutes_model=ProjectionParams.from_config().minutes_model, log=log, info=info)
+
+
+def record_projection(session: Session, slate: LiveSlate, frames: list, now: datetime, *, source: str = "ours", write_capture: bool = True,
+                      write_csv: bool = True, write_ownership: bool = False, minutes_model: Optional[str] = None, log: Log = print,
+                      info: Optional[ProjectInfo] = None) -> ProjectInfo:
+    """The capture rows (nba_projection_capture, one per player, plus DK's own FPPG as a yardstick) and the projections CSV
+    artifact for a set of team frames. Shared by project_slate (fresh frames) and capture_pool (the store's)."""
+    info = info or ProjectInfo()
     allp = pd.concat(frames)
     info.players = int(len(allp)); info.priced = int(allp["priced"].sum()) if "priced" in allp else 0
     by_name = {normalize_name(p.name): p for p in slate.players}
     market_fpts = market_fpts_by_player(session)
     rows = []
     for name, r in allp.iterrows():
-        p = by_name[name]
+        p = by_name.get(name)
+        if p is None:
+            continue                                        # a stored frame from before a roster change: the player is gone
         rows.append(dict(player_id=p.id, player_name=name, team=p.team, opponent=p.opponent, gametime=p.gametime,
                          salary=p.salary, status=p.status, starter=starter_label(slate, name, p.team),
                          minutes_proj=float(r["minutes"]), fpts_mean=float(r["fpts_mean"]), fpts_std=float(r["fpts_std"]),
                          priced=bool(r.get("priced", False)), pinned=bool(r.get("pinned", False)),
                          baseline_min=float(r["baseline"]), fpm=float(r["fpm"]), usage_mult=float(r["usage_mult"]),
-                         market_fpts=market_fpts.get(name), minutes_model=params.minutes_model, minutes_role=r.get("role"),
+                         market_fpts=market_fpts.get(name), minutes_model=minutes_model, minutes_role=r.get("role"),
                          p_out=None if r.get("p_out") is None else float(r["p_out"]),
                          minutes_p10=None if pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"]),
                          minutes_p90=None if pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"]),

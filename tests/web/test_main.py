@@ -99,6 +99,30 @@ def test_nba_step_knobs_move_only_their_own(open_site, monkeypatch):
     assert D.pipeline_form["lineups"] == "2000" and D.pipeline_form["fresh"] == "" and D.pipeline_form["sims"] == "777"
 
 
+def test_nba_slate_page_reads_and_the_team_page_edits(open_site):
+    """The slate page carries no projection edit control; every team chip and news name is a link to the team's own page, which
+    holds the card. An old /desk/?open=TEAM link lands on the team page."""
+    from ivan.web import nba_desk as D
+    dg, lock = D._loaded_slate()
+    if dg is None or lock is None or not D.desk.slate.teams():
+        pytest.skip("no slate loaded in this database")
+    day = lock.date().isoformat(); team = D.desk.slate.teams()[0]
+    board = open_site.get("/nba/board?view=games")
+    assert board.status_code == 200
+    assert f"/nba/{day}/{dg}/{team}/" in board.text                          # a chip is a link
+    assert 'name="minutes"' not in board.text and "hx-post=\"/nba/team/" not in board.text   # nothing edits here
+    assert "needs you" in board.text and 'class="chain' in board.text and "Snapshot" in board.text
+    page = open_site.get(f"/nba/{day}/{dg}/{team}/")
+    assert page.status_code == 200 and f'id="card-{team}"' in page.text and "crumb-team" in page.text
+    card = open_site.get(f"/nba/team/{team}")
+    assert card.status_code == 200 and "rot-grid" in card.text and 'name="minutes"' in card.text
+    assert open_site.get(f"/nba/{day}/{dg}/ZZZ/").status_code == 404
+    r = open_site.get(f"/nba/desk/?open={team}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith(f"/{dg}/{team}/")
+    players = open_site.get("/nba/board?view=players")
+    assert players.status_code == 200 and 'class="players sortable"' in players.text and "Snapshot" not in players.text
+
+
 def test_nfl_desk_renders(open_site):
     """The NFL desk: the slate page's default view, its game card and pair partials, the old pipeline address redirecting to it."""
     r = open_site.get("/nfl/desk")

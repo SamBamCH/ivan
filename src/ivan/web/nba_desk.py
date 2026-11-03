@@ -32,7 +32,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -44,7 +44,7 @@ from ivan.core.config import config_path
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT, normalize_name
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.ingest import after_pull, consumer_publish, ensure_schema, fetch_slate, project_slate, project_team, refresh_public_projection, refresh_pool, store_slate, IngestError
+from ivan.sports.nba.ingest import after_pull, capture_pool, ensure_schema, fetch_slate, project_slate, project_team, refresh_public_projection, refresh_pool, store_slate, IngestError
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupPool, LineupSimulationResult, NBAMarketRate, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR, MINUTES_OVERRIDES_CSV, OUTPUT_DIR, INPUT_DIR
@@ -72,7 +72,7 @@ app = FastAPI(title="Ivan · NBA desk", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 KEY, LABEL = "nba", "NBA"
-VIEWS = [("games", "pre-lock"), ("lateswap", "post-lock"), ("backtest", "backtest")]
+VIEWS = [("games", "pre-lock"), ("players", "players"), ("lateswap", "post-lock"), ("backtest", "backtest")]
 SPORT: Optional[Sport] = None                                 # set by sport(); the frame reads it
 NOT_AN_EDIT = ("/refresh", "/reload", "/news", "/autopilot", "/login", "/publish")
 
@@ -458,6 +458,10 @@ class Desk:
         self.session.commit()
         self.proj[team], self.hist_only[team], self.rot[team] = rec["frame"], rec["hist"], dict(rec.get("rot") or {})
         self.pool_stamp = self._stamp()                        # our own write is not "new data"
+        try:
+            autopilot.touch("publish")                         # the edit is in the pool the moment it is made: nothing is "unpublished"
+        except OSError:
+            pass
 
     # ---------------------------------------------------------------- views
     def players(self, team: str) -> list[NBAPlayer]:
@@ -1628,8 +1632,11 @@ def nba_summary(now: datetime) -> dict:
     return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else ""}
 
 
-def _shell(request: Request, view: Optional[str], open_team: Optional[str], page: Optional[SlateInfo], now: datetime, header: dict):
-    """The page shell for the loaded slate (page is None or the loaded one) or for another slate (its backtest, or a load card)."""
+def _shell(request: Request, view: Optional[str], team: Optional[str], page: Optional[SlateInfo], now: datetime, header: dict):
+    """
+    The page shell for the loaded slate (page is None or the loaded one) or for another slate (its backtest, or a load card).
+    `team` set = the team page: the same shell with the team's card as its body (the slate's pre-lock view is the bar's view).
+    """
     from ivan.sports.nba.slate_backtest import mode_for
     loaded = header.get("draft_group")
     days = _days_of(header["slate_days"], now)
@@ -1638,11 +1645,12 @@ def _shell(request: Request, view: Optional[str], open_team: Optional[str], page
         # replaced, so a load of today's read as yesterday's loading) and the board shows the progress; its poll reloads the
         # page when the load is done, and the page is then the new loaded slate
         fr = frame.ctx(request, SPORT, days, None, page if page is not None else next((s for d in days for s in d.slates if s.loaded), None), None, now)
-        return _render(request, "nba_desk.html", header=header, open_team=open_team, view="games", busy=desk.busy, dg=None, frame=fr,
+        return _render(request, "nba_desk.html", header=header, team=None, game=None, view="games", busy=desk.busy, dg=None, frame=fr,
                        page_slate=fr["slate"], is_loaded=False)
     if page is None:
         page = next((s for d in days for s in d.slates if s.loaded), None)
     dg = None
+    game = None
     if page is None or (loaded is not None and str(page.key) == str(loaded)):          # the loaded slate
         if view is None:
             lock = header.get("lock")
@@ -1650,32 +1658,43 @@ def _shell(request: Request, view: Optional[str], open_team: Optional[str], page
         view = VIEW_ALIAS.get(view, view)
         if view == "backtest":
             dg = loaded
+        if team is not None:
+            if team not in desk.slate.teams():
+                raise HTTPException(404, f"{team} is not on the loaded slate")
+            for t in desk.slate.teams():
+                desk.slate.spread(t)
+            game = next((g for grp in games_menu(now) for g in grp["games"] if any(c["team"] == team for c in g["teams"])), None)
+            view = "games"
     else:                                                                              # another slate: its backtest, or load it first
+        team = None
         if view not in ("backtest", "load"):
             view = "backtest" if (page.source == "archive" or page.day < now.date() or page.load is None) else "load"
         dg = int(page.key) if str(page.key).isdigit() else None
     fr = frame.ctx(request, SPORT, days, None, page, view if view != "load" else None, now)
-    return _render(request, "nba_desk.html", header=header, open_team=open_team, view=view, busy=desk.busy, dg=dg, frame=fr, page_slate=page,
+    return _render(request, "nba_desk.html", header=header, team=team, game=game, view=view, busy=desk.busy, dg=dg, frame=fr, page_slate=page,
                    is_loaded=(page is None or (loaded is not None and str(page.key) == str(loaded))))
 
 
 @app.get("/desk/", response_class=HTMLResponse)
-def index(request: Request, open: Optional[str] = None, view: Optional[str] = None, dg: Optional[int] = None):
-    """The loaded slate, wherever it is: the flat address actions and old links use. view=games (pre-lock), lateswap (post-lock),
-    backtest (dg = a past slate). With no view the loaded slate's mode picks it (slate_backtest.mode_for)."""
+def index(request: Request, view: Optional[str] = None, dg: Optional[int] = None, open: Optional[str] = None):
+    """The loaded slate, wherever it is: the flat address actions and old links use. view=games (pre-lock), players, lateswap
+    (post-lock), backtest (dg = a past slate). With no view the loaded slate's mode picks it (slate_backtest.mode_for).
+    open=TEAM (old links) goes to the team's page."""
     with LOCK:
         if not desk.busy:
             desk.maybe_reload()
         now = datetime.now()
         header = desk.header(now)
+        if open and not desk.busy and open in desk.slate.teams():
+            return RedirectResponse(_team_url(request, open), status_code=303)
         if view == "backtest" and dg is not None and str(dg) != str(header.get("draft_group")):
             page = find_slate(_days_of(header["slate_days"], now), str(dg))
-            return _shell(request, "backtest", open, page, now, header)
-        return _shell(request, view, open, None, now, header)
+            return _shell(request, "backtest", None, page, now, header)
+        return _shell(request, view, None, None, now, header)
 
 
 @app.get("/{day}/{key}/", response_class=HTMLResponse)
-def slate_page(request: Request, day: str, key: str, open: Optional[str] = None, view: Optional[str] = None):
+def slate_page(request: Request, day: str, key: str, view: Optional[str] = None):
     """One slate: sport › day › slate › view. The loaded slate is the desk; a past or archived slate its backtest (read only; Restore
     loads it); a lobby slate not loaded a load button (nothing is fetched by a GET)."""
     d = frame.parse_day(day)
@@ -1687,7 +1706,33 @@ def slate_page(request: Request, day: str, key: str, open: Optional[str] = None,
         page = find_slate(_days_of(header["slate_days"], now), key)
         if page is None:
             page = SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
-        return _shell(request, view, open, page, now, header)
+        return _shell(request, view, None, page, now, header)
+
+
+@app.get("/{day}/{key}/{team}/", response_class=HTMLResponse)
+def team_page(request: Request, day: str, key: str, team: str):
+    """One team of the loaded slate: sport › day › slate › TEAM. The rotation card (the grid, the rows, pins, scenarios, the
+    played game) on a page of its own; every edit here writes the team's projection into the pool at once, so leaving the page
+    loses nothing. The slate page shows the result and links here from the games strip and the news table."""
+    frame.parse_day(day)
+    with LOCK:
+        if not desk.busy:
+            desk.maybe_reload()
+        now = datetime.now()
+        header = desk.header(now)
+        page = find_slate(_days_of(header["slate_days"], now), key)
+        if page is None or (header.get("draft_group") is not None and str(page.key) != str(header["draft_group"])):
+            raise HTTPException(404, "a team page belongs to the loaded slate")
+        return _shell(request, "games", team.upper(), page, now, header)
+
+
+def _team_url(request: Request, team: str) -> str:
+    """The team's page under the loaded slate: /nba/<day>/<draft group>/<TEAM>/ (the desk page when the slate has no lock to name a day)."""
+    dg, lock = _loaded_slate()
+    if dg is None:
+        return f"{auth.root_of(request)}/desk/"
+    day = (lock or datetime.now()).date().isoformat()
+    return f"{auth.root_of(request)}/{day}/{dg}/{team}/"
 
 
 def sport() -> Sport:
@@ -1717,7 +1762,7 @@ def _backtest_board(request: Request, dg: Optional[int]):
                    lateswap=None, exposures=None, card=None, game=None, open_team=None)
 
 
-VIEW_ALIAS = {"players": "games", "exposures": "games"}      # the players table and the exposures are sections of pre-lock now
+VIEW_ALIAS = {"exposures": "games"}                           # the exposures are a section of pre-lock
 
 
 @app.get("/exposures", response_class=HTMLResponse)
@@ -1731,7 +1776,7 @@ def exposures_section(request: Request, set: str = "pool", metric: str = "proj",
 
 
 @app.get("/board", response_class=HTMLResponse)
-def board(request: Request, view: str = "games", team: str = "", after: str = "", dg: Optional[int] = None):
+def board(request: Request, view: str = "games", after: str = "", dg: Optional[int] = None):
     """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view.
     after=busy is the loading poll's request: once the load or refresh is done the whole page reloads (HX-Refresh), because
     the header (the slate picker, the counts) was built from the slate before it; swapping only the board left the picker
@@ -1750,25 +1795,50 @@ def board(request: Request, view: str = "games", team: str = "", after: str = ""
             desk.slate.spread(t)                            # loads the lines once
         menu = games_menu(now)                               # the games strip: tip, line, one chip per team (its state, the questions on hover)
         teams = desk.slate.teams()
-        if team and team in teams:
-            desk.open_team = team
-        open_team = getattr(desk, "open_team", None)
-        if open_team not in teams:
-            open_team = next((c["team"] for grp in menu for g in grp["games"] for c in g["teams"]), teams[0] if teams else None)
-            desk.open_team = open_team
-        card = desk.team_card(open_team, now) if (view == "games" and open_team) else None
         news_table = desk.news_table(now) if view == "games" else None
-        game = next((g for grp in menu for g in grp["games"] if any(c["team"] == open_team for c in g["teams"])), None)
-        games = []
         players = []; lateswap = None; exposures = None
         if view == "lateswap":
             lateswap = _lateswap_ctx(now)
-        if view == "games":                                  # the players table under the team card: every team's rows
-            players = [r for t in teams for r in (card["rows"] if card and t == open_team else desk.team_rows(t))]   # rows only: a whole card per team is ~0.4 s
+        if view == "players":                                # every team's rows, read only (the team page is where a row is edited)
+            players = [r for t in teams for r in desk.team_rows(t)]
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
-        return _render(request, "_nba_board.html", busy=None, games=games, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
-                       card=card, game=game, open_team=open_team, news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(),
-                       questions_sum=desk.questions_summary(now), **_pipeline_ctx())
+        return _render(request, "_nba_board.html", busy=None, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
+                       news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(), needs=_needs_you(menu, now),
+                       questions_sum=desk.questions_summary(now), team_url=lambda t: _team_url(request, t), **_pipeline_ctx())
+
+
+NEAR_TIP_LOOK_MIN = 90      # a team with an open question or no lineup this close to its tip needs a look
+
+
+def _needs_you(menu: list, now: datetime) -> list[dict]:
+    """
+    The teams that want a look, and why: mapped but the inputs moved since (a status, the lineup, an out), an open question
+    (a questionable rotation player with no call) inside NEAR_TIP_LOOK_MIN of the tip, no Rotowire lineup inside NEAR_TIP_MIN,
+    a headline newer than the mapping. Everything else is green: the slate page is for reading, the team page for the rest.
+    Order: the nearest tip first. Empty = nothing to do until the next refresh.
+    """
+    out = []
+    for grp in menu:
+        for g in grp["games"]:
+            for c in g["teams"]:
+                if c.get("locked"):
+                    continue
+                why = []
+                mtt = c.get("mins_to_tip")
+                if c.get("colour") == "changed":
+                    why.append(c.get("why") or "changed since mapped")
+                if c.get("open") and (mtt is None or mtt <= NEAR_TIP_LOOK_MIN):
+                    why.append(f"{c['open']} open question{'s' if c['open'] != 1 else ''}: {c.get('qtext') or ''}".rstrip(": "))
+                if c.get("new"):
+                    why.append("new headline on a questionable player")
+                if c.get("starters") == "none" and mtt is not None and mtt <= NEAR_TIP_MIN:
+                    why.append("no lineup from Rotowire this close to the tip")
+                if c.get("state") == "unmapped" and mtt is not None and mtt <= NEAR_TIP_LOOK_MIN:
+                    why.append("unmapped")
+                if why:
+                    out.append(dict(team=c["team"], tip=c.get("tip"), mins_to_tip=mtt, why=why, colour=c.get("colour")))
+    out.sort(key=lambda x: (x["mins_to_tip"] if x["mins_to_tip"] is not None else 1e9, x["team"]))
+    return out
 
 
 def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:
@@ -2427,28 +2497,24 @@ def clear_team(request: Request, team: str):
 
 @app.post("/publish")
 def publish(request: Request, pins: str = Form("")):
-    """Write the pins (the values still typed into the grids first), project at full sims, store projections + a capture row set.
-    A consumer projects only the slate's teams it edited; the rest stays as published."""
+    """Snapshot: record the projection as it stands (ingest.capture_pool: the capture rows the scorecard scores and the projections
+    CSV), the values still typed into a grid applied first. Nothing is projected or pushed: every edit already wrote its team
+    into the pool (Desk.reproject), and the server pulls the pool from this laptop when its own Refresh is pressed.
+    Terminal: scripts/nba/snapshot.py."""
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
         typed = _apply_typed_pins(pins)
         if typed:
-            desk.flash.append(f"{typed} typed value(s) applied before publishing")
+            desk.flash.append(f"{typed} typed value(s) applied first")
         desk.write_local()
         try:
-            if CONSUMER:
-                r = consumer_publish(desk.session, log=desk.flash.append)
-                desk.flash.append(("published: the laptop's projection restored" if r["restored"] else "published")
-                                  + (f", {r['players']} players re-projected with your edits on {', '.join(sorted(r['teams']))}; the other teams exactly as published"
-                                     if r["teams"] else "; no pins or grids of your own on this slate, so the laptop's projection stands"))
-            else:
-                info = project_slate(desk.session, log=desk.flash.append)
-                desk.flash.append(f"published: {info.players} players projected with {len(desk.overrides)} edits; edits saved to {MINUTES_OVERRIDES_CSV.name}")
-            autopilot.touch("publish")                       # the edits are published: the autopilot tick may run again
-            _push_feed(desk.flash.append)
+            info = capture_pool(desk.session, log=lambda m: None)
+            desk.flash.append(f"snapshot: {info.players} players recorded ({info.captures} capture rows, {len(desk.overrides)} edits)"
+                              + (f"; {Path(info.projections_path).name}" if info.projections_path else ""))
+            autopilot.touch("publish")
         except IngestError as e:
-            desk.flash.append(f"publish failed: {e}")
+            desk.flash.append(f"snapshot failed: {e}")
         desk.rebuild()
     return RedirectResponse(_here(request), status_code=303)
 
@@ -2768,43 +2834,60 @@ def _pipeline_ctx() -> dict:
     return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(runner.active()), entries=ent,
                 outputs=_latest_outputs(), lineups_in_db=n_lineups, sims_in_db=n_sims, lineup_slates=slates, current_draft_group=current,
                 side=_side_ctx(), ready=ready, projected=projected, just_finished=just_finished,
-                fresh=desk.freshness(now), published=_published_info(now), news=desk.news_status(now), now=now)
+                fresh=desk.freshness(now), chain=_chain_info(now), news=desk.news_status(now), now=now)
 
 
 PUBLISH_RED_MIN = 10   # unpublished changes older than this turn the published label red
 
 
-def _published_info(now: datetime) -> dict:
+CHAIN_STEPS = [("snapshot", "snapshot", ("snapshot",)), ("field", "field", ("field",)), ("generate", "lineups", ("generate", "all")),
+               ("sim", "sim", ("sim", "all")), ("choose", "picks", ("choose", "all")), ("lateswap", "late swap", ("lateswap",))]
+
+
+def _chain_info(now: datetime) -> dict:
     """
-    The last publish and whether it is behind: the producer's own feed manifest (a consumer: the laptop's, as pulled), and
-    what changed since on this desk: an edit (autopilot's desk activity) or a newer projection (a refresh). behind and
-    older than PUBLISH_RED_MIN = red, behind = amber, else up to date.
+    The slate's chain of stages and whether each is current: the projection (the pool, written by every edit and refresh;
+    its time is the newest fpts_updated_at), then what was built on it: the snapshot (the capture rows the scorecard scores),
+    the field + ownership, the lineups, the sim, the picks, the late swap. A stage built before the projection it should
+    rest on is stale (amber; red when the projection moved PUBLISH_RED_MIN minutes ago or more and the stage never followed).
+    The stages' times are the desk's job runner's (data/nba/jobs) and the capture table's; a script run from a terminal
+    shows up through the table only (the snapshot), the rest reads "not run here".
     """
-    at = None
-    try:
-        if CONSUMER:
-            v = feed.status("nba").get("published_at")
-        else:
-            m = feed.FEED_DIR / "nba" / "manifest.json"
-            v = json.loads(m.read_text()).get("published_at") if m.exists() else None
-        at = datetime.fromisoformat(str(v)) if v else None
-    except Exception:   # noqa: BLE001
-        at = None
-    behind = []
-    if not CONSUMER:
+    proj_at = desk.pool_stamp[0] if desk.pool_stamp else None
+    if isinstance(proj_at, str):
         try:
-            act = json.loads(autopilot.DESK_ACTIVITY_JSON.read_text()) if autopilot.DESK_ACTIVITY_JSON.exists() else {}
-            edit = datetime.fromisoformat(act["edit_at"]) if act.get("edit_at") else None
-        except Exception:   # noqa: BLE001
-            edit = None
-        if edit is not None and (at is None or edit > at):
-            behind.append(("edits", edit))
-        proj = next((f["at"] for f in desk.freshness(now) if f["label"] == "projected"), None)
-        if proj is not None and (at is None or proj > at + timedelta(seconds=60)):
-            behind.append(("a refresh", proj))
-    since = min((t for _, t in behind), default=None)
-    level = "red" if since is not None and (now - since).total_seconds() / 60 >= PUBLISH_RED_MIN else ("amber" if behind else "")
-    return dict(at=at, age=None if at is None else (now - at).total_seconds() / 60, behind=[k for k, _ in behind], since=since, level=level)
+            proj_at = datetime.fromisoformat(proj_at)
+        except ValueError:
+            proj_at = None
+    dg = desk.pool_stamp[2] if desk.pool_stamp else None
+    jobs = runner.all()
+    done = {}
+    for j in jobs:
+        if j.status == "done" and j.finished and j.name not in done:
+            done[j.name] = datetime.fromtimestamp(j.finished)
+    snap_at = None
+    try:
+        from sqlalchemy import text as _t
+        v = desk.session.execute(_t("select max(captured_at) from nba_projection_capture where source = 'ours' and draft_group_id = :dg").bindparams(dg=dg)).scalar()
+        snap_at = datetime.fromisoformat(str(v)) if v else None
+    except Exception:   # noqa: BLE001
+        snap_at = None
+    stages = []
+    worst = ""
+    for key, label, names in CHAIN_STEPS:
+        at = snap_at if key == "snapshot" else next((done[n] for n in sorted(names, key=lambda n: done.get(n) or datetime.min, reverse=True) if n in done), None)
+        stale = bool(at is not None and proj_at is not None and at < proj_at - timedelta(seconds=2))
+        level = ""
+        if stale:
+            level = "red" if (now - proj_at).total_seconds() / 60 >= PUBLISH_RED_MIN else "amber"
+        if key == "lateswap" and at is None:
+            continue                                            # only shown once a late swap has run
+        stages.append(dict(key=key, label=label, at=at, stale=stale, level=level,
+                           why=("built before the projection moved" if stale else ("current" if at is not None else "not run on this desk"))))
+        if level == "red" or (level == "amber" and worst != "red"):
+            worst = level
+    return dict(projection_at=proj_at, stages=stages, level=worst,
+                behind=[s["label"] for s in stages if s["stale"]], age=None if proj_at is None else (now - proj_at).total_seconds() / 60)
 
 
 def _contests_ctx() -> dict:
@@ -2962,21 +3045,15 @@ async def pipeline_run(request: Request, step: str):
                 desk.flash.append(f"heads up: {ms['n_mapped']} of {ms['n']} teams mapped and unchanged"
                                   + (f"; changed: {', '.join(ms['changed'])}" if ms["changed"] else "") + (f"; unmapped: {', '.join(ms['unmapped'])}" if ms["unmapped"] else ""))
             if step in ("generate", "sim", "lateswap", "all"):
+                # the pool is the projection (every edit wrote its team); a snapshot records what this run was built on
                 typed = _apply_typed_pins(str(form.get("pins") or ""))
                 desk.write_local()
                 try:
-                    if CONSUMER:
-                        r = consumer_publish(desk.session, log=lambda m: None)
-                        desk.flash.append((f"published: the laptop's projection with your edits on {', '.join(sorted(r['teams']))}" if r["teams"]
-                                           else "published: the laptop's projection as it stands (no pins or grids of your own on this slate)")
-                                          + (f" ({typed} typed values applied first)" if typed else "") + f", then queued {step}")
-                    else:
-                        info = project_slate(desk.session, log=lambda m: None)
-                        desk.flash.append(f"published {info.players} players with {len(desk.overrides)} edits" + (f" ({typed} typed values applied first)" if typed else "") + f", then queued {step}")
+                    info = capture_pool(desk.session, log=lambda m: None)
+                    desk.flash.append(f"snapshot of {info.players} players ({len(desk.overrides)} edits)" + (f", {typed} typed values applied first" if typed else "") + f"; queued {step}")
                     autopilot.touch("publish")
-                    _push_feed(desk.flash.append)
                 except IngestError as e:
-                    desk.flash.append(f"publish failed: {e}")
+                    desk.flash.append(f"snapshot failed: {e}")
             try:
                 _submit(step, pipeline_form)
             except (TypeError, ValueError) as e:
@@ -3131,13 +3208,7 @@ def late_news(request: Request, team: str, player: str = Form(...), call: str = 
                 desk.flash.append(m)
         except Exception as e:   # noqa: BLE001
             desk.flash.append(f"scenario pick failed: {type(e).__name__}: {e}")
-        try:
-            info = project_slate(desk.session, log=lambda m: None)
-            desk.flash.append(f"{team}: {player} {call}: published {info.players} players with {len(desk.overrides)} edits")
-            _push_feed(desk.flash.append)
-        except IngestError as e:
-            desk.flash.append(f"{team}: {player} {call}: publish failed: {e}")
-            then = "none"
+        desk.flash.append(f"{team}: {player} {call}: the team is re-projected and written to the pool ({len(desk.overrides)} edits on the slate)")
         if then in ("sim", "lateswap"):
             if runner.active():
                 desk.flash.append("a job is already running: nothing queued (cancel it or wait, then run Sim / Late swap)")
