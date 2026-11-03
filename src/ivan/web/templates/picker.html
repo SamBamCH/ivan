@@ -10,13 +10,13 @@
 <body class="plain">
 <header>{{ bar(frame) }}</header>
 <main>
-  <h1>{{ frame.sport.label }} <span class="muted small">pick a date, then a slate</span></h1>
+  <h1>{{ frame.sport.label }} <span class="muted small">pick a date, then a slate{% if day and day.slates|length > 1 %} · this day has {{ day.slates|length }}: the bar's day picks the main one{% endif %}</span></h1>
   <div class="picker">
     <div class="days">
       {% set ns = namespace(past=false) %}
       {% for d in days %}
         {% if d.day < frame.now.date() and not ns.past %}{% set ns.past = true %}{% if not loop.first %}<div class="gap"></div>{% endif %}{% endif %}
-        <a href="{{ frame.root }}/{{ d.iso }}/" class="{{ 'on' if day and d.day == day.day }}">
+        <a href="{{ frame.root }}/{{ d.iso }}/?pick" class="{{ 'on' if day and d.day == day.day }}">
           <span>{{ d.label }}</span><span class="n">{{ d.slates|length }} slate{{ '' if d.slates|length == 1 else 's' }}{% if d.slates|selectattr('loaded')|list %} · loaded{% endif %}</span>
         </a>
       {% else %}

@@ -158,8 +158,10 @@ def _here(request: Request) -> str:
 
 
 def _days_of(rows: list, now: datetime) -> list[Day]:
-    """Desk.slate_days rows -> the frame's days (ivan.web.sports). A lobby slate that is not loaded carries a load form (the
-    desk fetches a slate before it can show it); an archived one opens on its backtest, where Restore loads it."""
+    """Desk.slate_days rows -> the frame's days (ivan.web.sports). A lobby slate that is not loaded carries a load form (its page
+    starts that load when opened; the form is the picker's button and the fallback when a job holds the pool): the producer
+    fetches the slate from DraftKings, the consumer asks the laptop for it. An archived one opens on its backtest, where
+    Restore loads it."""
     out = []
     for d_iso, _label, slates in rows:
         d = date.fromisoformat(d_iso)
@@ -167,12 +169,14 @@ def _days_of(rows: list, now: datetime) -> list[Day]:
             lock = datetime.fromisoformat(sl["lock"]) if sl.get("lock") else None
             src = {"loaded": "working"}.get(sl["source"], sl["source"])
             load = None
-            if sl["source"] == "lobby" and not sl["loaded"] and not CONSUMER:
-                load = {"url": "/slate", "fields": {"draft_group": sl["id"], "source": "lobby", "day": d_iso}, "label": "load into the desk",
-                        "title": "fetch this slate from DraftKings, project it and work it (the loaded slate keeps its lineups, sims and edits)"}
+            if sl["source"] == "lobby" and not sl["loaded"]:
+                load = {"url": "/slate", "fields": {"draft_group": sl["id"], "source": "lobby", "day": d_iso},
+                        "label": "fetch from the laptop" if CONSUMER else "load into the desk",
+                        "title": ("ask the laptop to load this slate and copy it here (both desks move to it)" if CONSUMER else
+                                  "fetch this slate from DraftKings, project it and work it (the loaded slate keeps its lineups, sims and edits)")}
             detail = (f"{sl['contests']} contests in the lobby" if sl.get("contests") else "")
             out.append(SlateInfo(key=str(sl["id"]), day=d, lock=lock, label=sl["label"].replace(" · archived", ""), source=src, loaded=bool(sl["loaded"]),
-                                 mode="classic", detail=detail, load=load))
+                                 mode="classic", detail=detail, load=load, games=sl.get("games")))
     return group_days(out, now)
 
 

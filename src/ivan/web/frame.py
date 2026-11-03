@@ -6,7 +6,8 @@ slates on the right). Rendered from the sport's description (ivan.web.sports.Spo
 looks the same; the slate's own screens are the sport module's.
 
     ctx(request, sport, days, day, slate, view)   the template context the bar needs ("frame")
-    install_picker(app, sport)                     GET /  and  GET /{day}/  on a sport's sub-app
+    install_picker(app, sport)                     GET /  and  GET /{day}/  on a sport's sub-app (a day opens on its main slate;
+                                                   /{day}/?pick lists the day's slates)
     templates                                      the shared Jinja environment (frame, home, picker)
 """
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ivan.web import auth
@@ -51,7 +52,9 @@ def ctx(request: Request, sport: Optional[Sport], days: Optional[list[Day]] = No
 
 
 def install_picker(app: FastAPI, sport: Sport) -> None:
-    """The sport's landing pages: `/` (its days, the natural day open) and `/{day}/` (that day's slates)."""
+    """The sport's landing pages: `/` (its days, the natural day open) and `/{day}/`, which opens the day's main slate
+    (`sport.main_slate`: the loaded one, else the biggest, else the only one), so picking a day in the bar is picking its
+    slate. `/{day}/?pick` lists the day's slates instead (the picker), as does a day whose main slate cannot be told."""
 
     def page(request: Request, wanted: Optional[date]):
         now = datetime.now()
@@ -66,11 +69,17 @@ def install_picker(app: FastAPI, sport: Sport) -> None:
         return page(request, None)
 
     @app.get("/{day}/", response_class=HTMLResponse)
-    def picker_day(request: Request, day: str):
+    def picker_day(request: Request, day: str, pick: Optional[str] = None):
         try:
             d = date.fromisoformat(day)
         except ValueError:
             raise HTTPException(404, "not a day")
+        if pick is None:
+            now = datetime.now()
+            found = pick_day(sport.days(now), d, now)
+            main = sport.main_slate(found, now) if found is not None else None
+            if main is not None:
+                return RedirectResponse(main.path(f"{site_root(request)}/{sport.key}"), status_code=303)
         return page(request, d)
 
 

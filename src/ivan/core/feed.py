@@ -33,11 +33,10 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import tempfile
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 from ivan.core.utils import PROJECT_ROOT
 
@@ -235,20 +234,24 @@ def _ssh_cmd(host: str, timeout: int = 15) -> List[str]:
 
 
 def pull_ssh(host: str, sport: str, state_dir: Path, db_path: Optional[Path] = None, log: Log = print, root: Path = PROJECT_ROOT,
-             timeout: int = 180) -> dict:
+             timeout: int = 180, slate: Optional[int] = None) -> dict:
     """
     The consumer's Refresh: fetch the producer's feed over ssh and apply it. One ssh command asks the producer to publish its
-    live bundle fresh (`publish`: the forced command of the key, deploy/feed_serve.sh, runs scripts/nba/feed.py publish
-    --which live there), then rsync copies the producer's feed directory to this machine's data/feed/<sport>/ (the forced
+    live bundle fresh (`publish <sport>`: the forced command of the key, deploy/feed_serve.sh, runs scripts/<sport>/feed.py
+    publish there), then rsync copies the producer's feed directory to this machine's data/feed/<sport>/ (the forced
     command answers rsync with rrsync, read only, rooted at the producer's data/feed; only what changed travels, so the
     reference bundle moves once a night), then the usual pull from that directory replaces the feed's tables, the published
     edits and the projection store here. Nothing is pushed from the producer and nothing runs there but on this request.
+    With `slate` (a draft group) the command is `publish <sport> <slate>`: the producer loads that slate into its pool first
+    when it holds another (the NBA: ingest.refresh_pool, what its desk's slate pick does), so the consumer's pick of a slate
+    moves both desks to it; the ssh waits up to ten minutes for the load.
     Returns what pull returned (what changed), plus "published": the producer's answer to publish.
     """
     local = Path(root) / "data" / "feed"
     (local / sport).mkdir(parents=True, exist_ok=True)
+    ask = ["publish", sport] + ([str(int(slate))] if slate is not None else [])
     try:
-        r = subprocess.run(_ssh_cmd(host) + ["publish", sport], check=True, capture_output=True, timeout=timeout, text=True)
+        r = subprocess.run(_ssh_cmd(host) + ask, check=True, capture_output=True, timeout=(600 if slate is not None else timeout), text=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         err = (getattr(e, "stderr", "") or "").strip().splitlines()
         raise RuntimeError(f"the producer ({host}) did not publish: {err[-1] if err else type(e).__name__}") from e
@@ -265,14 +268,18 @@ def pull_ssh(host: str, sport: str, state_dir: Path, db_path: Optional[Path] = N
     return changed
 
 
-def pull_from_producer(sport: str, state_dir: Path, db_path: Optional[Path] = None, log: Log = print, root: Path = PROJECT_ROOT) -> dict:
-    """The consumer's pull, whichever way the environment names the producer (producer_source): ssh (pull_ssh) or a URL (pull)."""
+def pull_from_producer(sport: str, state_dir: Path, db_path: Optional[Path] = None, log: Log = print, root: Path = PROJECT_ROOT,
+                       slate: Optional[int] = None) -> dict:
+    """The consumer's pull, whichever way the environment names the producer (producer_source): ssh (pull_ssh) or a URL (pull).
+    `slate` asks the producer to load that slate first; only ssh can ask (a URL source serves what the producer holds)."""
     src = producer_source()
     if src is None:
         raise RuntimeError(f"no producer configured: set {SSH_ENV} (user@host) or {URL_ENV} in .env")
     kind, where = src
     if kind == "ssh":
-        return pull_ssh(where, sport, state_dir, db_path=db_path, log=log, root=root)
+        return pull_ssh(where, sport, state_dir, db_path=db_path, log=log, root=root, slate=slate)
+    if slate is not None:
+        raise RuntimeError(f"only an ssh producer ({SSH_ENV}) can be asked for another slate; {URL_ENV} serves what the laptop holds")
     return pull(where, os.environ.get("IVAN_FEED_TOKEN"), sport, state_dir, db_path=db_path, which="both", log=log, root=root)
 
 

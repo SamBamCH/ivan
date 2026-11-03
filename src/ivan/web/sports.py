@@ -33,6 +33,7 @@ class SlateInfo:
     detail: str = ""                      # one line for the picker card: contests, lineups, settle status
     status: str = ""                      # open | waiting | settled | ... (the settle job's word), "" when unknown
     load: Optional[dict] = None           # for a slate the picker can load into the workspace: {"url": POST target, "fields": {...}}
+    games: Optional[int] = None           # games on the slate, when the index knows (the day's main slate is the biggest)
 
     def path(self, root: str) -> str:
         return f"{root}/{self.day.isoformat()}/{self.key}/"
@@ -67,6 +68,7 @@ class Sport:
     summary: Callable[[datetime], dict]             # the home tile: {"loaded": SlateInfo|None, "job": str|None, "note": str}
     tools: list[tuple[str, str]] = field(default_factory=list)   # (label, path under the sport root) for pages that are not one slate's
     default_view: Callable[[SlateInfo, datetime], str] = lambda s, now: "backtest"
+    main_slate: Callable[[Day, datetime], Optional[SlateInfo]] = lambda d, now: main_slate(d)
     app: object = None                    # the mounted sub-application (FastAPI), None while it is not built
     error: str = ""                       # why the workspace is missing (an import that failed); the home page says so
 
@@ -110,6 +112,23 @@ def pick_day(days: list[Day], wanted: Optional[date], now: datetime) -> Optional
         return exact
     ahead = [d for d in days if d.day > today]
     return min(ahead, key=lambda d: d.day) if ahead else days[0]
+
+
+def main_slate(day: Day) -> Optional[SlateInfo]:
+    """The slate a day opens on when the day is picked (the frame's day dropdown goes straight to it): the one loaded, else
+    the one with the most games (DraftKings' main slate), else the only one; None when the day has no slates or the sport
+    cannot tell them apart (several, no game counts), and the picker page shows them."""
+    if not day.slates:
+        return None
+    loaded = next((s for s in day.slates if s.loaded), None)
+    if loaded is not None:
+        return loaded
+    if len(day.slates) == 1:
+        return day.slates[0]
+    with_games = [s for s in day.slates if s.games]
+    if with_games:
+        return max(with_games, key=lambda s: (s.games, -(s.lock or datetime.max).timestamp() if s.lock else 0))
+    return None
 
 
 def find_slate(days: list[Day], key: str) -> Optional[SlateInfo]:

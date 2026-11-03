@@ -163,7 +163,7 @@ class DeskBase:
             when = f"{lk:%H:%M}" if lk is not None else (start.split(" ", 1)[1] if " " in start else start)
             days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=when + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
                                                            source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=str(key) == str(dg),
-                                                           lock=lk.isoformat(timespec="minutes") if lk is not None else None, contests=v.get("contests")))
+                                                           lock=lk.isoformat(timespec="minutes") if lk is not None else None, contests=v.get("contests"), games=ng))
             seen.add(str(key))
         from sqlalchemy import text as _t
         for key, lock, src, n in self.session.execute(_t("select slate_key, min(lock), max(source), count(*) from archived_slate where sport = 'nba' group by slate_key")).all():
@@ -175,14 +175,14 @@ class DeskBase:
                 continue
             ng = self.slate_games(str(key))
             days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else "") + " · archived",
-                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg), lock=t.isoformat(timespec="minutes")))
+                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=str(key) == str(dg), lock=t.isoformat(timespec="minutes"), games=ng))
             seen.add(str(key))
         if dg is not None and str(dg) not in seen:
             lock = min((p.gametime for p in self.slate.players if p.gametime), default=None)
             d = (lock or now).date().isoformat()
             ng = len({frozenset((p.team, p.opponent)) for p in self.slate.players if p.team and p.opponent})
             days.setdefault(d, []).append(dict(id=str(dg), label=(f"{lock:%H:%M}" if lock else "loaded") + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""), source="loaded", sort="", loaded=True,
-                                               lock=lock.isoformat(timespec="minutes") if lock else None))
+                                               lock=lock.isoformat(timespec="minutes") if lock else None, games=ng))
         out = []
         for d in sorted(days, reverse=True):
             dd = date.fromisoformat(d)

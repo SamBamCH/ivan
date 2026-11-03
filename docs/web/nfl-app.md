@@ -13,7 +13,8 @@ sign in with the site's password. The Cloudflare tunnel (`nba.prattflix.com`) re
 
 ## The slate
 
-`/nfl/` lists the days with slates, `/nfl/<day>/` a day's slates, `/nfl/<day>/<key>/` one slate with the view
+`/nfl/` lists the days with slates, `/nfl/<day>/` opens the day's main slate (the working one, else its only one;
+`?pick` lists the day's slates, as does a day with several and none working), `/nfl/<day>/<key>/` one slate with the view
 dropdown: **desk**, **sim report**, **choose**, **exposures**, **backtest**.
 
 - The **working slate** (the one in the database's working tables, marked *loaded*) opens on the desk. The flat addresses

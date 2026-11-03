@@ -1,6 +1,6 @@
 {# The bar every Ivan page shares (ivan.web.frame.ctx -> `frame`): Ivan › sport › day › slate › view, the sport's tools, sign out.
-   Each level is a dropdown; changing one goes there. A slate option with data-load posts the sport's load form instead
-   (the NBA desk loads a lobby slate before it can show it). #}
+   Each level is a dropdown; changing one goes there: a day to its main slate (frame.install_picker), a slate to its page,
+   which shows that slate (the NBA desk loads a slate it does not hold when its page is opened). #}
 {% macro bar(frame) %}
 <nav class="frame" data-site="{{ frame.site }}" data-root="{{ frame.root }}">
   <a class="brand" href="{{ frame.site }}/" title="every sport">Ivan</a>
@@ -22,7 +22,7 @@
     <select class="crumb crumb-slate" title="the day's slates: pick one to open it" onchange="ivanPickSlate(this)">
       {% if not frame.slate %}<option value="" selected>slate…</option>{% endif %}
       {% for d in frame.days %}{% for s in d.slates %}
-        <option value="{{ s.path(frame.root) }}" data-day="{{ d.iso }}" {% if s.load %}data-load="{{ frame.root }}{{ s.load.url }}" data-fields='{{ s.load.fields|tojson }}'{% endif %}
+        <option value="{{ s.path(frame.root) }}" data-day="{{ d.iso }}"
                 {% if frame.slate and s.key == frame.slate.key %}selected{% endif %} {% if frame.day and d.day != frame.day.day %}hidden{% endif %}>{{ s.label }}{% if s.loaded %} · loaded{% endif %}</option>
       {% endfor %}{% endfor %}
     </select>
@@ -42,15 +42,10 @@
   {% if frame.login %}<a class="tool" href="{{ frame.site }}/logout" title="sign out of Ivan in this browser">sign out</a>{% endif %}
 </nav>
 <script>
-  // the slate dropdown: an option carrying data-load posts the sport's load form (the desk fetches the slate first); the arrows
-  // step through every slate in time order, across days
+  // the slate dropdown opens the slate's page (which shows that slate, loading it first when the workspace holds another);
+  // the arrows step through every slate in time order, across days
   function ivanPickSlate(sel) {
     const o = sel.options[sel.selectedIndex]; if (!o || !o.value) return;
-    if (o.dataset.load) {
-      const f = document.createElement("form"); f.method = "post"; f.action = o.dataset.load;
-      for (const [k, v] of Object.entries(JSON.parse(o.dataset.fields || "{}"))) { const i = document.createElement("input"); i.type = "hidden"; i.name = k; i.value = v; f.appendChild(i); }
-      document.body.appendChild(f); f.submit(); return;
-    }
     location.href = o.value;
   }
   (() => {

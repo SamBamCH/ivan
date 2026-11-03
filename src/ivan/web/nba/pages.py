@@ -13,7 +13,7 @@ from ivan.web.sports import SlateInfo, find_slate
 from . import core as A
 from .core import LOCK, _days_of, _render, _team_url, app, desk, engine
 from .lateswap import _lateswap_ctx
-from .pipeline import _contests_ctx, _pipeline_ctx
+from .pipeline import _contests_ctx, _pipeline_ctx, begin_switch
 from ivan.sports.nba.desk import NEAR_TIP_MIN
 
 
@@ -80,10 +80,12 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
     return sorted(games, key=lambda g: (g["locked"], g["tip"] or now))
 
 
-def _shell(request: Request, view: Optional[str], team: Optional[str], page: Optional[SlateInfo], now: datetime, header: dict):
+def _shell(request: Request, view: Optional[str], team: Optional[str], page: Optional[SlateInfo], now: datetime, header: dict,
+           note: Optional[str] = None):
     """
     The page shell for the loaded slate (page is None or the loaded one) or for another slate (its backtest, or a load card).
     `team` set = the team page: the same shell with the team's card as its body (the slate's pre-lock view is the bar's view).
+    `note` is why a load did not start (the load card says so).
     """
     from ivan.sports.nba.slate_backtest import mode_for
     loaded = header.get("draft_group")
@@ -116,11 +118,11 @@ def _shell(request: Request, view: Optional[str], team: Optional[str], page: Opt
     else:                                                                              # another slate: its backtest, or load it first
         team = None
         if view not in ("backtest", "load"):
-            view = "backtest" if (page.source == "archive" or page.day < now.date() or page.load is None) else "load"
+            view = "backtest" if (page.source == "archive" or page.day < now.date()) else "load"
         dg = int(page.key) if str(page.key).isdigit() else None
     fr = frame.ctx(request, A.SPORT, days, None, page, view if view != "load" else None, now)
     return _render(request, "nba_desk.html", header=header, team=team, game=game, view=view, busy=desk.busy, dg=dg, frame=fr, page_slate=page,
-                   is_loaded=(page is None or (loaded is not None and str(page.key) == str(loaded))))
+                   is_loaded=(page is None or (loaded is not None and str(page.key) == str(loaded))), load_note=note)
 
 
 @app.get("/desk/", response_class=HTMLResponse)
@@ -143,8 +145,11 @@ def index(request: Request, view: Optional[str] = None, dg: Optional[int] = None
 
 @app.get("/{day}/{key}/", response_class=HTMLResponse)
 def slate_page(request: Request, day: str, key: str, view: Optional[str] = None):
-    """One slate: sport › day › slate › view. The loaded slate is the desk; a past or archived slate its backtest (read only; Restore
-    loads it); a lobby slate not loaded a load button (nothing is fetched by a GET)."""
+    """One slate: sport › day › slate › view. The page shows the slate in its address, so the desk follows the bar: the loaded
+    slate is the desk (pre-lock, or post-lock once it locked); a slate of an earlier day its backtest (read only; Restore loads
+    it); a lobby slate of today or later that the desk does not hold starts loading when the page is opened (begin_switch: the
+    producer fetches it, the consumer asks the laptop for it), the page shows the progress and reloads on it when it is in.
+    When a job holds the pool the page says so and offers the load as a button instead."""
     d = frame.parse_day(day)
     with LOCK:
         if not desk.busy:
@@ -154,7 +159,12 @@ def slate_page(request: Request, day: str, key: str, view: Optional[str] = None)
         page = find_slate(_days_of(header["slate_days"], now), key)
         if page is None:
             page = SlateInfo(key=str(key), day=d, lock=None, label=f"slate {key}", source="archive", detail="nothing on file for this slate")
-        return _shell(request, view, None, page, now, header)
+        loaded = header.get("draft_group")
+        why = None
+        if (page.load is not None and not page.loaded and page.day >= now.date() and not desk.busy and view in (None, "games", "load")
+                and (loaded is None or str(page.key) != str(loaded))):
+            why = begin_switch(int(page.key), "lobby")
+        return _shell(request, view, None, page, now, header, note=why)
 
 
 @app.get("/{day}/{key}/{team}/", response_class=HTMLResponse)

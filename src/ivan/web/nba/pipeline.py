@@ -74,6 +74,69 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Option
     threading.Thread(target=run, name="ivan-refresh", daemon=True).start()
 
 
+def _start_pull(what: str, slate: Optional[int] = None) -> None:
+    """The consumer's Refresh from laptop in a background thread (feed.pull_from_producer: ssh publish, rsync, apply, then
+    ingest.after_pull layers this desk's own edits back on). With `slate` the laptop is asked to load that slate first
+    (`publish nba <slate>`: a load there takes a minute), so the page shows `what` meanwhile and reloads when it is done."""
+    def run():
+        from ivan.sports.nba import changes as CH
+        msgs = []
+        sess = get_session(engine)
+        try:
+            row = sess.query(NBAPlayer.draft_group_id).first()
+            dg = int(row[0]) if row and row[0] else None
+            before = CH.snapshot(sess)
+            changed = feed.pull_from_producer("nba", NBA_DATA_DIR.parent / "feed-state", log=msgs.append, slate=slate)
+            tables = {k: v for k, v in changed.items() if k != "published"}
+            if tables:
+                sess.expire_all()                                      # the pool was replaced underneath this session
+                r = after_pull(sess, dg, log=msgs.append)
+                desk.changes = dict(at=datetime.now(), teams=CH.diff(before, CH.snapshot(sess)))
+                if r["moved"]:
+                    msgs.append(f"the laptop moved to slate {r['draft_group']}: your edits of the previous slate are filed, this slate's are back, the previous slate's lineups cleared")
+                if r["teams"]:
+                    msgs.append(f"the laptop's pool is in (headlines included); your own edits re-projected on top for {', '.join(sorted(r['teams']))}")
+                else:
+                    msgs.append("the laptop's pool is in, as it stands there (headlines included)")
+            else:
+                fs = feed.status("nba")
+                prod = fs.get("producer") or {}
+                msgs.append(("the laptop holds this slate already; " if slate is not None else "") + "nothing new: the laptop's pool has not changed since the last pull"
+                            + (f" (autopilot {'on' if prod.get('autopilot') else 'off'} there)" if prod else ""))
+            desk.news_checked_at = datetime.now()                      # the headlines came with the pull
+        except Exception as e:   # noqa: BLE001
+            msgs.append(f"{what} failed: {type(e).__name__}: {e}")
+        finally:
+            sess.close()
+        with LOCK:
+            desk.rebuild(); desk.busy = None; desk.flash.extend(msgs)
+    desk.busy = what
+    threading.Thread(target=run, name="ivan-pull", daemon=True).start()
+
+
+def begin_switch(draft_group: int, source: str = "lobby") -> Optional[str]:
+    """Start showing another slate: the producer fetches a lobby slate from DraftKings (refresh_pool) or restores an archived one
+    from its capture; the consumer asks the laptop to load it and copies it (publish nba <dg>). The pick is remembered
+    (data/nba/active_slate.json: the capture tick's slate). Returns why it could not start (a job or a load holds the pool),
+    None when it did; the caller holds LOCK."""
+    from ivan.sports.nba.paths import ACTIVE_SLATE_JSON
+    if runner.active():
+        return "a job is running on the current slate; switch after it finishes (or cancel it)"
+    if desk.busy:
+        return f"already {desk.busy}"
+    try:
+        ACTIVE_SLATE_JSON.write_text(json.dumps({"draft_group": int(draft_group), "chosen_at": datetime.now().isoformat(timespec="seconds")}))
+    except OSError as e:
+        desk.flash.append(f"could not save the slate choice ({e}); the capture tick may switch back")
+    if CONSUMER:
+        _start_pull(f"asking the laptop for slate {draft_group}", slate=int(draft_group))
+    elif source == "archive":
+        _start_restore(int(draft_group))
+    else:
+        _start_refresh(f"loading slate {draft_group}", int(draft_group), update_odds=False)
+    return None
+
+
 @app.post("/publish")
 def publish(request: Request, pins: str = Form("")):
     """Snapshot: record the projection as it stands (ingest.capture_pool: the capture rows the scorecard scores and the projections
@@ -172,37 +235,18 @@ def reload(request: Request):
 
 @app.post("/refresh")
 def refresh(request: Request, what: str = Form("dk")):
-    if CONSUMER and what in ("props", "lines"):
-        what = "dk"                                              # a consumer has no props button; the laptop's capture loop fetches them
     """dk: pool + statuses + Rotowire starters and news (free). lines: also the game lines, spread and total (~3 credits).
-    props: also the player props and the game lines (~12 credits a game). A consumer pulls the feed and reads the news."""
+    props: also the player props and the game lines (~12 credits a game). A consumer has one Refresh: it pulls the laptop's
+    pool (headlines included) in the background and the page reloads when it is in."""
     with LOCK:
         dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
         if CONSUMER:                                             # Refresh from laptop: the producer publishes on request, this desk copies and applies it (feed.pull_ssh)
-            try:
-                from ivan.sports.nba import changes as CH
-                before = CH.snapshot(desk.session)
-                changed = feed.pull_from_producer("nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
-                tables = {k: v for k, v in changed.items() if k != "published"}
-                if tables:
-                    desk.session.expire_all()                        # the pool was replaced underneath this session
-                    r = after_pull(desk.session, dg, log=desk.flash.append)
-                    desk.changes = dict(at=datetime.now(), teams=CH.diff(before, CH.snapshot(desk.session)))
-                    if r["moved"]:
-                        desk.flash.append(f"the laptop moved to slate {r['draft_group']}: your edits of the previous slate are filed, this slate's are back, the previous slate's lineups cleared")
-                    if r["teams"]:
-                        desk.flash.append(f"the laptop's pool is in (headlines included); your own edits re-projected on top for {', '.join(sorted(r['teams']))}")
-                    else:
-                        desk.flash.append("the laptop's pool is in, as it stands there (headlines included)")
-                else:
-                    fs = feed.status("nba")
-                    prod = fs.get("producer") or {}
-                    desk.flash.append("nothing new: the laptop's pool has not changed since the last pull"
-                                      + (f" (autopilot {'on' if prod.get('autopilot') else 'off'} there)" if prod else ""))
-                desk.news_checked_at = datetime.now()                # the headlines came with the pull
-            except Exception as e:   # noqa: BLE001
-                desk.flash.append(f"pull from the laptop failed: {type(e).__name__}: {e}")
-        elif dg is None:
+            if desk.busy:
+                desk.flash.append(f"already {desk.busy}")
+            else:
+                _start_pull("refreshing from the laptop")
+            return RedirectResponse(_here(request), status_code=303)
+        if dg is None:
             desk.flash.append("no draft group in the pool; pick a slate first")
         elif runner.active():
             desk.flash.append("a job is running; it reads the pool, so refresh after it finishes (or cancel it)")
@@ -456,22 +500,13 @@ async def entries_upload(request: Request, file: UploadFile = File(...)):
 
 @app.post("/slate")
 def switch_slate(request: Request, draft_group: int = Form(...), source: str = Form("lobby"), day: str = Form("")):
-    """Load another slate: a lobby slate is fetched from DraftKings, an archived one restored from its capture (nothing fetched).
-    The pick is remembered (data/nba/active_slate.json)."""
+    """Load another slate (begin_switch): the picker's button and the slate page's fallback form; opening a slate's page starts
+    the same load by itself. A lobby slate is fetched from DraftKings (the consumer asks the laptop for it), an archived one
+    restored from its capture (nothing fetched)."""
     with LOCK:
-        from ivan.sports.nba.paths import ACTIVE_SLATE_JSON
-        try:
-            ACTIVE_SLATE_JSON.write_text(json.dumps({"draft_group": int(draft_group), "chosen_at": datetime.now().isoformat(timespec="seconds")}))
-        except OSError as e:
-            desk.flash.append(f"could not save the slate choice ({e}); the capture tick may switch back")
-        if runner.active():
-            desk.flash.append("a job is running on the current slate; switch after it finishes (or cancel it)")
-        elif desk.busy:
-            desk.flash.append(f"already {desk.busy}")
-        elif source == "archive":
-            _start_restore(int(draft_group))
-        else:
-            _start_refresh(f"loading slate {draft_group}", int(draft_group), update_odds=False)
+        why = begin_switch(int(draft_group), source)
+        if why:
+            desk.flash.append(why)
     if day:
         try:
             return RedirectResponse(f"{auth.root_of(request)}/{date.fromisoformat(day).isoformat()}/{int(draft_group)}/", status_code=303)

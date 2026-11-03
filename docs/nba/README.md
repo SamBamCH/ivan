@@ -53,7 +53,7 @@ Read in this order:
 | The brother's desk is stale               | [overnight.md](overnight.md) feed section; [../web/nba-desk.md](../web/nba-desk.md) consumer mode           |
 | No box scores / scorecards this morning   | [overnight.md](overnight.md): `data/nba/logs/nightly.log`, `systemctl --user list-timers`                   |
 | Field ownership looks off                 | [field-and-simulation.md](field-and-simulation.md) field model; `scripts/nba/field_model.py check`          |
-| A past slate needs re-examining           | the desk's slate picker restores a past slate from its archive capture; [data.md](data.md) archive section  |
+| A past slate needs re-examining           | a past slate's page is its backtest; its Restore button loads it from its archive capture; [data.md](data.md) archive section  |
 |                                           |                                                                                                             |
 |                                           |
 |                                           |

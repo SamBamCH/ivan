@@ -92,7 +92,10 @@ command (`deploy/feed_serve.sh`) answers by writing the live bundle fresh (the p
 the projection store, the headlines), then rsyncs the laptop's `data/feed/nba/` here (the forced command serves rsync
 through `rrsync`, read only, rooted at `data/feed`; only changed files move, so the reference bundle the nightly writes
 travels once a day), then applies the bundles. A publish whose content did not change keeps its stamp, so a Refresh
-with nothing new says so. The manifest carries a producer note (the autopilot switch, the last tick) that the
+with nothing new says so. When the consumer's bar picks a slate the laptop does not hold, the command is
+`publish nba <draft group>` (`scripts/nba/feed.py pull --slate DG` there, `publish --slate DG` here): the laptop loads
+that slate into its pool first (the same load as its own desk's slate pick, remembered in `active_slate.json`), so both
+desks move to it; the ssh waits up to ten minutes for the load. The manifest carries a producer note (the autopilot switch, the last tick) that the
 consumer's header shows. The key is the server's `~/.ssh/id_ed25519` (`deploy/setup_nba_server.sh` makes and prints
 it), bound on the laptop by `deploy/install_feed_key.sh` with no shell, pty or forwarding; the laptop's sshd must be on
 (`sudo apt install openssh-server`, which starts it) and reachable on the tailnet (`main-thinkpad`). Table lists and the consumer's

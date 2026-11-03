@@ -10,18 +10,27 @@ a day is [../nba/game-day.md](../nba/game-day.md); this page is what is on the s
 
 The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README.md)) with the desk's own items after it.
 
-- **Slate**: `/nba/` lists the days, `/nba/<day>/` a day's classic draft groups (from the DK lobby for today and
-  tomorrow, from the archive for past days; the loaded slate is always listed), `/nba/<day>/<draft group>/` one slate.
-  In the bar the day and slate dropdowns and the ‹ › arrows step through every slate in time order. A slate of
-  **today or tomorrow** that is not loaded **loads** when picked in the bar (fetched, projected; the slate it replaces
-  keeps its lineups, sims and edits for when it comes back; its page shows a load button instead when opened by its
-  address, so a link never fetches). A slate of an **earlier day opens its backtest** (below), read only: nothing is
-  loaded or deleted. The backtest's **Restore into the desk** button loads a past slate from its archive capture when
-  it is to be re-worked. While a load or a refresh runs, the bar keeps the slate you picked, the header reads "loading slate N…" and the board shows the progress; when it is done the whole page reloads on the new slate. Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
+- **Slate**: the desk shows the slate in the bar, always. `/nba/` lists the days, `/nba/<day>/` opens the day's **main
+  slate** (the loaded one, else the one with the most games, else its only one; `/nba/<day>/?pick` lists the day's
+  classic draft groups instead: from the DK lobby for today and tomorrow, from the archive for past days, the loaded slate
+  always listed), `/nba/<day>/<draft group>/` one slate. In the bar the day dropdown goes to the day's main slate, the
+  slate dropdown and the ‹ › arrows to any slate in time order, and the page shows what its address names:
+  - a slate of **today or later** that the desk does not hold **loads when its page is opened** (`begin_switch`): the
+    producer fetches it from DraftKings and projects it (the slate it replaces keeps its lineups, sims and edits for when
+    it comes back; the pick is remembered in `data/nba/active_slate.json` so the capture tick stays on it); a consumer
+    asks the laptop for it over ssh (`publish nba <dg>`: the laptop loads the slate if it holds another, then publishes,
+    and the consumer copies it, so both desks move to it; `scripts/nba/feed.py pull --slate DG`). While it loads the bar
+    keeps the slate you picked, the header reads "loading slate N…" (or "asking the laptop for slate N…") and the board
+    shows the progress; when it is done the whole page reloads on the new slate. When a job holds the pool the page says
+    so and offers the load as a button (`POST /slate`, the picker's button).
+  - the **loaded slate** opens on the view its lock picks: **pre-lock** before its first lock, **post-lock** (the late
+    swap) after it, **backtest** once its day has passed (`slate_backtest.mode_for`).
+  - a slate of an **earlier day opens its backtest** (below), read only: nothing is loaded or deleted. Its **Restore
+    into the desk** button loads it from its archive capture when it is to be re-worked.
+  Every action returns to the loaded slate's page; `/nba/desk/` is that page wherever it is.
 - **View** dropdown: **pre-lock** (the slate view below, `view=games`), **players** (every player of the slate,
-  `view=players`), **post-lock** (the late swap, `view=lateswap`), **backtest**. Opening the loaded slate with no view
-  picks one from its lock (`slate_backtest.mode_for`): before its first lock pre-lock, after it post-lock, and a slate
-  of an earlier day its backtest. The old `view=exposures` links open pre-lock, where the exposures are a section.
+  `view=players`), **post-lock** (the late swap, `view=lateswap`), **backtest**. With no view in the address the
+  slate's lock picks one (above). The old `view=exposures` links open pre-lock, where the exposures are a section.
   A team's page (below) sits one level under the slate: **Ivan › NBA › day › slate › TEAM**.
 - **locks in / locked**: the loaded slate's countdown (prefixed "loaded slate" on another slate's page).
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
@@ -47,7 +56,8 @@ or when news breaks.
    is the **mapped** summary: teams mapped of the slate, the open questions, "good to go".
 2. **Actions** (`_nba_pipeline.html`, re-rendered by every `/pipeline/<step>`), the steps of a slate in order:
    1 **Refresh DK** (free) / **Lines** (every game's spread and total, about 3 credits) / **Props** (about 12 credits a
-   game plus the lines; confirm dialog); on a consumer a single **Refresh** pulls the laptop's pool. Every refresh
+   game plus the lines; confirm dialog); on a consumer a single **Refresh from laptop** pulls the laptop's pool in the
+   background (the board shows "refreshing from the laptop…" and reloads when it is in). Every refresh
    reads the news too; the public field and ownership are not rebuilt by it.
    2 **Field + ownership** (`scripts/nba/field_ownership.py`, about 45 s).
    3 **Snapshot** (`/publish` = `scripts/nba/snapshot.py`, `ingest.capture_pool`): records the projection as it stands,

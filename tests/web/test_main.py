@@ -1,5 +1,5 @@
 """The one Ivan UI (ivan.web.main): every sport mounted under one app, one password for all of it, the frame's pages up."""
-import os
+import json
 
 import pytest
 
@@ -74,6 +74,65 @@ def test_tunnel_requests_need_a_password(open_site):
     """Through the Cloudflare tunnel every path is forwarded; with no password configured the site refuses to serve."""
     for path in ("/", "/nba/", "/nfl/jobs"):
         assert open_site.get(path, headers=CF).status_code == 503, path
+
+
+def test_a_day_opens_on_its_main_slate(open_site, monkeypatch):
+    """The bar's day dropdown is a slate pick: /<sport>/<day>/ goes to the day's loaded slate, else its biggest, else its only one;
+    ?pick (and a day whose main slate cannot be told) shows the day's slates."""
+    from datetime import date, datetime
+    from ivan.web.sports import Day, SlateInfo, main_slate
+    d = date(2099, 1, 2)
+    small = SlateInfo(key="1", day=d, lock=datetime(2099, 1, 2, 18), label="18:00 · 2 games", source="lobby", games=2)
+    big = SlateInfo(key="2", day=d, lock=datetime(2099, 1, 2, 19), label="19:00 · 8 games", source="lobby", games=8)
+    assert main_slate(Day(day=d, label="", tag="", slates=[small, big])) is big
+    assert main_slate(Day(day=d, label="", tag="", slates=[small])) is small
+    assert main_slate(Day(day=d, label="", tag="", slates=[])) is None
+    loaded = SlateInfo(key="3", day=d, lock=None, label="loaded", source="working", loaded=True)
+    assert main_slate(Day(day=d, label="", tag="", slates=[small, big, loaded])) is loaded
+    assert main_slate(Day(day=d, label="", tag="", slates=[SlateInfo(key="4", day=d, lock=None, label="a", source="lobby"), SlateInfo(key="5", day=d, lock=None, label="b", source="lobby")])) is None
+    monkeypatch.setattr(REGISTRY["nba"], "days", lambda now: [Day(day=d, label="Fri 01-02", tag="", slates=[small, big])])
+    r = open_site.get("/nba/2099-01-02/", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("/nba/2099-01-02/2/")
+    r = open_site.get("/nba/2099-01-02/?pick")
+    assert r.status_code == 200 and "pick a date" in r.text and "19:00 · 8 games" in r.text
+    assert open_site.get("/nba/2099-01-03/").status_code == 200                     # a day with nothing: the picker says so
+
+
+def test_nba_slate_page_loads_the_slate_it_names(open_site, monkeypatch, tmp_path):
+    """Opening a lobby slate the desk does not hold starts its load (the producer fetches it; a consumer asks the laptop) and
+    the page shows the progress; when a job holds the pool the page says why and offers the load as a button."""
+    from datetime import date, datetime
+    from ivan.web import nba as D
+    from ivan.web.nba import pages as PG, pipeline as P
+    from ivan.web.sports import Day, SlateInfo
+    d = date(2099, 1, 2)
+    lobby = SlateInfo(key="999002", day=d, lock=datetime(2099, 1, 2, 19), label="19:00 · 8 games", source="lobby", games=8,
+                      load={"url": "/slate", "fields": {"draft_group": "999002", "source": "lobby", "day": d.isoformat()}, "label": "load into the desk"})
+    monkeypatch.setattr(PG, "_days_of", lambda rows, now: [Day(day=d, label="Fri 01-02", tag="", slates=[lobby])])
+    import ivan.sports.nba.paths as PATHS
+    monkeypatch.setattr(PATHS, "ACTIVE_SLATE_JSON", tmp_path / "active.json")
+    started = []
+
+    def fake_refresh(what, dg, update_odds, lines=None):
+        started.append((what, dg)); D.desk.busy = what
+    monkeypatch.setattr(P, "_start_refresh", fake_refresh)
+    monkeypatch.setattr(P.runner, "active", lambda: None)
+    assert not D.desk.busy
+    try:
+        r = open_site.get("/nba/2099-01-02/999002/")
+        assert r.status_code == 200 and started == [("loading slate 999002", 999002)]
+        assert "loading slate 999002" in r.text and 'name="draft_group"' not in r.text
+        assert json.loads((tmp_path / "active.json").read_text())["draft_group"] == 999002
+        # while it loads, opening the page again does not start another
+        r = open_site.get("/nba/2099-01-02/999002/")
+        assert len(started) == 1
+    finally:
+        D.desk.busy = None
+    # a job holds the pool: the page says so and offers the button
+    monkeypatch.setattr(P.runner, "active", lambda: object())
+    r = open_site.get("/nba/2099-01-02/999002/")
+    assert r.status_code == 200 and len(started) == 1
+    assert "a job is running on the current slate" in r.text and 'name="draft_group" value="999002"' in r.text
 
 
 def test_nba_bar_keeps_the_slate_being_loaded(open_site, monkeypatch):

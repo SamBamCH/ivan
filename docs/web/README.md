@@ -15,8 +15,11 @@ server's `ivan-web` unit runs the same on the Tailscale IP, port 80 ([../deploym
 
 The bar on every page is the frame (`ivan.web.frame`, `templates/_frame.html`): **Ivan › sport › day ›
 slate › view**, each a dropdown that goes where it says, ‹ › through the slates in time order, the sport's
-tools on the right, sign out. Picking a slate that the sport has to fetch first (an NBA lobby slate) posts
-its load form instead of navigating, like the desk's old picker did.
+tools on the right, sign out. The page always shows the slate in the bar: a **day** opens on its main slate
+(`/<sport>/<day>/` redirects to the loaded slate of that day, else the one with the most games, else its only
+one, `Sport.main_slate`; `?pick` shows the day's list instead, as does a day whose main slate cannot be told),
+and a slate's page shows that slate, fetching it first when the sport has to (the NBA desk loads a lobby slate
+it does not hold when its page is opened, [nba-desk.md](nba-desk.md)).
 
 | Piece | Module | What |
 |---|---|---|
@@ -40,7 +43,8 @@ lineups, sims and edits). Every button is a script in `scripts/<sport>/`; the jo
 Each sport's `days(now)` lists what it knows, by the day the slate locks:
 
 - **NBA**: the DraftKings lobby's classic draft groups (today, tomorrow), every slate with an archive
-  capture, the loaded slate (`Desk.slate_days`). A lobby slate not loaded carries a **load** form.
+  capture, the loaded slate (`Desk.slate_days`), each with its game count. A lobby slate not loaded carries
+  a **load** form (the picker's button; its page starts the same load by itself).
 - **NFL**: the lobby's showdown and classic draft groups, the archive's ingest captures with the settle
   job's status (`slate_status`), the slates any backtest run replayed (`run_index`), and the working slate
   (the pool in `nfl_player`, keyed by the capture archived at its lock).

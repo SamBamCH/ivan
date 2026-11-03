@@ -85,6 +85,32 @@ def test_pull_ssh_asks_the_producer_to_publish_then_rsyncs_then_applies(tmp_path
     assert {k: v for k, v in changed2.items() if k != "published"} == {}
 
 
+def test_pull_ssh_asks_for_a_slate_and_waits_longer_for_it(tmp_path, monkeypatch):
+    """A consumer that picks a slate the producer does not hold asks 'publish nba <dg>' (the forced command loads it first);
+    a URL source cannot ask."""
+    cons = tmp_path / "consumer"; (cons / "data" / "nba").mkdir(parents=True)
+    _db(cons / "data" / "nba" / "nba_history.sqlite", [(9, "stale")])
+    seen = []
+
+    def fake_run(cmd, **kw):
+        if cmd[0] == "ssh":
+            seen.append((cmd[-3:], kw.get("timeout")))
+            raise subprocess.CalledProcessError(1, cmd, stderr="feed_serve: refused")
+        raise AssertionError(cmd)
+    monkeypatch.setattr(feed.subprocess, "run", fake_run)
+    try:
+        feed.pull_ssh("laptop", "nba", tmp_path / "state", log=lambda s: None, root=cons, slate=12345)
+    except RuntimeError as e:
+        assert "did not publish" in str(e)
+    assert seen == [(["publish", "nba", "12345"], 600)]
+    monkeypatch.setenv(feed.URL_ENV, "file:///x"); monkeypatch.delenv(feed.SSH_ENV, raising=False)
+    try:
+        feed.pull_from_producer("nba", tmp_path / "state", root=cons, slate=12345)
+        raise AssertionError("a URL source must refuse a slate ask")
+    except RuntimeError as e:
+        assert "only an ssh producer" in str(e)
+
+
 def test_every_sport_has_a_spec_and_the_nfl_reference_is_every_table_but_the_working_set(tmp_path):
     """The same pull for every sport: the NBA has a live part, the NFL and MMA a reference part only; the NFL's "*" resolves to
     every table except its per-slate working tables and MLB's, the MMA's to everything."""
