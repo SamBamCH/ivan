@@ -24,7 +24,7 @@ First-time setup, as your admin user on the server:
 sudo apt install python3-venv sqlite3 rsync
 git clone git@github.com:SamBamCH/ivan.git ~/ivan
 sudo ~/ivan/deploy/harden_server.sh        # user ivan, checkout to /opt/ivan/app, venv from requirements-server.txt, the sandboxed unit, ufw rule
-sudo -u ivan nano /opt/ivan/app/.env       # IVAN_PASSWORD_HASH (scripts/password.py), IVAN_PUBLIC=1, IVAN_FEED_SSH=sam-pratt@main-thinkpad (the laptop on the tailnet)
+sudo -u ivan nano /opt/ivan/app/.env       # IVAN_PASSWORD_HASH (scripts/password.py), IVAN_PUBLIC=1, IVAN_FEED_SSH=sam-pratt@100.91.103.23 (the laptop's tailnet IP, `tailscale ip -4` there; the server does not resolve MagicDNS names)
 sudo loginctl enable-linger ivan           # user timers survive logout
 ```
 

@@ -208,7 +208,7 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: Optional[str] = None, l
     return manifest
 
 
-SSH_ENV = "IVAN_FEED_SSH"        # the consumer's .env: the producer as ssh reaches it, e.g. sam-pratt@main-thinkpad (the tailnet name)
+SSH_ENV = "IVAN_FEED_SSH"        # the consumer's .env: the producer as ssh reaches it, e.g. sam-pratt@100.91.103.23 (the laptop's tailnet IP; the server does not resolve MagicDNS names)
 SSH_KEY_ENV = "IVAN_FEED_SSH_KEY"   # optional: the private key to use (default: ssh's own choice, ~/.ssh/id_ed25519)
 URL_ENV = "IVAN_FEED_URL"        # the older source: a directory (file://) or a feed server (http://, with IVAN_FEED_TOKEN)
 

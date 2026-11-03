@@ -18,7 +18,7 @@ its Refresh button pulls the laptop's feed over ssh instead (`ivan.sports.nba.de
 | Variable | Role | Meaning |
 |---|---|---|
 | `ODDS_API_KEY` | producer | the-odds-api key; player props cost about 12 credits per game, game lines about 3 per fetch |
-| `IVAN_FEED_SSH` | consumer | the producer as ssh reaches it, e.g. `sam-pratt@main-thinkpad`: Refresh pulls the laptop's feed over ssh (`feed.pull_ssh`; the key is bound on the laptop by `deploy/install_feed_key.sh`); `IVAN_FEED_SSH_KEY` names another private key |
+| `IVAN_FEED_SSH` | consumer | the producer as ssh reaches it, e.g. `sam-pratt@100.91.103.23` (the laptop's tailnet IP; the server does not resolve its MagicDNS name): Refresh pulls the laptop's feed over ssh (`feed.pull_ssh`; the key is bound on the laptop by `deploy/install_feed_key.sh`); `IVAN_FEED_SSH_KEY` names another private key |
 | `IVAN_FEED_URL` | consumer | the older source when `IVAN_FEED_SSH` is unset: `file:///…/data/feed` or `http://host:8790` for a feed server (then `IVAN_FEED_TOKEN` too) |
 | `IVAN_PASSWORD_HASH` | consumer | the site's one login, made by `scripts/password.py --set`; `IVAN_PASSWORD` plain text is the fallback (the old `IVAN_DESK_*` names still work) |
 | `IVAN_PUBLIC=1` | consumer | required when the site is reached through the Cloudflare tunnel; refuses to serve without a password |

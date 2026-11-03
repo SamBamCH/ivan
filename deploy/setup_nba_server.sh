@@ -14,7 +14,7 @@ cd "$ROOT"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 grep -qE "^IVAN(_DESK)?_PASSWORD(_HASH)?=." .env 2>/dev/null || { echo "!! IVAN_PASSWORD_HASH is missing in $ROOT/.env (scripts/password.py --set)"; exit 1; }
 if ! grep -q "^IVAN_FEED_SSH=" .env 2>/dev/null; then
-  echo "!! IVAN_FEED_SSH is missing in $ROOT/.env: the laptop as ssh reaches it, e.g. IVAN_FEED_SSH=sam-pratt@main-thinkpad"; exit 1
+  echo "!! IVAN_FEED_SSH is missing in $ROOT/.env: the laptop as ssh reaches it, e.g. IVAN_FEED_SSH=sam-pratt@100.91.103.23 (its tailnet IP: tailscale ip -4 on the laptop; the server does not resolve MagicDNS names)"; exit 1
 fi
 HOST="$(grep '^IVAN_FEED_SSH=' .env | cut -d= -f2- | tr -d '"'"'" )"
 mkdir -p data/nba/{input/rotations,output,models,jobs,logs,diagnostics/scorecard,derived,raw} data/feed/nba data/feed-state
