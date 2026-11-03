@@ -15,15 +15,6 @@ for unit in ivan-nba-archive ivan-nba-nightly ivan-nba-capture; do
 done
 systemctl --user daemon-reload
 systemctl --user enable --now ivan-nba-archive.timer ivan-nba-nightly.timer ivan-nba-capture.timer >/dev/null
-if [[ "${1:-}" == "--pull" ]]; then
-  # a consumer: pull the feed instead of capturing (the capture + nightly timers are disabled here)
-  for u in ivan-nba-pull.service ivan-nba-pull.timer; do sed "s|__ROOT__|$ROOT|g" "$ROOT/deploy/$u" > "$UNITS/$u"; done
-  systemctl --user daemon-reload
-  systemctl --user disable --now ivan-nba-capture.timer ivan-nba-nightly.timer 2>/dev/null || true
-  systemctl --user enable --now ivan-nba-pull.timer
-  systemctl --user list-timers --no-pager | grep -E "ivan-nba" || true
-  exit 0
-fi
 if [[ "${1:-}" == "--feed" ]]; then
   sed "s|__ROOT__|$ROOT|g" "$ROOT/deploy/ivan-feed.service" > "$UNITS/ivan-feed.service"
   systemctl --user daemon-reload

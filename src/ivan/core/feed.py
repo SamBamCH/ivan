@@ -46,7 +46,7 @@ FEED_DIR = PROJECT_ROOT / "data" / "feed"
 
 TABLES = {
     "nba": {
-        "live": ["nba_player", "odds", "nba_market_rate", "game_odds", "starting_lineups", "historical_contest_information", "payouts"],
+        "live": ["nba_player", "odds", "nba_market_rate", "game_odds", "starting_lineups", "historical_contest_information", "payouts", "nba_news"],
         "reference": ["nba_stats", "nba_stint", "nba_projection_capture", "archived_slate", "projection_snapshot", "classic_contest_metadata"],
         "files": ["data/nba/models", "data/nba/input/historical_lines.csv", "data/nba/derived", "data/nba/diagnostics/scorecard"],
         # the producer's edits (minutes pins, the sim / public overrides, the painted grids) travel with every live bundle;
@@ -98,10 +98,16 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
     manifest = _read_manifest(d)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S.%f")     # to the microsecond: two publishes in one second are two stamps (a pull compares them)
     parts = ["live", "reference"] if which == "both" else [which]
+    def stamped(prev: Optional[dict], listing_digest: str) -> str:
+        """The part's stamp: the previous one when the content is the same (a pull compares stamps, so an unchanged publish
+        is nothing new to the consumer), else this publish's."""
+        return prev["stamp"] if prev and prev.get("sha256") == listing_digest else stamp
+
     for part in parts:
         gz = d / f"{part}.sql.gz"
         n = dump_tables(db_path, spec[part], gz)
-        manifest[part] = {"stamp": stamp, "sha256": _sha(gz), "bytes": n, "tables": spec[part]}
+        sha = _sha(gz)
+        manifest[part] = {"stamp": stamped(manifest.get(part), sha), "sha256": sha, "bytes": n, "tables": spec[part]}
         log(f"feed {sport} {part}: {n / 1e6:.1f} MB")
         if part == "live" and spec.get("live_files"):
             lf = d / "live_files"; shutil.rmtree(lf, ignore_errors=True); lf.mkdir(parents=True)
@@ -114,7 +120,8 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
                     (lf / src.relative_to(lroot)).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, lf / src.relative_to(lroot))
             listing = {str(q.relative_to(lf)): _sha(q) for q in lf.rglob("*") if q.is_file()}
             (d / "live_files.json").write_text(json.dumps(listing, indent=0))
-            manifest["live_files"] = {"stamp": stamp, "count": len(listing)}
+            ldig = hashlib.sha256(json.dumps(listing, sort_keys=True).encode()).hexdigest()
+            manifest["live_files"] = {"stamp": stamped(manifest.get("live_files"), ldig), "sha256": ldig, "count": len(listing)}
             log(f"feed {sport} live files: {len(listing)} (the producer's pins and grids)")
         if part == "live" and spec.get("live_mirror"):
             # directories mirrored to the same path on the consumer (the projection store), replaced whole on a pull
@@ -125,7 +132,8 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
                     shutil.copytree(src, mir / rel, dirs_exist_ok=True)
             listing = {str(q.relative_to(mir)): _sha(q) for q in mir.rglob("*") if q.is_file()}
             (d / "live_mirror.json").write_text(json.dumps(listing, indent=0))
-            manifest["live_mirror"] = {"stamp": stamp, "count": len(listing), "dirs": list(spec["live_mirror"])}
+            mdig = hashlib.sha256(json.dumps(listing, sort_keys=True).encode()).hexdigest()
+            manifest["live_mirror"] = {"stamp": stamped(manifest.get("live_mirror"), mdig), "sha256": mdig, "count": len(listing), "dirs": list(spec["live_mirror"])}
             log(f"feed {sport} mirrored files: {len(listing)} (the projection store)")
         if part == "reference":
             files = d / "files"; shutil.rmtree(files, ignore_errors=True)
@@ -137,7 +145,8 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
                     (files / rel).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, files / rel)
             listing = {str(p.relative_to(files)): _sha(p) for p in files.rglob("*") if p.is_file()}
             (d / "files.json").write_text(json.dumps(listing, indent=0))
-            manifest["files"] = {"stamp": stamp, "count": len(listing)}
+            fdig = hashlib.sha256(json.dumps(listing, sort_keys=True).encode()).hexdigest()
+            manifest["files"] = {"stamp": stamped(manifest.get("files"), fdig), "sha256": fdig, "count": len(listing)}
     manifest["published_at"] = datetime.now().isoformat(timespec="seconds")
     if producer is not None:
         manifest["producer"] = producer
@@ -147,37 +156,71 @@ def publish(sport: str, out_dir: Path = FEED_DIR, which: str = "live", log: Log 
     return manifest
 
 
-PUSH_ENV = "IVAN_FEED_PUSH"      # e.g. ivan-server:/opt/ivan/app/data/feed  (rsync destination, the consumer's feed dir)
+SSH_ENV = "IVAN_FEED_SSH"        # the consumer's .env: the producer as ssh reaches it, e.g. sam-pratt@main-thinkpad (the tailnet name)
+SSH_KEY_ENV = "IVAN_FEED_SSH_KEY"   # optional: the private key to use (default: ssh's own choice, ~/.ssh/id_ed25519)
+URL_ENV = "IVAN_FEED_URL"        # the older source: a directory (file://) or a feed server (http://, with IVAN_FEED_TOKEN)
 
 
-def push(sport: str, dest: Optional[str] = None, out_dir: Path = FEED_DIR, log: Log = print, timeout: int = 120) -> bool:
+def producer_source() -> Optional[tuple]:
+    """How this machine reaches the producer, from the environment: ("ssh", user@host) when IVAN_FEED_SSH is set, else
+    ("url", url) when IVAN_FEED_URL is, else None (this machine is the producer, or stands alone)."""
+    host = os.environ.get(SSH_ENV, "").strip()
+    if host:
+        return ("ssh", host)
+    url = os.environ.get(URL_ENV, "").strip()
+    if url:
+        return ("url", url)
+    return None
+
+
+def _ssh_cmd(host: str, timeout: int = 15) -> List[str]:
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout}", "-o", "StrictHostKeyChecking=accept-new"]
+    key = os.environ.get(SSH_KEY_ENV, "").strip()
+    if key:
+        cmd += ["-i", key]
+    return cmd + [host]
+
+
+def pull_ssh(host: str, sport: str, state_dir: Path, db_path: Optional[Path] = None, log: Log = print, root: Path = PROJECT_ROOT,
+             timeout: int = 180) -> dict:
     """
-    Copy the published bundles to another machine with rsync (over ssh): the
-    consumer then pulls from its own disk (IVAN_FEED_URL=file:///.../data/feed).
-    The manifest goes last so a reader never sees a new manifest with an old
-    bundle. dest defaults to $IVAN_FEED_PUSH; nothing happens when it is unset.
+    The consumer's Refresh: fetch the producer's feed over ssh and apply it. One ssh command asks the producer to publish its
+    live bundle fresh (`publish`: the forced command of the key, deploy/feed_serve.sh, runs scripts/nba/feed.py publish
+    --which live there), then rsync copies the producer's feed directory to this machine's data/feed/<sport>/ (the forced
+    command answers rsync with rrsync, read only, rooted at the producer's data/feed; only what changed travels, so the
+    reference bundle moves once a night), then the usual pull from that directory replaces the feed's tables, the published
+    edits and the projection store here. Nothing is pushed from the producer and nothing runs there but on this request.
+    Returns what pull returned (what changed), plus "published": the producer's answer to publish.
     """
-    dest = dest or os.environ.get(PUSH_ENV, "").strip()
-    if not dest:
-        return False
-    src = Path(out_dir) / sport
-    if not (src / "manifest.json").exists():
-        return False
-    target = dest.rstrip("/") + f"/{sport}/"
-    ssh = "ssh -o BatchMode=yes -o ConnectTimeout=10"
-    base = ["rsync", "-az", "--delete", "-e", ssh]
+    local = Path(root) / "data" / "feed"
+    (local / sport).mkdir(parents=True, exist_ok=True)
     try:
-        host, _, remote_dir = target.partition(":")                      # rsync does not create parent directories
-        if remote_dir:
-            subprocess.run(ssh.split() + [host, f"mkdir -p '{remote_dir}'"], check=True, capture_output=True, timeout=timeout)
-        subprocess.run(base + ["--exclude", "manifest.json", f"{src}/", target], check=True, capture_output=True, timeout=timeout)
-        subprocess.run(base + [str(src / "manifest.json"), target], check=True, capture_output=True, timeout=timeout)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        err = (getattr(e, "stderr", b"") or b"").decode(errors="replace").strip().splitlines()
-        log(f"feed {sport}: push to {dest} failed: {err[-1] if err else type(e).__name__}")
-        return False
-    log(f"feed {sport}: pushed to {dest}")
-    return True
+        r = subprocess.run(_ssh_cmd(host) + ["publish", sport], check=True, capture_output=True, timeout=timeout, text=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        err = (getattr(e, "stderr", "") or "").strip().splitlines()
+        raise RuntimeError(f"the producer ({host}) did not publish: {err[-1] if err else type(e).__name__}") from e
+    published = (r.stdout or "").strip().splitlines()[-1:] or [""]
+    log(f"feed {sport}: {host} published ({published[0]})")
+    rsync = ["rsync", "-az", "--delete", "-e", " ".join(_ssh_cmd(host)[:-1]), f"{host}:{sport}/", f"{local / sport}/"]
+    try:
+        subprocess.run(rsync, check=True, capture_output=True, timeout=timeout, text=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        err = (getattr(e, "stderr", "") or "").strip().splitlines()
+        raise RuntimeError(f"rsync from {host} failed: {err[-1] if err else type(e).__name__}") from e
+    changed = pull(f"file://{local}", None, sport, state_dir, db_path=db_path, which="both", log=log, root=root)
+    changed["published"] = published[0]
+    return changed
+
+
+def pull_from_producer(sport: str, state_dir: Path, db_path: Optional[Path] = None, log: Log = print, root: Path = PROJECT_ROOT) -> dict:
+    """The consumer's pull, whichever way the environment names the producer (producer_source): ssh (pull_ssh) or a URL (pull)."""
+    src = producer_source()
+    if src is None:
+        raise RuntimeError(f"no producer configured: set {SSH_ENV} (user@host) or {URL_ENV} in .env")
+    kind, where = src
+    if kind == "ssh":
+        return pull_ssh(where, sport, state_dir, db_path=db_path, log=log, root=root)
+    return pull(where, os.environ.get("IVAN_FEED_TOKEN"), sport, state_dir, db_path=db_path, which="both", log=log, root=root)
 
 
 def _read_manifest(d: Path) -> dict:
@@ -244,18 +287,23 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
     state["checked_at"] = datetime.now().isoformat(timespec="seconds")
     changed = {}
     parts = ["live", "reference"] if which == "both" else [which]
+    def is_new(key: str) -> bool:
+        m = manifest.get(key)
+        return bool(m) and state.get(key, {}).get("stamp") != m["stamp"]
+
     for part in parts:
         m = manifest.get(part)
         if not m:
             continue
-        if state.get(part, {}).get("stamp") == m["stamp"]:
-            continue
-        gz = fetch(f"{base}/{part}.sql.gz", token, tmp / f"{part}.sql.gz")
-        if _sha(gz) != m["sha256"]:
-            raise RuntimeError(f"{part} bundle digest mismatch; try again")
-        changed[part] = apply(sport, gz, db_path, log)
-        state[part] = {"stamp": m["stamp"], "pulled_at": datetime.now().isoformat(timespec="seconds")}
-        if part == "live" and manifest.get("live_files") and spec.get("published_dir"):
+        if is_new(part):
+            gz = fetch(f"{base}/{part}.sql.gz", token, tmp / f"{part}.sql.gz")
+            if _sha(gz) != m["sha256"]:
+                raise RuntimeError(f"{part} bundle digest mismatch; try again")
+            changed[part] = apply(sport, gz, db_path, log)
+            state[part] = {"stamp": m["stamp"], "pulled_at": datetime.now().isoformat(timespec="seconds")}
+        # the files beside the tables each have their own stamp (publish keeps a stamp while the content is the same), so a
+        # grid saved without a projection change, or a store record dropped, still travels
+        if part == "live" and spec.get("published_dir") and is_new("live_files"):
             # the producer's edits become this machine's published base layer (replaced whole: a pin the producer lifted is lifted here too)
             listing = json.loads(fetch(f"{base}/live_files.json", token, tmp / "live_files.json").read_text())
             pub = root / spec["published_dir"]; shutil.rmtree(pub, ignore_errors=True); pub.mkdir(parents=True, exist_ok=True)
@@ -263,7 +311,7 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
                 fetch(f"{base}/live_files/{rel}", token, pub / rel)
             log(f"feed {sport}: {len(listing)} published edit file(s) (the producer's pins and grids)"); changed["live_files"] = len(listing)
             state["live_files"] = {"stamp": manifest["live_files"]["stamp"]}
-        if part == "live" and manifest.get("live_mirror"):
+        if part == "live" and is_new("live_mirror"):
             # the mirrored directories (the projection store) replaced whole: the consumer's frames are the producer's until it edits a team
             listing = json.loads(fetch(f"{base}/live_mirror.json", token, tmp / "live_mirror.json").read_text())
             for rel_dir in manifest["live_mirror"].get("dirs") or spec.get("live_mirror") or []:
@@ -272,7 +320,7 @@ def pull(base_url: str, token: Optional[str], sport: str, state_dir: Path, db_pa
                 fetch(f"{base}/live_mirror/{rel}", token, root / rel)
             log(f"feed {sport}: {len(listing)} mirrored file(s) (the projection store)"); changed["live_mirror"] = len(listing)
             state["live_mirror"] = {"stamp": manifest["live_mirror"]["stamp"]}
-        if part == "reference" and manifest.get("files"):
+        if part == "reference" and is_new("files"):
             listing = json.loads(fetch(f"{base}/files.json", token, tmp / "files.json").read_text())
             n = 0
             for rel, sha in listing.items():

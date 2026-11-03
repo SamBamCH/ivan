@@ -32,15 +32,15 @@ Read in this order:
                        projection (projection/live.py) ─► minutes_proj, fpts_mean/std, quantiles
                        desk pins + painted grids ─────────► minutes_overrides.csv, rotations/*.json
                                                               │
-                                           Publish ───────────┼─► feed.publish + push ───► data/feed ──► feed.pull (5 min)
-                                                              │                                             └► brother's desk
+                       every edit / Refresh writes the pool ─┼─◄── ssh: publish + rrsync (feed.pull_ssh) ◄── brother's desk: Refresh from laptop
+                                                              │
                        generate_lineups.py  ─► lineup pool    │
                        sim.py               ─► lineup_simulation_results + contest_sim_report
                        choose.py            ─► chosen_entries.*.csv (DK upload)
                                                               │
  lock ───► archive_at_lock.py (timer) records the pool at each tip
  after lock ───► fetch_standings.py (a minute after a tip) ─► lateswap.py re-optimises the open slots of our entries
- next morning ───► nightly.py: box scores, scorecards, stints, standings derive, feed push
+ next morning ───► nightly.py: box scores, scorecards, stints, standings derive, the reference feed bundle
                    standings.py scrape: the real fields (by hand, needs the DK Chrome login)
 ```
 

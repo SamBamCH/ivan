@@ -1,23 +1,23 @@
 # src/ivan/sports/nba/autopilot.py
 """
-Autopilot: the laptop refreshes and publishes on its own when nobody is at the desk.
+Autopilot: the laptop refreshes its pool on its own when nobody is at the desk.
 
 The capture tick (scripts/nba/capture.py, a user timer every 15 minutes) does nothing unless the switch is on.
 With it on, each tick refreshes the slate the desk left loaded (or the one that locks next), fetches the props at
-the usual offsets before lock, projects with the pins and grids on file, and publishes + pushes the feed, so the
-consumer's desk (the brother's) keeps getting fresh projections on a day the producer is not playing.
+the usual offsets before lock and projects with the pins and grids on file, so the pool the other desk pulls (its Refresh
+asks this laptop over ssh, feed.pull_ssh) is fresh on a day the producer is not playing.
 
 The switch is a file (data/nba/autopilot.json) so the desk, the tick and the command line agree without a shared
 process. Off by default. The desk toggles it (POST /autopilot) and shows the state; scripts/nba/autopilot.py on|off|status
 does the same from a terminal.
 
-The guard: the tick stands down while someone is working the desk, even with the switch on. The desk records its
-activity (data/nba/desk_activity.json: the last edit, the last publish) and its jobs leave their status under
-data/nba/jobs/; a tick within HOLD_MINUTES of an edit that has not been published since, or while a job is running,
+The guard: the tick stands down while a desk job is running, even with the switch on. The desk records its
+activity (data/nba/desk_activity.json: the last edit, the last write to the pool, which every edit is) and its jobs leave their status under
+data/nba/jobs/; a tick within HOLD_MINUTES of an edit not yet in the pool (none, since 2026-11-03), or while a job is running,
 skips and says why. `--force` on the tick overrides the switch and the guard for a test.
 
-The state of the switch and of the last tick travel with the feed manifest (feed.publish(..., producer=...)), so the
-consumer's desk can say "autopilot on, last tick 14:30" or "autopilot off: the laptop publishes by hand".
+The state of the switch and of the last tick travel with the feed manifest (feed.publish(..., producer=...), written when the
+consumer pulls), so the consumer's desk can say "autopilot on, last tick 14:30" or "autopilot off".
 """
 from __future__ import annotations
 

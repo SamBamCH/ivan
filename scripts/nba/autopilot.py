@@ -8,7 +8,7 @@ pushes the feed to the other desk while nobody is editing here. Same switch as t
 
     scripts/nba/autopilot.py status        the switch, the last tick, whether the tick would stand down right now, the timer
     scripts/nba/autopilot.py on            turn it on   (the desk shows "autopilot on")
-    scripts/nba/autopilot.py off           turn it off  (only Publish sends projections to the other desk)
+    scripts/nba/autopilot.py off           turn it off  (the other desk pulls whatever the pool holds when it refreshes)
     scripts/nba/autopilot.py tick          run one tick now, honouring the switch and the guard (what the timer does)
     scripts/nba/autopilot.py tick --force  run one tick now whatever the switch says (a test); extra args go to capture.py
 """

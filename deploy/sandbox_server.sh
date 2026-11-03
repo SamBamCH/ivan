@@ -48,7 +48,7 @@ venv/bin/python scripts/nba/feed.py pull --no-project 2>&1 | tail -2
 systemctl --user stop ivan-sandbox.service ivan-sandbox-pull.service 2>/dev/null || true
 systemd-run --user --unit ivan-sandbox --collect -p WorkingDirectory="$SB" -E PYTHONPATH="$SB/src" -E PYTHONUNBUFFERED=1 \
   "$SB/venv/bin/python" "$SB/scripts/serve.py" --host 127.0.0.1 --port "$PORT" >/dev/null
-# his 5-minute pull timer, as a loop: the sandbox picks up a push on its own and shows "new data · load" like his desk does
+# a pull loop from the server's own feed directory (what his Refresh fills): the sandbox follows his pulls on its own
 systemd-run --user --unit ivan-sandbox-pull --collect -p WorkingDirectory="$SB" -E PYTHONPATH="$SB/src" -E PYTHONUNBUFFERED=1 \
   "$SB/venv/bin/python" "$SB/scripts/nba/feed.py" pull --loop 5 >/dev/null
 code=000

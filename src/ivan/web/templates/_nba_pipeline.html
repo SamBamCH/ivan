@@ -6,7 +6,7 @@
   <div class="act-row">
     <span class="brand-sm">Actions</span>
     <span class="step"><i>1</i>
-      {% if consumer %}<form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the latest pool, lineups, props and projections the laptop published, and read the news">Refresh</button></form>
+      {% if consumer %}<form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="pull the laptop: it publishes its pool (players, statuses, lineups, props, lines, headlines, its edits and projections) and this desk copies it over ssh and applies it; your own edited teams are re-projected on top. Nothing is fetched from DraftKings or the odds API here">Refresh from laptop</button></form>
       {% else %}<form method="post" action="{{ root }}/refresh"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups + news (free)">Refresh DK</button></form>
       <form method="post" action="{{ root }}/refresh" title="the pool plus every game's spread and total (about 3 odds-api credits): what the games strip and the minutes model's blowout draw read"><input type="hidden" name="what" value="lines"><button>Lines</button></form>
       <form method="post" action="{{ root }}/refresh" onsubmit="return confirm('Fetch props now? About 12 odds-api credits per game, plus about 3 for the game lines.')" title="the pool, the player props and the game lines (about 12 credits a game)"><input type="hidden" name="what" value="props"><button>Props</button></form>{% endif %}

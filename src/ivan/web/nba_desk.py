@@ -64,8 +64,8 @@ FOUL_SHORT_SHARE = 0.8     # ...and minutes under this share of the player's rec
 ADD_BACK_MINUTES = 6.0     # a player the rotation left off, added back by hand, starts at his history or this many minutes
 
 HERE = Path(__file__).parent
-load_dotenv(PROJECT_ROOT / ".env")                                  # IVAN_FEED_URL (consumer) / IVAN_FEED_PUSH (producer)
-CONSUMER = bool(os.environ.get("IVAN_FEED_URL", "").strip())        # the server: takes what the laptop pushes, never fetches
+load_dotenv(PROJECT_ROOT / ".env")                                  # IVAN_FEED_SSH (a consumer: the laptop it pulls from) / IVAN_FEED_URL (older)
+CONSUMER = feed.producer_source() is not None                        # the server: pulls the laptop's pool on Refresh, never fetches DK, props or news itself
 engine = init_db("nba")
 ensure_schema(engine)
 app = FastAPI(title="Ivan · NBA desk", docs_url=None, redoc_url=None)
@@ -2519,17 +2519,6 @@ def publish(request: Request, pins: str = Form("")):
     return RedirectResponse(_here(request), status_code=303)
 
 
-def _push_feed(log) -> None:
-    """The laptop's projections to the server: publish the live bundle and rsync it (IVAN_FEED_PUSH); nothing on a consumer or when unset."""
-    if CONSUMER or not os.environ.get(feed.PUSH_ENV, "").strip():
-        return
-    try:
-        feed.publish("nba", which="live", log=lambda m: None, producer=autopilot.producer_info("desk"))
-        feed.push("nba", log=log)
-    except Exception as e:   # noqa: BLE001 - the publish itself succeeded; the push is best effort
-        log(f"feed push failed: {type(e).__name__}: {e}")
-
-
 def _news_note(r: dict) -> str:
     """'; news: 3 new, 1 on this slate: X · headline' after a refresh read Rotowire (the desk's news clock moves too)."""
     desk.news_checked_at = r["fetched_at"]
@@ -2568,15 +2557,15 @@ def autopilot_toggle(request: Request, on: str = Form("")):
         return RedirectResponse(_here(request), status_code=303)
     with LOCK:
         st = autopilot.set_on(bool(on), by="desk")
-        desk.flash.append("autopilot " + ("on: the tick refreshes, fetches props at the offsets and publishes every 15 minutes while nobody is editing here"
-                                          if st["on"] else "off: only Publish sends projections to the other desk"))
+        desk.flash.append("autopilot " + ("on: the tick refreshes, fetches props at the offsets and re-projects every 15 minutes while no job runs here; the other desk pulls it on its Refresh"
+                                          if st["on"] else "off: the pool moves only when you refresh or edit; the other desk pulls whatever it holds"))
     return RedirectResponse(_here(request), status_code=303)
 
 
 def _news_loop():
     while True:
         time.sleep(NEWS_AUTO_SECONDS)
-        if not getattr(desk, "news_auto", False):
+        if CONSUMER or not getattr(desk, "news_auto", False):     # a consumer's headlines come with the laptop's pool
             continue
         try:
             with LOCK:
@@ -2641,37 +2630,31 @@ def refresh(request: Request, what: str = Form("dk")):
     """dk: pool + statuses + Rotowire starters and news (free). lines: also the game lines, spread and total (~3 credits).
     props: also the player props and the game lines (~12 credits a game). A consumer pulls the feed and reads the news."""
     with LOCK:
-        feed_url = os.environ.get("IVAN_FEED_URL", "").strip()
         dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
-        if feed_url:                                             # a consumer never fetches: it takes what the producer pushed
+        if CONSUMER:                                             # Refresh from laptop: the producer publishes on request, this desk copies and applies it (feed.pull_ssh)
             try:
-                from ivan.core import feed
                 from ivan.sports.nba import changes as CH
                 before = CH.snapshot(desk.session)
-                changed = feed.pull(feed_url, os.environ.get("IVAN_FEED_TOKEN"), "nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
-                if changed:
+                changed = feed.pull_from_producer("nba", NBA_DATA_DIR.parent / "feed-state", log=desk.flash.append)
+                tables = {k: v for k, v in changed.items() if k != "published"}
+                if tables:
                     desk.session.expire_all()                        # the pool was replaced underneath this session
                     r = after_pull(desk.session, dg, log=desk.flash.append)
                     desk.changes = dict(at=datetime.now(), teams=CH.diff(before, CH.snapshot(desk.session)))
                     if r["moved"]:
                         desk.flash.append(f"the laptop moved to slate {r['draft_group']}: your edits of the previous slate are filed, this slate's are back, the previous slate's lineups cleared")
                     if r["teams"]:
-                        desk.flash.append(f"the published projection is in; your own edits re-projected on top for {', '.join(sorted(r['teams']))}")
+                        desk.flash.append(f"the laptop's pool is in (headlines included); your own edits re-projected on top for {', '.join(sorted(r['teams']))}")
                     else:
-                        desk.flash.append("the published projection is in, as published")
+                        desk.flash.append("the laptop's pool is in, as it stands there (headlines included)")
                 else:
                     fs = feed.status("nba")
                     prod = fs.get("producer") or {}
-                    when = str(fs.get("published_at") or "")[11:16]
-                    desk.flash.append("nothing new: the laptop has not published since " + (when or "the last pull")
-                                      + (f" ({prod.get('source')}; autopilot {'on' if prod.get('autopilot') else 'off'})" if prod else ""))
+                    desk.flash.append("nothing new: the laptop's pool has not changed since the last pull"
+                                      + (f" (autopilot {'on' if prod.get('autopilot') else 'off'} there)" if prod else ""))
+                desk.news_checked_at = datetime.now()                # the headlines came with the pull
             except Exception as e:   # noqa: BLE001
-                desk.flash.append(f"feed pull failed: {type(e).__name__}: {e}")
-            try:                                                 # the feed carries no headlines: a consumer reads Rotowire itself (free)
-                r = _news_check(lambda m: None)
-                desk.flash.append(f"news: {r['new']} new" + (": " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]) if r["on_slate"] else ", none on this slate"))
-            except Exception as e:   # noqa: BLE001
-                desk.flash.append(f"news check failed: {type(e).__name__}: {e}")
+                desk.flash.append(f"pull from the laptop failed: {type(e).__name__}: {e}")
         elif dg is None:
             desk.flash.append("no draft group in the pool; pick a slate first")
         elif runner.active():

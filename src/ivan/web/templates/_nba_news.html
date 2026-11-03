@@ -20,7 +20,7 @@
     <h3>News</h3>
     <span class="muted small">{{ nt.questionable|length }} questionable{% if open_q %} · <b>{{ open_q|length }} with no call</b>{% endif %} · {{ nt.new_out|length }} newly out · {{ nt.out|length }} already out</span>
     <span class="spacer"></span>
-    <form method="post" action="{{ root }}/news/auto" class="news-auto" title="read Rotowire's news every 5 minutes while the desk runs; every Refresh reads it too (off: only Refresh does)"><label><input type="checkbox" name="on" value="1" {% if news.auto %}checked{% endif %} onchange="this.form.submit()"> auto every 5 min</label></form>
+    {% if not consumer %}<form method="post" action="{{ root }}/news/auto" class="news-auto" title="read Rotowire's news every 5 minutes while the desk runs; every Refresh reads it too (off: only Refresh does)"><label><input type="checkbox" name="on" value="1" {% if news.auto %}checked{% endif %} onchange="this.form.submit()"> auto every 5 min</label></form>{% endif %}
     <span class="muted small" title="headlines on file about this slate's players in the last 24h · when the page was last read">read {% if news.checked %}{{ news.checked }}{% else %}not yet (Refresh reads it){% endif %} · {{ news.n_slate }} on this slate (24h)</span>
   </div>
   <table class="players news-table">

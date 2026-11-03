@@ -4,7 +4,7 @@ The autopilot tick. Runs every 15 minutes from a user timer (deploy/install_nba_
 and does nothing unless the autopilot switch is on (ivan.sports.nba.autopilot: scripts/nba/autopilot.py on|off|status,
 or the desk's header). With the switch on, each tick:
 
-  * stands down while someone is at the desk: an edit in the last 30 minutes not published since, or a running desk job
+  * stands down while a desk job is running (an edit counts as published the moment it is written, so edits never hold it)
   * finds today's classic slates in the DK lobby and picks ONE: the slate the desk left loaded
     (data/nba/active_slate.json) while it has not locked, else the one that locks next
   * refreshes it the way the desk's Refresh does (ingest.run_ingest: the fetch outside the database, then the pool
@@ -12,9 +12,8 @@ or the desk's header). With the switch on, each tick:
     edits filed and restored on a switch): DK pool + statuses + Rotowire every tick; the player props (about 12 odds-api
     credits per game) when the slate crosses an offset before lock (360, 180, 90, 45, 15 minutes), the game lines
     (about 3 credits) with the props and once at the first tick of the day; the slate's contests and payouts (free)
-  * publishes the live feed bundle and pushes it to the consumer (IVAN_FEED_PUSH) with a producer note, so the other
-    desk's header can say who published and when
-  * records what it did (or why it stood down) in data/nba/autopilot.json for both desks' headers
+  * records what it did (or why it stood down) in data/nba/autopilot.json for both desks' headers; the other desk pulls
+    the pool itself (its "Refresh from laptop", feed.pull_ssh), nothing is pushed from here
 
 State (which props offsets are done per slate, the props fetches of the day) lives in data/nba/capture_state.json.
 Until 2026-10-27 the tick captured every slate of the day in turn and wrote the pool table by table; the archive timer
@@ -90,7 +89,6 @@ def main() -> int:
     ap.add_argument("--max-props-per-day", type=int, default=20, help="safety cap on props fetches per day (each costs ~12 credits per game)")
     ap.add_argument("--no-props", action="store_true", help="never fetch props or game lines (free tick)")
     ap.add_argument("--no-contests", action="store_true", help="skip the contest + payout store")
-    ap.add_argument("--no-feed", action="store_true", help="skip publishing and pushing the live feed bundle")
     ap.add_argument("--sims", type=int, default=2000)
     ap.add_argument("--grace", type=int, default=5, help="minutes after lock during which a slate is still refreshed")
     ap.add_argument("--only", type=int, default=None, help="draft group id: this slate, whatever the desk picked")
@@ -198,17 +196,8 @@ def main() -> int:
     slate_st.update(lock=str(full.lock), last_tick=str(now), name=s["name"])
     save_state(st)
     result = f"{str(s['name']).replace('NBA ', '')[:40]}: {len(full.players)} players refreshed, props {'fetched' if due else 'kept'}"
-    detail = dict(draft_group=s["id"], props=bool(due), lock=str(full.lock), pushed=None)
-    autopilot.record_tick(result, ok=True, detail=detail)            # before the publish, so the manifest carries this tick
-    if not args.no_feed:
-        pushed = False
-        try:
-            from ivan.core import feed
-            feed.publish("nba", which="live", log=log.info, producer=autopilot.producer_info("autopilot"))
-            pushed = feed.push("nba", log=log.info)                  # to the consumer when IVAN_FEED_PUSH is set
-        except Exception as e:   # noqa: BLE001 - the feed is a convenience for the other machine
-            log.warning(f"feed publish failed: {type(e).__name__}: {e}")
-        autopilot.record_tick(result + (", pushed" if pushed else ", not pushed"), ok=True, detail=dict(detail, pushed=pushed))
+    detail = dict(draft_group=s["id"], props=bool(due), lock=str(full.lock))
+    autopilot.record_tick(result, ok=True, detail=detail)            # the other desk reads this note when it pulls (feed.publish, on its request)
     return 0
 
 

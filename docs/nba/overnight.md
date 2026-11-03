@@ -9,8 +9,7 @@ running after logout only with `sudo loginctl enable-linger <user>`.
 |---|---|---|---|
 | `ivan-nba-nightly.timer` | 06:45, 12:45, 18:45 (+ up to 5 min), `Persistent=true` so a missed slot runs at wake | `scripts/nba/nightly.py` | `data/nba/logs/nightly.log` |
 | `ivan-nba-archive.timer` | every 5 min, 09:00–23:59 | `scripts/nba/archive_at_lock.py` | `data/nba/logs/archive.log` |
-| `ivan-nba-capture.timer` | every 15 min, 09:00–23:45; does nothing unless the **autopilot** switch is on (`scripts/nba/autopilot.py`, the desk header) | `scripts/nba/capture.py` (one slate through `ingest.run_ingest`, props at the offsets, feed publish + push) | `data/nba/logs/capture.log` |
-| `ivan-nba-pull.timer` (consumer) | every 5 min | `scripts/nba/feed.py pull` | `journalctl --user -u ivan-nba-pull` |
+| `ivan-nba-capture.timer` | every 15 min, 09:00–23:45; does nothing unless the **autopilot** switch is on (`scripts/nba/autopilot.py`, the desk header) | `scripts/nba/capture.py` (one slate through `ingest.run_ingest`, props at the offsets; the server pulls the result on its Refresh) | `data/nba/logs/capture.log` |
 
 ```bash
 systemctl --user list-timers | grep ivan-nba              # next and last runs
@@ -39,8 +38,8 @@ In order, each step guarded so a failure does not stop the next (except the box 
    derived folder yet. It never fetches; the scrape is yours (below).
 5. **Experience** (`experience.fetch`, also `scripts/nba/experience.py fetch`): nba_api's all-players list, one
    request, each player's first NBA season into `data/nba/derived/players/experience.json` (the desk's rookie marks).
-6. **Feed**: `feed.publish("nba", which="both")` then `feed.push` to `IVAN_FEED_PUSH`, so the server's
-   reference tables (box scores, stints, captures, models) and `data/nba/derived` follow.
+6. **Feed**: `feed.publish("nba", which="both")` writes the reference bundle (box scores, stints, captures, models,
+   `data/nba/derived`) into `data/feed/nba/`; the server's next Refresh rsyncs it over (nothing is pushed).
 
 A laptop that wakes with no network yet fails at step 1 with a DNS error and nothing else runs; the
 next slot or `systemctl --user start ivan-nba-nightly.service` repeats it. The job is idempotent.
@@ -95,8 +94,7 @@ gzipped SQL dump plus a manifest with stamps and digests; the consumer replaces 
 
 ```bash
 venv/bin/python scripts/nba/feed.py publish [--which live|reference|both]    # write data/feed/nba/*
-venv/bin/python scripts/nba/feed.py push [DEST]                              # rsync to DEST or $IVAN_FEED_PUSH
-venv/bin/python scripts/nba/feed.py pull [--url file:///opt/ivan/app/data/feed] [--no-project] [--loop 5]
+venv/bin/python scripts/nba/feed.py pull [--no-project] [--loop 5]          # the consumer: ssh publish + rsync + apply (IVAN_FEED_SSH), or --url
 venv/bin/python scripts/nba/feed.py apply <dir>                              # apply bundles already on disk
 ```
 
@@ -116,5 +114,5 @@ consumer that cannot receive rsync.
 grep -n "box scores for\|scorecards written\|stints\|standings derived\|pushed" data/nba/logs/nightly.log | tail
 venv/bin/python scripts/nba/validate.py history                      # the headline numbers per scored slate
 venv/bin/python scripts/nba/standings.py status --days 3
-ssh ivan-server 'ls -la /opt/ivan/app/data/feed-state/ /opt/ivan/app/data/feed/nba/'   # what was pushed and what the server last applied
+ssh ivan-server 'ls -la /opt/ivan/app/data/feed-state/ /opt/ivan/app/data/feed/nba/'   # the laptop's feed as the server last pulled it, and what it applied
 ```

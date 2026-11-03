@@ -1,5 +1,7 @@
 """The data feed (ivan.core.feed): publish from one database, pull from a directory into another, only the feed's tables replaced."""
+import shutil
 import sqlite3
+import subprocess
 
 from ivan.core import feed
 
@@ -51,6 +53,42 @@ def test_live_bundle_mirrors_the_projection_store_whole(tmp_path):
     assert sorted(p.name for p in cstore.iterdir()) == ["BOS.pkl"]
 
 
-def test_push_is_a_no_op_without_a_destination(tmp_path, monkeypatch):
-    monkeypatch.delenv(feed.PUSH_ENV, raising=False)
-    assert feed.push("nba", out_dir=tmp_path, log=lambda s: None) is False
+def test_pull_ssh_asks_the_producer_to_publish_then_rsyncs_then_applies(tmp_path, monkeypatch):
+    """The consumer's Refresh: one ssh 'publish', one read-only rsync of the producer's feed directory into ours, then the
+    ordinary pull from that directory. ssh and rsync are stood in for: the producer's feed is published into the directory
+    the rsync would have filled."""
+    prod = tmp_path / "producer"; cons = tmp_path / "consumer"
+    (prod / "data" / "nba").mkdir(parents=True); (cons / "data" / "nba").mkdir(parents=True)
+    _db(prod / "data" / "nba" / "nba_history.sqlite", [(1, "a"), (2, "b")]); _db(cons / "data" / "nba" / "nba_history.sqlite", [(9, "stale")])
+    calls = []
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kw):
+        if cmd[0] not in ("ssh", "rsync"):
+            return real_run(cmd, **kw)                                                                            # feed.publish dumps with sqlite3
+        calls.append(cmd)
+        if cmd[0] == "ssh":
+            assert cmd[-2:] == ["publish", "nba"] and "BatchMode=yes" in " ".join(cmd)
+            feed.publish("nba", out_dir=prod / "data" / "feed", which="live", log=lambda s: None, root=prod)       # what feed_serve.sh does on the laptop
+            return subprocess.CompletedProcess(cmd, 0, stdout="live 20261103-120000.000001 reference None\n", stderr="")
+        assert cmd[0] == "rsync" and cmd[1:4] == ["-az", "--delete", "-e"] and cmd[-2] == "laptop:nba/"
+        shutil.copytree(prod / "data" / "feed" / "nba", cmd[-1], dirs_exist_ok=True)                              # what rrsync would have served
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(feed.subprocess, "run", fake_run)
+    changed = feed.pull_ssh("laptop", "nba", tmp_path / "state", log=lambda s: None, root=cons)
+    assert [c[0] for c in calls] == ["ssh", "rsync"]
+    assert "nba_player" in changed["live"] and changed["published"].startswith("live 20261103")
+    con = sqlite3.connect(cons / "data" / "nba" / "nba_history.sqlite")
+    assert con.execute("select name from nba_player order by id").fetchall() == [("a",), ("b",)]
+    # nothing new on the producer: the pull says so without touching the tables
+    changed2 = feed.pull_ssh("laptop", "nba", tmp_path / "state", log=lambda s: None, root=cons)
+    assert {k: v for k, v in changed2.items() if k != "published"} == {}
+
+
+def test_producer_source_reads_the_environment(monkeypatch):
+    monkeypatch.delenv(feed.SSH_ENV, raising=False); monkeypatch.delenv(feed.URL_ENV, raising=False)
+    assert feed.producer_source() is None
+    monkeypatch.setenv(feed.URL_ENV, "file:///x/feed")
+    assert feed.producer_source() == ("url", "file:///x/feed")
+    monkeypatch.setenv(feed.SSH_ENV, "sam@laptop")                       # ssh wins when both are set
+    assert feed.producer_source() == ("ssh", "sam@laptop")

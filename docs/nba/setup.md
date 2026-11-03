@@ -11,15 +11,15 @@ What a machine needs before the NBA side runs. The shared install (venv, `pip in
 | **Consumer** | the server | nothing; takes the feed the producer pushes | the same desk at `/nba` in the server's Ivan site, `feed.pull` on a timer |
 
 A machine is a consumer when `IVAN_FEED_URL` is set in `.env`; the desk then never fetches and
-its Refresh button pulls the feed instead (`src/ivan/web/nba_desk.py`, `CONSUMER`).
+its Refresh button pulls the laptop's feed over ssh instead (`src/ivan/web/nba_desk.py`, `CONSUMER`).
 
 ## Environment (`.env` at the repo root)
 
 | Variable | Role | Meaning |
 |---|---|---|
 | `ODDS_API_KEY` | producer | the-odds-api key; player props cost about 12 credits per game, game lines about 3 per fetch |
-| `IVAN_FEED_PUSH` | producer | where `feed.push` rsyncs the bundles, e.g. `ivan-server:/opt/ivan/app/data/feed` |
-| `IVAN_FEED_URL` | consumer | `file:///opt/ivan/app/data/feed` when the producer pushes to this disk, or `http://host:8790` for a feed server (then `IVAN_FEED_TOKEN` too) |
+| `IVAN_FEED_SSH` | consumer | the producer as ssh reaches it, e.g. `sam-pratt@main-thinkpad`: Refresh pulls the laptop's feed over ssh (`feed.pull_ssh`; the key is bound on the laptop by `deploy/install_feed_key.sh`); `IVAN_FEED_SSH_KEY` names another private key |
+| `IVAN_FEED_URL` | consumer | the older source when `IVAN_FEED_SSH` is unset: `file:///…/data/feed` or `http://host:8790` for a feed server (then `IVAN_FEED_TOKEN` too) |
 | `IVAN_PASSWORD_HASH` | consumer | the site's one login, made by `scripts/password.py --set`; `IVAN_PASSWORD` plain text is the fallback (the old `IVAN_DESK_*` names still work) |
 | `IVAN_PUBLIC=1` | consumer | required when the site is reached through the Cloudflare tunnel; refuses to serve without a password |
 | `IVAN_DK_USERNAME` | producer | the DraftKings login the standings scrape and the late swap use through the Chrome profile |

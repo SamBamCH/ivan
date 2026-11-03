@@ -25,7 +25,7 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
   A team's page (below) sits one level under the slate: **Ivan › NBA › day › slate › TEAM**.
 - **locks in / locked**: the loaded slate's countdown (prefixed "loaded slate" on another slate's page).
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
-  fetches props at the offsets and publishes + pushes every 15 minutes while nobody is editing here; the
+  fetches props at the offsets and re-projects every 15 minutes while no desk job runs, so the server's Refresh finds a fresh pool; the
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See
   [../nba/game-day.md](../nba/game-day.md#2-refresh-through-the-day). On a consumer the same spot shows
   the laptop's state instead: autopilot on/off, who published last (desk, autopilot, nightly) and when.
@@ -281,19 +281,19 @@ standings CSVs exported by hand under the same raw path.
 
 ## Consumer mode (the server)
 
-Set by `IVAN_FEED_URL` in `.env`. The desk never fetches: Refresh pulls the feed (the same pull the
-`ivan-nba-pull.timer` makes every 5 minutes, at once), the slate shown is the one the producer
-published, the producer's pins and grids arrive as `data/nba/input/published/` and show as green
-placeholders; the consumer's own edits (amber) sit on top in its own files, a blank box falls back to
-the published value, Clear locks drops only its own layer, and a pull re-projects only the teams it
-edited. The card says "published" and counts "N of your own". No props button. Refresh can only
-bring what the laptop published: when nothing is new it says so with the time of the laptop's last
-publish and its autopilot state, and the freshness strip has a **published** entry (the bundle's
-time; hover for the last pull). The header badge "laptop autopilot on/off · desk|autopilot|nightly
-published HH:MM" reads the pull state (`data/feed-state/nba.json`, `feed.status`).
+Set by `IVAN_FEED_SSH` in `.env` (the laptop as ssh reaches it; the older `IVAN_FEED_URL` still works). The desk never
+fetches DraftKings, the odds API or Rotowire. Its one data button is **Refresh from laptop** (`/refresh` =
+`scripts/nba/feed.py pull`, `feed.pull_ssh`): the laptop publishes its live bundle on request (the pool with every
+edit written into it, the published pins and grids, the projection store, the headlines), the server copies it over
+ssh and applies it; the slate shown is the one the laptop holds, the laptop's pins and grids arrive as
+`data/nba/input/published/` and show as green placeholders; the consumer's own edits (amber) sit on top in its own
+files, a blank box falls back to the published value, Clear locks drops only its own layer, and a pull re-projects
+only the teams it edited. The card says "published" and counts "N of your own". No props, lines or news buttons, no
+news auto box: the headlines come with the pool. When nothing changed on the laptop, Refresh says so. The header
+badge "laptop autopilot on/off · published HH:MM" reads the pull state (`data/feed-state/nba.json`, `feed.status`).
 
 To try to break a consumer desk without touching his: `deploy/sandbox_server.sh up` runs a second consumer
-on the server, fed by the same pushed directory, reached over an ssh tunnel at `http://127.0.0.1:8002/nba/`
+on the server, fed by the same directory his Refresh fills, reached over an ssh tunnel at `http://127.0.0.1:8002/nba/`
 (see [../deployment.md](../deployment.md#a-sandbox-consumer-on-the-server)). To test this desk from the
 producer without a browser on the other machine:
 `scripts/nba/consumer_check.py` (see [../deployment.md](../deployment.md)) logs in with a cookie minted on
@@ -319,10 +319,10 @@ in the main folders, as the live desk's would. The filed edits (`data/nba/input`
 backtest's overlay shows grids drawn on the live desk only after the merge.
 
 It shows the live slate. Its pins, grids, jobs and autopilot switch live under the worktree's own `data/`, so the
-live desk's edits are not in it and nothing typed here reaches the live desk; with no `.env` it never pushes the
-feed. **Refresh, Publish, Generate and Sim still write the shared database** (the pool, the projections, the
-lineups), so on a slate day look and click but leave those to the live desk, or point `IVAN_NBA_DB_URL` at a copy
-of the sqlite file (2.7 GB) for a free hand. A Refresh also reads the news, which only adds headlines.
+live desk's edits are not in it and nothing typed here reaches the live desk. **Refresh, every team-page edit,
+Generate and Sim write the shared database** (the pool, the projections, the lineups), so on a slate day look but
+leave those to the live desk, or copy the sqlite file (5 GB, `sqlite3 … ".backup …"`) into the worktree's `data/nba/`
+and run without `IVAN_NBA_DB_URL` for a free hand (the branch of 2026-11-03 was built that way). A Refresh also reads the news, which only adds headlines.
 
 ## Login and public access
 

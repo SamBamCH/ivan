@@ -49,9 +49,9 @@ working the desk but the other desk still plays. With it on, `ivan-nba-capture.t
 `scripts/nba/capture.py` every 15 minutes: it refreshes the loaded slate (or the one that locks next)
 through the same one-transaction path as Refresh, fetches the props when the slate crosses 360, 180,
 90, 45 and 15 minutes before lock (about 12 credits per game each, at most 20 fetches a day), the
-game lines with them, projects with the pins and grids on file, and publishes + pushes the feed. It
-stands down while you are at the desk: an edit in the last 30 minutes not published since, or a
-running job (`autopilot.desk_hold`). The switch is `data/nba/autopilot.json`; the last tick's result
+game lines with them, and projects with the pins and grids on file, so the pool the server pulls (its
+Refresh from laptop) is fresh. It stands down while a desk job is running (`autopilot.desk_hold`; an
+edit counts as published the moment it is written, so edits never hold it). The switch is `data/nba/autopilot.json`; the last tick's result
 shows next to the box and in the other desk's header. Off by default; turn it off when you play.
 `scripts/nba/autopilot.py tick --force` runs one tick from a terminal whatever the switch says.
 
