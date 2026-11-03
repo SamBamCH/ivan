@@ -37,7 +37,7 @@ from ivan.sports.nba.paths import ACTIVE_SLATE_JSON, NBA_DATA_DIR, LOGS_DIR
 
 
 def chosen_slate() -> int | None:
-    """The draft group picked on the desk (ivan.web.nba_desk.switch_slate), or None."""
+    """The draft group picked on the desk (ivan.web.nba.pipeline.switch_slate), or None."""
     try:
         return int(json.loads(ACTIVE_SLATE_JSON.read_text())["draft_group"])
     except (OSError, ValueError, KeyError, TypeError):

@@ -1,5 +1,5 @@
 {# the contests section: the entries file (upload), its contests against the slate loaded at the top, our latest picks and
-   their exposures. Built with the board (nba_desk._contests_ctx); an upload reloads the page. #}
+   their exposures. Built with the board (ivan.web.nba.pipeline._contests_ctx); an upload reloads the page. #}
 {% set cx = contests_ctx %}
 <details class="hist-box contests-box" id="contests" {% if not cx.entries.exists or cx.other %}open{% endif %}><summary>Contests <span class="muted">{% if cx.entries.exists %}{{ cx.entries.entries or 0 }} entries in {{ cx.contests|length }} contest{{ '' if cx.contests|length == 1 else 's' }}{% if cx.other %} · <b class="bad">{{ cx.other }} of another slate</b>{% endif %}{% else %}no entries file yet{% endif %}</span></summary>
   <div class="pipe-row">

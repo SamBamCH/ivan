@@ -1,6 +1,6 @@
 # The NBA desk
 
-`src/ivan/web/nba_desk.py` (FastAPI + Jinja + htmx, templates `src/ivan/web/templates/nba_desk.html`
+`src/ivan/web/nba/` (one module per concern: `core.py` the app and the Desk object, `pages.py`, `team.py`, `pipeline.py`, `lateswap.py`, `exposures.py`, `exports.py`; the desk's model is `ivan.sports.nba.desk`, no web imports; FastAPI + Jinja + htmx, templates `src/ivan/web/templates/nba_desk.html`
 and `_nba_*.html`). One page to manage a slate in the last minutes before lock, plus the pipeline
 panel, the exposures and the late swap. Mounted at `/nba` inside the one Ivan UI (`scripts/serve.py`,
 [README.md](README.md)); the login is the site's. Every link carries the mount prefix (`root`). The flow of

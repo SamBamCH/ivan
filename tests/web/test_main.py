@@ -78,7 +78,7 @@ def test_tunnel_requests_need_a_password(open_site):
 
 def test_nba_bar_keeps_the_slate_being_loaded(open_site, monkeypatch):
     """While a load runs the desk still holds the old pool; the bar must show the slate asked for, not the one being replaced."""
-    from ivan.web import nba_desk as D
+    from ivan.web import nba as D
     monkeypatch.setattr(D.desk, "busy", "loading slate 999001")
     r = open_site.get("/nba/2099-01-02/999001/")
     assert r.status_code == 200
@@ -88,7 +88,7 @@ def test_nba_bar_keeps_the_slate_being_loaded(open_site, monkeypatch):
 
 def test_nba_step_knobs_move_only_their_own(open_site, monkeypatch):
     """Generate and sim send their popover's knobs only; the others, and the fresh-pool box, keep what the desk last had."""
-    from ivan.web import nba_desk as D
+    from ivan.web import nba as D
     monkeypatch.setattr(D.runner, "active", lambda: [object()])          # "a job is running": the route stores the knobs, starts nothing
     monkeypatch.setitem(D.pipeline_form, "lineups", "12345")
     monkeypatch.setitem(D.pipeline_form, "fresh", "on")
@@ -102,7 +102,7 @@ def test_nba_step_knobs_move_only_their_own(open_site, monkeypatch):
 def test_nba_slate_page_reads_and_the_team_page_edits(open_site):
     """The slate page carries no projection edit control; every team chip and news name is a link to the team's own page, which
     holds the card. An old /desk/?open=TEAM link lands on the team page."""
-    from ivan.web import nba_desk as D
+    from ivan.web import nba as D
     dg, lock = D._loaded_slate()
     if dg is None or lock is None or not D.desk.slate.teams():
         pytest.skip("no slate loaded in this database")

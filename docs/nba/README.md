@@ -4,7 +4,7 @@ DraftKings NBA classic slates: the laptop fetches the slate and the books, proje
 minutes times per-minute rates, builds a field, simulates the contests you entered and picks the
 lineups to upload. A second machine (the server) runs the same desk for someone else on the
 projections the laptop publishes. Everything lives in `src/ivan/sports/nba/`, the commands in
-`scripts/nba/`, the desk in `src/ivan/web/nba_desk.py`.
+`scripts/nba/`, the desk in `src/ivan/web/nba/` (its model in `src/ivan/sports/nba/desk/`).
 
 Read in this order:
 

@@ -11,7 +11,7 @@ What a machine needs before the NBA side runs. The shared install (venv, `pip in
 | **Consumer** | the server | nothing; takes the feed the producer pushes | the same desk at `/nba` in the server's Ivan site, `feed.pull` on a timer |
 
 A machine is a consumer when `IVAN_FEED_URL` is set in `.env`; the desk then never fetches and
-its Refresh button pulls the laptop's feed over ssh instead (`src/ivan/web/nba_desk.py`, `CONSUMER`).
+its Refresh button pulls the laptop's feed over ssh instead (`ivan.sports.nba.desk.state.CONSUMER`).
 
 ## Environment (`.env` at the repo root)
 

@@ -14,7 +14,7 @@ site is not public), one frame (ivan.web.frame). Each sport is a sub-application
     /<sport>/<day>/<key>/ the slate, ?view= one of the sport's views (the sport module)
     /<sport>/...          the sport's own actions, partials, exports and tools
 
-    nba   ivan.web.nba_desk   the desk: pre-lock, post-lock (late swap), backtest
+    nba   ivan.web.nba        the desk: pre-lock, post-lock (late swap), backtest, the team page
     nfl   ivan.web.nfl_app    the pipeline and its report pages, the slate's builds (backtest)
     mma   ivan.web.mma_slot   the slates only (dates, the picker, a backtest placeholder): no workspace yet
 
@@ -39,7 +39,7 @@ from ivan.web.sports import REGISTRY, Sport
 
 HERE = Path(__file__).parent
 ALL_SPORTS = ("nba", "nfl", "mma")
-MODULES = {"nba": "ivan.web.nba_desk", "nfl": "ivan.web.nfl_app", "mma": "ivan.web.mma_slot"}
+MODULES = {"nba": "ivan.web.nba", "nfl": "ivan.web.nfl_app", "mma": "ivan.web.mma_slot"}
 LABELS = {"nba": "NBA", "nfl": "NFL", "mma": "MMA"}
 
 
