@@ -199,7 +199,11 @@ The **rotation grid** (`_nba_rotation.html`): players × 48 minutes. Paint cells
 floor; the grid autosaves every stroke (`/rotation`). Row lock holds a row exactly; **Re-fill** fills the
 unlocked rows around the locks (`/rotation/propose` with `source=propose`, or a past game's grid with
 `game_id`); **Hold all** locks everything as drawn; **Clear locks**; **Map** adds a player the cut left off
-(`/rotation/add`), **drop** removes one, **restore** undoes. Spot colours mark the slot each player
+(`/rotation/add`), **drop** removes one, **restore** undoes. A player the mapping counted on ruled OUT (a DK status on a
+refresh, a scratch call) voids the mapping on its own (`ivan.sports.nba.mapping`, `Desk.void_if_stale` before every
+re-projection, `ingest.void_stale_mappings` inside the refresh; `scripts/nba/mapping.py`): the grid and the team's positive
+minutes pins go, the model's rotation for the new pool shows, the card says so and reads unmapped; the old mapping is kept
+as a scenario assuming him in. The refresh note and the team's dot carry it ("mapping void: Johnson out"). Spot colours mark the slot each player
 inherited; fouls are shown on historical views. The row sums are the minutes projection.
 Rookies carry a purple **R** badge with their games played this season (`R4`) and a purple edge on the name, on
 tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a player whose first NBA season is this one

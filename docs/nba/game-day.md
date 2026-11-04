@@ -81,6 +81,14 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
   Written at once to the day's `data/nba/days/<day>/edits/minutes_overrides.csv` (the slates of one day share their edits;
   the next day starts clean); the team re-projects around the pins.
 - **call a starter** (toggle) when Rotowire has not confirmed yet.
+- **a player ruled out voids the team's mapping** (`ivan.sports.nba.mapping`, inside every refresh and before every
+  re-projection on the desk; `scripts/nba/mapping.py --slate DG` from a terminal). The mapping was made against a pool the
+  grid's fingerprint recorded; when one of those players is OUT (DK's status or a scratch call here), the grid and the
+  team's positive minutes pins go, the model initialises the new pool itself (the last game's rotation minus the outs,
+  plus returners) and its rotation is on the grid; the team reads **unmapped** until you accept it (**Hold all**) or paint
+  and hold. Nothing has to be cleared by hand first. The voided mapping is kept as a scenario assuming the player in
+  ("Johnson in"), so a reversed call puts it straight back. Other changes (a starter, a status short of OUT, a player
+  back) still only mark the team **changed** for you to look at.
 - **paint the rotation grid**: who is on the floor in each of the 48 minutes. The grid autosaves on every
   stroke to `data/nba/days/<day>/edits/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
   projection, **Re-fill** fills the unlocked rows around the locks, **Hold all** locks the grid as drawn,

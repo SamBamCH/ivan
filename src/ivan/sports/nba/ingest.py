@@ -600,6 +600,7 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
             fetched = fetch_slate(session, dg, update_odds=update_odds, starters=starters, log=log, lines=lines)
         with one_transaction(session):
             stored = store_slate(session, fetched, log=log)
+            voided = void_stale_mappings(session, log=log)
             projected = project_slate(session, n_sims=n_sims, log=log) if project else None
         S.create(dg, lock=fetched.lock, games=len(fetched.teams) // 2 if fetched.teams else None)
         S.touch(dg, "refreshed", by=by)
@@ -609,9 +610,22 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
             moved = CH.diff(before, CH.snapshot(session), (news_r or {}).get("new"))
         except Exception:   # noqa: BLE001
             moved = {}
+        for v in voided:                                  # a voided mapping is a change of the team: the board's dot and the refresh note say so
+            moved.setdefault(v["team"], []).append(dict(kind="mapping", player=None, text=f"mapping void: {', '.join(n.split()[-1].title() for n in v['out'])} out; map the team again"))
         for team, items in sorted(moved.items()):
             log(f"changed {team}: " + "; ".join(x["text"] for x in items))
         return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r, "changes": moved}
+
+
+def void_stale_mappings(session: Session, log: Log = print) -> list:
+    """The mappings a player now out makes void (ivan.sports.nba.mapping.void_stale), with this machine's pins file rewritten."""
+    from ivan.sports.nba import mapping as MAP
+    from ivan.sports.nba.projection.live import write_overrides
+    local = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}
+    voided = MAP.void_stale(session, local, log=log)
+    if voided:
+        write_overrides(local)
+    return voided
 
 
 def check_news(session, log: Log = print, draft_group_id: Optional[int] = None) -> Optional[dict]:

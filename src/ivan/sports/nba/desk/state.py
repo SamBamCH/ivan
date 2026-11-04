@@ -386,6 +386,7 @@ class DeskBase:
         the same path a publish takes, seeded per team so the numbers are those a publish would give). The desk's frame is
         the record just written; nothing downstream can see a projection the desk does not show.
         """
+        self.void_if_stale(team)
         rec = project_team(self.session, self.slate, team, self.overrides, ProjectionParams.from_config())
         self.session.commit()
         self.proj[team], self.hist_only[team], self.rot[team] = rec["frame"], rec["hist"], dict(rec.get("rot") or {})
@@ -397,6 +398,20 @@ class DeskBase:
 
     def players(self, team: str) -> list[NBAPlayer]:
         return sorted([p for p in self.slate.players if p.team == team], key=lambda p: -(p.salary or 0))
+
+    def void_if_stale(self, team: str) -> Optional[dict]:
+        """A player the team's mapping had available is out now (a status, a scratch call): the mapping is void (ivan.sports.nba.mapping):
+        grid cleared, positive minutes pins lifted, the old mapping kept as a scenario assuming him in; the card says so."""
+        from ivan.sports.nba import mapping as MAP
+        statuses = {normalize_name(p.name): (p.status or "") for p in self.players(team)}
+        outs = MAP.stale_outs(team, statuses, self.overrides)
+        if not outs:
+            return None
+        rep = MAP.void_mapping(team, outs, statuses.keys(), self.local_overrides, log=lambda m: None)
+        self.write_local()
+        self.flash.append(f"{team}: {', '.join(n.split()[-1].title() for n in outs)} now out: the mapping is void, the model's rotation is on the grid"
+                          f" ({rep['pins']} minutes pin(s) lifted{'; the old mapping is scenario ' + repr(rep['label']) if rep['scenario'] else ''}): accept it (Hold all) or paint and hold")
+        return rep
 
     def tip(self, team: str) -> Optional[datetime]:
         return min((p.gametime for p in self.players(team) if p.gametime), default=None)
