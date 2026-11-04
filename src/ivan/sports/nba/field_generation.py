@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from ivan.core.seed import seed_for
 from ivan.core.utils import coerce_player_ids
-from ivan.database.session import get_session, init_db
+from ivan.sports.nba import slates as S
 from ivan.sports.nba.models import Lineup, LineupPool, NBAPlayer
 from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.pre_lock.player import generate_player_samples
@@ -86,9 +86,11 @@ def player_pool(session: Session, player_min_fpts: float = 15.0) -> List[FieldPl
     return out
 
 
-def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optional[float], q: Queue, randomness: Optional[float] = None) -> None:
+def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optional[float], q: Queue, randomness: Optional[float] = None,
+           slate: Optional[int] = None) -> None:
     """One generator process: its own session and seed; progress messages on q."""
-    session = get_session(init_db("nba"))
+    S.use(int(slate) if slate is not None else S.current())           # a worker process: the slate does not travel with the context
+    session = S.session()
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
     s = generate_settings(config, min_fpts, randomness)
@@ -181,7 +183,7 @@ def run_workers(quota: List[int], config_path: str, min_fpts: Optional[float], l
                 randomness: Optional[float] = None) -> int:
     """One worker per quota entry; a rich progress bar per worker when `progress`, else a line per start/finish. Returns lineups created."""
     q: Queue = Queue()
-    procs = [Process(target=worker, args=(i, n, config_path, min_fpts, q, randomness)) for i, n in enumerate(quota)]
+    procs = [Process(target=worker, args=(i, n, config_path, min_fpts, q, randomness, S.current())) for i, n in enumerate(quota)]
     for p in procs:
         p.start()
     created, done = 0, 0
@@ -335,7 +337,7 @@ def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log 
                    min_fpts: Optional[float] = None, session: Optional[Session] = None, randomness: Optional[float] = None) -> dict:
     """The whole generate step: workers, dedupe, the pool report (no field, no ownership). `session` (opened from the environment when None) is used for the dedupe. Returns counts."""
     own = session is None
-    session = session or get_session(init_db("nba"))
+    session = session or S.session()
     try:
         dg = snapshot_pool(session)                      # the exports read names and positions from this, not from the live pool
         log(f"pool snapshot for slate {dg}: {session.query(LineupPool).filter(LineupPool.draft_group_id == dg).count()} players" if dg else "no draft group on the pool")
