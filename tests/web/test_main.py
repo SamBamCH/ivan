@@ -396,7 +396,8 @@ def test_nba_starter_toggle_posts_the_rows_player(open_site):
     d = D.desk_for(dg)
     team = sorted({p.team for p in d.slate.players})[0]
     r = open_site.get(f"/nba/{day}/{dg}/team/{team}")
-    assert r.status_code == 200 and "hx-vals=\"js:{player: this.closest('tr').dataset.key}\"" in r.text and f"/team/{team}/starter" in r.text
+    assert r.status_code == 200 and "hx-vals='{&#34;player&#34;: " in r.text.replace('"', "&#34;") or "hx-vals='{\"player\": " in r.text
+    assert f"/team/{team}/starter" in r.text
     assert open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={}).status_code == 422                # what the old click sent
     key = next(k for k in (r.text.split('data-key="')[1:2] or ["x"]) ).split('"')[0]
     before = override_of(d.overrides, key).get("starter")
