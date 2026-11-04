@@ -10,8 +10,10 @@
       <label title="spread of the sampled worlds the lineups are optimised in, 0-1; lower = closer to the optimal">randomness <input name="randomness" value="{{ form.randomness }}" size="4"></label>
       <label title="every lineup must project at least this share of the mean-optimal lineup">min fpts frac <input name="min_fpts_frac" value="{{ form.min_fpts_frac }}" size="4"></label>
       <label title="players projected below this are left out of the solver's pool">player min fpts <input name="player_min_fpts" value="{{ form.player_min_fpts }}" size="3"></label>
+      <span class="estimate" hx-get="{{ root }}/pipeline/estimate?step=generate" hx-include="#knobs-generate" hx-trigger="load, change from:#knobs-generate delay:300ms, keyup from:#knobs-generate delay:600ms" hx-swap="innerHTML"></span>
 </div>{% endmacro %}
 {% macro sim_knobs(form) %}<div class="knobs" id="knobs-sim"><div class="knobs-title">sim</div>
       <label title="simulated worlds per contest">sims <input name="sims" value="{{ form.sims }}" size="5"></label>
       <label title="largest field size simulated; bigger contests are scaled down to it">field cap <input name="field_cap" value="{{ form.field_cap }}" size="6"></label>
+      <span class="estimate" hx-get="{{ root }}/pipeline/estimate?step=sim" hx-include="#knobs-sim" hx-trigger="load, change from:#knobs-sim delay:300ms, keyup from:#knobs-sim delay:600ms" hx-swap="innerHTML"></span>
 </div>{% endmacro %}

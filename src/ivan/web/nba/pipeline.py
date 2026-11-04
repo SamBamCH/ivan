@@ -17,6 +17,7 @@ from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from ivan.core import feed
 from ivan.sports.nba import autopilot
+from ivan.sports.nba import job_time as JT
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.ingest import after_pull, capture_pool, refresh_pool, IngestError
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAPlayer
@@ -403,16 +404,55 @@ async def contest_weights_set(contest_id: int, request: Request):
     return HTMLResponse('<span class="ok">saved</span>' if cur else '<span class="muted">panel</span>')
 
 
+def _deadline(step: str, now: datetime) -> tuple[Optional[datetime], str]:
+    """What the job must beat: the slate's lock, or for the late swap the next tip still ahead."""
+    tips = sorted({p.gametime for p in desk.slate.players if p.gametime}) if desk.slate is not None else []
+    if step == "lateswap":
+        ahead = [t for t in tips if t > now]
+        return (ahead[0] if ahead else None), "next tip"
+    return (tips[0] if tips else None), "lock"
+
+
+def _estimate(step: str, form: dict, now: Optional[datetime] = None) -> dict:
+    """The job's time estimate for these knobs (ivan.sports.nba.job_time) checked against the slate's deadline: {est, verdict, message,
+    n_contests, deadline, label}. The contests count comes from the slate's entries file."""
+    now = now or datetime.now()
+    ent = _entries_info()
+    n_contests = len(ent.get("contests") or {}) or None
+    est = JT.estimate(step, form, n_contests, now=now)
+    deadline, label = _deadline(step, now)
+    verdict, message = JT.deadline_check(est, deadline, JT.MARGIN_MIN, label)
+    return dict(est=est, verdict=verdict, message=message, n_contests=n_contests, deadline=deadline, label=label, step=step,
+                margin=JT.MARGIN_MIN, fmt=JT.fmt)
+
+
+@slate.get("/pipeline/estimate", response_class=HTMLResponse)
+def pipeline_estimate(request: Request, step: str = "sim"):
+    """The estimate under a step's knobs, re-read as the knobs change (the popover's hx-get sends them): how long, done when, against
+    the slate's lock; red when the run would end inside the margin before lock, with a "run anyway" box."""
+    if step not in JT.STEPS:
+        return HTMLResponse("")
+    knobs = {k: v for k, v in request.query_params.items() if k != "step"}
+    with LOCK:
+        return _render(request, "_nba_estimate.html", **_estimate(step, {**pipeline_form, **knobs}))
+
+
 def _submit(step: str, form: dict) -> list:
     py = sys.executable
     jobs = []
     cfg = write_desk_config(form)
+    now = datetime.now()
+    ent = _entries_info(); n_contests = len(ent.get("contests") or {}) or None
+
+    def meta(st):
+        e = JT.estimate(st, form, n_contests, now=now)
+        return dict(units=e["units"], n_contests=n_contests, estimate=round(e["seconds"]), upto=round(e["upto"]))
     n_jobs = max(1, min(MAX_JOBS, int(_field(form.get("jobs"), "jobs", int) or MAX_JOBS)))
     if step in ("generate", "all"):
         cmd = [py, str(SCRIPTS / "generate_lineups.py"), str(int(form["lineups"])), str(n_jobs), "-c", str(cfg), "--no-progress"] + (["--fresh"] if str(form.get("fresh", "on")) else [])
-        jobs.append(_submit_job("generate", cmd, "generate"))
+        jobs.append(_submit_job("generate", cmd, "generate", meta("generate")))
     if step in ("sim", "all"):
-        jobs.append(_submit_job("sim", [py, str(SCRIPTS / "sim.py"), "--config", str(cfg), "-n", str(int(form["sims"])), "-c", str(int(form["field_cap"]))], "sim"))
+        jobs.append(_submit_job("sim", [py, str(SCRIPTS / "sim.py"), "--config", str(cfg), "-n", str(int(form["sims"])), "-c", str(int(form["field_cap"]))], "sim", meta("sim")))
     if step == "lateswap":
         source = "raw" if LIMITED else str(form.get("ls_source") or "auto")     # no DraftKings login here: the uploaded standings
         field = "each" if str(form.get("ls_field") or "shared") == "each" else "shared"
@@ -420,11 +460,11 @@ def _submit(step: str, form: dict) -> list:
                "--candidates", str(int(_field(form.get("ls_candidates"), "candidates", int) or 10)),
                "--field-cap", str(int(_field(form.get("ls_field_cap"), "field cap", int) or 5000)),
                "--sims", str(int(_field(form.get("ls_sims"), "sims", int) or 1000))] + (["--live"] if form.get("ls_live") else [])
-        jobs.append(_submit_job("lateswap", cmd, "lateswap"))
+        jobs.append(_submit_job("lateswap", cmd, "lateswap", meta("lateswap")))
     if step == "fetch_standings":
-        jobs.append(_submit_job("fetch_standings", [py, str(SCRIPTS / "fetch_standings.py")], "fetch_standings"))
+        jobs.append(_submit_job("fetch_standings", [py, str(SCRIPTS / "fetch_standings.py")], "fetch_standings", meta("fetch_standings")))
     if step == "field":
-        jobs.append(_submit_job("field", [py, str(SCRIPTS / "field_ownership.py")], "field"))
+        jobs.append(_submit_job("field", [py, str(SCRIPTS / "field_ownership.py")], "field", meta("field")))
     if step in ("choose", "all"):
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
@@ -432,7 +472,7 @@ def _submit(step: str, form: dict) -> list:
         from ivan.sports.nba.lineup_export import contest_weights, contest_weights_json
         if contest_weights():                                     # the contests section's knobs win over the panel's for their contest
             cmd += ["--weights-json", str(contest_weights_json())]
-        jobs.append(_submit_job("choose", cmd, "choose"))
+        jobs.append(_submit_job("choose", cmd, "choose", meta("choose")))
     return jobs
 
 
@@ -491,7 +531,13 @@ async def pipeline_run(request: Request, step: str):
                 except IngestError as e:
                     desk.flash.append(f"snapshot failed: {e}")
             try:
-                _submit(step, pipeline_form)
+                guard = _estimate(step, pipeline_form)
+                if guard["verdict"] == "late" and not form.get("force"):
+                    desk.flash.append(f"not started: {guard['message']} Tick \"run anyway\" under the knobs to run it regardless, or make it smaller.")
+                else:
+                    if guard["verdict"] != "ok":
+                        desk.flash.append(("forced: " if guard["verdict"] == "late" else "heads up: ") + guard["message"])
+                    _submit(step, pipeline_form)
             except (TypeError, ValueError) as e:
                 desk.flash.append(f"bad setting: {e}")
         return _render(request, "_nba_pipeline.html", **_pipeline_ctx())

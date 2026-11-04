@@ -123,6 +123,17 @@ pressed ([../deployment.md](../deployment.md)); nothing is pushed from here.
 
 ## 5. Generate, simulate, choose
 
+**How long will it take?** Before a job starts the desk estimates it from this machine's past runs
+(`ivan.sports.nba.job_time`, shown under the Generate and Sim knobs and in the job's status line) and checks the end against
+the slate's lock less 5 minutes: a run that would end inside that margin is refused until you tick **run anyway** or make
+it smaller (2026-11-03: a sim too big for the time left missed lock). From a terminal:
+
+```bash
+venv/bin/python scripts/nba/job_time.py fit                                                   # the model: seconds per unit per step
+venv/bin/python scripts/nba/job_time.py estimate --step sim --sims 1000 --field-cap 10000 --contests 6 --slate DG
+```
+
+
 Desk: steps 4 to 6 of the **actions** bar, with the knobs in the **config** tile beside the games strip (lineups, jobs,
 sims, field cap, fresh pool, and the chooser's weights from `config/nba.json → choose`); **4–6 in a row** runs the
 three. The entries export goes in through the **contests** section, which flags contests of another slate (the sim

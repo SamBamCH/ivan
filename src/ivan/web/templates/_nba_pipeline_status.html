@@ -5,7 +5,7 @@
   {% if current or log %}
   <div class="pipe-row">
     {% if current %}
-      <span class="jobstat {{ current.status }}">{{ current.name }} · {{ current.status }}{% if current.duration %} · {{ '%.0f'|format(current.duration) }}s{% endif %}</span>
+      <span class="jobstat {{ current.status }}">{{ current.name }} · {{ current.status }}{% if current.duration %} · {{ '%.0f'|format(current.duration) }}s{% endif %}{% if current.is_active and current.meta and current.meta.estimate %} · <span class="muted" title="the desk's estimate when it started, from this machine's past runs (up to {{ current.meta.upto }} s)">≈ {{ current.meta.estimate }} s expected{% if current.duration %}, {{ [0, (current.meta.estimate - current.duration)|int]|max }} s left{% endif %}</span>{% endif %}</span>
       {% if current.is_active %}<button hx-post="{{ root }}/pipeline/cancel/{{ current.id }}" hx-target="#pipeline" hx-swap="outerHTML">cancel</button>{% endif %}
     {% endif %}
     {% if jobs %}<span class="muted small">recent: {% for j in jobs[:5] %}<span class="jobstat {{ j.status }}">{{ j.name }} {{ j.status }}{% if j.duration %} {{ '%.0f'|format(j.duration) }}s{% endif %}</span>{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}

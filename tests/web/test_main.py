@@ -323,3 +323,30 @@ def test_nba_refresh_shows_a_progress_banner_with_its_log(open_site):
         d.busy = None; D.PROGRESS.pop(dg, None)
     r = open_site.get(f"/nba/{day}/{dg}/board?view=games&after=busy")
     assert r.headers.get("HX-Refresh") == "true"
+
+
+def test_nba_run_estimate_guards_the_lock(open_site, monkeypatch):
+    """The knobs popover's estimate answers for the step's knobs, and a run the estimate puts inside the margin before lock is not
+    started unless "run anyway" is ticked; the job's record carries the estimate."""
+    from ivan.web import nba as D
+    from ivan.web.nba import pipeline as P
+    from ivan.sports.nba import job_time as JT
+    dg, day = _held(open_site)
+    slow = {s: dict(per_unit=0.0, fixed=360000.0, n=9, p90_ratio=1.2, basis="fitted") for s in JT.STEPS}     # every run "takes a hundred hours"
+    monkeypatch.setattr(JT, "fit", lambda *a, **k: slow)
+    monkeypatch.setattr(P, "_active", lambda dg=None: [])
+    r = open_site.get(f"/nba/{day}/{dg}/pipeline/estimate?step=sim&sims=1000&field_cap=10000")
+    assert r.status_code == 200 and "≈ 100 h" in r.text and 'class="est' in r.text
+    d = D.desk_for(dg)
+    has_lock = any(p.gametime for p in d.slate.players)
+    submitted = []
+    monkeypatch.setattr(P, "_submit_job", lambda name, cmd, step, extra=None: submitted.append((name, extra)) or object())
+    monkeypatch.setattr(P, "capture_pool", lambda *a, **k: type("I", (), {"players": 1})())
+    r = open_site.post(f"/nba/{day}/{dg}/pipeline/sim", data={"sims": "1000", "field_cap": "10000"})
+    assert r.status_code == 200
+    if has_lock and min(p.gametime for p in d.slate.players if p.gametime) > __import__("datetime").datetime.now():
+        assert submitted == [] and "not started" in r.text and "run anyway" in r.text                  # inside the margin: refused
+        r = open_site.post(f"/nba/{day}/{dg}/pipeline/sim", data={"sims": "1000", "field_cap": "10000", "force": "1"})
+        assert r.status_code == 200 and len(submitted) == 1 and submitted[0][0] == "sim" and submitted[0][1]["estimate"] == 360000
+    else:
+        assert len(submitted) == 1                                                                      # a locked or lockless slate: nothing to beat

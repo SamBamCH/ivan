@@ -182,10 +182,11 @@ def _active(dg: Optional[int] = None) -> list:
     return [j for j in slate_jobs(dg) if j.is_active]
 
 
-def _submit(name: str, cmd: list, step: str) -> object:
-    """Submit a job for the bound slate: `--slate <dg>` on the script, the slate in the job's record."""
+def _submit(name: str, cmd: list, step: str, extra: Optional[dict] = None) -> object:
+    """Submit a job for the bound slate: `--slate <dg>` on the script, the slate in the job's record (with the work units and the
+    time estimate the desk made, ivan.sports.nba.job_time, so the status line counts down and later fits learn from the run)."""
     d = bound()
-    return runner.submit(name, [str(c) for c in cmd] + ["--slate", str(d.dg)], meta=dict(step=step, slate=d.dg))
+    return runner.submit(name, [str(c) for c in cmd] + ["--slate", str(d.dg)], meta=dict(step=step, slate=d.dg, **(extra or {})))
 
 
 # ------------------------------------------------------------------------------ render helpers
@@ -197,7 +198,7 @@ def _busy(request: Request):
     return None
 
 
-SHOWS_FLASH = {"_nba_board.html", "_nba_side.html", "_nba_rotation.html"}   # the templates that display the flash: only they consume it
+SHOWS_FLASH = {"_nba_board.html", "_nba_side.html", "_nba_rotation.html", "_nba_pipeline.html"}   # the templates that display the flash: only they consume it
 
 
 def sport_root(request: Request) -> str:

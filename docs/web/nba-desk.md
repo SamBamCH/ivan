@@ -78,6 +78,14 @@ or when news breaks.
    **amber** when the pool moved since (run it again), **red** when the pool moved 10+ minutes ago and the stage never
    followed, grey when never run here. The late swap appears once it has run.
    4 **Generate**, 5 **Sim**, 6 **Choose**, and **4–6 in a row**: jobs (below); generate, sim and the row take a snapshot first.
+   Under Generate's and Sim's knobs a **time estimate** re-reads as you type (`/pipeline/estimate?step=…`,
+   `ivan.sports.nba.job_time`, `scripts/nba/job_time.py estimate`): "≈ 4 min, done 18:52 · lock 19:00", from this machine's
+   past runs of that step (seconds per unit of work: lineups per worker for generate, contests × sims × field cap for the
+   sim and the late swap; a conservative default until a step has 4 runs), green when even a slow run leaves 5 minutes
+   before lock, amber when only the expected run does, red when the run would end inside those 5 minutes or after lock.
+   A red run is **not started** unless its **run anyway** box is ticked; the message says why. The late swap's deadline is
+   the next tip. While a job runs its status line shows the estimate and the seconds left; the record it leaves carries
+   the estimate and the work units, so the next fit learns from it (`scripts/nba/job_time.py fit` prints the model).
    **Knobs**: resting the pointer on Generate or Sim opens its knobs under the button (`_nba_knobs.html`; they stay open
    while the pointer is in them or a field has focus): generate's fresh pool, lineups, jobs, min salary, max salary per
    team, randomness, min fpts frac, player min fpts; sim's sims and field cap. A button sends only its own knobs
