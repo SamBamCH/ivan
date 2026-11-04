@@ -56,6 +56,7 @@ A checkout that still has the one pool is moved once:
 
 ```bash
 venv/bin/python scripts/nba/migrate_slates.py --dry-run   # what would move
+venv/bin/python scripts/nba/migrate_edits_by_day.py       # each slate's edits under its day (data/nba/days/<day>/); also run by the server bootstrap
 venv/bin/python scripts/nba/migrate_slates.py             # the pool and every worked slate into slates/<dg>/; the old tables renamed _migrated_*
 ```
 

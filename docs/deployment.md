@@ -127,7 +127,8 @@ archive timer for two days in October 2026.
 | `/opt/ivan/app/data/<sport>/<sport>_history.sqlite` | the server's databases |
 | `/opt/ivan/app/data/nfl/input/web/`, `output/web/`, `jobs/` | NFL uploads, outputs, job logs |
 | `/opt/ivan/app/data/feed/nba/`, `data/feed-state/` | the laptop's feed as last pulled; what was last applied |
-| `/opt/ivan/app/data/nba/slates/<dg>/` | the server's copy of each slate: `slate.sqlite` (the laptop's pool with the server's own lineups and sims), `published/` (the laptop's pins and grids), its own `edits/`, `slate.json` (refreshed / pulled times) |
+| `/opt/ivan/app/data/nba/slates/<dg>/` | the server's copy of each slate: `slate.sqlite` (the laptop's pool with the server's own lineups and sims), `slate.json` (refreshed / pulled times) |
+| `/opt/ivan/app/data/nba/days/<day>/` | the day's `published/` (the laptop's pins and grids as pulled) and the server's own `edits/` on top, shared by the day's slates |
 | `journalctl -u ivan-web`, `journalctl --user -u ivan-nba-pull` | logs (a slate page's Refresh pulls inside ivan-web; the timer pulls every 30 minutes) |
 
 ## Sizing

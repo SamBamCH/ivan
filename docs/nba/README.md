@@ -30,7 +30,7 @@ Read in this order:
  odds-api ─┘      (store_slate)                               │
                                                               ▼
                        projection (projection/live.py) ─► minutes_proj, fpts_mean/std, quantiles
-                       desk pins + painted grids ─────────► slates/<dg>/edits/{minutes_overrides.csv, rotations/*.json}
+                       desk pins + painted grids ─────────► days/<day>/edits/{minutes_overrides.csv, rotations/*.json}
                                                               │
                        every edit / Refresh writes the pool ─┼─◄── ssh: publish + rrsync (feed.pull_ssh) ◄── brother's desk: Refresh from laptop
                                                               │

@@ -69,3 +69,57 @@ def test_held_open_and_main(root):
     assert S.resolve("101") == 101
     with pytest.raises(S.NoSlate):
         S.open(99)
+
+
+def test_edits_are_the_days_shared_by_its_slates(root):
+    """A slate's pins, grids and scenarios live under data/nba/days/<day>/edits/: the two slates of one evening share them, the next
+    day has its own, and a slate whose day is not on record yet keeps them under itself."""
+    S.create(200, lock=datetime(2026, 11, 4, 18, 0), games=8)
+    S.create(201, lock=datetime(2026, 11, 4, 18, 30), games=6)
+    S.create(202, lock=datetime(2026, 11, 5, 18, 0), games=9)
+    a, b, c = S.paths(200), S.paths(201), S.paths(202)
+    assert a.day == "2026-11-04" and a.day_root == root / "days" / "2026-11-04"
+    assert a.edits == b.edits == root / "days" / "2026-11-04" / "edits" and a.published == b.published
+    assert c.edits == root / "days" / "2026-11-05" / "edits" and a.scenarios != c.scenarios
+    assert a.rotations.is_dir() and not (a.root / "edits").exists()                             # created under the day, not the slate
+    a.overrides_csv.write_text("player,minutes\nx,30\n")
+    with S.using(201):
+        assert S.overrides_csv().read_text().startswith("player") and S.scenarios_dir() == a.scenarios
+    with S.using(202):
+        assert not S.overrides_csv().exists()
+    assert S.paths(300).edits == root / "slates" / "300" / "edits"                               # no record: under the slate
+
+
+def test_migration_files_each_slates_edits_under_its_day(root):
+    """scripts/nba/migrate_edits_by_day.py: a slate's edits/ and published/ move to the day's; a scenario saved on another day is
+    filed under that day; the newer of two same-day pin files stands; a lock recorded in UTC is made local first."""
+    import importlib.util, json, os, time
+    spec = importlib.util.spec_from_file_location("mig", "scripts/nba/migrate_edits_by_day.py"); mig = importlib.util.module_from_spec(spec); spec.loader.exec_module(mig)
+    for dg, lock in ((200, datetime(2026, 11, 4, 18, 0)), (201, datetime(2026, 11, 4, 18, 30)), (210, datetime(2026, 11, 3, 1, 0))):
+        S.write_meta(dg, lock=lock, day=lock.date(), created_at=datetime.now())
+        (root / "slates" / str(dg) / "slate.sqlite").touch()                                      # held: a slate with a database
+        (root / "slates" / str(dg) / "edits" / "rotations").mkdir(parents=True)
+    old = lambda dg: root / "slates" / str(dg) / "edits"                                        # noqa: E731
+    (old(200) / "minutes_overrides.csv").write_text("player,minutes\nold,1\n")
+    (old(201) / "minutes_overrides.csv").write_text("player,minutes\nnew,2\n")
+    os.utime(old(200) / "minutes_overrides.csv", (time.time() - 100, time.time() - 100))
+    (old(200) / "rotations" / "ATL.json").write_text("{}")
+    (old(200) / "scenarios" / "CLE").mkdir(parents=True)
+    (old(200) / "scenarios" / "CLE" / "giannis-out.json").write_text(json.dumps({"saved_at": "2026-11-02T11:00:00"}))
+    (old(200) / "scenarios" / "CLE" / "_active.json").write_text(json.dumps({"slug": "giannis-out", "since": "2026-11-02T17:30:00"}))
+    (old(200) / "scenarios" / "ATL").mkdir(parents=True)
+    (old(200) / "scenarios" / "ATL" / "today.json").write_text(json.dumps({"saved_at": "2026-11-04T10:00:00"}))
+    (root / "slates" / "201" / "published").mkdir(); (root / "slates" / "201" / "published" / "minutes_overrides.csv").write_text("player,minutes\npub,3\n")
+    mig.migrate(log=lambda m: None)
+    day = root / "days" / "2026-11-04"
+    assert (day / "edits" / "minutes_overrides.csv").read_text() == "player,minutes\nnew,2\n"
+    assert (day / "edits" / "minutes_overrides.from-200.csv").read_text() == "player,minutes\nold,1\n"
+    assert (day / "edits" / "rotations" / "ATL.json").exists() and (day / "edits" / "scenarios" / "ATL" / "today.json").exists()
+    assert (root / "days" / "2026-11-02" / "edits" / "scenarios" / "CLE" / "giannis-out.json").exists()
+    assert (root / "days" / "2026-11-02" / "edits" / "scenarios" / "CLE" / "_active.json").exists()
+    assert not (day / "edits" / "scenarios" / "CLE").exists()                                   # nothing of 11-02 applies to 11-04
+    assert (day / "published" / "minutes_overrides.csv").exists()
+    assert not (root / "slates" / "200" / "edits").exists() and not (root / "slates" / "201" / "published").exists()
+    m = S.read_meta(210)
+    assert m["lock"] == "2026-11-02T19:00:00" and m["day"] == "2026-11-02"                      # 01:00 UTC is the evening before, local
+    assert mig.migrate(log=lambda m: None) == 0                                                 # idempotent

@@ -365,8 +365,9 @@ def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(o
     assert r.status_code == 200 and "/publish" not in r.text and "Snapshot" not in r.text and "3–5 in a row" in r.text
     d = D.desk_for(dg)
     pid = d.slate.players[0].id
+    before = d.session.query(NBAPlayer.ownership).filter(NBAPlayer.id == pid).scalar()        # the live pool: put back at the end
     with d.lock:
-        d.session.query(NBAPlayer).filter(NBAPlayer.id == pid).update({"ownership": 0.4321}); d.session.commit()
+        d.session.query(NBAPlayer).filter(NBAPlayer.id == pid).update({"ownership": 0.4321 if before != 0.4321 else 0.4322}); d.session.commit()
     assert d._stamp() != d.pool_stamp                                                        # the stamp sees the ownership alone
     job = type("J", (), dict(name="field", status="done", finished=time.time() - 1, started=time.time() - 30, id="f1", meta={"slate": dg},
                              is_active=False, duration=29.0, cmd=[]))()
@@ -381,3 +382,6 @@ def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(o
     job.name = "choose"
     r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
     assert r.status_code == 200 and "HX-Refresh" not in r.headers                             # a job that does not write the pool: the partial
+    from ivan.sports.nba import slates as S
+    with d.lock, S.using(dg):
+        d.session.query(NBAPlayer).filter(NBAPlayer.id == pid).update({"ownership": before}); d.session.commit(); d.rebuild()

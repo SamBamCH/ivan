@@ -156,13 +156,15 @@ to **pub**.
 
 ## Late news and overrides (`live.py`, `scenarios.py`)
 
-Under the slate's directory (`data/nba/slates/<dg>/`, `ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds
-the pins (minutes, fppm, band, fpts, starter calls; 0 minutes is a scratch); `edits/rotations/<TEAM>.json` the painted
-grid with its locked rows. Both are read by every projection of that slate, by any entry point (the slate is the current
-one in context: a script's `--slate`, the web's address). On a consumer the laptop's copies sit under the slate's
-`published/` as the base layer and the consumer's own files on top (`override_layers`). Scenarios
-(`edits/scenarios/<TEAM>/`) are named copies of a team's two
-files plus the assumptions read off them. `scripts/nba/news.py "Name"` builds the overrides for one
+Under the day's directory (`data/nba/days/<day>/`, reached through the slate's `day` in `slate.json`,
+`ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, starter calls;
+0 minutes is a scratch); `edits/rotations/<TEAM>.json` the painted grid with its locked rows. A game is mapped once:
+the slates of one evening share these files and the next day starts clean. Both are read by every projection of a
+slate of that day, by any entry point (the slate is the current one in context: a script's `--slate`, the web's
+address). On a consumer the laptop's copies sit under the day's `published/` as the base layer and the consumer's own
+files on top (`override_layers`). Scenarios (`edits/scenarios/<TEAM>/`) are named copies of a team's two files plus
+the assumptions read off them; a scenario belongs to the day it was saved on and picks itself for that day's slates only
+(2026-11-04: scenarios were a global per-team library and a Nov 2 scenario re-applied its grid to Nov 4's game). `scripts/nba/news.py "Name"` builds the overrides for one
 scratch from the terminal; `--conditional` scales teammates toward their "without him" per-minute
 history (opt-in: those samples are small and confounded).
 

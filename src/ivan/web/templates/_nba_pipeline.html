@@ -25,8 +25,8 @@
     {% if limited %}<span class="muted small" title="this desk is shared: settings above these are lowered, and a job running longer than {{ job_max_minutes }} minutes is stopped">limits: {{ limits.lineups }} lineups, {{ limits.sims }} sims, {{ job_max_minutes }} min a job</span>{% endif %}
   </div>
   <div class="act-row fresh-row">
-    <span class="fresh">{% for f in fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}
-      <span class="f" title="Rotowire's news page, last read (every Refresh reads it; news auto every 5 minutes)">news {% if news.checked %}{{ news.checked }}{% else %}not read{% endif %}</span></span>
+    {% if not consumer %}<span class="fresh">{% for f in fresh %}<span class="f {% if f.warn %}old{% endif %}" title="{{ f.what }}{% if f.at %} at {{ f.at.strftime('%a %H:%M') }}{% endif %}">{{ f.label }} {% if f.at %}{{ f.at.strftime('%H:%M') }}<small> {% if f.age < 1 %}now{% elif f.age < 60 %}{{ f.age|int }}m{% else %}{{ (f.age // 60)|int }}h{% endif %}</small>{% else %}—{% endif %}</span>{% endfor %}
+      <span class="f" title="Rotowire's news page, last read (every Refresh reads it; news auto every 5 minutes)">news {% if news.checked %}{{ news.checked }}{% else %}not read{% endif %}</span></span>{% endif %}
     <span class="muted small">{{ lineups_in_db }} lineups · {{ sims_in_db }} sim rows on this slate</span>
   </div>
   {% with poll=False %}{% include "_nba_pipeline_status.html" %}{% endwith %}

@@ -5,11 +5,18 @@ record is the directory.
 
     slate.json        draft_group, lock, day, label, games, created_at, refreshed_at, refreshed_by, published_at | pulled_at
     slate.sqlite      the slate's own tables (SLATE_TABLES): the pool, starters, market rates, notes, lineups, sims, contests
-    edits/            this machine's minutes_overrides.csv, rotations/<TEAM>.json, scenarios/<TEAM>/
-    published/        a consumer's base layer: the laptop's edits as pulled
     projection/       the projection store (projection.store), <TEAM>.pkl
     input/            entries.csv, contest_weights.json
     output/           lineups, chosen entries, exposures, late swap files, sim artifacts
+
+The edits are the day's, not the slate's: a game is mapped once, and the 6:00 and 6:30 slates of one evening share the
+mapping, while the next day starts clean (nothing of yesterday's grids, pins or scenarios applies to today's games).
+data/nba/days/<YYYY-MM-DD>/ holds them, reached through the slate's `day` in slate.json (SlatePaths.edits):
+
+    edits/            this machine's minutes_overrides.csv, rotations/<TEAM>.json, scenarios/<TEAM>/ (and _active.json)
+    published/        a consumer's base layer: the laptop's edits as pulled
+
+A slate whose day is not known yet (its record not written) keeps them under its own directory until it is.
 
 The slate's engine opens slate.sqlite as main and ATTACHes the history database as `hist`: SQLite resolves an
 unqualified table name in main first, then in the attached databases, so `nba_player` is the slate's and `nba_stats`
@@ -37,6 +44,8 @@ from ivan.database.session import get_session, init_db
 from ivan.sports.nba.paths import NBA_DATA_DIR
 
 SLATES_DIR = NBA_DATA_DIR / "slates"
+DAYS_DIRNAME = "days"                 # beside the slates directory: data/nba/days/<day>/{edits,published}
+_DAYS: dict = {}                      # (slates root, dg) -> day, read once from slate.json (a day never changes once known)
 
 # the tables that belong to one slate (created in slate.sqlite); every other NBA table lives in the history database
 SLATE_TABLES = ("nba_player", "starting_lineups", "nba_market_rate", "nba_player_note", "lineup", "lineup_pool",
@@ -90,13 +99,19 @@ class using:
 class SlatePaths:
     dg: int
     root: Path
+    day: Optional[str] = None         # the slate's day (slate.json "day"): its edits and published layer are the day's
+    days: Optional[Path] = None       # the days directory (data/nba/days)
 
     @property
     def meta(self) -> Path: return self.root / "slate.json"
     @property
     def db(self) -> Path: return self.root / "slate.sqlite"
     @property
-    def edits(self) -> Path: return self.root / "edits"
+    def day_root(self) -> Optional[Path]:
+        """data/nba/days/<day>: where the day's edits live; None while the slate's day is unknown."""
+        return self.days / self.day if self.day and self.days is not None else None
+    @property
+    def edits(self) -> Path: return (self.day_root or self.root) / "edits"
     @property
     def overrides_csv(self) -> Path: return self.edits / "minutes_overrides.csv"
     @property
@@ -104,7 +119,7 @@ class SlatePaths:
     @property
     def scenarios(self) -> Path: return self.edits / "scenarios"
     @property
-    def published(self) -> Path: return self.root / "published"
+    def published(self) -> Path: return (self.day_root or self.root) / "published"
     @property
     def published_overrides_csv(self) -> Path: return self.published / "minutes_overrides.csv"
     @property
@@ -134,10 +149,31 @@ def _root(root: Optional[Path]) -> Path:
     return Path(root) if root is not None else SLATES_DIR          # read at call time: tests point SLATES_DIR at a temporary directory
 
 
+def days_dir(root: Optional[Path] = None) -> Path:
+    """The days directory beside the slates directory: data/nba/days (the edits of each day, shared by its slates)."""
+    return _root(root).parent / DAYS_DIRNAME
+
+
+def _day_of(dg: int, base: Path) -> Optional[str]:
+    """The slate's day from its record, cached once known (None, re-read every time, until the record carries it)."""
+    key = (str(base), int(dg))
+    if key in _DAYS:
+        return _DAYS[key]
+    try:
+        d = json.loads((base / str(dg) / "slate.json").read_text()).get("day")
+    except (OSError, ValueError):
+        d = None
+    if d:
+        _DAYS[key] = str(d)[:10]
+        return _DAYS[key]
+    return None
+
+
 def paths(dg: Optional[int] = None, root: Optional[Path] = None) -> SlatePaths:
-    """The layout of slate `dg` (the current slate when None) under `root` (data/nba/slates)."""
+    """The layout of slate `dg` (the current slate when None) under `root` (data/nba/slates); its edits under the day's directory."""
     dg = int(dg) if dg is not None else current()
-    return SlatePaths(dg=dg, root=_root(root) / str(dg))
+    base = _root(root)
+    return SlatePaths(dg=dg, root=base / str(dg), day=_day_of(dg, base), days=base.parent / DAYS_DIRNAME)
 
 
 # the per-slate paths the code reads as functions of the current slate (the constants they replace are in the docstring)
@@ -165,13 +201,17 @@ def read_meta(dg: Optional[int] = None, root: Optional[Path] = None) -> dict:
 
 
 def write_meta(dg: Optional[int] = None, root: Optional[Path] = None, **fields) -> dict:
-    """Merge `fields` into slate.json (datetimes as ISO text). Creates the directory."""
-    sp = paths(dg, root).ensure()
+    """Merge `fields` into slate.json (datetimes as ISO text). Creates the slate's directory (not the day's: `create` does that once the
+    day is known)."""
+    sp = paths(dg, root)
+    sp.root.mkdir(parents=True, exist_ok=True)
     meta = read_meta(sp.dg, root)
     for k, v in fields.items():
         meta[k] = v.isoformat(timespec="seconds") if isinstance(v, datetime) else (v.isoformat() if isinstance(v, date) else v)
     meta["draft_group"] = sp.dg
     tmp = sp.meta.with_suffix(".json.tmp"); tmp.write_text(json.dumps(meta, indent=1, sort_keys=True)); os.replace(tmp, sp.meta)
+    if "day" in fields:
+        _DAYS.pop((str(_root(root)), sp.dg), None)                     # re-read: the day is known now (or changed by a migration)
     return meta
 
 
@@ -339,8 +379,6 @@ def create(dg: int, *, lock: Optional[datetime] = None, label: str = "", games: 
            history: Optional[Path] = None) -> SlatePaths:
     """Make the slate's directory and database (idempotent) and note what is known about it. `history`: the history database to
     attach (default: this checkout's; the feed names the consumer's)."""
-    sp = paths(dg, root).ensure()
-    ensure_slate_schema(engine(dg, root, history))
     meta = read_meta(dg, root)
     fields = {}
     if not meta.get("created_at"):
@@ -351,7 +389,9 @@ def create(dg: int, *, lock: Optional[datetime] = None, label: str = "", games: 
         fields["label"] = label
     if games is not None:
         fields["games"] = int(games)
-    write_meta(dg, root, **fields)
+    write_meta(dg, root, **fields)                                     # the record first: the day decides where the edits live
+    sp = paths(dg, root).ensure()
+    ensure_slate_schema(engine(dg, root, history))
     return sp
 
 

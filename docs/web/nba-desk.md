@@ -40,8 +40,9 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
   slate's lock picks one (above). The old `view=exposures` links open pre-lock, where the exposures are a section.
   A team's page (below) sits one level under the slate: **Ivan › NBA › day › slate › TEAM**.
 - **locks in / locked**: the slate's countdown. Next to it, **refreshed HH:MM (desk | autopilot | script)**: when this
-  slate's pool was last refreshed and by what (`slate.json`); on a consumer **laptop autopilot on/off · refreshed HH:MM
-  (by) · pulled HH:MM**: when the laptop last refreshed the slate and when this desk last pulled it.
+  slate's pool was last refreshed and by what (`slate.json`); on a consumer one stamp, **projections HH:MM**: when the slate's
+  projection was last written, by the laptop's refresh as pulled or by a team re-figured here by an edit (the hover has the
+  laptop's refresh time and the pull time); a consumer shows no other refresh times.
 - **autopilot** box (producer only; `scripts/nba/autopilot.py on|off|status`): the capture tick refreshes,
   fetches props at the offsets and re-projects every 15 minutes while no desk job runs, so the server's Refresh finds a fresh pool; the
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See
@@ -94,7 +95,7 @@ or when news breaks.
    read them through `data/nba/jobs/desk_config.json`. Choose has no panel knobs: they are set per contest in the
    contests section, a blank one is the desk default.
    6 **Late swap** opens the late swap view.
-   Under the steps: when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
+   Under the steps (the producer only; a consumer has the header's one stamp): when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
    the news was read, the slate's lineups and sim rows; then the job status, its log, the exports and the latest picks.
 3. **Needs you** (`_needs_you`): the teams to open, nearest tip first, each with why: mapped but the inputs moved since
    (a status, the lineup, an out), an open question (a questionable rotation player with no call) within 90 minutes of
@@ -248,8 +249,8 @@ A past slate, read only (`ivan.sports.nba.slate_backtest`, terminal `scripts/nba
 - **Notes at lock**: the desk's player notes that stood at lock.
 - **Players by team**: minutes and points projected (our last capture before lock) against played, the miss, our
   exposure, the field's ownership (DraftKings' %drafted in the largest contest), our projected ownership, the note.
-  Below each team's table, the game as played over our grid: the grid drawn on the desk (filed per slate under
-  `data/nba/input/edits/<draft group>/<TEAM>.json`), else the grid rows the archive kept at the tip (`rotation_cells`,
+  Below each team's table, the game as played over our grid: the grid drawn on the desk (the day's, under
+  `data/nba/days/<day>/edits/rotations/<TEAM>.json`), else the grid rows the archive kept at the tip (`rotation_cells`,
   kept from 2026-10-29 by `archive_at_lock.py`), each minute marked on the floor in both, played but not in ours, or in
   ours and sat; the share of the 240 player-minutes on the floor in both.
 - **Our lineups**: every entry, best first: rank, points, payout, copies of it in that contest's field, and the sim's
@@ -322,7 +323,7 @@ arrive as the slate's `published/` layer and show as green placeholders; the con
 its own files, a blank box falls back to the published value, Clear locks drops only its own layer, and a pull
 re-projects only the teams it edited. The card says "published" and counts "N of your own". No props, lines or news
 buttons, no news auto box: the headlines come with the pool. When nothing changed on the laptop, Refresh says so. The
-header reads "laptop autopilot on/off · refreshed HH:MM (desk | autopilot) · pulled HH:MM" from the slate's record
+header reads "projections HH:MM" (the pool's newest projection time; the hover has the laptop's refresh and the pull time from the slate's record)
 (`slate.json`) and the pull state (`data/feed-state/nba.json`, `feed.status`).
 
 To try to break a consumer desk without touching his: `deploy/sandbox_server.sh up` runs a second consumer

@@ -78,10 +78,11 @@ spread): the things the history-built rotation does not know. `scripts/nba/consi
 Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 
 - **pin** a player's minutes (0 scratches him), his fppm, his 10-90 band, or his projection; blank unpins.
-  Written at once to `data/nba/slates/<dg>/edits/minutes_overrides.csv`; the team re-projects around the pins.
+  Written at once to the day's `data/nba/days/<day>/edits/minutes_overrides.csv` (the slates of one day share their edits;
+  the next day starts clean); the team re-projects around the pins.
 - **call a starter** (toggle) when Rotowire has not confirmed yet.
 - **paint the rotation grid**: who is on the floor in each of the 48 minutes. The grid autosaves on every
-  stroke to `data/nba/slates/<dg>/edits/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
+  stroke to `data/nba/days/<day>/edits/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
   projection, **Re-fill** fills the unlocked rows around the locks, **Hold all** locks the grid as drawn,
   **Clear locks** drops the team's pins and grid. The grid's row sums are the minutes projection
   ([projections.md](projections.md)).

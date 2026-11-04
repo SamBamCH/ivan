@@ -467,7 +467,8 @@ def _pull_slates(spec: dict, base: str, token: Optional[str], tmp: Path, manifes
         new_mirror = (p0.get("mirror") or {}).get("stamp") != (m.get("mirror") or {}).get("stamp")
         if not (new_tables or new_edits or new_mirror):
             continue
-        sp = S.create(dg, root=sdir, history=root / spec["db"])
+        meta = m.get("meta") or {}
+        sp = S.create(dg, root=sdir, history=root / spec["db"], lock=S.meta_time(meta, "lock"))     # the day first: the published layer is the day's
         if new_tables:
             gz = fetch(f"{base}/slates/{key}/slate.sql.gz", token, tmp / f"slate-{key}.sql.gz")
             if _sha(gz) != m["sha256"]:
@@ -485,7 +486,6 @@ def _pull_slates(spec: dict, base: str, token: Optional[str], tmp: Path, manifes
             for rel in listing:
                 fetch(f"{base}/slates/{key}/projection/{rel}", token, sp.store / rel)
             got["mirror"] = len(listing)
-        meta = m.get("meta") or {}
         S.write_meta(dg, sdir, **{k: v for k, v in meta.items() if v is not None}, pulled_at=datetime.now())
         st[key] = {"stamp": m["stamp"], "edits": {"stamp": (m.get("edits") or {}).get("stamp")}, "mirror": {"stamp": (m.get("mirror") or {}).get("stamp")},
                    "pulled_at": datetime.now().isoformat(timespec="seconds")}

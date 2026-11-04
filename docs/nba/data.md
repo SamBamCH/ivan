@@ -42,7 +42,8 @@ The slate tables (`slates.SLATE_TABLES`) are created in the slate's file by `sla
 history file by `ingest.ensure_schema`; a history table created in a slate file would shadow the real one, so the two
 lists are explicit. A slate's lineups, sims and reports are its own and nothing clears them for another slate;
 `scripts/nba/clear_all.py --slate DG [--yes|--dry-run]` empties one slate's by hand. The one-time move from the one pool
-is `scripts/nba/migrate_slates.py` (the old tables stay in the history file as `_migrated_*` until dropped).
+is `scripts/nba/migrate_slates.py` (the old tables stay in the history file as `_migrated_*` until dropped);
+`scripts/nba/migrate_edits_by_day.py` then moved each slate's edits under its day (both run by the server bootstrap, idempotent).
 
 ## On disk (`data/nba/`)
 
@@ -52,11 +53,6 @@ data/nba/
 ├── slates/<draft group>/           one slate (ivan.sports.nba.slates; never deleted by the code)
 │   ├── slate.json                  draft_group, lock, day, label, games, created_at, refreshed_at + refreshed_by (desk | autopilot | script | feed | archive), published_at (producer) / pulled_at (consumer)
 │   ├── slate.sqlite                the slate's tables: the pool, starters, market rates, notes, lineups, sims, contests (the history attached as `hist`)
-│   ├── edits/
-│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
-│   │   ├── rotations/<TEAM>.json   the painted grid per team with its locked rows
-│   │   └── scenarios/<TEAM>/*.json named copies of a team's two files + assumptions; _active.json
-│   ├── published/                  consumer only: the laptop's edits for this slate as the base layer (minutes_overrides.csv, rotations/)
 │   ├── projection/<TEAM>.pkl       the projection store: the slate's projection per team (frame, history-only frame, the grid behind it),
 │   │                               written by whatever projects (ingest.project_team), read by the desk; mirrored to the consumer
 │   ├── input/
@@ -67,6 +63,13 @@ data/nba/
 │       ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
 │       ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
 │       └── lateswap.<stamp>.csv + .json
+├── days/<YYYY-MM-DD>/              the day's edits, shared by its slates (a game is mapped once; the 6:00 and 6:30 slates read the
+│   │                               same files, the next day starts clean); a slate reaches them through the `day` in its slate.json
+│   ├── edits/
+│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
+│   │   ├── rotations/<TEAM>.json   the painted grid per team with its locked rows
+│   │   └── scenarios/<TEAM>/*.json named copies of a team's two files + assumptions, saved on this day; _active.json
+│   └── published/                  consumer only: the laptop's edits of the day as the base layer (minutes_overrides.csv, rotations/)
 ├── archive_state.json              which tips archive_at_lock.py has recorded
 ├── capture_state.json              the autopilot tick's state (props offsets done per slate, the day's fetches)
 ├── input/

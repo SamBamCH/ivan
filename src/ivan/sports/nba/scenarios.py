@@ -3,15 +3,17 @@ ivan.sports.nba.scenarios
 
 A scenario is a team's edits saved under a name with the assumption they were built on: "Giannis out" holds a scratch
 pin on him and the grid painted around his absence; "Giannis in" holds his row at 32 minutes. Each is a copy of the two
-things a team's edits live in (its rows of data/nba/input/minutes_overrides.csv and data/nba/input/rotations/<TEAM>.json)
-plus `assumes`: {player: out | in | starts | bench}, read off the calls in the edits when it is saved. Activating one puts
+things a team's edits live in (its rows of the day's minutes_overrides.csv and its rotations/<TEAM>.json, under
+data/nba/days/<day>/edits/, ivan.sports.nba.slates) plus `assumes`: {player: out | in | starts | bench}, read off the calls in the edits when it is saved. Activating one puts
 its pins and grid back live for that team only; the desk re-projects the team.
 
 The assumptions are what makes a scenario pick itself: when a refresh or a late-news call changes the facts (DK statuses,
 Rotowire starters, the call you typed), the scenario whose assumptions all hold is activated for the team (one match,
 not already active). Two matches or none leave the desk as it is and say so.
 
-Files: data/nba/input/scenarios/<TEAM>/<slug>.json, and _active.json beside them naming the active slug.
+Files: data/nba/days/<day>/edits/scenarios/<TEAM>/<slug>.json, and _active.json beside them naming the active slug. A scenario
+belongs to the day it was saved on (a grid is a mapping of that day's game): it is listed and can pick itself for the slates
+of that day only; the next day starts without it.
 """
 from __future__ import annotations
 
