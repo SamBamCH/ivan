@@ -45,6 +45,12 @@ venv/bin/python scripts/nba/migrate_slates.py | tail -3
 OLD=$(systemctl show ivan-web -p MainPID --value 2>/dev/null || echo 0)
 [[ "$OLD" != "0" ]] && kill "$OLD" && sleep 4
 TS="$(tailscale ip -4 2>/dev/null || hostname -I | awk '{print $1}')"
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://$TS/nba/login" || true)
-[[ "$code" == "200" ]] && echo "desk login page answers at http://$TS/nba/login" || echo "!! desk not answering at http://$TS/nba/login (status $code); check: journalctl -u ivan-web -n 50"
+# the site's login lives at its root (/nba/login answers 303 to it) and the app imports every sport at start: up to 30 s
+code=000
+for _ in $(seq 1 10); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://$TS/nba/login" || true)
+  [[ "$code" == "200" || "$code" == "303" ]] && break
+  sleep 3
+done
+[[ "$code" == "200" || "$code" == "303" ]] && echo "desk answers at http://$TS/nba/ (login status $code)" || echo "!! desk not answering at http://$TS/nba/login (status $code); check: journalctl -u ivan-web -n 50"
 echo "done. desk: http://$TS/nba/  (its Refresh pulls from $HOST)"
