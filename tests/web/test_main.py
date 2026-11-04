@@ -298,3 +298,28 @@ def test_every_address_the_nba_pages_carry_answers(open_site):
     if team:
         page = open_site.get(f"/nba/{day}/{dg}/{team}/").text
         assert f'href="/nba/{day}/{dg}/"' in page                              # ‹ slate goes back to the slate page
+
+
+def test_nba_refresh_shows_a_progress_banner_with_its_log(open_site):
+    """While a held slate refreshes in the background its board carries a banner with what runs, the seconds so far and the last
+    lines the refresh logged, polled every 2 s; the poll answers the banner while it runs and a reload when it is done."""
+    from datetime import datetime
+    from ivan.web import nba as D
+    dg, day = _held(open_site)
+    d = D.desk_for(dg)
+    D.PROGRESS[dg] = dict(what="refreshing the pool", started=datetime.now(), lines=["fetching DK draftables for draft group %d" % dg, "stored 382 players"])
+    d.busy = "refreshing the pool"
+    try:
+        r = open_site.get(f"/nba/{day}/{dg}/board?view=games")
+        assert r.status_code == 200 and 'id="refresh-banner"' in r.text and "stored 382 players" in r.text and "refreshing the pool" in r.text
+        assert "team-row" in r.text or "games" in r.text                                    # the board itself still renders beneath the banner
+        r = open_site.get(f"/nba/{day}/{dg}/board?view=games&after=busy")
+        assert r.status_code == 200 and 'id="refresh-banner"' in r.text and "HX-Refresh" not in r.headers
+        page = open_site.get(f"/nba/{day}/{dg}/")
+        assert "refreshing the pool…" in page.text                                           # the bar says so too
+        edit = open_site.post(f"/nba/{day}/{dg}/refresh", data={"what": "dk"}, follow_redirects=False)
+        assert edit.status_code == 303                                                       # a second refresh is refused while one runs
+    finally:
+        d.busy = None; D.PROGRESS.pop(dg, None)
+    r = open_site.get(f"/nba/{day}/{dg}/board?view=games&after=busy")
+    assert r.headers.get("HX-Refresh") == "true"

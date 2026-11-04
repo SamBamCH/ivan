@@ -236,7 +236,7 @@ def board(request: Request, view: str = "games", after: str = "", dg: Optional[i
     from fastapi.responses import Response
     if after == "busy" and bound() is not None:
         if desk.busy:
-            return Response(status_code=204)                     # still refreshing: the page keeps what it shows
+            return _render(request, "_nba_progress.html", view=view)      # still refreshing: the banner with the latest lines
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     if after == "busy" and bound() is None and key is not None and not LOADING.get(key) and S.holds(key):
         return Response(status_code=200, headers={"HX-Refresh": "true"})

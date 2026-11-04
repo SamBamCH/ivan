@@ -21,12 +21,15 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
     over ssh (`publish nba <dg>`: the laptop fetches the slate if it does not hold it, publishes its bundle, and the
     consumer copies it; `scripts/nba/feed.py pull --slate DG`). Nothing else is touched: flipping back to a held slate
     is instant. While it loads the bar keeps the slate you picked, the header reads "loading slate N…" (or "asking the
-    laptop for slate N…") and the board shows the progress; when it is done the whole page reloads on the new slate.
+    laptop for slate N…") and the board shows the progress: a spinner, the seconds so far and the last lines the load
+    logged (fetching DraftKings, Rotowire, storing, projecting each team, the news), refreshed every 2 s; when it is done
+    the whole page reloads on the new slate.
     When that slate's jobs run the page says so and offers the load as a button (`POST /slate`, the picker's button).
   - a **held slate** opens on the view its lock picks: **pre-lock** before its first lock, **post-lock** (the late
     swap) after it, **backtest** once its day has passed (`slate_backtest.mode_for`). A refresh of the slate running
-    meanwhile shows as "refreshing the pool…" in the bar; its pages keep reading, its edits answer "wait", and the page
-    reloads when the refresh is done.
+    meanwhile shows as "refreshing the pool…" in the bar and as an amber **progress banner** at the top of the board (what
+    runs, the seconds so far, the last log lines, updated every 2 s; `_nba_progress.html`); its pages keep reading, its
+    edits answer "wait", and the page reloads when the refresh is done.
   - a slate of an **earlier day** not held opens its backtest (below), read only: nothing is loaded or deleted. Its
     **Restore into the desk** button loads it from its archive capture into its own directory when it is to be re-worked.
   Every action of a slate hangs off its address (`/nba/<day>/<dg>/refresh`, `.../team/<TEAM>/pin`, `.../pipeline/sim`,

@@ -13,7 +13,7 @@ One module per concern; the routes register on the shared app when the package i
 """
 from __future__ import annotations
 
-from .core import app, desk, sport, runner, LOCK, CONSUMER, LIMITED, LIMITS, KEY, LABEL, VIEWS, LOADING, DESKS, desk_for, bound, slate_url, _loaded_slate, _render, _here      # noqa: F401
+from .core import app, desk, sport, runner, LOCK, CONSUMER, LIMITED, LIMITS, KEY, LABEL, VIEWS, LOADING, PROGRESS, DESKS, desk_for, bound, slate_url, _loaded_slate, _render, _here      # noqa: F401
 from .knobs import pipeline_form, PIPELINE_DEFAULTS, clamp_form, write_desk_config                                            # noqa: F401
 from . import edits, outputs, exposures, pipeline, lateswap, pages, team, exports                                              # noqa: F401  (the routes register here)
 from .core import slate as _slate_router

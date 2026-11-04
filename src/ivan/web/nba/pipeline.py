@@ -22,7 +22,7 @@ from ivan.sports.nba.ingest import after_pull, capture_pool, refresh_pool, Inges
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR
 from ivan.web import auth
-from .core import CONSUMER, LIMITED, LOADING, LOCK, MAX_JOBS, NEWS_AUTO_SECONDS, SCRIPTS, _active, _busy, _here, _render, _submit as _submit_job, app, desk, desk_for, runner, slate, slate_jobs
+from .core import CONSUMER, LIMITED, LOADING, LOCK, PROGRESS, MAX_JOBS, NEWS_AUTO_SECONDS, SCRIPTS, _active, _busy, _here, _render, _submit as _submit_job, app, desk, desk_for, runner, slate, slate_jobs
 from ivan.sports.nba import slates as S
 from .edits import _apply_typed_pins
 from .exposures import _side_ctx
@@ -31,19 +31,21 @@ from .outputs import _entries_info, _entries_path, _latest_outputs
 from ivan.sports.nba.desk import lineup_slates
 
 
-def _begin(dg: int, what: str):
-    """Mark the slate busy: on its desk when it has one, else in LOADING (a slate being fetched for the first time)."""
+def _begin(dg: int, what: str) -> list:
+    """Mark the slate busy: on its desk when it has one, else in LOADING (a slate being fetched for the first time). Returns the
+    progress record's lines: the thread logs into it and the page's banner shows the last few until the work is done."""
     d = desk_for(dg, create=False)
     if d is not None:
         d.busy = what
     else:
         LOADING[int(dg)] = what
-    return d
+    PROGRESS[int(dg)] = dict(what=what, started=datetime.now(), lines=[])
+    return PROGRESS[int(dg)]["lines"]
 
 
 def _finish(dg: int, msgs: list, changes: Optional[dict] = None, news_checked: bool = False) -> None:
     """The slate's work is done: its desk (made now when the slate is new) rebuilds and shows the messages."""
-    LOADING.pop(int(dg), None)
+    LOADING.pop(int(dg), None); PROGRESS.pop(int(dg), None)
     d = desk_for(dg)
     if d is None:
         return
@@ -64,7 +66,6 @@ def _start_restore(draft_group: int) -> None:
     dg = int(draft_group)
 
     def run():
-        log = []
         with S.using(dg):
             sess = S.session(dg)
             try:
@@ -77,7 +78,7 @@ def _start_restore(draft_group: int) -> None:
             finally:
                 sess.close()
         _finish(dg, [msg])
-    _begin(dg, f"restoring slate {dg} from the archive")
+    log = _begin(dg, f"restoring slate {dg} from the archive")
     threading.Thread(target=run, name=f"ivan-restore-{dg}", daemon=True).start()
 
 
@@ -88,7 +89,7 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Option
     dg = int(draft_group)
 
     def run():
-        log = []; changes = None
+        changes = None
         with S.using(dg):
             sess = S.session(dg)
             try:
@@ -102,7 +103,7 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Option
             finally:
                 sess.close()
         _finish(dg, [msg], changes=changes, news_checked=True)
-    _begin(dg, what)
+    log = _begin(dg, what)
     threading.Thread(target=run, name=f"ivan-refresh-{dg}", daemon=True).start()
 
 
@@ -117,7 +118,7 @@ def _start_pull(what: str, draft_group: int, ask: bool = False) -> None:
         msgs = []; changes = None
         with S.using(dg):
             try:
-                changed = feed.pull_from_producer("nba", NBA_DATA_DIR.parent / "feed-state", log=msgs.append, slate=dg)
+                changed = feed.pull_from_producer("nba", NBA_DATA_DIR.parent / "feed-state", log=log.append, slate=dg)
                 applied = changed.get("slates") or {}
                 if applied.get(dg) or applied.get(str(dg)):
                     sess = S.session(dg)
@@ -140,7 +141,7 @@ def _start_pull(what: str, draft_group: int, ask: bool = False) -> None:
             except Exception as e:   # noqa: BLE001
                 msgs.append(f"{what} failed: {type(e).__name__}: {e}")
         _finish(dg, msgs, changes=changes, news_checked=True)
-    _begin(dg, what)
+    log = _begin(dg, what)
     threading.Thread(target=run, name=f"ivan-pull-{dg}", daemon=True).start()
 
 

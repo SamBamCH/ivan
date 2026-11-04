@@ -51,6 +51,15 @@ NOT_AN_EDIT = ("/refresh", "/reload", "/news", "/autopilot", "/login", "/publish
 DESKS: dict[int, Desk] = {}
 _DESKS_LOCK = threading.Lock()
 LOADING: dict[int, str] = {}                                  # a slate being fetched that has no desk yet: draft group -> what is happening
+PROGRESS: dict[int, dict] = {}                                # every slate with a refresh, load, restore or pull running: {what, started, lines}
+
+
+def progress_of(dg: Optional[int]) -> Optional[dict]:
+    """The running background work on a slate, with elapsed seconds, for the banner; None when nothing runs."""
+    if dg is None or int(dg) not in PROGRESS:
+        return None
+    pr = PROGRESS[int(dg)]
+    return dict(pr, elapsed=int((datetime.now() - pr["started"]).total_seconds()))
 _bound: contextvars.ContextVar[Optional[Desk]] = contextvars.ContextVar("ivan_nba_desk", default=None)
 
 
@@ -214,7 +223,8 @@ def _render(request: Request, template: str, **ctx):
         flash = []
     return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "root": slate_root(request), "sport_root": sport_root(request),
                                                           "here": _here(request), "consumer": CONSUMER, "limited": LIMITED, "limits": LIMITS,
-                                                          "job_max_minutes": JOB_MAX_MINUTES, "refreshing": (d.busy if d is not None else None), **ctx})
+                                                          "job_max_minutes": JOB_MAX_MINUTES, "refreshing": (d.busy if d is not None else None),
+                                                          "progress": progress_of(getattr(request.state, "dg", None)), **ctx})
 
 
 def _loaded_slate() -> tuple[Optional[int], Optional[datetime]]:
