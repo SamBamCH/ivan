@@ -232,3 +232,69 @@ def test_spearman_se():
     assert spearman_se(0.0, 3) is None
     assert abs(spearman_se(0.0, 103) - 0.1) < 1e-9
     assert spearman_se(0.5, 103) > spearman_se(0.0, 103)
+
+
+def _nba_addresses(html: str) -> tuple[set, set]:
+    """(GET addresses, POST addresses) under /nba/ that a rendered page carries: href and hx-get, form action and hx-post."""
+    import re
+    gets = set(re.findall(r'(?:href|hx-get)="(/nba/[^"#]*)"', html))
+    posts = set(re.findall(r'(?:hx-post)="(/nba/[^"#]*)"', html))
+    for m in re.finditer(r'<form[^>]*method="post"[^>]*action="(/nba/[^"#]*)"', html, flags=re.I):
+        posts.add(m.group(1))
+    for m in re.finditer(r'<form[^>]*action="(/nba/[^"#]*)"[^>]*method="post"', html, flags=re.I):
+        posts.add(m.group(1))
+    return gets, posts
+
+
+def _route_exists(path: str, method: str) -> bool:
+    """Does any route of the site (its mounted sports included) answer `method` at `path`? Nothing is sent."""
+    from starlette.routing import Match
+    from urllib.parse import urlsplit
+
+    def walk(routes, scope):
+        for r in routes:
+            m, child = r.matches(scope)
+            if m == Match.NONE:
+                continue
+            sub = getattr(r, "app", None)
+            if hasattr(sub, "routes") and child.get("app") is not None and sub is not None and not hasattr(r, "endpoint"):
+                if walk(sub.routes, {**scope, **child}):
+                    return True
+            elif m == Match.FULL:
+                return True
+        return False
+    scope = {"type": "http", "method": method.upper(), "path": urlsplit(path).path, "root_path": "", "headers": [], "query_string": b""}
+    return walk(app.routes, scope)
+
+
+def test_every_address_the_nba_pages_carry_answers(open_site):
+    """Every link and every form or htmx target on the NBA pages of a held slate resolves: the GET ones answer (no 404, no doubled
+    slate in the path), the POST ones have a route. The team page's back link doubled the slate once (2026-11-03: `root` became
+    the slate's root while the link still appended the slate's path to it)."""
+    from ivan.web import nba as D
+    dg, day = _held(open_site)
+    d = D.desk_for(dg)
+    team = d.slate.teams()[0] if d.slate.teams() else None
+    pages = [f"/nba/{day}/{dg}/", f"/nba/{day}/{dg}/?view=players", f"/nba/{day}/{dg}/?view=lateswap", f"/nba/{day}/{dg}/?view=backtest",
+             f"/nba/{day}/{dg}/board?view=games", f"/nba/{day}/{dg}/board?view=players", f"/nba/{day}/{dg}/board?view=lateswap",
+             f"/nba/{day}/{dg}/board?view=backtest&dg={dg}", f"/nba/{day}/{dg}/pipeline", f"/nba/{day}/{dg}/pipeline/status", f"/nba/{day}/{dg}/exposures"]
+    if team:
+        pages += [f"/nba/{day}/{dg}/{team}/", f"/nba/{day}/{dg}/team/{team}", f"/nba/{day}/{dg}/team/{team}/rotation"]
+    gets, posts = set(), set()
+    for p in pages:
+        r = open_site.get(p)
+        assert r.status_code == 200, (p, r.status_code)
+        g, po = _nba_addresses(r.text); gets |= g; posts |= po
+    assert gets and posts
+    bad = []
+    for g in sorted(gets):
+        assert g.count(f"/{dg}/") <= 1, f"the slate appears twice in {g}"
+        r = open_site.get(g, follow_redirects=True)
+        if r.status_code >= 400:
+            bad.append((g, r.status_code))
+    assert not bad, bad
+    missing = [p for p in sorted(posts) if not _route_exists(p, "POST")]
+    assert not missing, missing
+    if team:
+        page = open_site.get(f"/nba/{day}/{dg}/{team}/").text
+        assert f'href="/nba/{day}/{dg}/"' in page                              # ‹ slate goes back to the slate page

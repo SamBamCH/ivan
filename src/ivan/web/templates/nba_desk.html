@@ -351,10 +351,10 @@
   {% set g = game %}
   <div class="game team-page">
     <div class="gh">
-      <a class="btn back" href="{{ page_slate.path(root) if page_slate else root ~ '/desk/' }}" title="back to the slate">‹ slate</a>
+      <a class="btn back" href="{{ here }}" title="back to the slate">‹ slate</a>
       <span class="tip {% if g and g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{% if g %}{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% endif %}{% else %}{{ team }}{% endif %}</span>
       {% if g and g.fav %}<span class="muted" title="the consensus spread of tonight's game">{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line for tonight's game</span>{% endif %}
-      {% if g and g.teams|length == 2 %}{% set other = (g.teams|rejectattr('team', 'equalto', team)|first).team %}<span class="muted small">· <a class="other" href="{{ page_slate.path(root) if page_slate else root ~ '/desk/' }}{{ other }}/">the other side ({{ other }})</a></span>{% endif %}
+      {% if g and g.teams|length == 2 %}{% set other = (g.teams|rejectattr('team', 'equalto', team)|first).team %}<span class="muted small">· <a class="other" href="{{ here }}{{ other }}/">the other side ({{ other }})</a></span>{% endif %}
       <span class="spacer"></span>{% include "_nba_minfpts.html" %}
     </div>
     <div class="sides">
