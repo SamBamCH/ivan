@@ -190,6 +190,9 @@ def test_nba_slate_page_reads_and_the_team_page_edits(open_site):
     assert f"/nba/{day}/{dg}/{team}/" in board.text                                                        # the chip links to the team page
     page = open_site.get(f"/nba/{day}/{dg}/{team}/")
     assert page.status_code == 200 and f'hx-get="/nba/{day}/{dg}/team/{team}"' in page.text
+    others = [t for t in d.slate.teams() if t != team]
+    assert 'class="tips"' in page.text and f" on\" href=\"/nba/{day}/{dg}/{team}/\"" in page.text                  # the games strip, this team's chip outlined
+    assert any(f'href="/nba/{day}/{dg}/{t}/"' in page.text for t in others)                                   # the other teams one click away
     card = open_site.get(f"/nba/{day}/{dg}/team/{team}")
     assert card.status_code == 200 and 'name="minutes"' in card.text and f'/nba/{day}/{dg}/team/{team}/' in card.text   # the card is where the pins are
     r = open_site.get(f"/nba/desk/?open={team}", follow_redirects=False)

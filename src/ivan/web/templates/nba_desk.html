@@ -371,6 +371,7 @@
   {% elif team %}
   {# the team page: the rotation card on a page of its own; its body loads after the shell like the board does #}
   {% set g = game %}
+  {% if menu %}<div class="top-row">{% with current_team=team %}{% include "_nba_games.html" %}{% endwith %}</div>{% endif %}
   <div class="game team-page">
     <div class="gh">
       <a class="btn back" href="{{ here }}" title="back to the slate">‹ slate</a>

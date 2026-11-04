@@ -1,0 +1,31 @@
+{# the games strip: one table above the actions, each tip heading four columns (away, home, spread, total), each team a chip
+   coloured by its map state and a link to its page. On the slate page (the board) and on every team page, so one team's page
+   leads to the others; `current_team` marks the page's own team. Needs menu, mapped, questions_sum, team_url. #}
+<nav class="menu below">
+  {% if mapped and mapped.n %}<div class="slot mapped-slot">
+    <div class="slot-time">mapped</div>
+    <div class="mapped-sum {% if mapped.n_mapped == mapped.n and questions_sum.open == 0 %}ok{% elif mapped.changed %}warn{% endif %}" title="green: mapped and no open question · yellow: an open question (a questionable player who could shake the rotation) · red: mapped but the inputs moved since · grey: unmapped{% if mapped.changed %} · changed: {{ mapped.changed|join(', ') }}{% endif %}{% if mapped.unmapped %} · unmapped: {{ mapped.unmapped|join(', ') }}{% endif %}">
+      <b>{{ mapped.n_mapped }}/{{ mapped.n }}</b> teams{% if questions_sum.open %}<br>{{ questions_sum.open }} open question{{ '' if questions_sum.open == 1 else 's' }}{% endif %}{% if mapped.n_mapped == mapped.n and questions_sum.open == 0 %}<br><b>good to go</b>{% endif %}</div>
+  </div>{% endif %}
+  {% set nrows = menu|map(attribute='games')|map('length')|max if menu else 0 %}
+  <table class="tips">
+    <colgroup>{% for grp in menu %}<col class="team"><col class="team"><col class="line"><col class="total">{% endfor %}</colgroup>
+    <thead>
+      <tr>{% for grp in menu %}<th colspan="4" class="tip">{{ grp.tip.strftime('%H:%M') if grp.tip else 'no tip' }} <span class="n">{{ grp.games|length }} game{{ '' if grp.games|length == 1 else 's' }}</span></th>{% endfor %}</tr>
+      <tr class="sub">{% for grp in menu %}<th class="first">away</th><th>home</th><th class="num">spread</th><th class="num">total</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+    {% for i in range(nrows) %}
+    <tr>
+      {% for grp in menu %}{% set g = grp.games[i] if i < grp.games|length else none %}
+      {% if g %}{% set st = 'locked' if g.locked else '' %}
+        {% for c in g.teams %}<td class="{{ st }}{% if loop.first %} first{% endif %}"><a class="chip {{ c.colour or 'unmapped' }}{% if current_team is defined and c.team == current_team %} on{% endif %}" href="{{ team_url(c.team) }}" title="{{ c.team }} · lineup {{ c.starters }} · {{ c.why }}{% if c.qtext %} · {{ c.qtext }}{% endif %}{% if c.moved %} · since the last refresh: {{ c.moved }}{% endif %} · open the team's page">{{ c.team }}{% if c.new or c.moved %}<i class="dot {% if c.moved %}moved{% endif %}"></i>{% endif %}</a></td>{% endfor %}{% if g.teams|length == 1 %}<td class="{{ st }}"></td>{% endif %}
+        <td class="num {{ st }}" title="the favourite and its spread (the consensus line of tonight's game)">{% if g.fav %}{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% else %}<span class="muted">no line</span>{% endif %}</td>
+        <td class="num {{ st }}" title="the game total">{{ '%g'|format(g.total) if g.total else '' }}</td>
+      {% else %}<td class="first"></td><td></td><td></td><td></td>{% endif %}
+      {% endfor %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</nav>

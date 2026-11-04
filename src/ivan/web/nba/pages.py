@@ -118,7 +118,7 @@ def _shell(request: Request, view: Optional[str], team: Optional[str], page: Opt
         fr = frame.ctx(request, A.SPORT, days, None, page, None, now)
         return _render(request, "nba_desk.html", header=header, team=None, game=None, view="games", busy=loading, dg=dg, frame=fr,
                        page_slate=fr["slate"], is_loaded=False)
-    game = None
+    game = None; strip = {}
     if d is not None:                                                                  # a held slate: its desk
         if view is None:
             lock = header.get("lock")
@@ -129,7 +129,10 @@ def _shell(request: Request, view: Optional[str], team: Optional[str], page: Opt
                 raise HTTPException(404, f"{team} is not on this slate")
             for t in desk.slate.teams():
                 desk.slate.spread(t)
-            game = next((g for grp in games_menu(now) for g in grp["games"] if any(c["team"] == team for c in g["teams"])), None)
+            menu = games_menu(now)
+            game = next((g for grp in menu for g in grp["games"] if any(c["team"] == team for c in g["teams"])), None)
+            # the games strip on the team page too, so one team's page leads to the others (the page's own chip outlined)
+            strip = dict(menu=menu, mapped=desk.mapped_summary(), questions_sum=desk.questions_summary(now), team_url=lambda t: _team_url(request, t))
             view = "games"
         is_loaded = True
     else:                                                                              # not held: its backtest, or load it first
@@ -139,7 +142,7 @@ def _shell(request: Request, view: Optional[str], team: Optional[str], page: Opt
         is_loaded = False
     fr = frame.ctx(request, A.SPORT, days, None, page, view if view != "load" else None, now)
     return _render(request, "nba_desk.html", header=header, team=team, game=game, view=view, busy=None, dg=dg, frame=fr, page_slate=page,
-                   is_loaded=is_loaded, load_note=note)
+                   is_loaded=is_loaded, load_note=note, **strip)
 
 
 @app.get("/desk/", response_class=HTMLResponse)

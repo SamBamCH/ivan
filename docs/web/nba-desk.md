@@ -58,7 +58,7 @@ its own page (below), and every edit there writes the team into the pool at once
 and the other desk all show the same numbers. You open a team only to map its minutes, when **needs you** sends you,
 or when news breaks.
 
-1. **Games strip**: one table above the actions, fixed column widths and row heights: each tip time heads four
+1. **Games strip** (`_nba_games.html`, also at the top of every team page): one table above the actions, fixed column widths and row heights: each tip time heads four
    columns (away, home, spread as "DET -7.5" or "PK" for a pick'em, total), and row N holds every tip's Nth game
    (the strip scrolls sideways when the tips outgrow the row). Each team is a chip coloured by its
    map state (green mapped, yellow an open question, red changed since mapped, grey unmapped; a dot for news or for
@@ -121,7 +121,8 @@ while one is open.
 
 A held slate's team on a page of its own, reached from a chip in the games strip, a name in the news table or
 the players view, or an old `/desk/?open=TEAM` link. The bar reads **Ivan › NBA › day › slate › TEAM**; **‹ slate** and
-the bar's slate go back; **the other side** opens the opponent's page. The page shell renders at once and the card
+the bar's slate go back; **the other side** opens the opponent's page; the **games strip** heads the page as on the
+slate page, the page's own chip outlined, so any other team is one click away. The page shell renders at once and the card
 (`GET /team/<TEAM>`, `_nba_side.html`) loads into it, as the board does on the slate page. Tonight's game heads the
 card: tip, countdown, the line ("DET -7.5 · O/U 228"; "no line" until Refresh lines or Refresh props fetches them).
 
