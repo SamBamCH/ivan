@@ -94,14 +94,14 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Option
             try:
                 _, _, news, moved = refresh_pool(sess, dg, update_odds=update_odds, starters=True, log=log.append, lines=lines, by="desk")
                 changes = dict(at=datetime.now(), teams=moved or {})
-                msg = f"{what}: done" + (_news_note(news) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
+                msg = f"{what}: done" + (_news_note(news, sess) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
             except IngestError as e:
                 msg = f"{what} failed: {e}"
             except Exception as e:   # noqa: BLE001 - the transaction rolled back: the old pool stands
                 msg = f"{what} failed, the previous pool is unchanged: {type(e).__name__}: {e}"
             finally:
                 sess.close()
-        _finish(dg, [msg], changes=changes)
+        _finish(dg, [msg], changes=changes, news_checked=True)
     _begin(dg, what)
     threading.Thread(target=run, name=f"ivan-refresh-{dg}", daemon=True).start()
 
@@ -189,10 +189,10 @@ def publish(request: Request, pins: str = Form("")):
     return RedirectResponse(_here(request), status_code=303)
 
 
-def _news_note(r: dict) -> str:
-    """'; news: 3 new, 1 on this slate: X · headline' after a refresh read Rotowire (the desk's news clock moves too)."""
-    desk.news_checked_at = r["fetched_at"]
-    pool = {normalize_name(p.name) for p in desk.slate.players}
+def _news_note(r: dict, sess) -> str:
+    """'; news: 3 new, 1 on this slate: X · headline' after a refresh read Rotowire (the slate's pool from its own session: this runs
+    in the load thread, where no desk is bound)."""
+    pool = {normalize_name(n) for (n,) in sess.query(NBAPlayer.name).all()}
     on_slate = [x for x in r["new"] if x.player_name in pool]
     return f"; news: {len(r['new'])} new" + (f", {len(on_slate)} on this slate: " + "; ".join(f"{x.player_raw} · {x.headline}" for x in on_slate[:6]) if on_slate else "")
 

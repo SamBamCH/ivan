@@ -271,6 +271,27 @@ def open(arg=None, *, create: bool = False):
 # ------------------------------------------------------------------------------ engines
 _engines: dict[Path, object] = {}
 _engines_lock = threading.Lock()
+WRITE_LOCK = threading.RLock()            # one slate write transaction at a time in this process (two slates share the history file)
+
+
+class writing:
+    """`with slates.writing(session): ...` around a write transaction: this process's other slate writers wait (WRITE_LOCK), any
+    read transaction of the session is ended, and the transaction begins IMMEDIATE, taking the write lock on the slate file and
+    the attached history up front. A deferred transaction that read the history and then wrote it met another writer's lock
+    with SQLite's immediate "database is locked" (no busy wait, to avoid a deadlock); IMMEDIATE waits the busy timeout instead.
+    Reads are untouched: the driver begins no transaction for a SELECT, so a page never holds a lock between statements."""
+    def __init__(self, session):
+        self.session = session
+
+    def __enter__(self):
+        WRITE_LOCK.acquire()
+        from sqlalchemy import text
+        self.session.rollback()
+        self.session.execute(text("BEGIN IMMEDIATE"))
+        return self.session
+
+    def __exit__(self, *exc):
+        WRITE_LOCK.release()
 
 
 def history_db_path() -> Path:
@@ -292,6 +313,7 @@ def engine(dg: Optional[int] = None, root: Optional[Path] = None, history: Optio
 
             @event.listens_for(eng, "connect")
             def _attach(dbapi_con, _rec, _hist=str(hist)):
+                dbapi_con.execute("PRAGMA journal_mode=WAL")           # readers never block a writer's commit (the history file is WAL too)
                 dbapi_con.execute(f"ATTACH DATABASE '{_hist}' AS hist")
             _engines[sp.db] = eng
     return eng

@@ -220,17 +220,20 @@ def one_transaction(session: Session):
     Everything inside commits once, at the end: the pool is replaced, projected and its public side refreshed before any
     other connection sees a row of it (SQLite WAL readers keep the old pool until the commit). The functions inside call
     session.commit() as they always did; here that becomes a flush. On an error everything rolls back and the old pool stays.
+    One slate writes at a time in this process and the transaction begins IMMEDIATE (slates.writing): two slates refreshing
+    together share the history file, and a deferred transaction that had read it hit "database is locked" when it wrote.
     """
     real_commit = session.commit
-    session.commit = session.flush            # type: ignore[method-assign]
-    try:
-        yield
-        session.commit = real_commit          # type: ignore[method-assign]
-        real_commit()
-    except BaseException:
-        session.commit = real_commit          # type: ignore[method-assign]
-        session.rollback()
-        raise
+    with S.writing(session):
+        session.commit = session.flush            # type: ignore[method-assign]
+        try:
+            yield
+            session.commit = real_commit          # type: ignore[method-assign]
+            real_commit()
+        except BaseException:
+            session.commit = real_commit          # type: ignore[method-assign]
+            session.rollback()
+            raise
 
 
 def locally_edited_teams(session: Session) -> set:
@@ -616,16 +619,17 @@ def check_news(session, log: Log = print, draft_group_id: Optional[int] = None) 
     every headline of the slate's teams now on file is linked to the slate (nba_slate_news, once per headline and slate), so
     the slate's pre-lock news is nba_news joined through that table."""
     from ivan.sports.nba import newsfeed
-    try:
-        out = newsfeed.check(session, log=log)
-    except Exception as e:   # noqa: BLE001 - the pool is the refresh; the news is a convenience on top
-        log(f"news check failed: {type(e).__name__}: {e}")
-        return None
-    if draft_group_id is not None:
+    with S.WRITE_LOCK:                                      # the headlines table is shared: two slates refreshing together write it in turn
         try:
-            link_slate_news(session, int(draft_group_id))
-        except Exception as e:   # noqa: BLE001
-            log(f"news link skipped: {type(e).__name__}: {e}")
+            out = newsfeed.check(session, log=log)
+        except Exception as e:   # noqa: BLE001 - the pool is the refresh; the news is a convenience on top
+            log(f"news check failed: {type(e).__name__}: {e}")
+            return None
+        if draft_group_id is not None:
+            try:
+                link_slate_news(session, int(draft_group_id))
+            except Exception as e:   # noqa: BLE001
+                log(f"news link skipped: {type(e).__name__}: {e}")
     return out
 
 
