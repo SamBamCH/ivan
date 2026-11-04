@@ -529,7 +529,7 @@ def drawn_source(team: str) -> Optional[str]:
     """Where the team's grid comes from: 'local' (painted on this machine), 'published' (the producer's, pulled), or None."""
     if drawn_path(team).exists():
         return "local"
-    if (S.published_rotations_dir() / f"{team}.json").exists():
+    if S.published_grid(team) is not None:
         return "published"
     return None
 
@@ -555,8 +555,8 @@ def load_drawn(team: str) -> Optional[pd.DataFrame]:
     This machine's own grid first, else the producer's published one (a consumer); .attrs["source"] says which."""
     p = drawn_path(team)
     if not p.exists():
-        p = S.published_rotations_dir() / f"{team}.json"
-        if not p.exists():
+        p = S.published_grid(team)
+        if p is None:
             return None
     d = json.loads(p.read_text())
     g = pd.DataFrame(np.array(d["grid"], dtype=bool).reshape(len(d["players"]), MINUTES), index=d["players"], columns=list(range(MINUTES)))

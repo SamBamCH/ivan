@@ -42,7 +42,7 @@ def test_a_new_out_voids_the_mapping_and_keeps_it_as_a_scenario(slate):
     assert MAP.stale_outs("ATL", statuses, local) == []                                                   # void once: nothing to void again
 
 
-def test_a_scratch_call_is_a_new_out_too_and_published_grids_are_left_alone(slate):
+def test_a_scratch_call_is_a_new_out_too_and_published_grids_are_left_alone(slate, monkeypatch):
     names = ["a one", "b two"]
     _mapped("BOS", names, names)
     local = {"a one": {"minutes": 0.0}}                                                                  # the desk's own scratch call
@@ -50,6 +50,7 @@ def test_a_scratch_call_is_a_new_out_too_and_published_grids_are_left_alone(slat
     rep = MAP.void_mapping("BOS", ["a one"], names, local, log=lambda m: None)
     assert local == {"a one": {"minutes": 0.0}} and rep["pins"] == 0                                      # the scratch stays: it is the call
     # a consumer: the laptop's published grid is not this machine's to void
+    monkeypatch.setenv("IVAN_FEED_SSH", "me@laptop")
     p = S.published_rotations_dir() / "CHI.json"; p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"team": "CHI", "players": names, "grid": [[1] * 48, [0] * 48], "locked": names,
                              "fingerprint": dict(available=names, out=[], status={}, starters=[])}))

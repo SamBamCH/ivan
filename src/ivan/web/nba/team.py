@@ -195,7 +195,7 @@ def rotation_restore(request: Request, team: str, player: str = Form(...)):
 def rotation_clear(request: Request, team: str):
     with LOCK:
         n = desk.clear_rotation(team)
-        back = "the published grid and pins" if ROT.drawn_source(team) == "published" or S.published_overrides_csv().exists() else "the model's"
+        back = "the published grid and pins" if ROT.drawn_source(team) == "published" or S.published_pins() is not None else "the model's"
         desk.flash.append(f"{team}: locks cleared" + (f", {n} typed minutes lifted" if n else "") + f"; the grid is {back}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 

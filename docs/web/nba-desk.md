@@ -322,7 +322,9 @@ laptop published (`scripts/nba/feed.py pull`); a slate page's one data button, *
 `scripts/nba/feed.py pull --slate DG`, `feed.pull_ssh`), pulls that slate now, in the background: the laptop publishes
 on request (each held slate's pool with every edit written into it, its pins and grids, its projection store, the shared
 props, lines and headlines), the server copies it over ssh and applies every bundle that moved, each into its own slate
-directory here. Picking a slate the laptop does not hold has the laptop fetch it first. The laptop's pins and grids
+directory here. Picking a slate the laptop does not hold has the laptop fetch it first. Only a consumer (a machine with
+`IVAN_FEED_SSH` or `IVAN_FEED_URL` set, `slates.is_consumer`) reads a published layer at all; the laptop ignores one it may
+find under a day (`slates.published_pins`, `published_grid`). The laptop's pins and grids
 arrive as the slate's `published/` layer and show as green placeholders; the consumer's own edits (amber) sit on top in
 its own files, a blank box falls back to the published value, Clear locks drops only its own layer, and a pull
 re-projects only the teams it edited. The card says "published" and counts "N of your own". No props, lines or news

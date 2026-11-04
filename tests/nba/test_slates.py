@@ -123,3 +123,16 @@ def test_migration_files_each_slates_edits_under_its_day(root):
     m = S.read_meta(210)
     assert m["lock"] == "2026-11-02T19:00:00" and m["day"] == "2026-11-02"                      # 01:00 UTC is the evening before, local
     assert mig.migrate(log=lambda m: None) == 0                                                 # idempotent
+
+
+def test_a_published_layer_counts_only_on_a_consumer(root, monkeypatch):
+    """A producer ignores a published pins file or grid it may find under the day (only a machine that pulls a feed has one)."""
+    S.create(400, lock=datetime(2026, 11, 4, 18, 0))
+    sp = S.paths(400)
+    sp.published.mkdir(parents=True); sp.published_overrides_csv.write_text("player,minutes\na,30\n")
+    sp.published_rotations.mkdir(); (sp.published_rotations / "ATL.json").write_text("{}")
+    monkeypatch.delenv("IVAN_FEED_SSH", raising=False); monkeypatch.delenv("IVAN_FEED_URL", raising=False)
+    with S.using(400):
+        assert not S.is_consumer() and S.published_pins() is None and S.published_grid("ATL") is None
+        monkeypatch.setenv("IVAN_FEED_SSH", "me@laptop")
+        assert S.is_consumer() and S.published_pins() == sp.published_overrides_csv and S.published_grid("ATL") == sp.published_rotations / "ATL.json"

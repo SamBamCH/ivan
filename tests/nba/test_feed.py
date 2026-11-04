@@ -32,19 +32,20 @@ def _slate(root, dg, rows, history):
 
 def test_publish_pull_from_directory_replaces_only_feed_tables(tmp_path):
     src = tmp_path / "producer.sqlite"; _db(src, [(1, "a"), (2, "b")])
-    m = feed.publish("nba", out_dir=tmp_path / "feed", which="both", log=lambda s: None, db_path=src)
+    ck = tmp_path / "ckout"; ck.mkdir()                                                          # never the live checkout's slates
+    m = feed.publish("nba", out_dir=tmp_path / "feed", which="both", log=lambda s: None, db_path=src, root=ck)
     assert m["live"]["bytes"] > 0 and m["reference"]["bytes"] > 0 and "odds" in m["live"]["tables"]
     dst = tmp_path / "consumer.sqlite"
     con = sqlite3.connect(dst)
     con.execute("create table my_own (id integer primary key)"); con.execute("insert into my_own values (7)")
     con.execute("create table odds (id integer primary key, player text)"); con.execute("insert into odds values (9, 'stale')"); con.commit(); con.close()
-    changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None)
+    changed = feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None, root=ck)
     assert "odds" in changed["live"] and "nba_stats" in changed["reference"]
     con = sqlite3.connect(dst)
     assert con.execute("select player from odds order by id").fetchall() == [("a",), ("b",)]
     assert con.execute("select id from my_own").fetchall() == [(7,)]                      # the consumer's own table survives
     assert con.execute("select count(*) from sqlite_master where name='ix_odds_player'").fetchone()[0] == 1
-    assert feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None) == {}   # nothing new
+    assert feed.pull(f"file://{tmp_path / 'feed'}", None, "nba", tmp_path / "state", db_path=dst, log=lambda s: None, root=ck) == {}   # nothing new
 
 
 def test_a_bundle_per_held_slate_lands_in_the_consumers_slate_directory(tmp_path):

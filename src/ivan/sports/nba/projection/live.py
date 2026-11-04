@@ -56,8 +56,8 @@ def read_overrides_full(path: Path | None = None, layered: bool = True) -> dict[
     published base layer (the producer's pins, when this machine pulls a feed) under this machine's own file: a local
     value wins per field, a blank local field falls back to the published one. `layered=False` reads one file as is.
     """
-    if path is None and layered and S.published_overrides_csv().exists():
-        base = read_overrides_full(S.published_overrides_csv(), layered=False)
+    if path is None and layered and S.published_pins() is not None:
+        base = read_overrides_full(S.published_pins(), layered=False)
         local = read_overrides_full(S.overrides_csv(), layered=False) if S.overrides_csv().exists() else {}
         out = {n: dict(v) for n, v in base.items()}
         for n, v in local.items():
@@ -109,7 +109,7 @@ def write_overrides(overrides: dict, path: Path | None = None) -> Path:
 
 def override_layers(name: str) -> tuple[dict, dict]:
     """(published, local) overrides for a player: what the producer pinned and what this machine typed on top (empty dicts when none)."""
-    pub = read_overrides_full(S.published_overrides_csv(), layered=False).get(name, {}) if S.published_overrides_csv().exists() else {}
+    pub = read_overrides_full(S.published_pins(), layered=False).get(name, {}) if S.published_pins() is not None else {}
     loc = read_overrides_full(S.overrides_csv(), layered=False).get(name, {}) if S.overrides_csv().exists() else {}
     return ({k: v for k, v in pub.items() if v is not None}, {k: v for k, v in loc.items() if v is not None})
 

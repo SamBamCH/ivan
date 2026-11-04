@@ -203,7 +203,7 @@ class RowsMixin:
                     assigned=assigned, to_place=to_place, rotation_drawn=ROT.drawn_path(team).exists(), rotation=self.rotation(team), mapped=self.mapped_state(team),
                     questions=self.questions(team, now), scenarios=self.scenario_list(team),
                     published=dict(grid=ROT.drawn_source(team), pins=sum(1 for r in rows if "published" in r.get("layer", {}).values()),
-                                   own=sum(1 for r in rows if "local" in r.get("layer", {}).values()), consumer=S.published_overrides_csv().exists() or S.published_rotations_dir().is_dir()),
+                                   own=sum(1 for r in rows if "local" in r.get("layer", {}).values()), consumer=S.published_pins() is not None or (S.is_consumer() and S.published_rotations_dir().is_dir())),
                     last_game=self.game_grid(team), considerations=self.considerations(team), notes=self.team_notes(team),
                     changes=((getattr(self, "changes", None) or {}).get("teams") or {}).get(team, []), changes_at=(getattr(self, "changes", None) or {}).get("at"),
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,

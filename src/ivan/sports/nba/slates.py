@@ -183,6 +183,26 @@ def rotations_dir() -> Path: return paths().rotations                           
 def published_rotations_dir() -> Path: return paths().published_rotations          # PUBLISHED_ROTATIONS_DIR
 def scenarios_dir() -> Path: return paths().scenarios                              # SCENARIOS_DIR
 def store_dir() -> Path: return paths().store                                      # projection.store.STORE_DIR
+
+
+def is_consumer() -> bool:
+    """This machine pulls a producer's feed (IVAN_FEED_SSH / IVAN_FEED_URL set): only then does a published layer mean anything."""
+    from ivan.core import feed
+    return feed.producer_source() is not None
+
+
+def published_pins() -> Optional[Path]:
+    """The day's published pins file (the laptop's, as pulled) when this machine is a consumer and it exists; None otherwise. A
+    producer ignores a published layer it may find (2026-11-04: a test pulled the laptop's own edits back under it as 'published',
+    and every toggle then cleared the local value and the copy showed through)."""
+    p = paths().published_overrides_csv
+    return p if is_consumer() and p.exists() else None
+
+
+def published_grid(team: str) -> Optional[Path]:
+    """The day's published grid file for the team, on a consumer, when it exists; None otherwise."""
+    p = paths().published_rotations / f"{team}.json"
+    return p if is_consumer() and p.exists() else None
 def input_dir() -> Path: return paths().input                                      # the slate's input (entries, contest weights)
 def output_dir() -> Path: return paths().output                                    # OUTPUT_DIR
 def entries_csv() -> Path: return paths().entries_csv                              # DEFAULT_ENTRIES_CSV

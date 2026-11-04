@@ -479,7 +479,7 @@ class DeskBase:
 
     def _layer_of(self, name: str) -> dict:
         """{field: 'local' | 'published'} for the player's pins: what this machine typed vs what the producer published (a consumer)."""
-        if not S.published_overrides_csv().exists():
+        if S.published_pins() is None:
             return {}
         cache = self.__dict__.setdefault("_layers_cache", {})
         if name not in cache:
@@ -489,7 +489,7 @@ class DeskBase:
 
     def _published_of(self, name: str) -> dict:
         """The producer's published pins for the player (a consumer), {} elsewhere."""
-        if not S.published_overrides_csv().exists():
+        if S.published_pins() is None:
             return {}
         cache = self.__dict__.setdefault("_published_cache", {})
         if name not in cache:
