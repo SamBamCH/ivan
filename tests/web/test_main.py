@@ -350,3 +350,34 @@ def test_nba_run_estimate_guards_the_lock(open_site, monkeypatch):
         assert r.status_code == 200 and len(submitted) == 1 and submitted[0][0] == "sim" and submitted[0][1]["estimate"] == 360000
     else:
         assert len(submitted) == 1                                                                      # a locked or lockless slate: nothing to beat
+
+
+def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(open_site, monkeypatch):
+    """There is no Snapshot button (Generate and Sim take the snapshot); the status poll that finds a field or sim job just done
+    answers HX-Refresh, and the desk's pool stamp sees an ownership written behind its back, so the reloaded board and the
+    projections CSV export carry the new numbers."""
+    import time
+    from ivan.web import nba as D
+    from ivan.web.nba import pipeline as P
+    from ivan.sports.nba.models import NBAPlayer
+    dg, day = _held(open_site)
+    r = open_site.get(f"/nba/{day}/{dg}/pipeline")
+    assert r.status_code == 200 and "/publish" not in r.text and "Snapshot" not in r.text and "3–5 in a row" in r.text
+    d = D.desk_for(dg)
+    pid = d.slate.players[0].id
+    with d.lock:
+        d.session.query(NBAPlayer).filter(NBAPlayer.id == pid).update({"ownership": 0.4321}); d.session.commit()
+    assert d._stamp() != d.pool_stamp                                                        # the stamp sees the ownership alone
+    job = type("J", (), dict(name="field", status="done", finished=time.time() - 1, started=time.time() - 30, id="f1", meta={"slate": dg},
+                             is_active=False, duration=29.0, cmd=[]))()
+    monkeypatch.setattr(P, "slate_jobs", lambda dg=None: [job])
+    monkeypatch.setattr(P, "_active", lambda dg=None: [])
+    monkeypatch.setattr(P.runner, "read_log", lambda *a, **k: "")
+    r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
+    assert r.status_code == 200 and r.headers.get("HX-Refresh") == "true"
+    assert d._stamp() == d.pool_stamp                                                        # the poll reloaded the desk
+    r = open_site.get(f"/nba/{day}/{dg}/export/projections.csv")
+    assert r.status_code == 200 and "0.432" in r.text
+    job.name = "choose"
+    r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
+    assert r.status_code == 200 and "HX-Refresh" not in r.headers                             # a job that does not write the pool: the partial

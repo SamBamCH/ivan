@@ -27,7 +27,7 @@ The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-0
 | `historical_contest_information`, `payouts`, `classic_contest_metadata` | slate | the slate's DK contests and payout tables | `contests.upsert_contests` / `fetch_payouts` / `ensure_contest` (the sim) | slate bundle |
 | `nba_stats` | history | box scores, one row per player-game, both seasons | `nightly.py` (`historical.data_fetch.fetch_boxscores`) | reference |
 | `nba_stint`, `nba_sub`, `nba_foul` | history | when each player was on the floor, substitution pairs, personal fouls, from the play-by-play | `nightly.py`, `pbp.py` | stints only |
-| `nba_projection_capture` | history | our projection per player at a moment, keyed by slate and lock: sources `ours` (every refresh and Snapshot), `at_tip` (the archive timer), `dk_avg`, a Stokastic CSV; carries the history context the scorecard needs | `project_slate`, `archive_at_lock.py` | reference |
+| `nba_projection_capture` | history | our projection per player at a moment, keyed by slate and lock: sources `ours` (every refresh and the snapshot Generate, Sim and the late swap take first), `at_tip` (the archive timer), `dk_avg`, a Stokastic CSV; carries the history context the scorecard needs | `project_slate`, `archive_at_lock.py` | reference |
 | `archived_slate`, `archived_blob` | history | the slate archive: a capture per refresh and per tip with the pool, the props and the game lines as JSON (`ivan.core.archive`), by slate key | `ingest.store_slate`, `archive_at_lock.py` | reference (`archived_slate`) |
 | `projection_snapshot` | slate | last season's Stokastic projections and our own, one `fpts_mean` per player-day | the old pipeline; `ingest.py --stok-csv` | no |
 | `nba_player_note` | slate | the desk's player notes: draft group, day, player, text, created / updated / cleared | the note button, `notes.py` | no |
@@ -63,7 +63,7 @@ data/nba/
 │   │   ├── entries.csv             the DraftKings entries export the sim and chooser read (the desk's upload box)
 │   │   └── contest_weights.json    per-contest chooser knobs set on the desk's contests section (contest_weights.py); Choose passes it as --weights-json
 │   └── output/
-│       ├── projections/projections.<stamp>.csv       the projection artifact of each refresh / Snapshot
+│       ├── projections/projections.<stamp>.csv       the projection artifact of each refresh and snapshot
 │       ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
 │       ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
 │       └── lateswap.<stamp>.csv + .json
@@ -112,7 +112,7 @@ cookie secret is `data/.desk_secret` (delete it to log everyone out).
   `ingest.project_team`; the desk only reads the store. The slate's edit files (pins, grids) are what any
   projection is rebuilt from. [game-day.md](game-day.md) has the table.
 - **The pre-lock record of a slate**, for backtests: its archive captures (the pool, props and lines at every refresh),
-  its `ours` projection captures (one per refresh and Snapshot), its headlines (`nba_slate_news`), and its directory
+  its `ours` projection captures (one per refresh and per snapshot), its headlines (`nba_slate_news`), and its directory
   (edits, store, entries, outputs) as it stood.
 - **After lock**: the `at_tip` capture is the record of what we projected (the pool may change later
   by a refresh); the `ours` capture before lock is what the scorecard scores.

@@ -107,19 +107,24 @@ Terminal equivalents: `scripts/nba/news.py "Player Name" [--accept] [--condition
 the grids through the same `project_team` path, store record included, without a capture row;
 `scripts/nba/validate.py review --team XXX` prints the minutes provenance and flags for a team.
 
-## 4. Snapshot (what Publish became)
+## 4. The snapshot (the record a run is built on)
 
-The pool is the projection: every edit, every refresh and `project.py` write it. **Snapshot** (`/publish` =
-`scripts/nba/snapshot.py`, `ingest.capture_pool`) records it as it stands, without projecting anything: an
+The pool is the projection: every edit, every refresh and `project.py` write it, and nothing is published from the
+desk (the server pulls the slate, [../deployment.md](../deployment.md)). What remains of the old Publish is the
+**snapshot**: `ingest.capture_pool` records the pool as it stands, without projecting anything, as an
 `nba_projection_capture` row per player (source "ours", the rows the scorecard scores) and a projections CSV under
-`data/nba/output/projections/`, from the projection store; any value still typed into a grid is applied first. Under
-a second. Generate, Sim, Late swap and 4–6 in a row take a snapshot first, so each run has the record of what it was
-built on; Choose does not.
+`data/nba/slates/<dg>/output/projections/`, from the projection store; any value still typed into a grid is applied
+first. Under a second. It has no button: Generate, Sim, Late swap and 3–5 in a row take it before they start, so each
+run has the record of what it was built on (Choose and Field + ownership do not; a refresh records its own projection
+as it writes it). For a record between runs, `scripts/nba/snapshot.py --slate DG` from a terminal.
 
 The actions bar's **chain** says what is current: `pool HH:MM › snapshot › field › lineups › sim › picks`, each
 stage green when built after the pool's last write, amber when the pool moved since (run it again), red when the
-pool moved 10+ minutes ago and the stage never followed. The server reads this laptop's pool when its own Refresh is
-pressed ([../deployment.md](../deployment.md)); nothing is pushed from here.
+pool moved 10+ minutes ago and the stage never followed.
+
+When a refresh, a **Field + ownership** build or a sim finishes, the page reloads on the new pool: the desk's pool stamp
+(`Desk._stamp`) covers the ownership column too, so the board's own column and the projections CSV export
+(`/export/projections.csv`) carry the new numbers at once, whoever wrote them (a desk job, a script, the autopilot).
 
 ## 5. Generate, simulate, choose
 
@@ -134,8 +139,8 @@ venv/bin/python scripts/nba/job_time.py estimate --step sim --sims 1000 --field-
 ```
 
 
-Desk: steps 4 to 6 of the **actions** bar, with the knobs in the **config** tile beside the games strip (lineups, jobs,
-sims, field cap, fresh pool, and the chooser's weights from `config/nba.json → choose`); **4–6 in a row** runs the
+Desk: steps 3 to 5 of the **actions** bar, with the knobs in the **config** tile beside the games strip (lineups, jobs,
+sims, field cap, fresh pool, and the chooser's weights from `config/nba.json → choose`); **3–5 in a row** runs the
 three. The entries export goes in through the **contests** section, which flags contests of another slate (the sim
 skips them) and takes each contest's own chooser knobs (`scripts/nba/contest_weights.py`; Choose passes them as
 `--weights-json data/nba/slates/<dg>/input/contest_weights.json`; every job carries `--slate DG`). Jobs run
@@ -210,9 +215,9 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 | Action | Fetches | Writes the pool |
 |---|---|---|
 | paint + Apply, pin, starter call, Re-fill, a late-news call | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
-| Snapshot | no | no (records the pool: capture rows + the projections CSV) |
+| `scripts/nba/snapshot.py` | no | no (records the pool: capture rows + the projections CSV) |
 | Refresh dk / props, pick a slate | yes | yes |
-| Generate / Sim / Late swap / All from the desk | no | no (a snapshot first, then the job reads the pool) |
+| Generate / Sim / Late swap / All from the desk | no | no (a snapshot first, then the job reads the pool; the sim writes the ownership column) |
 | Choose from the desk | no | no |
 | Fetch standings | yes (DraftKings standings) | no |
 | `news.py`, `project.py`, `ingest.py --project-only` | no | yes |

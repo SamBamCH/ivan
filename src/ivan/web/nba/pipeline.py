@@ -1,5 +1,5 @@
 """
-The actions bar and the jobs: Refresh (the producer fetches, a consumer pulls the laptop), Snapshot, the chain, generate / sim / choose / field as jobs, the news and autopilot switches, the entries upload, the slate switch.
+The actions bar and the jobs: Refresh (the producer fetches, a consumer pulls the laptop), the chain, generate / sim / choose / field as jobs, the news and autopilot switches, the entries upload, the slate switch.
 """
 from __future__ import annotations
 
@@ -11,10 +11,9 @@ import time
 from datetime import date, datetime, timedelta
 from ivan.sports.nba.ingest import restore_from_archive
 from ivan.sports.nba import newsfeed as NF
-from pathlib import Path
 from typing import Optional
 from fastapi import File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from ivan.core import feed
 from ivan.sports.nba import autopilot
 from ivan.sports.nba import job_time as JT
@@ -165,30 +164,6 @@ def begin_switch(draft_group: int, source: str = "lobby") -> Optional[str]:
     else:
         _start_refresh(f"loading slate {dg}", dg, update_odds=False)
     return None
-
-
-@slate.post("/publish")
-def publish(request: Request, pins: str = Form("")):
-    """Snapshot: record the projection as it stands (ingest.capture_pool: the capture rows the scorecard scores and the projections
-    CSV), the values still typed into a grid applied first. Nothing is projected or pushed: every edit already wrote its team
-    into the pool (Desk.reproject), and the server pulls the pool from this laptop when its own Refresh is pressed.
-    Terminal: scripts/nba/snapshot.py."""
-    if (b := _busy(request)) is not None:
-        return b
-    with LOCK:
-        typed = _apply_typed_pins(pins)
-        if typed:
-            desk.flash.append(f"{typed} typed value(s) applied first")
-        desk.write_local()
-        try:
-            info = capture_pool(desk.session, log=lambda m: None)
-            desk.flash.append(f"snapshot: {info.players} players recorded ({info.captures} capture rows, {len(desk.overrides)} edits)"
-                              + (f"; {Path(info.projections_path).name}" if info.projections_path else ""))
-            autopilot.touch("publish")
-        except IngestError as e:
-            desk.flash.append(f"snapshot failed: {e}")
-        desk.rebuild()
-    return RedirectResponse(_here(request), status_code=303)
 
 
 def _news_note(r: dict, sess) -> str:
@@ -476,11 +451,20 @@ def _submit(step: str, form: dict) -> list:
     return jobs
 
 
+POOL_WRITERS = ("field", "sim")   # jobs that write the pool (every player's ownership): the page reloads on them when they are done
+
+
 @slate.get("/pipeline/status", response_class=HTMLResponse)
 def pipeline_status(request: Request):
-    """Only the job status, log and results: what polls while a job runs, so nobody's typing in the form is overwritten."""
+    """Only the job status, log and results: what polls while a job runs, so nobody's typing in the form is overwritten. The poll
+    that finds a pool-writing job (POOL_WRITERS) just done answers HX-Refresh instead: the desk reloads the pool (the stamp sees the
+    new ownership, Desk.maybe_reload) and the whole page, board and export included, shows it."""
     with LOCK:
-        return _render(request, "_nba_pipeline_status.html", **_pipeline_ctx())
+        ctx = _pipeline_ctx()
+        if ctx["just_finished"] and ctx["jobs"][0].name in POOL_WRITERS and ctx["jobs"][0].status == "done":
+            desk.maybe_reload()
+            return Response(status_code=200, headers={"HX-Refresh": "true"})
+        return _render(request, "_nba_pipeline_status.html", **ctx)
 
 
 @slate.get("/pipeline", response_class=HTMLResponse)
@@ -491,9 +475,11 @@ def pipeline(request: Request):
 
 @slate.post("/pipeline/{step}", response_class=HTMLResponse)
 async def pipeline_run(request: Request, step: str):
-    """generate | sim | choose | all | lateswap | field. Generate, sim, late swap and all publish the desk's projections first, so
-    the pool is what you see on the grid (2026-10-25: a sim run on a stale pool after a repaint was the late-swap mess); choose
-    and field (the public field + ownership, scripts/nba/field_ownership.py) do not."""
+    """generate | sim | choose | all | lateswap | field. Generate, sim, late swap and all take the snapshot first (ingest.capture_pool:
+    the capture rows the scorecard scores and the projections CSV; the only snapshot there is, scripts/nba/snapshot.py from a
+    terminal), so the record is what the run was built on and the pool is what you see on the grid (2026-10-25: a sim run on a
+    stale pool after a repaint was the late-swap mess); choose and field (the public field + ownership, scripts/nba/field_ownership.py)
+    do not."""
     form = await request.form()
     if (b := _busy(request)) is not None:
         return b
@@ -557,7 +543,6 @@ async def entries_upload(request: Request, file: UploadFile = File(...)):
     if len(data) > MAX_UPLOAD or not (file.filename or "").lower().endswith(".csv"):
         with LOCK:
             desk.flash.append("entries upload refused: a .csv under 5 MB, please")
-        from fastapi.responses import Response
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     with LOCK:
         p = _entries_path(); p.parent.mkdir(parents=True, exist_ok=True)
@@ -565,7 +550,6 @@ async def entries_upload(request: Request, file: UploadFile = File(...)):
         cx = _contests_ctx()
         desk.flash.append(f"entries file saved: {file.filename} -> {p.name} ({len(data)} bytes)"
                           + (f"; {cx['other']} contest(s) belong to another slate than the loaded one: the sim skips them" if cx["other"] else ""))
-    from fastapi.responses import Response
     return Response(status_code=200, headers={"HX-Refresh": "true"})
 
 

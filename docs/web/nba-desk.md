@@ -68,16 +68,17 @@ or when news breaks.
    game plus the lines; confirm dialog); on a consumer a single **Refresh from laptop** pulls the laptop's pool in the
    background (the board shows "refreshing from the laptop…" and reloads when it is in). Every refresh
    reads the news too; the public field and ownership are not rebuilt by it.
-   2 **Field + ownership** (`scripts/nba/field_ownership.py`, about 45 s).
-   3 **Snapshot** (`/publish` = `scripts/nba/snapshot.py`, `ingest.capture_pool`): records the projection as it stands,
-   the capture rows the scorecard scores (source "ours") and the projections CSV, from the projection store, without
-   projecting anything; values still typed into a grid are applied first. There is nothing to publish: the pool is the
-   projection. Beside it **the chain**: `pool HH:MM › snapshot › field › lineups › sim › picks` (`_chain_info`), the
+   2 **Field + ownership** (`scripts/nba/field_ownership.py`, about 45 s). When it is done the page reloads on the new
+   ownership (the status poll that finds a field or sim job finished answers `HX-Refresh`; `pipeline.POOL_WRITERS`).
+   Beside it **the chain**: `pool HH:MM › snapshot › field › lineups › sim › picks` (`_chain_info`), the
    pool's time being its newest write (any edit, refresh or `project.py`) and each stage the time of its last run on
    this desk (the job runner; the snapshot from the capture table): green when built after the pool's last write,
    **amber** when the pool moved since (run it again), **red** when the pool moved 10+ minutes ago and the stage never
-   followed, grey when never run here. The late swap appears once it has run.
-   4 **Generate**, 5 **Sim**, 6 **Choose**, and **4–6 in a row**: jobs (below); generate, sim and the row take a snapshot first.
+   followed, grey when never run here. The late swap appears once it has run. The **snapshot** is not a button: Generate,
+   Sim and the row take it themselves before they start (`ingest.capture_pool`: the capture rows the scorecard scores,
+   source "ours", and the projections CSV, from the projection store, without projecting anything; values still typed
+   into a grid are applied first), so the record is what the run was built on. From a terminal, `scripts/nba/snapshot.py`.
+   3 **Generate**, 4 **Sim**, 5 **Choose**, and **3–5 in a row**: jobs (below).
    Under Generate's and Sim's knobs a **time estimate** re-reads as you type (`/pipeline/estimate?step=…`,
    `ivan.sports.nba.job_time`, `scripts/nba/job_time.py estimate`): "≈ 4 min, done 18:52 · lock 19:00", from this machine's
    past runs of that step (seconds per unit of work: lineups per worker for generate, contests × sims × field cap for the
@@ -89,10 +90,10 @@ or when news breaks.
    **Knobs**: resting the pointer on Generate or Sim opens its knobs under the button (`_nba_knobs.html`; they stay open
    while the pointer is in them or a field has focus): generate's fresh pool, lineups, jobs, min salary, max salary per
    team, randomness, min fpts frac, player min fpts; sim's sims and field cap. A button sends only its own knobs
-   (4–6 in a row sends both); the desk keeps every knob it was last sent, seeded from `config/nba.json`, and the jobs
+   (3–5 in a row sends both); the desk keeps every knob it was last sent, seeded from `config/nba.json`, and the jobs
    read them through `data/nba/jobs/desk_config.json`. Choose has no panel knobs: they are set per contest in the
    contests section, a blank one is the desk default.
-   7 **Late swap** opens the late swap view.
+   6 **Late swap** opens the late swap view.
    Under the steps: when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
    the news was read, the slate's lineups and sim rows; then the job status, its log, the exports and the latest picks.
 3. **Needs you** (`_needs_you`): the teams to open, nearest tip first, each with why: mapped but the inputs moved since
@@ -259,8 +260,9 @@ The plan this is phase 1 of: [../nba/notes/slate_views_plan_2026-10-29.md](../nb
 
 ## Jobs (`/pipeline/<step>`)
 
-The actions bar's Generate, Sim, Choose, 4–6 in a row and Field + ownership post to `/pipeline/<step>` with the Config
-tile's knobs; the late swap view's form posts its own (`ls_*`). Generate, sim, late swap and the row take a snapshot first.
+The actions bar's Generate, Sim, Choose, 3–5 in a row and Field + ownership post to `/pipeline/<step>` with the Config
+tile's knobs; the late swap view's form posts its own (`ls_*`). Generate, sim, late swap and the row take a snapshot first
+(the only snapshot there is; `scripts/nba/snapshot.py` from a terminal).
 Generate writes no ownership; the sim builds the public field once, at the largest size any contest in the run
 needs, every contest slices it, and the largest contest's field becomes the ownership column.
 **Field + ownership** (`/pipeline/field` = `scripts/nba/field_ownership.py`, about 45s) builds the field on

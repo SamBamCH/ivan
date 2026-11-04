@@ -219,10 +219,13 @@ class DeskBase:
                 self.session.rollback()
 
     def _stamp(self):
-        """(latest projection time, player count, draft group, hash of the player ids) of the pool on disk. A column query:
-        it does not touch the player objects the page holds, so a stale page still renders from them."""
-        rows = self.session.query(NBAPlayer.id, NBAPlayer.fpts_updated_at, NBAPlayer.draft_group_id).all()
-        return (max((r[1] for r in rows if r[1]), default=None), len(rows), rows[0][2] if rows else None, hash(frozenset(int(r[0]) for r in rows)))
+        """(latest projection time, player count, draft group, hash of the player ids, hash of the ownerships) of the pool on disk.
+        A column query: it does not touch the player objects the page holds, so a stale page still renders from them. The
+        ownerships are in it so a field build or a sim (they write nba_player.ownership, nothing else) reloads the desk too:
+        the board's own column and the projections CSV export read the desk's players."""
+        rows = self.session.query(NBAPlayer.id, NBAPlayer.fpts_updated_at, NBAPlayer.draft_group_id, NBAPlayer.ownership).all()
+        return (max((r[1] for r in rows if r[1]), default=None), len(rows), rows[0][2] if rows else None,
+                hash(frozenset(int(r[0]) for r in rows)), hash(frozenset((int(r[0]), r[3]) for r in rows)))
 
     def history(self):
         """(box, HistoryState), rebuilt only when nba_stats grew (the nightly box scores); one copy per process, every desk shares it."""
@@ -352,11 +355,11 @@ class DeskBase:
         now = self._stamp()
         if now == self.pool_stamp:
             return
-        if now[1:] != self.pool_stamp[1:]:
+        if now[1:4] != self.pool_stamp[1:4]:
             self.rebuild()
             self.flash.append("the player pool changed on disk (a refresh from another process changed the roster); reloaded")
         else:
-            self.rebuild()
+            self.rebuild()                                    # new numbers (a projection, the ownership) for the same players: quietly
 
     def load_frames(self) -> None:
         """

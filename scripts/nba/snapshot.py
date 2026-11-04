@@ -1,10 +1,10 @@
 """
-Snapshot: record the NBA projection as it stands (the desk's Snapshot button, what Publish became).
+Snapshot: record the NBA projection as it stands (what the desk's Generate, Sim and Late swap do first; no button of its own).
 
-The pool (nba_player) is the projection: every edit on a team page, every refresh and project.py write it, and the
-projection store (data/nba/derived/projection/<TEAM>.pkl) holds each team's frame. This records that state without
-projecting anything: an nba_projection_capture row per player (source "ours", the rows the scorecard scores) and the
-projections CSV under data/nba/output/projections/. Generate, Sim and the late swap take one first from the desk.
+The pool (nba_player) is the projection: every edit on a team page, every refresh and project.py write it, and the slate's
+projection store (slates/<dg>/projection/<TEAM>.pkl) holds each team's frame. This records that state without projecting
+anything: an nba_projection_capture row per player (source "ours", the rows the scorecard scores) and the projections CSV
+under the slate's output/projections/. From a terminal, for a record between runs (a belief about to change, say).
 
   venv/bin/python scripts/nba/snapshot.py             # capture rows + CSV
   venv/bin/python scripts/nba/snapshot.py --no-csv    # capture rows only

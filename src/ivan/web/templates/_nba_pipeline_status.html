@@ -11,7 +11,7 @@
     {% if jobs %}<span class="muted small">recent: {% for j in jobs[:5] %}<span class="jobstat {{ j.status }}">{{ j.name }} {{ j.status }}{% if j.duration %} {{ '%.0f'|format(j.duration) }}s{% endif %}</span>{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}
   </div>
   {% if log %}<pre class="log">{{ log }}</pre>{% endif %}
-  {% else %}<pre class="log muted">no job yet · Publish + Generate, Sim and Choose report here</pre>{% endif %}
+  {% else %}<pre class="log muted">no job yet · Field, Generate, Sim and Choose report here</pre>{% endif %}
   <div class="pipe-row">
     <span class="muted small"><b>export</b> · <a href="{{ root }}/export/projections.csv" title="every player in the pool: our projection after the desk's edits (minutes, band, fpts, sd, fppm), the public projection, ownership, pins and locks">projections CSV</a>
       · generated lineups, players in roster order only:
