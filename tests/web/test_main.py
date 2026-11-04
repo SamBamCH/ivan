@@ -385,3 +385,22 @@ def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(o
     from ivan.sports.nba import slates as S
     with d.lock, S.using(dg):
         d.session.query(NBAPlayer).filter(NBAPlayer.id == pid).update({"ownership": before}); d.session.commit(); d.rebuild()
+
+
+def test_nba_starter_toggle_posts_the_rows_player(open_site):
+    """The st cell on the rotation grid toggles a starter call: the click sends the row's player (the grid rows carry no form field
+    for him, so hx-include alone posted nothing and the route answered 422); a second click clears the call."""
+    from ivan.web import nba as D
+    from ivan.sports.nba.projection.live import override_of
+    dg, day = _held(open_site)
+    d = D.desk_for(dg)
+    team = sorted({p.team for p in d.slate.players})[0]
+    r = open_site.get(f"/nba/{day}/{dg}/team/{team}")
+    assert r.status_code == 200 and "hx-vals=\"js:{player: this.closest('tr').dataset.key}\"" in r.text and f"/team/{team}/starter" in r.text
+    assert open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={}).status_code == 422                # what the old click sent
+    key = next(k for k in (r.text.split('data-key="')[1:2] or ["x"]) ).split('"')[0]
+    before = override_of(d.overrides, key).get("starter")
+    r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
+    assert r.status_code == 200 and override_of(d.overrides, key).get("starter") is not None               # a hand call now
+    r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
+    assert r.status_code == 200 and override_of(d.overrides, key).get("starter") == before                  # cleared back
