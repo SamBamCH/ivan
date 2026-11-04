@@ -60,7 +60,8 @@ def public_projection(session: Session, history, on: Optional[datetime] = None) 
     if not players:
         return {}
     df = pd.DataFrame([dict(player_name=normalize_name(p.name), salary=p.salary or 0, id=int(p.id), out=(p.status or "").upper() in OUT_STATUSES) for p in players])
-    odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.connection())
+    from ivan.sports.nba.projection.market import fresh_odds
+    odds = fresh_odds(session, {normalize_name(p.name): p.gametime for p in players})        # tonight's props only (not a past game's)
     odds = odds[odds.player.isin(set(df.player_name))]
     pub = project(df[["player_name", "salary"]], odds, history, (on or datetime.now()).date())
     return {int(r.id): (0.0 if r.out else float(pub.get(r.player_name, 0.0))) for r in df.itertuples()}

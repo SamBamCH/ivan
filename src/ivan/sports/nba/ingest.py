@@ -38,7 +38,7 @@ from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
-from ivan.sports.nba.projection.market import NBA_MARKETS, market_means
+from ivan.sports.nba.projection.market import NBA_MARKETS, fresh_odds, market_means
 
 Log = Callable[[str], None]
 ODDS_SPORT = "basketball_nba"
@@ -302,8 +302,9 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
         info.odds = len(fetched.odds)
     if fetched.game_lines is not None and len(fetched.game_lines):
         info.game_lines = store_game_lines(session, fetched.game_lines, fetched_at=fetched.fetched_at)
-    # market rates for this pool from whatever props are stored (fresh or an earlier fetch today)
-    odds_df = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.connection())
+    # market rates for this pool from the props posted for tonight's games only (market.fresh_odds: within 36 h before each
+    # player's tip; a player the books did not price tonight gets no market rate rather than his last game's)
+    odds_df = fresh_odds(session, {r["name"]: r.get("gametime") for r in fetched.players})
     if len(odds_df):
         pool = {r["name"] for r in fetched.players}
         odds_df = odds_df[odds_df.player.isin(pool)]
@@ -722,7 +723,7 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
                 session.commit()
             if line_rows:
                 store_game_lines(session, pd.DataFrame(line_rows), fetched_at=cap.captured_at)
-            odds_df = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.connection())
+            odds_df = fresh_odds(session, {r["name"]: r.get("gametime") for r in players})
             pool = {r["name"] for r in players}
             odds_df = odds_df[odds_df.player.isin(pool)] if len(odds_df) else odds_df
             if len(odds_df):

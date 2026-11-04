@@ -304,8 +304,9 @@ class DeskBase:
         return out
 
     def _consensus_odds(self) -> dict:
-        from ivan.sports.nba.projection.market import MARKET_TO_STAT, american_to_prob
-        odds = pd.read_sql("select player, market, sportsbook, side, point, price from odds", self.session.get_bind())
+        from ivan.sports.nba.projection.market import MARKET_TO_STAT, american_to_prob, fresh_rows
+        odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", self.session.get_bind())
+        odds = fresh_rows(odds, {normalize_name(p.name): p.gametime for p in self.slate.players})   # tonight's props only
         if odds.empty:
             return {}
         odds = odds[odds.market.isin(MARKET_TO_STAT) & ~odds.market.str.endswith("alternate")].copy()

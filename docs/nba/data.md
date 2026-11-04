@@ -21,7 +21,7 @@ The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-0
 |---|---|---|---|---|
 | `nba_player` | slate | **the pool**: one row per DK player of the slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`; the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), `project_slate`, `project.py`, `news.py` | slate bundle |
 | `starting_lineups` | slate | Rotowire's expected and confirmed starters, with `fetched_at` | the pool refresh | slate bundle |
-| `odds` | history | player props as (book, market, line, prices), by game: the day's slates share them | `ingest.fetch_slate` with `--update-odds` / Refresh props | live |
+| `odds` | history | player props as (book, market, line, prices), by game: the day's slates share them | `ingest.fetch_slate` with `--update-odds` / Refresh props | live; a row is used for a projection only when posted within 36 h before the player's tip (`market.fresh_odds`) |
 | `nba_market_rate` | slate | per player and stat: market mean ÷ basis minutes, books, line | `live.store_market_rates` after a props fetch | slate bundle |
 | `game_odds` | history | moneyline, spread, total per book per game | `ingest.store_game_lines` | live |
 | `historical_contest_information`, `payouts`, `classic_contest_metadata` | slate | the slate's DK contests and payout tables | `contests.upsert_contests` / `fetch_payouts` / `ensure_contest` (the sim) | slate bundle |

@@ -191,3 +191,12 @@ projection.n_sims` (4000; the draws cost nothing next to the solve, 0.15 s a tea
    [notes/projection_explainer_2026-10-22.md](notes/projection_explainer_2026-10-22.md); the
    measurements behind the solve, the skeleton and the depth cut in
    [notes/minutes_model_plan.md](notes/minutes_model_plan.md).
+
+## Market rates
+
+**Only tonight's props count.** The odds table keeps a player's latest rows whatever game they were posted for, so every
+reader of it (the market rates at refresh, the public projection, the desk's consensus prices) goes through
+`projection.market.fresh_odds`: a row counts when the book posted it within 36 hours before the player's own tip on this
+slate and not after it. A player the books did not price tonight gets no market rate and projects from his history alone
+(2026-11-04: IND's Toppin, Huff and Nance carried Nov 2 and Oct 30 props into Nov 4, 33 projected points each on prices
+for another game; 2026-10-28: O'Neale on week-old props).

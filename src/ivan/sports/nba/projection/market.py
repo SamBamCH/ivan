@@ -15,6 +15,7 @@ alternate lines). Turnovers are never priced and stay on history.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -83,6 +84,32 @@ def means_from_tails(points: np.ndarray, p_overs: np.ndarray, ks: np.ndarray, it
     mu = 0.5 * (lo + hi)
     mu[~ok] = np.nan
     return mu[np.asarray(inverse).reshape(-1)]
+
+
+FRESH_HOURS = 36.0      # a prop counts for a game when the book posted it within this many hours before the tip
+
+
+def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FRESH_HOURS) -> pd.DataFrame:
+    """
+    Only the odds rows priced for the player's game on this slate: `last_update` (UTC) within `hours` before his tip (`gametimes`:
+    DK name -> local tip) and not after it. The odds table keeps a player's latest rows whatever game they were posted for, so
+    without this a player the books did not price tonight kept the rates of his last priced game (2026-11-04: IND's Toppin,
+    Walker, Huff and Nance carried Nov 2 and Oct 30 props into Nov 4). A player with no fresh row has no market rate: the
+    projection falls back to his history alone.
+    """
+    if odds is None or odds.empty or "last_update" not in odds.columns:
+        return odds.iloc[0:0] if odds is not None else pd.DataFrame()
+    lu = pd.to_datetime(odds["last_update"], errors="coerce", utc=True)
+    local = lu.dt.tz_convert(datetime.now().astimezone().tzinfo).dt.tz_localize(None)
+    tip = pd.to_datetime(odds["player"].map(lambda n: gametimes.get(n)), errors="coerce")
+    keep = tip.notna() & local.notna() & (local >= tip - pd.Timedelta(hours=hours)) & (local <= tip + pd.Timedelta(hours=1))
+    return odds[keep.values]
+
+
+def fresh_odds(session, gametimes: dict, hours: float = FRESH_HOURS) -> pd.DataFrame:
+    """The odds table's rows the projection may use for this pool (fresh_rows over `select ... from odds`)."""
+    odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.connection())
+    return fresh_rows(odds, gametimes, hours)
 
 
 def market_means(odds: pd.DataFrame, dispersion: dict[str, float] | None = None) -> pd.DataFrame:
