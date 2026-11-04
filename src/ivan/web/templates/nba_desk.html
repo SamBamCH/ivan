@@ -266,7 +266,7 @@
   .top-row { display:flex; gap:14px; align-items:flex-start } .top-row > nav.menu { flex:1 1 auto; min-width:0; padding-left:0; padding-right:0; overflow-x:auto }
   /* a step's knobs: a popover under its button, opened after a short rest of the pointer, kept open while the pointer is in it or a field has focus */
   .actions .step.has-knobs { position:relative }
-  .actions .step .knobs { display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:30; width:max-content; max-width:520px; padding:8px 12px 10px;
+  .actions .step .knobs { display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:30; width:max-content; max-width:min(520px, calc(100vw - 24px)); padding:8px 12px 10px;
     background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.12); font-size:12px;
     flex-wrap:wrap; gap:6px 12px; align-items:center; white-space:normal }
   .actions .step.has-knobs::after { content:""; position:absolute; left:0; right:0; top:100%; height:6px }   /* a bridge, so the pointer can reach the popover */
@@ -318,6 +318,24 @@
       apply();
     });
   })();
+</script>
+<script>
+  // a step's knobs popover opens under its button; near the right edge it would run off the page, so once it shows it is nudged
+  // left to stay inside the window (measured against the document's own box, so the page zoom above does not matter)
+  document.addEventListener("mouseover", function (e) {
+    const step = e.target.closest ? e.target.closest(".step.has-knobs") : null; if (!step) return;
+    const k = step.querySelector(".knobs"); if (!k || k.dataset.nudged === "1") return;
+    k.dataset.nudged = "1";
+    setTimeout(function () {
+      k.style.left = "0px";
+      const over = k.getBoundingClientRect().right - (document.documentElement.getBoundingClientRect().right - 10);
+      if (over > 0) { const z = parseFloat(document.documentElement.style.zoom) || 1; k.style.left = (-over / z) + "px"; }
+    }, 0);
+  });
+  document.addEventListener("mouseout", function (e) {
+    const step = e.target.closest ? e.target.closest(".step.has-knobs") : null; if (!step || step.contains(e.relatedTarget)) return;
+    const k = step.querySelector(".knobs"); if (k) { k.dataset.nudged = ""; }
+  });
 </script>
 <header>
 {% call bar(frame) %}<span class="bar extra">
