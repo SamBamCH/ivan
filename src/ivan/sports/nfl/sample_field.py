@@ -904,7 +904,7 @@ def sample_showdown_field_learned(
     
     # Add metadata
     meta['model_path'] = str(Path(models_dir() if model_dir is None else model_dir))
-    meta['model_mode'] = dupe_mode
+    meta['model_mode'] = 'product'
     meta['contest_params'] = {
         'total_entries': total_entries,
         'entry_fee': entry_fee,
