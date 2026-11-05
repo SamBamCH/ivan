@@ -375,13 +375,17 @@ def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, balance
 
 
 def fit(df: pd.DataFrame, cutoff: Optional[str] = None, terms=TERMS, balance: Optional[str] = None) -> ProductDupeModel:
-    """Fit per format with the given terms; a format with too few fields keeps the defaults, one with too few slates gets ownership only."""
+    """
+    Fit per format: showdown with the given terms (ownership only until it has MIN_SLATES slates to generalise across),
+    classic with the ownership rule alone (its fields barely duplicate by ownership and the season backtest scores
+    showdown only, so no classic term has been earned); a format with too few fields keeps the defaults.
+    """
     m = ProductDupeModel(fitted_on=datetime.now().strftime("%Y-%m-%d"), cutoff=cutoff)
     for fmt, flag in (("showdown", 1.0), ("classic", 0.0)):
         d = df[df.is_showdown == flag] if len(df) else df
         if len(d) and d.contest_id.nunique() >= MIN_CONTESTS:
             n_slates = d.date.dt.strftime("%Y-%m-%d %H").nunique() if "date" in d else d.contest_id.nunique()
-            m.params[fmt] = _fit_format(d, terms if n_slates >= MIN_SLATES else (), balance=balance)   # the extra terms need slates to generalise across
+            m.params[fmt] = _fit_format(d, terms if (fmt == "showdown" and n_slates >= MIN_SLATES) else (), balance=balance)
             m.contests[fmt] = int(d.contest_id.nunique())
     return m
 
