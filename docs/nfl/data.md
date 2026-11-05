@@ -9,7 +9,6 @@
 | `ownership.num_lineups` 1000, `ownership.num_simulations` 1 | how many sampled lineups ownership is estimated from |
 | `ownership.model` | `learned` (live), `sampler_calibrated`, `sampler`; `ownership.calibration.enabled` |
 | `field.ownership_calibration` {`enabled`, `iterations` 30, `damping` .7, `max_ratio` 4, `min_target_pct` .05} | rake the sampler's lineup weights to the projected ownership |
-| `field.dupe_model` | `product` |
 | `randomness` .5 | the generator's spread |
 | `classic.lineup_generation` {`n_samples`, `n_jobs`, `salary_cap` 50000, `min_salary` 49500, `max_off_vs_dst`, `min_qb_wrte_stack`, `min_qb_skill_stack`, `min_qb_bringback`, `max_team_players` 3, `jitter` .05} | classic solver rules |
 | read by code, absent from the file (defaults apply) | `sim.method` (montecarlo), `showdown.lineup_generation.*`, `solver.*` (`glpk_path`, `keep_files`, `msg`), `database_url` |
@@ -40,7 +39,7 @@ data/nfl/
 ├── input/entries.csv, input/web/   the entries file; web uploads + weights.json
 ├── raw/{dk,odds}/, index.jsonl     every payload as received
 ├── derived/contests/<id>/          lineups.parquet, scores.npy from settle
-├── models/                         classic_*.pkl, dst_odds_params.json, dupe_model_v2.json, ownership_calibration.json, ownership_model.pkl, sd_calibration.json, manifest.json; asof/<cutoff>/; archive/
+├── models/                         classic_*.pkl, dst_odds_params.json, dupe_model_v2.json, ownership_calibration.json, ownership_model.pkl, sd_calibration.json, manifest.json; asof/<cutoff>/; archive/ (legacy marginals only)
 ├── output/
 │   ├── chosen_entries.*            CLI choose runs (web: output/web/chosen.*)
 │   ├── projections/, sim/<stamp>/  the ingest's and the sim's artifacts

@@ -869,31 +869,21 @@ def sample_showdown_field_learned(
         'min': float(player_ownership.min()), 'max': float(player_ownership.max()),
         'mean': float(player_ownership.mean()),
     }
-    dupe_info: dict = {}
-    dupe_mode = str(((config or {}).get("field") or {}).get("dupe_model", "product")).lower()
-    dupe_clip_floor = 1.0
-
-    # ================================================================
-    # PREDICT DUPLICATION BASED ON MODEL MODE
-    # ================================================================
-
-    if dupe_mode == "product":
-        # copies = N x k x prod(own)^beta x salary term, fitted on real fields (ivan.sports.nfl.dupe_model); the same function gives the
-        # sampling weights, so the sampled field's concentration and every candidate's predicted copies agree
-        from ivan.sports.nfl import dupe_model as DMv2
-        dm = DMv2.load()
-        slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
-        feats = slate.dupe_features(session, player_ownership, captain=True)
-        entry_cap = contest_entry_cap(session, contest_id)
-        predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float), max_entries=entry_cap, **feats)
-        dupe_clip_floor = 1e-6
-        dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
-                     "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries),
-                     "max_entries": entry_cap if entry_cap is not None else f"unknown (assumed {DMv2.EMAX_DEFAULT:.0f})"}
-        print(f"  dupes: {dm.describe().split(';')[0]}; candidates' expected copies at {int(total_entries)} entries, cap {dupe_info['max_entries']}: "
-              f"median {np.median(predicted_dupes):.2f}, p90 {np.percentile(predicted_dupes, 90):.1f}, max {predicted_dupes.max():.1f}")
-    else:
-        raise ValueError(f"config field.dupe_model must be 'product' (got {dupe_mode!r}); the two-stage model was removed")
+    # every candidate's expected copies from the dupe model (ivan.sports.nfl.dupe_model: ownership, salary left, projection gap, the
+    # contest's entry cap); the same function gives the sampling weights, so the sampled field's concentration and the predicted
+    # copies of every candidate agree
+    from ivan.sports.nfl import dupe_model as DMv2
+    dm = DMv2.load()
+    slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
+    feats = slate.dupe_features(session, player_ownership, captain=True)
+    entry_cap = contest_entry_cap(session, contest_id)
+    predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float), max_entries=entry_cap, **feats)
+    dupe_clip_floor = 1e-6
+    dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
+                 "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries),
+                 "max_entries": entry_cap if entry_cap is not None else f"unknown (assumed {DMv2.EMAX_DEFAULT:.0f})"}
+    print(f"  dupes: {dm.describe().split(';')[0]}; candidates' expected copies at {int(total_entries)} entries, cap {dupe_info['max_entries']}: "
+          f"median {np.median(predicted_dupes):.2f}, p90 {np.percentile(predicted_dupes, 90):.1f}, max {predicted_dupes.max():.1f}")
 
     # Use unified diversity-gated duplication sampler
     counts_by_lineup, meta = sample_showdown_field_unified(
@@ -1078,9 +1068,8 @@ def sample_classic_field_learned(
     weights = np.zeros(n_lineups, dtype=np.float64)
     for i in range(n_lineups):
         weights[i] = proj_probs[proj_bins[i]] * own_probs[own_bins[i]]
-    classic_dupe_mode = str(((config or {}).get("field") or {}).get("dupe_model", "product")).lower()
     predicted_copies_classic = None
-    if classic_dupe_mode == "product" and player_ownership is not None and np.nanmax(player_ownership) > 0:
+    if player_ownership is not None and np.nanmax(player_ownership) > 0:
         # the fitted product rule decides how much the field concentrates on the chalk; the bin weights keep the shape of
         # the projection / ownership distributions and are multiplied in
         from ivan.sports.nfl import dupe_model as DMv2
