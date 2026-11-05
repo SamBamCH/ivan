@@ -122,6 +122,13 @@ biggest open error. The samplers now read each contest's cap (`sample_field.cont
 contest without one is predicted at the default cap of 20. The live and as-of model files were rebuilt
 with the new terms the same afternoon.
 
+The run after the rebuild (`diagnostics/dupe_backtest/20261105-124024`), the four-term model forward over the
+same 16 slates against the three-term one: log MAE 0.79 vs 0.80, bias -0.08 vs -0.10, slope 0.98 vs 0.93,
+top-100 share 0.163 vs 0.152 (real 0.192). By cap: single entry -0.04 (was +0.50), 2-5 +0.39 (was +0.71, two
+fields), 6-20 -0.19 (was -0.07), 21-150 -0.14 (was -0.30). On our own entries the bias is +0.07 in 20-max and
++0.05 in 150-max contests (was +0.19 and -0.11); our copies against the field's average entry in the same
+contests stay 77 vs 34 and 110 vs 56.
+
 ## What to run, and when
 
 After the nightly settle has scraped a slate's fields (the Monday after a week, or any morning):
