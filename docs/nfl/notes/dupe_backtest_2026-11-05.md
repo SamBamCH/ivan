@@ -24,6 +24,8 @@ the model said. Bands are 90 % over slates.
 | live file (fitted 2026-10-15) | 13 | 0.81 | -0.16 [-0.32, +0.02] | 0.94 | 1.09 | 0.162 / 0.190 |
 | as-of, the live terms, all history | 16 | 0.80 | -0.09 [-0.24, +0.07] | 0.93 | 0.98 | 0.151 / 0.192 |
 | as-of, this season's fields only | 15 | 0.83 | +0.01 | 0.90 | 0.71 | 0.126 / 0.186 |
+| as-of, every past slate weighted equally | 16 | 0.82 | -0.22 [-0.36, -0.06] | 0.96 | 0.93 | 0.155 / 0.192 |
+| as-of, slate-balanced + entry-cap term | 16 | 0.81 | -0.19 | 1.02 | 0.92 | 0.166 / 0.192 |
 | as-of, ownership only | 16 | 1.04 | -0.12 | 0.97 | 0.12 | 0.062 / 0.192 |
 | as-of + entry-cap term | 16 | 0.79 | -0.07 | 0.98 | 0.98 | 0.162 / 0.192 |
 
@@ -50,14 +52,50 @@ the model said. Bands are 90 % over slates.
    fields hurt more than the season shift helps; keep all history.
 5. **Ownership alone is useless for the top**: the top lineup at 0.12x and the top-100 share at a
    third of the real one. The projection-gap term is doing most of the work, as documented.
-6. **Our own entries are the chalk.** 2,180 of our entries were found in 87 scraped fields. Their
-   mean copies in the field: 93 (the as-of prediction 85; the live file 111 vs 110 on 1,781 entries),
-   so the level of the dupe prediction for what we enter is right on average over the window, with
-   the same per-slate swings (-0.60 to +0.78). Only 4 % of our entries were alone in their field;
-   on 2026-11-03 we held a copy of the most duplicated lineup of the 237k-entry mini-MAX (1,174
-   copies). The average entry in a 150-max field has about 70 copies, so we are more duplicated than
-   the field. That is a chooser and sim finding, not a dupe-model one, and it sits with the open
-   "sim field top too flat" item.
+6. **Weighting every past slate equally in the fit is worse, not better** (second run, 11:31):
+   bias -0.22 against -0.09, MAE 0.82 against 0.80, with the bands shifted the same way. Balancing
+   hands the small November 2025 and Saturday slates the weight of the big Sunday ones, and their
+   levels are the noisiest. The scores were always one row per slate; the copy weighting in the fit
+   stays. The season's imbalance is a coverage problem (below), not a weighting one.
+7. **Our own entries carry twice the copies of the field's average entry.** 2,328 of our 2,534
+   scraped entries were found in 89 fields (the rest are contests whose field was not derived).
+   Mean copies 88, median 28, against 44 for a random entry of the same fields, weighted the same
+   way; the ratio is 1.8 to 2.4 at every contest size (under 10k entries: 12 vs 6; over 100k: 141 vs
+   77) and every cap (20-max 74 vs 34, 150-max 102 vs 55). Only 4 % of our entries were alone; on
+   2026-11-03 we held a copy of the most duplicated lineup of the 237k-entry mini-MAX (1,174 copies).
+   The dupe model's level for what we enter is right on average (as-of 85 predicted vs 93 held), but
+   by cap the live file runs +0.17 log low on our 20-max entries and -0.14 high on our 150-max ones;
+   with the entry-cap term both are within 0.08. So the chalk we play is not the dupe model lying
+   about our copies: it is the chooser and sim preferring lineups the field also builds, which sits
+   with the open "sim field top too flat" item (the sampled field holds too few copies of the chalk,
+   so a chalk lineup that hits splits first place with fewer copies in the sim than in reality).
+
+## Why only 16 slates of this season
+
+The archive holds 51 NFL slates: 12 November 2025 showdowns (backfilled) and 39 of this season, every
+one locked on or after 2026-10-11, the day the slate archive started. Of those 39, 24 are showdowns
+(the rest classic, whose fields are not stored at the lineup level). Three limits, in order of size:
+
+1. **Only the slates we play are captured.** A week has 14 to 16 showdown games; we ingest about five
+   (Thursday, the Sunday early and late games we enter, Sunday night, Monday night). The other games'
+   contests are listed in `historical_contest_information` (about 13 draft groups per Sunday, 2,800
+   unarchived contests in October) but there is no capture and no projection for them, so no
+   pre-lock ownership to fit on. Adding them needs the DraftKings pool at lock, which nothing stores.
+2. **Nothing before 2026-10-11 is archived**, but 11 showdown slates from 2026-09-09 to 2026-10-08
+   have projection snapshots and listed contests: `backfill_archive.py --since 2026-09-09 --until
+   2026-10-10 --odds` rebuilds their captures from the snapshots and the odds-api history (about 230
+   credits a game, 2,500 in all) and `settle.py --since 2026-09-09 --until 2026-10-10 --public 5`
+   scrapes their public fields through the logged-in Chrome profile. That takes the season from 16
+   scored slates to about 27.
+3. **Per slate the settle job scrapes our contests plus three public ones** (`--public 3`): 6 to 11
+   fields of 150 to 260 per draft group. More public contests per slate add fields of the same game
+   (more single-entry and 5-max fields, which the by-cap table is short of: 11 and 2), not slates.
+   `--public 6` on the nightly timer is cheap.
+
+The balance question is the other side of this: November 2025 is 12 of the 28 slates but about 55 %
+of the copies, and the fit weighs a lineup by its copies, so the parameters are set by the biggest
+fields. The `asof balanced` variants give every past slate the same total weight in the fit
+(`dupe_model.fit_weights`); the scores were always one row per slate, weighted equally.
 
 ## What to run, and when
 
@@ -71,5 +109,7 @@ venv/bin/python scripts/nfl/backtest_dupes.py --no-actual-own      # half the ti
 Read the `asof` row against the last run: the band over slates is the noise, so a term or a refit is
 only called better when its band clears the `asof` one, and its by-cap table is flatter. The live
 file's row is the error the chooser actually carried; when its bias drifts outside its band, rebuild
-the model (`build_models.py --only dupe`). Rebuilding on all history is the current recommendation;
-the entry-cap term is the first candidate change, pending the sampler hook.
+the model (`build_models.py --only dupe`). Rebuilding on all history, copy-weighted, is the current
+recommendation; the entry-cap term is the first candidate change, pending the sampler hook. The
+"our entries by cap" table is the one to watch for the chalk problem: our copies against the field's,
+and whether the ratio comes down once the sim's field top is fixed.

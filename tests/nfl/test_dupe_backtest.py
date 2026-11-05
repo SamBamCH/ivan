@@ -9,8 +9,8 @@ from ivan.sports.nfl import dupe_backtest as DB
 from ivan.sports.nfl import dupe_model as DM
 
 
-def _field(cid, day, n, k, beta, rng, emax=20, delta_emax=0.0, rows=300):
-    slo = rng.uniform(-14, -5, rows)
+def _field(cid, day, n, k, beta, rng, emax=20, delta_emax=0.0, rows=300, slo_range=(-14, -5)):
+    slo = rng.uniform(*slo_range, rows)
     lam = n * k * np.exp(beta * slo) * np.exp(delta_emax * np.log(emax))
     cnt = np.maximum(1, rng.poisson(lam))
     lineups = [f"CPT p{cid}_{i}|FLEX a|FLEX b{i}|FLEX c|FLEX d|FLEX e" for i in range(rows)]
@@ -96,3 +96,23 @@ def test_lineup_key_matches_entry_strings_to_field_rows():
     t = DB.ours_table(df, pred)
     assert len(t) == 1 and t.entries.iloc[0] == 4 and abs(t.pred_copies_mean.iloc[0] - (4 * 2 + 1 + 10) / 4) < 1e-9
     assert abs(t.log_bias.iloc[0] - (2 * np.log(2 / 4) + 0 + 0) / 4) < 1e-9
+
+
+def test_slate_balanced_fit_gives_every_slate_the_same_weight():
+    rng = np.random.default_rng(4)
+    # one huge slate with a flat rule (beta 0.3) and five small slates with a steep one (beta 0.8), the two rules crossing at the
+    # middle of the ownership range so a single line is well defined: copy-weighting follows the huge slate, balancing the five
+    big = _field(0, 0, 5_000_000, 0.05, 0.3, rng, rows=3000)
+    k_small = 0.05 * np.exp(0.5 * 9.5)
+    small = [_field(i, i, 300_000, k_small, 0.8, rng, rows=300) for i in range(1, 6)]
+    df = pd.concat([big] + small, ignore_index=True)
+    w = DM.fit_weights(df, "slate")
+    by_slate = pd.Series(w).groupby(df.date.values).sum()
+    assert np.allclose(by_slate.values, by_slate.values[0])            # every slate the same total weight
+    assert np.isclose(w.sum(), df["count"].sum())                       # the same total as the copy weights
+    plain = DM._fit_format(df, ())["beta"]
+    bal = DM._fit_format(df, (), balance="slate")["beta"]
+    assert plain < 0.45 and bal > 0.6 and DM._fit_format(df, (), balance="slate")["balance"] == "slate"
+    slates, preds = DB.forward(df.assign(slate=df.date.dt.strftime("%Y-%m-%d %H"), key=None, ours=0, emax_bucket="6-20", in_window=True),
+                               [DB.Variant("asof balanced", (), balance="slate")])
+    assert len(slates) and np.isfinite(preds["asof balanced"]).any()

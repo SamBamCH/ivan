@@ -19,23 +19,27 @@ cannot:
    the 100 most duplicated lineups hold, predicted and real (what the field sampler's
    concentration follows). The live model file is scored the same way on the slates
    after its fitted_on date: that is the error the chooser actually carried.
-2. variants side by side: the live terms on all history, the live terms on this
-   season only, ownership only, and the live terms plus the entry-cap term
-   (log entries per user; dupe_model ALL_TERMS "emax") so a candidate change is
-   judged forward before it is turned on.
+2. variants side by side: the live terms on all history (copy-weighted, so the
+   biggest fields set the fit), the same with every past slate weighted equally
+   (dupe_model.fit_weights "slate": November 2025 held 55 % of the copies in
+   2026-11 but 10 of 28 slates), this season only, ownership only, and the live
+   terms plus the entry-cap term (log entries per user; dupe_model ALL_TERMS
+   "emax"), so a candidate change is judged forward before it is turned on.
 3. calibration of the forward predictions pooled over slates: by predicted-copies
    bin, and by the contest's entries-per-user cap (single entry, 5, 20, 150),
    from projected ownership (what the pipeline has) and from actual ownership
    (what the rule would do with perfect ownership), so a miss is attributed to the
    rule or to the ownership upstream.
 4. our entries: the lineups we entered (contest_entry_result) found in the real
-   field, their predicted copies against the copies the field held, per slate.
-   This is the number the chooser divides the prize by.
+   field, their predicted copies against the copies the field held, per slate and
+   by the contest's cap, next to the field's own copies per entry. This is the
+   number the chooser divides the prize by, and whether we are chalkier than the
+   field we play in.
 
 Confidence: the per-slate scores are bootstrapped over slates (90 % band of the
 mean), so a variant is only called better when the band says so. Output under
 data/nfl/diagnostics/dupe_backtest/<stamp>/: report.txt, slates.csv (slate x
-variant), calibration.csv, by_entry_max.csv, ours.csv, summary.json.
+variant), calibration.csv, by_entry_max.csv, ours.csv, ours_by_cap.csv, summary.json.
 
     scripts/nfl/backtest_dupes.py [--since 2026-09-01] [--until ...] [--train-since ...] [--model path] [--no-write]
 """
@@ -73,6 +77,7 @@ class Variant:
     train_since: Optional[str] = None         # fit only on fields locked on or after this date
     model: Optional[DM.ProductDupeModel] = None
     note: str = ""
+    balance: Optional[str] = None             # "slate": every slate carries the same weight in the fit (dupe_model.fit_weights)
 
 
 def default_variants(model: Optional[DM.ProductDupeModel] = None, train_since: Optional[str] = None) -> List[Variant]:
@@ -81,10 +86,12 @@ def default_variants(model: Optional[DM.ProductDupeModel] = None, train_since: O
     out = []
     if model is not None:
         out.append(Variant("live file", None, model=model, note=f"dupe_model_v2.json fitted {model.fitted_on} on {model.contests.get('showdown', '?')} fields; scored after that date"))
-    out += [Variant("asof", DM.TERMS, note="the live terms, refitted on every field before the slate"),
+    out += [Variant("asof", DM.TERMS, note="the live terms, refitted on every field before the slate (copy-weighted: the biggest fields set the fit)"),
+            Variant("asof balanced", DM.TERMS, balance="slate", note="the live terms, every past slate weighted the same in the fit"),
             Variant("asof season", DM.TERMS, train_since=season, note=f"the live terms, fields since {season} only"),
             Variant("asof own only", (), note="ownership product alone (k, beta, captain)"),
-            Variant("asof +emax", tuple(DM.TERMS) + ("emax",), note="the live terms plus log(entries per user)")]
+            Variant("asof +emax", tuple(DM.TERMS) + ("emax",), note="the live terms plus log(entries per user)"),
+            Variant("asof bal +emax", tuple(DM.TERMS) + ("emax",), balance="slate", note="slate-balanced, plus log(entries per user)")]
     return out
 
 
@@ -215,12 +222,14 @@ def forward(frame: pd.DataFrame, variants: Sequence[Variant], min_contests: int 
                 if tr.contest_id.nunique() < min_contests:
                     continue
                 n_slates = tr.slate.nunique()
-                p = DM._fit_format(tr, v.terms if n_slates >= DM.MIN_SLATES else (), method=DM.METHOD)
+                p = DM._fit_format(tr, v.terms if n_slates >= DM.MIN_SLATES else (), method=DM.METHOD, balance=v.balance)
                 n_train, train_slates = int(tr.contest_id.nunique()), int(n_slates)
             pr = DM.predict(p, te)
             preds[v.key][te_mask] = pr
             sc = slate_scores(te, pr)
+            tr_2025 = int(tr[tr.date < pd.Timestamp(SEASON_START)].contest_id.nunique()) if v.terms is not None else None
             rows.append({"slate": s, "lock": lock, "variant": v.key, "contests": int(te.contest_id.nunique()), "train_contests": n_train, "train_slates": train_slates,
+                         "train_before_season": tr_2025,
                          "k": p["k"], "beta": p["beta"], "beta_cpt": p.get("beta_cpt"), "gamma": p.get("gamma", 0.0), "delta_logproj": p.get("delta_logproj", 0.0),
                          "delta_emax": p.get("delta_emax", 0.0), **sc})
     return pd.DataFrame(rows), preds
@@ -300,6 +309,28 @@ def ours_table(frame: pd.DataFrame, pred: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def ours_by_cap(frame: pd.DataFrame, pred: np.ndarray) -> pd.DataFrame:
+    """Our entered lineups by the contest's entries-per-user cap: where we play, how duplicated we are there, and the model's bias there."""
+    ok = np.isfinite(pred) & (frame.ours.values > 0)
+    d = frame[ok].assign(pred=pred[ok])
+    rows = []
+    for b in [x[2] for x in EMAX_BUCKETS] + ["unknown"]:
+        g = d[d.emax_bucket == b]
+        if g.empty:
+            continue
+        w = g.ours.values.astype(float)
+        ratio = np.log(g["count"].values.astype(float)) - np.log(np.maximum(g.pred.values, 1e-3))
+        # the field's own copies per entry (sum c^2 / entries, the copies a random entry of the field has), weighted like our entries
+        all_rows = frame[frame.contest_id.isin(g.contest_id.unique())]
+        cpe = all_rows.groupby("contest_id").apply(lambda x: (x["count"].astype(float) ** 2).sum() / float(x.entries.iloc[0]), include_groups=False)
+        field_cpe = float((g.contest_id.map(cpe).values * w).sum() / w.sum())
+        rows.append({"entry_max": b, "contests": int(g.contest_id.nunique()), "entries": int(w.sum()),
+                     "pred_copies_mean": float((g.pred.values * w).sum() / w.sum()), "actual_copies_mean": float((g["count"].values * w).sum() / w.sum()),
+                     "field_copies_per_entry": field_cpe, "share_alone_actual": float(((g["count"].values == 1) * w).sum() / w.sum()),
+                     "log_bias": float((ratio * w).sum() / w.sum()), "log_mae": float((np.abs(ratio) * w).sum() / w.sum())})
+    return pd.DataFrame(rows)
+
+
 # --------------------------------------------------------------------------- run and report
 @dataclass
 class Result:
@@ -312,6 +343,7 @@ class Result:
     calibration_actual_own: Optional[pd.DataFrame]
     by_entry_max: Dict[str, pd.DataFrame]
     ours: Dict[str, pd.DataFrame]
+    ours_cap: Dict[str, pd.DataFrame] = field(default_factory=dict)
     n_fields: int = 0
     n_slates_total: int = 0
     notes: List[str] = field(default_factory=list)
@@ -334,6 +366,7 @@ def run(session, since: Optional[str] = SEASON_START, until: Optional[str] = Non
     cal = {v.key: calibration(frame, preds[v.key]) for v in variants if np.isfinite(preds[v.key]).any()}
     bem = {v.key: by_entry_max(frame, preds[v.key]) for v in variants if np.isfinite(preds[v.key]).any()}
     ours = {v.key: ours_table(frame, preds[v.key]) for v in variants if np.isfinite(preds[v.key]).any()}
+    ours_cap = {v.key: ours_by_cap(frame, preds[v.key]) for v in variants if np.isfinite(preds[v.key]).any()}
     cal_act = None
     if actual_own:
         # the same forward rule from the ownership the field actually showed: a miss that stays is the rule's, one that goes was ownership
@@ -346,7 +379,7 @@ def run(session, since: Optional[str] = SEASON_START, until: Optional[str] = Non
             ref = [v for v in variants if v.key == "asof"]
             _, pa = forward(fa, ref)
             cal_act = calibration(fa, pa["asof"])
-    return Result(since, until, variants, slates, summary, cal, cal_act, bem, ours, n_fields=int(frame.contest_id.nunique()), n_slates_total=int(frame.slate.nunique()))
+    return Result(since, until, variants, slates, summary, cal, cal_act, bem, ours, ours_cap, n_fields=int(frame.contest_id.nunique()), n_slates_total=int(frame.slate.nunique()))
 
 
 def _fmt_band(row, col, nd=2) -> str:
@@ -376,9 +409,9 @@ def format_report(r: Result) -> str:
     piv = r.slates.pivot_table(index="slate", columns="variant", values="log_bias", aggfunc="first")
     base = r.slates[r.slates.variant == ("asof" if (r.slates.variant == "asof").any() else r.slates.variant.iloc[0])].set_index("slate")
     others = [v.key for v in r.variants if v.key in piv.columns]
-    L.append(f"  {'slate':14s} {'fields':>6s} {'entries':>9s} {'train':>6s} {'MAE':>5s} {'slope':>6s} {'top1 p/a':>8s} {'top100 p':>8s} {'top100 a':>8s} | bias: " + " ".join(f"{k:>14s}" for k in others))
+    L.append(f"  {'slate':14s} {'fields':>6s} {'entries':>9s} {'train':>6s} {'(2025)':>6s} {'MAE':>5s} {'slope':>6s} {'top1 p/a':>8s} {'top100 p':>8s} {'top100 a':>8s} | bias: " + " ".join(f"{k:>14s}" for k in others))
     for s, row in base.iterrows():
-        L.append(f"  {s:14s} {int(row.contests):6d} {int(row.entries):9,d} {int(row.train_contests):6d} {row.log_mae:5.2f} {row.log_slope:6.2f} {row.top_lineup_ratio_median:8.2f} "
+        L.append(f"  {s:14s} {int(row.contests):6d} {int(row.entries):9,d} {int(row.train_contests):6d} {int(row.train_before_season or 0):6d} {row.log_mae:5.2f} {row.log_slope:6.2f} {row.top_lineup_ratio_median:8.2f} "
                  f"{row.top100_share_pred:8.3f} {row.top100_share_actual:8.3f} |       " + " ".join((f"{piv.loc[s, k]:+14.2f}" if np.isfinite(piv.loc[s, k]) else f"{'':>14s}") for k in others))
     L.append("")
     for key in ("asof", "live file"):
@@ -412,6 +445,15 @@ def format_report(r: Result) -> str:
         w = t.entries.values.astype(float)
         L.append(f"    {'all':14s} {int(t.contests.sum()):6d} {int(w.sum()):7d} {(t.pred_copies_mean * w).sum() / w.sum():6.2f} {(t.actual_copies_mean * w).sum() / w.sum():6.2f} "
                  f"{(t.share_alone_actual * w).sum() / w.sum():6.2f} {(t.log_bias * w).sum() / w.sum():+6.2f} {(t.log_mae * w).sum() / w.sum():5.2f}")
+    L.append("")
+    L.append("our entries by the contest's cap (where we play; field c/e = the copies a random entry of the same fields has, weighted like our entries: ours above it = we are chalkier than the field):")
+    for key, t in r.ours_cap.items():
+        if t.empty:
+            continue
+        L.append(f"  {key}:")
+        L.append(f"    {'cap':14s} {'fields':>6s} {'entries':>7s} {'pred':>7s} {'actual':>7s} {'field c/e':>9s} {'alone':>6s} {'bias':>6s} {'MAE':>5s}")
+        for _, o in t.iterrows():
+            L.append(f"    {o.entry_max:14s} {int(o.contests):6d} {int(o.entries):7d} {o.pred_copies_mean:7.1f} {o.actual_copies_mean:7.1f} {o.field_copies_per_entry:9.1f} {o.share_alone_actual:6.2f} {o.log_bias:+6.2f} {o.log_mae:5.2f}")
     if r.notes:
         L.append("")
         L += [f"note: {n}" for n in r.notes]
@@ -429,8 +471,9 @@ def write(r: Result, out_dir: Optional[Path] = None, stamp: Optional[str] = None
               ignore_index=True).to_csv(out / "calibration.csv", index=False)
     pd.concat([t.assign(variant=k) for k, t in r.by_entry_max.items()], ignore_index=True).to_csv(out / "by_entry_max.csv", index=False)
     pd.concat([t.assign(variant=k) for k, t in r.ours.items()], ignore_index=True).to_csv(out / "ours.csv", index=False)
+    pd.concat([t.assign(variant=k) for k, t in r.ours_cap.items()], ignore_index=True).to_csv(out / "ours_by_cap.csv", index=False)
     summary = {"since": r.since, "until": r.until, "fields": r.n_fields, "slates_total": r.n_slates_total, "written_at": datetime.now().isoformat(timespec="seconds"),
-               "variants": [{"key": v.key, "terms": list(v.terms) if v.terms is not None else None, "train_since": v.train_since, "note": v.note} for v in r.variants],
+               "variants": [{"key": v.key, "terms": list(v.terms) if v.terms is not None else None, "train_since": v.train_since, "balance": v.balance, "note": v.note} for v in r.variants],
                "summary": json.loads(r.summary.to_json(orient="records"))}
     (out / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
     return out

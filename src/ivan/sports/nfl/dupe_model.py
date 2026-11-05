@@ -431,15 +431,30 @@ def _ztp(X: np.ndarray, counts: np.ndarray, log_n: np.ndarray, b0: np.ndarray) -
     return r.x if np.all(np.isfinite(r.x)) else b0
 
 
-def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, method: str = METHOD) -> Dict[str, float]:
-    """One format's parameters from its training rows: the regressors in `terms`, fitted by `method` (ztp or wls)."""
+def fit_weights(d: pd.DataFrame, balance: Optional[str] = None) -> np.ndarray:
+    """
+    The least-squares weights: a lineup's copies (the fit is about where the entries land), or with balance "slate"
+    the copies scaled so every slate (lock hour) carries the same total weight, so a season with the most or the
+    largest fields does not set the parameters on its own (November 2025 held 55 % of the copies in 2026-11).
+    """
+    counts = d["count"].values.astype(float)
+    if balance != "slate" or "date" not in d:
+        return counts
+    slate = pd.to_datetime(d.date).dt.strftime("%Y-%m-%d %H").values
+    tot = pd.Series(counts).groupby(slate).transform("sum").values
+    return counts / tot * (counts.sum() / len(np.unique(slate)))
+
+
+def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, method: str = METHOD, balance: Optional[str] = None) -> Dict[str, float]:
+    """One format's parameters from its training rows: the regressors in `terms`, fitted by `method` (ztp or wls), weights per `fit_weights`."""
     terms = set(terms or ())
     log_n = np.log(d.entries.values.astype(float))
     counts = d["count"].values.astype(float)
+    w = fit_weights(d, balance)
     y = np.log(counts) - log_n
     names, X = _design(d, terms, knee)
     try:
-        coef = _wls(X, y, counts)
+        coef = _wls(X, y, w)
         if method == "ztp":
             coef = _ztp(X, counts, log_n, coef)
     except np.linalg.LinAlgError:
@@ -450,15 +465,17 @@ def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, method:
          "delta_logproj": float(np.clip(c.get("delta_logproj", 0.0), -5.0, 0.0)),
          "delta_emax": float(np.clip(c.get("delta_emax", 0.0), -3.0, 1.0)),
          "stack": {k: float(np.clip(c[k], -3.0, 3.0)) for k in STACK_KEYS if k in c}, "method": method}
+    if balance:
+        p["balance"] = balance
     if method == "wls":
-        # least squares: re-centre k after clipping so the copy-weighted mean is still matched
+        # least squares: re-centre k after clipping so the weighted mean is still matched
         m = ProductDupeModel(params={"showdown": p, "classic": p})
         resid = y - m.log_rate(True, d.sum_log_own.values, d.salary_left.values if "salary_left" in d else None,
                                d.log_own_cpt.values if "log_own_cpt" in d else None,
                                d.qb_mates.values if "qb_mates" in d else None, d.n_qb.values if "n_qb" in d else None,
                                d.proj_gap.values if "proj_gap" in d else None,
                                d.max_entries.values if "max_entries" in d else None)
-        p["k"] = float(np.exp((resid * counts).sum() / counts.sum()))
+        p["k"] = float(np.exp((resid * w).sum() / w.sum()))
     return p
 
 
