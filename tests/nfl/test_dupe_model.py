@@ -67,6 +67,9 @@ def test_salary_term_is_recovered_and_applied():
     assert DM.fit(two).params["showdown"]["gamma"] == 0.0 and DM.fit(two).params["showdown"]["delta_logproj"] == 0.0
     m0 = DM.fit(df, terms=())
     assert m0.params["showdown"]["gamma"] == 0.0 and "exp(" not in m0.describe() and "exp(" in m.describe()
+    classic = df.assign(is_showdown=0.0)                                      # classic fields: the ownership rule alone whatever the terms
+    pc = DM.fit(classic).params["classic"]
+    assert pc["gamma"] == 0.0 and pc["delta_logproj"] == 0.0 and pc["delta_emax"] == 0.0 and abs(pc["beta"] - 0.6) < 0.1
 
 
 def test_projection_gap_and_entry_cap_terms_are_recovered_and_applied():
