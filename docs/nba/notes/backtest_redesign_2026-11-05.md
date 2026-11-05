@@ -38,32 +38,58 @@ Three consequences:
 ## The data, split by date
 
 Everything a date's page needs lives under the slate's directory (`data/nba/slates/<dg>/`, the slate's `day` in
-`slate.json` says which date), in three parts that are written once and never rewritten:
+`slate.json` says which date), in parts that are written once and never rewritten. **The unit of truth is a game's
+tip, not the slate's lock** (decided 2026-11-05): a 6:00 slate's 8:00 game is judged on what was known at 8:00, so
+every tip gets its record, and a game's backtest reads the newest tip at or before its own (`tips.tip_for`).
 
 ```
 data/nba/slates/<dg>/
-  lock/                       the snapshot at lock (written by archive_at_lock at the first tip; read only after)
-    players.parquet           the pool: id, name, team, opponent, position, salary, status, starter, dk_avg_fpts, gametime
-    odds.parquet              the props posted for THIS slate's games, as of lock (fresh_rows), with posted-at times
-    game_lines.parquet        spreads and totals for this slate's games, as of lock
-    edits/                    the grids, overrides and scenarios as they stood (a copy, not the live day directory)
-    entries.csv               DraftKings' entries file as uploaded (our contests, Entry IDs)
-    chosen.csv                the lineup each entry held at lock (the last chooser upload before lock + swaps before lock)
-    projection.parquet        what the desk projected at lock (the at_tip capture), for the "as shown" column
-  results/                    DraftKings' word, written when scraped (final exports only; a mid-slate fetch stays raw)
-    <contest id>.csv.gz       the final standings export
-    payouts.json              the payout tables of the slate's contests
-  input/, output/, slate.sqlite, projection/   the live slate as today (the desk's working state; post-lock)
+  tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.tips; BUILT 2026-11-05, archive_at_lock writes it)
+    meta.json                 the tip, when written, the teams tipping, the counts, where each part came from
+    players.json              the pool as the desk showed it: salary, status, starter, minutes and points projected, p_out, ownership,
+                              pub_fpts, the grid row (rotation_cells)
+    odds.parquet              the props for the slate's players as stored at the tip (the odds table is replaced per player on every
+                              refresh, so this is the only record; a replay cuts it to the game's tip with projection.market.fresh_rows)
+    game_lines.json           spreads and totals for the slate's games
+    news.json                 the slate's news seen by then (nba_slate_news x nba_news)
+    edits/                    a copy of the day's edits (minutes_overrides.csv, rotations/, scenarios/) as they stood
+  results/ledger.json         the money (ivan.sports.nba.results; BUILT 2026-11-05): per contest from the final exports, cached, complete
+                              once every contest has one
+  input/, output/, slate.sqlite, projection/   the live slate as today (the desk's working state; post-lock after the last refresh)
 ```
 
-History that is naturally dated stays where it is and is sliced by date: box scores (`nba_stats.game_date`), stints,
-the news table (`first_seen`). The season-wide tables that are not dated (the odds table's "latest row per player",
-`nba_market_rate`) are never read by a backtest.
+Still read from where they are, because they are dated or stamped already: the box scores and stints (`game_date`
+before the slate's day), the entries file and the chooser's and late swap's upload files (`input/`, `output/`, stamped
+before the tip), the contests and payouts (the slate's database, written before lock), the final standings exports
+(raw `dk/standings/<id>/`, the results' input). The season-wide tables that are not dated (the odds table's "latest row
+per player", `nba_market_rate`) are never read by a backtest.
 
-The archive capture tables (`archived_slate` and its blobs) already hold players, the whole odds table and the game
-lines per capture; `lock/` is that capture written to the slate's directory with the odds cut to the slate's games.
-Once `lock/` exists for a slate the captures are a backup, and the per-capture copy of the 100,000-row odds table
-stops (it is why a capture weighs what it does).
+The archive capture tables (`archived_slate` and its blobs, `nba_projection_capture` at_tip) hold the same players,
+props and lines per tip since 2026-10-23 and are backfilled into `tips/` with `scripts/nba/tips.py backfill`; the timer
+still writes them for now, and the per-capture copy of the odds table stops once every reader uses `tips/`.
+
+## What is frozen at a tip, and what is not
+
+| Frozen at the tip (in `tips/`) | Dated already (read by date) | Never pre-tip: the actuals |
+|---|---|---|
+| the pool and salaries, statuses, starters | box scores before the slate's day | the box score of the game |
+| our minutes and points projection, p_out, ownership, the grid | stints before the slate's day | DK's %drafted, the standings |
+| the props (every market, every book, with their update times) | our entries and upload files (stamped) | the payout received |
+| the game lines | contests and payouts (written before lock) | |
+| the news seen so far | | |
+| the day's edits (pins, grids, scenarios) | | |
+
+## Feasibility and cost (2026-11-05)
+
+- **The money per page**: built. The first season pass parses every final export once (16 s for seven slates); after
+  that a complete slate is one small JSON read and the season strip costs a millisecond. An incomplete slate is
+  re-checked every ten minutes against the raw index (46 ms). The nightly warms the ledgers, so a page never pays the
+  parse unless a scrape just landed. Past results do not change, so nothing is ever recomputed once complete.
+- **The tip record**: built; a tip costs one parquet and a few JSON files (the props are the bulk, a few hundred KB).
+- **The model re-run per page** (phase 4 below): the projection for a slate is seconds; the field and the sim are
+  minutes, so they run once per (slate, commit) and are cached under the slate's directory, never recomputed on a
+  page load. A date page sums its slates' cached stage results; the season page sums the days. The page shows "not
+  run for this commit" rather than running the sim on load.
 
 ## The page: what runs at load
 
@@ -94,16 +120,17 @@ swap's fetch keeps writing to raw `dk/standings/` for the swap's own use and is 
 
 ## Order of work
 
-1. Done in this commit: final-export-only results on the page; the scrape reads the slate's entries file; `--date`
-   finds held slates by their day.
-2. `lock/`: `archive_at_lock` writes the snapshot to the slate's directory (players, odds for the slate's games,
-   game lines, edits copy, entries, chosen lineups, projection). Backfill from the archive captures for the slates
-   that have them (2026-10-23 on; odds cut by game at backfill).
-3. `results/`: the scrape writes the final export and the payouts there; the page reads `results/` first, raw
-   `dk/standings/` as a fallback for older slates. The derived contest folders are rebuilt from `results/` on demand
-   (`standings.derive_contest` becomes a function of the page, not of the nightly).
-4. The projection re-run on `lock/` (replace `validation.replay_slate`, which drops props and the grid), on the page
-   beside the "as shown" column. Then the field (the field backtest per slate on the page), then the sim's claim
-   against the real ranks.
-5. Retire: the nightly scorecard files (the page computes them), `derive_pending` in the nightly, the per-capture
-   odds blob once `lock/` is written at every lock.
+1. Done 2026-11-05: final-export-only results on the page; the scrape reads the slate's entries file; `--date` finds
+   held slates by their day.
+2. Done 2026-11-05: `tips/` written by `archive_at_lock` at every tip (players, props, lines, news, edits), backfilled
+   from the captures; `results/ledger.json` per slate, the money on the home tile, the picker (season and per day) and
+   the slate's backtest view, this machine only, identified by our DraftKings user name.
+3. The projection re-run on a tip's record (replace `validation.replay_slate`, which drops props and the grid): per
+   game, the newest tip at or before its own, on the slate's backtest page beside the "as shown" column, with the
+   players' minutes and points MAE per team and per date. Seconds per slate; computed at page load and cached by
+   (slate, commit).
+4. The field and the sim on the tip record: the field backtest per slate on the page (ownership MAE, chalk, duplication
+   against the final export), then the sim's claimed ROI against the real ranks of our lineups. Minutes per slate: run
+   by a button or the nightly for the current commit, cached under the slate's directory; the page reads the cache.
+5. Retire: the nightly scorecard files (the page computes them), `derive_pending` in the nightly (derive from the final
+   export when the field backtest needs it), the per-capture odds blob once every reader uses `tips/`.

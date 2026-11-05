@@ -224,7 +224,8 @@ def _backtest_board(request: Request, dg: Optional[int]):
     finally:
         sess.close()
     return _render(request, "_nba_board.html", busy=None, view="backtest", bt=bt, bt_error=err, menu=[], games=[], players=[],
-                   lateswap=None, exposures=None, card=None, game=None, open_team=None)
+                   lateswap=None, exposures=None, card=None, game=None, open_team=None,
+                   actuals=not CONSUMER)                                # the money (our entries, contests, the ROI timeline) is this machine's only
 
 
 VIEW_ALIAS = {"exposures": "games"}                           # the exposures are a section of pre-lock

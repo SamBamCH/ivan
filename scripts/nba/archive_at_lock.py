@@ -4,6 +4,9 @@ scripts/nba/archive_at_lock.py
 
 Keep the record at every lock without touching anything live. At each game's tip of every slate this machine holds
 (data/nba/slates/<dg>/; the first tip is the slate lock) this writes, as they stand at that moment:
+  - the tip's record on disk, data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/ (ivan.sports.nba.tips): the pool with its
+    projections and grid rows, the props, the game lines, the slate's news seen so far and a copy of the day's edits.
+    This is what a backtest of that game's models reads: nothing dated after the tip;
   - nba_projection_capture rows (source "at_tip", lock = that tip) from nba_player: the published projections,
     minutes, ownership, status, starters;
   - an archived_slate capture (source "at_tip") of the pool, the stored props and the game lines.
@@ -79,7 +82,9 @@ def archive_tip(session, players, tip, now, dg) -> dict:
     cap = archive_slate(session, sport="nba", slate_key=str(dg), lock=tip, mode="classic", players=prow,
                         odds=odds.to_dict("records") if len(odds) else None, game_lines=lines.to_dict("records") if len(lines) else None,
                         source="at_tip", captured_at=now)
-    return dict(capture_rows=n, archive_id=cap.id, odds=int(len(odds)), lines=int(len(lines)))
+    from ivan.sports.nba import tips
+    d = tips.write_tip(dg, tip, now, prow, odds, lines, session=session)      # the record on disk: slates/<dg>/tips/<stamp>/ (players, props, lines, news, edits)
+    return dict(capture_rows=n, archive_id=cap.id, odds=int(len(odds)), lines=int(len(lines)), tip_dir=str(d) if d else None)
 
 
 def main() -> int:
@@ -113,7 +118,8 @@ def main() -> int:
                         log.info(f"would archive slate {dg} at tip {t:%a %H:%M}: {len(players)} players, {sum(1 for p in players if p.fpts_mean)} projected"); continue
                     info = archive_tip(session, players, t, now, dg)
                     done.add(key)
-                    log.info(f"archived slate {dg} at tip {t:%a %H:%M}: {info['capture_rows']} capture rows, archive {info['archive_id']}, {info['odds']} prop rows, {info['lines']} line rows")
+                    log.info(f"archived slate {dg} at tip {t:%a %H:%M}: {info['capture_rows']} capture rows, archive {info['archive_id']}, {info['odds']} prop rows, "
+                             f"{info['lines']} line rows, tip record {info['tip_dir'] or 'already on disk'}")
             finally:
                 session.close()
     if not a.dry_run:

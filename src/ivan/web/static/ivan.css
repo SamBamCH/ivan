@@ -37,3 +37,8 @@ body.plain h1 { font-size:22px; margin:0 0 16px } body.plain h2 { font-size:17px
 .slate .acts a, .slate .acts button { font:inherit; font-size:13px; padding:5px 11px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer; text-decoration:none }
 .slate .acts .primary { background:var(--accent); color:#fff }
 .empty { color:var(--muted); padding:30px 0; text-align:center }
+/* the money (ivan.sports.nba.results): the picker's season strip, the day's heading, the home tile; this machine only */
+.hi { color:var(--ok) } .lo { color:var(--bad) }
+.ledger { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:baseline; margin:-6px 0 14px; font-size:14px }
+.ledger .big { font-size:22px; font-weight:700 }
+.ledger-day { font-size:16px; font-weight:700; margin-left:10px }

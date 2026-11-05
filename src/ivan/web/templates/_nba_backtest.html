@@ -12,15 +12,18 @@
       <input type="hidden" name="draft_group" value="{{ bt.draft_group }}"><input type="hidden" name="source" value="archive">
       <button type="submit" title="load this slate's archive capture into the desk to re-work it (the old desk restore)">Restore into the desk</button></form>
   </div>
+  {% set actuals = actuals if actuals is defined else true %}
+  {% if actuals %}
   <div class="bt-tiles">
     <div class="tile"><b>{{ money(sm.net) }}</b><span>net · {{ pct(sm.roi) }} ROI</span></div>
     <div class="tile"><b>{{ money(sm.won) }}</b><span>won on {{ money(sm.fees) }} in fees</span></div>
     <div class="tile"><b>{{ sm.cashed }} / {{ sm.entries }}</b><span>entries cashed · {{ sm.contests }} contest{{ '' if sm.contests == 1 else 's' }}</span></div>
     <div class="tile {% if sm.claimed_roi is not none and sm.roi is not none and sm.claimed_roi > sm.roi + 0.5 %}over{% endif %}"><b>{{ pct(sm.claimed_roi) }}</b><span>the sim's claim (chooser's ROI, fee-weighted)</span></div>
   </div>
-  <p class="muted small">Points, ranks and payouts from DraftKings' final standings exports (the payout table for the money; ties share the places they cover).{% if sm.unscored %} <b>Unscored: {{ sm.unscored|length }} contest{{ '' if sm.unscored|length == 1 else 's' }}, {{ money(sm.fees_unscored) }} in fees</b>, whose only export is mid-slate (the late swap's fetch, LOCKED slots) or missing: not in the tiles until scraped final (<code>scripts/nba/standings.py scrape</code>).{% endif %}</p>
+  <p class="muted small">Points, ranks and payouts from DraftKings' final standings exports (the payout table for the money; ties share the places they cover); our entries are the ones under our DraftKings user name plus the upload files' Entry IDs.{% if sm.unscored %} <b>Unscored: {{ sm.unscored|length }} contest{{ '' if sm.unscored|length == 1 else 's' }}, {{ money(sm.fees_unscored) }} in fees</b>, whose only export is mid-slate (the late swap's fetch, LOCKED slots) or missing: not in the tiles until scraped final (<code>scripts/nba/standings.py scrape</code>).{% endif %}</p>
+  {% else %}<p class="muted small">The entries' results are shown on the laptop only; this desk shows the model against the games.</p>{% endif %}
 
-  {% if bt.timeline %}<h3>ROI through the night <span class="muted small">what our entries were expected to make at each point, against what they made</span></h3>
+  {% if bt.timeline and actuals %}<h3>ROI through the night <span class="muted small">what our entries were expected to make at each point, against what they made</span></h3>
   <table class="players bt-timeline"><thead><tr><th>time</th><th>what</th><th class="n" title="expected ROI of the entries as held">expected ROI</th><th class="n" title="the late swap's expected ROI after its swaps">after the swap</th><th class="n">entries</th></tr></thead>
     <tbody>{% for x in bt.timeline %}<tr class="{% if x.what == 'final' %}final{% endif %}"><td>{{ x.at.strftime('%H:%M') if x.at else '' }}</td><td>{{ x.what }}</td><td class="n {% if x.roi < 0 %}lo{% else %}hi{% endif %}">{{ pct(x.roi) }}</td><td class="n">{{ pct(x.roi_swapped) if x.roi_swapped is not none else '' }}</td><td class="n">{{ x.entries or '' }}</td></tr>{% endfor %}</tbody></table>{% endif %}
 
@@ -30,7 +33,7 @@
       <td class="n">{{ '%.1f'|format(x.min_mae_pre) }} → <b>{{ '%.1f'|format(x.min_mae_tip) }}</b></td><td class="n">{{ '%.1f'|format(x.fpts_mae_pre) }} → <b>{{ '%.1f'|format(x.fpts_mae_tip) }}</b></td><td class="n">{{ '%+.1f'|format(x.fpts_bias_pre) }} → <b>{{ '%+.1f'|format(x.fpts_bias_tip) }}</b></td>
       <td class="small lineup">{% for m in x.moved %}{{ m.name }} {{ '%+.0f'|format(m.moved) }} (scored {{ '%.0f'|format(m.fpts_act) }}){% if not loop.last %} · {% endif %}{% else %}<span class="muted">nothing moved after lock</span>{% endfor %}</td></tr>{% endfor %}</tbody></table>{% endif %}
 
-  {% if bt.contests %}<h3>Contests</h3>
+  {% if bt.contests and actuals %}<h3>Contests</h3>
   <table class="players sortable bt-contests">
     <thead><tr><th>contest</th><th class="n">fee</th><th class="n" title="entries in the export">field</th><th class="n">ours</th><th class="n">best</th><th class="n">cashed</th><th class="n" title="the lowest score that cashed">cash line</th><th class="n">won</th><th class="n">net</th><th class="n">ROI</th><th class="n" title="the chooser's claimed ROI for these entries (its run closest before lock)">claimed</th><th>scored from</th></tr></thead>
     <tbody>{% for r in bt.contests %}{% if r.final %}<tr>
@@ -44,7 +47,7 @@
       <td class="n"></td><td class="n"></td><td class="n"></td><td class="n" data-v="0">—</td><td class="n" data-v="0">—</td><td class="n" data-v="0">—</td>
       <td class="n" data-v="{{ r.claim.roi if r.claim and r.claim.roi is not none else 0 }}">{{ pct(r.claim.roi) if r.claim else '—' }}</td>
       <td class="muted small">unscored: {{ r.scored }}</td></tr>{% endif %}{% endfor %}</tbody>
-  </table>{% else %}<p class="muted">No entries of ours found for this slate's contests (the upload files under data/nba/output name them).</p>{% endif %}
+  </table>{% elif actuals %}<p class="muted">No entries of ours found for this slate's contests (our user name in a final export, or the slate's upload files).</p>{% endif %}
 
   {% if bt.contests %}<h3>Fields <span class="muted small">duplication per contest; the winning score; the most-owned players in {{ bt.field_contest or 'the largest contest' }}</span></h3>
   <table class="players bt-fields"><thead><tr><th>contest</th><th class="n">entries</th><th class="n">unique</th><th class="n" title="entries in a lineup someone else also played">duplicated</th><th class="n">max copies</th><th class="n">winner</th><th class="n" title="our entries' mean copies of their lineup in the field">our copies</th></tr></thead>
@@ -80,7 +83,7 @@
   {% endfor %}
   </div>
 
-  {% if bt.entries %}<h3>Our lineups <span class="muted small">{{ bt.entries|length }} entries, best first; copies = identical lineups in that contest's field (ours included)</span></h3>
+  {% if bt.entries and actuals %}<h3>Our lineups <span class="muted small">{{ bt.entries|length }} entries, best first; copies = identical lineups in that contest's field (ours included)</span></h3>
   <table class="players sortable bt-entries">
     <thead><tr><th>contest</th><th class="n">rank</th><th class="n">points</th><th class="n">payout</th><th class="n">copies</th><th class="n" title="the sim's ROI for this lineup at choose time (runs from 2026-10-29 keep it)">claimed</th><th>lineup</th></tr></thead>
     <tbody>{% for e in bt.entries %}<tr class="{% if e.payout > 0 %}cash{% endif %}"><td class="small">{{ e.contest }}</td><td class="n">{{ e.rank }}</td><td class="n">{{ '%.2f'|format(e.points) }}</td><td class="n" data-v="{{ e.payout }}">{{ money(e.payout) if e.payout else '' }}</td><td class="n">{{ e.copies }}</td><td class="n">{{ pct(e.claim_roi) if e.claim_roi is defined and e.claim_roi is not none else '' }}</td><td class="small lineup">{{ e.names|select|join(' · ') }}</td></tr>{% endfor %}</tbody>

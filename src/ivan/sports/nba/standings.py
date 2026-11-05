@@ -200,19 +200,35 @@ def entries_contest_ids(entries_csv: Optional[Path]) -> set:
         return set()
 
 
-def our_contest_ids(draft_group: int, entries_csv: Optional[Path] = None, root: Optional[Path] = None) -> set:
+def entries_contest_counts(entries_csv: Optional[Path]) -> Dict[int, int]:
+    """{Contest ID: our entries in it} from a DraftKings entries file; empty when there is no file."""
+    if not entries_csv or not Path(entries_csv).exists():
+        return {}
+    try:
+        from ivan.sports.nba.lineup_export import read_entries
+        return {int(c): int(n) for c, n in read_entries(entries_csv).groupby("Contest ID").size().items()}
+    except Exception:   # noqa: BLE001
+        return {}
+
+
+def our_contest_counts(draft_group: int, entries_csv: Optional[Path] = None, root: Optional[Path] = None) -> Dict[int, int]:
     """
-    The contests we played on a slate: the Contest IDs of the slate's own entries file (data/nba/slates/<dg>/input/entries.csv,
-    the DraftKings export the desk works from), else of `entries_csv` when given (a machine that does not hold the slate).
+    {contest id: our entries} on a slate: from the slate's own entries file (data/nba/slates/<dg>/input/entries.csv, the
+    DraftKings export the desk works from), else from `entries_csv` when given (a machine that does not hold the slate).
     Until 2026-11-05 this read the pre-split shared path, which no longer exists, so only the public contests were scraped.
     """
     from ivan.sports.nba import slates as SL
     dg = int(draft_group)
     if SL.holds(dg, root):
-        ours = entries_contest_ids(SL.paths(dg, root).entries_csv)
+        ours = entries_contest_counts(SL.paths(dg, root).entries_csv)
         if ours:
             return ours
-    return entries_contest_ids(entries_csv)
+    return entries_contest_counts(entries_csv)
+
+
+def our_contest_ids(draft_group: int, entries_csv: Optional[Path] = None, root: Optional[Path] = None) -> set:
+    """The contests we played on a slate (our_contest_counts' keys)."""
+    return set(our_contest_counts(draft_group, entries_csv, root))
 
 
 def contests_to_scrape(session: Session, since: datetime, until: datetime, public_n: int = 3, entries_csv: Optional[Path] = None,

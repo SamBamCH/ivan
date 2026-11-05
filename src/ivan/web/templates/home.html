@@ -23,6 +23,7 @@
       {% else %}
         <p class="line muted">no slate loaded</p>
       {% endif %}
+      {% if s.ledger and s.ledger.contests %}{% set ov = s.ledger %}<p class="line" title="what our entries made, from DraftKings' final standings exports (this machine only)"><b class="{{ 'lo' if ov.net < 0 else 'hi' }}">{{ '-' if ov.net < 0 else '+' }}${{ '%.2f'|format(ov.net|abs) }}</b> <span class="muted">net · {{ '%+.0f%%'|format(100 * ov.roi) if ov.roi is not none else '—' }} ROI on ${{ '%.2f'|format(ov.fees) }} · {{ ov.cashed }} / {{ ov.entries }} cashed · {{ ov.days }} day{{ '' if ov.days == 1 else 's' }}{% if ov.incomplete %} · {{ ov.incomplete }} not final{% endif %}</span></p>{% endif %}
       {% if s.job %}<p class="line small warn">job: {{ s.job }}</p>{% endif %}
       {% if s.note %}<p class="line small muted">{{ s.note }}</p>{% endif %}
       <p class="line small muted">{{ s.n_days }} day{{ '' if s.n_days == 1 else 's' }} with slates{% if s.next %} · next {{ s.next }}{% endif %}</p>

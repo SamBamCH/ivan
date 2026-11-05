@@ -234,7 +234,10 @@ A past slate, read only (`ivan.sports.nba.slate_backtest`, terminal `scripts/nba
 --date YYYY-MM-DD`). Built in about two seconds from what is on disk; the desk's working tables are not touched.
 
 - **Tiles**: net and ROI, winnings on fees, entries cashed, the sim's claim (the chooser's ROI for the same entries,
-  fee-weighted; red when it claimed far more than happened).
+  fee-weighted; red when it claimed far more than happened). The money (the tiles, the contests, the ROI timeline, our
+  lineups) shows **on the laptop only**: a consumer desk (the server) gets a line saying so and keeps the model's
+  sections (by tip, fields, players by team). The same numbers, summed per day and over the season, are on the NBA picker
+  and the Ivan home tile ([README.md](README.md#the-money)); `ivan.sports.nba.results` makes them for all three.
 - **Contests**: fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, where the
   points came from. Our entries are the Entry IDs in the upload files the desk wrote (`chosen_entries.classic.*.csv`,
   `lateswap.*.csv`). A contest is scored only from a **final** standings export (every game over, no LOCKED slot,

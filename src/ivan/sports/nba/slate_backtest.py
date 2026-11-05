@@ -11,8 +11,10 @@ show the same.
     slate_backtest(session, dg)      everything for one slate: summary, contests, our entries, players by team
 
 Where the numbers come from:
-  our entries   the Entry IDs in the upload files the desk wrote for the slate's contests (the slate's output/
-                chosen_entries.classic.*.csv and lateswap.*.csv); their final lineups come from DraftKings' export
+  our entries   the entries DraftKings lists under our user name (config backtest.dk_user: "SamBamCH (3/10)") plus the
+                Entry IDs in the upload files the desk wrote for the slate's contests (the slate's output/
+                chosen_entries.classic.*.csv and lateswap.*.csv); their final lineups come from DraftKings' export.
+                The money is ivan.sports.nba.results (compute), shared with the ledger the picker and home page sum
   the field     the contest's newest standings export (raw dk/standings/<id>), and only when it is FINAL: every game
                 over, no LOCKED slot (standings.export_is_final). Points are DraftKings' own; ranks follow them, ties
                 sharing the payouts of the places they cover. The late swap's fetch (taken minutes after a tip) shows
@@ -53,6 +55,7 @@ from sqlalchemy.orm import Session
 
 from ivan.core import raw
 from ivan.core.utils import normalize_name
+from ivan.sports.nba import results as R
 from ivan.sports.nba import slates as S
 
 STAMP = re.compile(r"(\d{8}-\d{6})")
@@ -144,96 +147,8 @@ def claims(contest_ids, lock: Optional[datetime], out_dir: Optional[Path] = None
     return {k: v[1] for k, v in best.items()}
 
 
-def payout_table(session: Session, contest_id: int, n: int) -> np.ndarray:
-    """Payout by finishing place 1..n (index 0 = 1st)."""
-    pay = np.zeros(max(n, 1))
-    rows = session.execute(text("select min_position, max_position, payout_amount from payouts where contest_id = :c").bindparams(c=int(contest_id))).all()
-    for lo, hi, amt in rows:
-        lo, hi = int(lo), min(int(hi), len(pay))
-        if lo <= hi:
-            pay[lo - 1:hi] = float(amt)
-    return pay
-
-
-def ranked_payouts(points: np.ndarray, pay: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(rank, payout) per entry: rank = 1 + the entries strictly ahead; tied entries share the payouts of the places they cover."""
-    order = np.argsort(-points, kind="stable")
-    rank = np.empty(len(points), dtype=int); won = np.zeros(len(points))
-    i = 0
-    while i < len(order):
-        j = i
-        while j + 1 < len(order) and points[order[j + 1]] == points[order[i]]:
-            j += 1
-        places = pay[i:j + 1] if i < len(pay) else np.zeros(0)
-        share = float(places.sum()) / (j - i + 1) if len(places) else 0.0
-        for k in range(i, j + 1):
-            rank[order[k]] = i + 1; won[order[k]] = share
-        i = j + 1
-    return rank, won
-
-
-def unscored(contest: dict, ours: set, why: str, export_at: Optional[datetime] = None, field: int = 0, locked: int = 0) -> dict:
-    """A contest without a result yet: what we paid is known, what we won is not (won, net and ROI are None, never 0)."""
-    return dict(contest, ours=len(ours), found=0, final=False, scored=why, export_at=export_at, field=field, locked=locked, entries=[],
-                fees=float(contest["entry_fee"]) * len(ours), won=None, net=None, roi=None, best_rank=None, cashed=0, min_cash=None,
-                unique=None, max_copies=None, dup_share=None, winner=None, side=None)
-
-
-def score_contest(contest: dict, ours: set, ent: pd.DataFrame, pay: np.ndarray, export_at: Optional[datetime] = None) -> dict:
-    """
-    One contest from a parsed standings export (standings.parse_export) and its payout table. A final export (every game over,
-    no LOCKED slot) is scored as DraftKings scored it: its points, ranks from them, ties sharing the payouts of the places they
-    cover; the field's duplication; our entries in it. A mid-slate export is not scored (unscored(...)): the late swap's fetch
-    shows every not-yet-tipped player as LOCKED, ours included.
-    """
-    from ivan.sports.nba.standings import export_is_final, locked_entries
-    cid = int(contest["contest_id"])
-    n_locked = locked_entries(ent)
-    if not export_is_final(ent):
-        when = f" {export_at:%m-%d %H:%M}" if export_at else ""
-        return unscored(contest, ours, f"mid-slate export{when}: {n_locked:,} of {len(ent):,} entries show a LOCKED slot; scrape it final",
-                        export_at, len(ent), n_locked)
-    out = dict(contest, ours=len(ours), final=True, scored=f"DraftKings' final export{f' {export_at:%m-%d %H:%M}' if export_at else ''}",
-               export_at=export_at, field=len(ent), locked=n_locked, side=None)
-    pts = ent.points.fillna(0).to_numpy(dtype=float)
-    rank, won = ranked_payouts(pts, pay)
-    keys = ent.names.map(lambda ns: tuple(sorted(normalize_name(n) for n in ns if n)))
-    copies = Counter(keys)
-    out["unique"] = len(copies)
-    out["max_copies"] = max(copies.values()) if copies else 0
-    out["dup_share"] = float(sum(v for v in copies.values() if v > 1)) / len(ent) if len(ent) else None
-    out["winner"] = float(pts.max()) if len(pts) else None
-    mine = ent.entry_id.astype(str).isin(ours).to_numpy()
-    rows = []
-    for i in np.nonzero(mine)[0]:
-        rows.append(dict(entry_id=str(ent.entry_id.iloc[i]), names=list(ent.names.iloc[i]), points=float(pts[i]), rank=int(rank[i]),
-                         payout=float(won[i]), copies=int(copies[keys.iloc[i]]), contest=contest["name"], contest_id=cid))
-    rows.sort(key=lambda r: r["rank"])
-    out["entries"] = rows
-    out["found"] = len(rows)
-    out["won"] = float(sum(r["payout"] for r in rows))
-    out["fees"] = float(contest["entry_fee"]) * (len(rows) or len(ours))
-    out["net"] = out["won"] - out["fees"]
-    out["best_rank"] = rows[0]["rank"] if rows else None
-    out["cashed"] = sum(1 for r in rows if r["payout"] > 0)
-    out["roi"] = out["net"] / out["fees"] if out["fees"] else None
-    out["min_cash"] = float(pts[won > 0].min()) if (won > 0).any() else None
-    return out
-
-
-def contest_result(session: Session, contest: dict, ours: set) -> dict:
-    """One contest: our entries' result from its newest standings export when that is final (score_contest); unscored otherwise."""
-    from ivan.sports.nba.standings import parse_export
-    cid = int(contest["contest_id"])
-    art = raw.latest("nba", "dk/standings", cid)
-    if art is None:
-        return unscored(contest, ours, "no standings export: scrape it (scripts/nba/standings.py scrape)")
-    export_at = datetime.strptime(art.stamp, "%Y%m%d-%H%M%S")
-    ent, side = parse_export(raw.load(art.path, "nba"))
-    out = score_contest(contest, ours, ent, payout_table(session, cid, len(ent)), export_at)
-    if out["final"]:
-        out["side"] = side
-    return out
+# the money is ivan.sports.nba.results'; the names stay importable here (tests, the web)
+from ivan.sports.nba.results import payout_table, ranked_payouts, score_contest, summarize, unscored  # noqa: E402,F401
 
 
 def archived_cells(session: Session, dg: int) -> tuple[Dict[str, Dict[str, list]], Optional[datetime]]:
@@ -400,19 +315,6 @@ def roi_timeline(results: List[dict], lock: Optional[datetime], day: Optional[da
     return out
 
 
-def summarize(results: List[dict]) -> dict:
-    """The slate's tiles over the contests with a final export; the rest listed as unscored with what they cost."""
-    scored = [r for r in results if r["final"]]
-    fees = sum(r["fees"] for r in scored); won = sum(r["won"] for r in scored)
-    claimed = [(r["claim"]["roi"], r["fees"]) for r in scored if r.get("claim") and r["claim"].get("roi") is not None]
-    return dict(contests=len(scored), entries=sum(r["found"] for r in scored), fees=fees, won=won, net=won - fees,
-                roi=(won - fees) / fees if fees else None, cashed=sum(r["cashed"] for r in scored),
-                claimed_roi=(sum(a * w for a, w in claimed) / sum(w for _, w in claimed)) if claimed else None,
-                final=bool(results) and len(scored) == len(results),
-                unscored=[dict(name=r["name"], contest_id=r["contest_id"], fees=r["fees"], ours=r["ours"], why=r["scored"]) for r in results if not r["final"]],
-                fees_unscored=sum(r["fees"] for r in results if not r["final"]))
-
-
 def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) -> dict:
     from ivan.sports.nba import validation as V
     now = now or datetime.now()
@@ -424,14 +326,12 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
         d0 = session.execute(text("select min(date) from historical_contest_information where draft_group_id = :d").bindparams(d=int(dg))).scalar()
         day = pd.Timestamp(d0).date() if d0 else None
     ids = our_entry_ids([c["contest_id"] for c in contests])
-    claim = claims(ids.keys(), lock)
-    results = []
-    picked = chosen_lineups(ids.keys(), lock)
-    for c in contests:
-        if c["contest_id"] not in ids:
-            continue
-        r = contest_result(session, c, ids[c["contest_id"]])
-        r["claim"] = claim.get(c["contest_id"])
+    results = R.compute(int(dg), session, ours_ids=ids)                 # every contest we played: by our user name in the exports + the upload files
+    cids = [r["contest_id"] for r in results]
+    claim = claims(cids, lock)
+    picked = chosen_lineups(cids, lock)
+    for r in results:
+        r["claim"] = claim.get(r["contest_id"])
         by = (r["claim"] or {}).get("by_players") or {}
         for e in r["entries"]:                                    # each entry's own claim, when the chooser's run kept them
             k = picked.get(e["entry_id"])
@@ -440,8 +340,6 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
             e["claim_cash"] = None if cl is None else cl.get("cash_pct")
         if r["claim"]:
             r["claim"].pop("by_players", None)
-        results.append(r)
-    results.sort(key=lambda r: (not r["final"], -r["fees"]))
     summary = summarize(results)
     scored = [r for r in results if r["final"]]
     # players: the scorecard join, our exposure, the field's ownership (the largest final export)

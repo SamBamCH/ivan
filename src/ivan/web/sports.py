@@ -67,6 +67,8 @@ class Sport:
     days: Callable[[datetime], list[Day]]           # the slate index
     summary: Callable[[datetime], dict]             # the home tile: {"loaded": SlateInfo|None, "job": str|None, "note": str}
     tools: list[tuple[str, str]] = field(default_factory=list)   # (label, path under the sport root) for pages that are not one slate's
+    ledger: Optional[Callable[[datetime], dict]] = None          # the money: {"overall": agg, "days": {iso: agg}} (ivan.sports.nba.results.ledger_days);
+                                                                  # None on a machine that must not show it (a consumer desk)
     default_view: Callable[[SlateInfo, datetime], str] = lambda s, now: "backtest"
     main_slate: Callable[[Day, datetime], Optional[SlateInfo]] = lambda d, now: main_slate(d)
     app: object = None                    # the mounted sub-application (FastAPI), None while it is not built

@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ivan.core import feed
 from ivan.sports.nba import autopilot
+from ivan.sports.nba import results
 from ivan.sports.nba import slates as S
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nba.paths import NBA_DATA_DIR
@@ -304,7 +305,13 @@ def nba_summary(now: datetime) -> dict:
         note += f" · {len(held)} slate{'s' if len(held) != 1 else ''} held"
     ahead = [d for d in days if d.day >= now.date()]
     nxt = min(ahead, key=lambda d: d.day) if ahead else None
-    return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else ""}
+    ledger = None
+    if not CONSUMER:                                              # the money, this machine only (ivan.sports.nba.results)
+        try:
+            ledger = results.ledger_days(now)["overall"]
+        except Exception:   # noqa: BLE001 - the home page opens without it
+            ledger = None
+    return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else "", "ledger": ledger}
 
 
 def sport() -> Sport:
@@ -312,6 +319,7 @@ def sport() -> Sport:
     global SPORT
     from ivan.sports.nba.slate_backtest import mode_for
     SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nba_days, summary=nba_summary, tools=[], app=app,
+                  ledger=None if CONSUMER else results.ledger_days,       # the picker's money per day; never on the consumer (the server)
                   default_view=lambda s, now: {"lateswap": "lateswap", "backtest": "backtest"}.get(mode_for(s.day, s.lock, now), "games"))
     frame.install_picker(app, SPORT)
     return SPORT

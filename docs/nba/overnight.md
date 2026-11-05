@@ -37,9 +37,12 @@ In order, each step guarded so a failure does not stop the next (except the box 
    and the skeleton read these.
 4. **Standings derive** (`standings.derive_pending`): parses every standings export on disk that has no
    derived folder yet. It never fetches; the scrape is yours (below).
-5. **Experience** (`experience.fetch`, also `scripts/nba/experience.py fetch`): nba_api's all-players list, one
+5. **Results ledger** (`results.ledger_days`): the money per held past slate from the final exports, cached under
+   `slates/<dg>/results/ledger.json` so the picker and the home tile never pay the parse; a complete slate is not touched
+   ([validation-and-backtests.md](validation-and-backtests.md#the-money-ivansportsnbaresults-scriptsnbaresultspy)).
+6. **Experience** (`experience.fetch`, also `scripts/nba/experience.py fetch`): nba_api's all-players list, one
    request, each player's first NBA season into `data/nba/derived/players/experience.json` (the desk's rookie marks).
-6. **Feed**: `feed.publish("nba", which="both")` writes the reference bundle (box scores, stints, captures, models,
+7. **Feed**: `feed.publish("nba", which="both")` writes the reference bundle (box scores, stints, captures, models,
    `data/nba/derived`) and every held slate's bundle into `data/feed/nba/`; the server's next pull rsyncs it over (nothing is pushed).
 
 A laptop that wakes with no network yet fails at step 1 with a DNS error and nothing else runs; the
@@ -48,11 +51,16 @@ next slot or `systemctl --user start ivan-nba-nightly.service` repeats it. The j
 ## Archive at tip (`scripts/nba/archive_at_lock.py`)
 
 At each game's tip of every slate this machine holds (the first tip is the slate lock), within 12 minutes
-after it, it writes as they stand: `nba_projection_capture` rows (source `at_tip`, lock = that tip)
-from the slate's `nba_player`, and an `archived_slate` capture (source `at_tip`) of the pool, the stored props and the
-game lines. It never fetches and never writes a pool, so it cannot change what the desk sees. A tip
-is archived once per slate (state in `data/nba/archive_state.json`). `--dry-run` and `--now <ISO>` for testing.
-The late swap and the backtests read these to see what changed after lock.
+after it, it writes as they stand: **the tip's record on disk**, `data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/`
+(`ivan.sports.nba.tips`: the pool with its projections, ownership and grid rows, the props as stored, the game lines,
+the slate's news seen so far, a copy of the day's edits; the source of truth a backtest of that game's models reads,
+[validation-and-backtests.md](validation-and-backtests.md#the-record-at-each-games-tip-ivansportsnbatips-scriptsnbatipspy)),
+`nba_projection_capture` rows (source `at_tip`, lock = that tip) from the slate's `nba_player`, and an `archived_slate`
+capture (source `at_tip`) of the pool, the stored props and the game lines. It never fetches and never writes a pool,
+so it cannot change what the desk sees. A tip is archived once per slate (state in `data/nba/archive_state.json`; a
+tip record already on disk is left alone). `--dry-run` and `--now <ISO>` for testing. The late swap and the backtests
+read these to see what changed after lock. Slates archived before 2026-11-05 get their tip records from the captures
+with `scripts/nba/tips.py backfill --all` (players, props and lines; no edits or news were kept then).
 
 ## The autopilot tick (`scripts/nba/capture.py`)
 
