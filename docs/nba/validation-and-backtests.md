@@ -35,9 +35,13 @@ as `review`.
 
 ## One slate's results (`ivan.sports.nba.slate_backtest`, `scripts/nba/backtest_slate.py`, the desk's backtest view)
 
-Per past slate: our entries' results rescored from the box scores against the chooser's claim, each contest, our
-lineups with their field copies, and every player's projection at lock against the box score. Read only. How the
-numbers are made is on [../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml).
+Per past slate: our entries' results from DraftKings' **final** standings exports (a contest with only a mid-slate
+export or none is listed unscored, never given a number) against the chooser's claim, each contest, our lineups
+with their field copies, and every player's projection at lock against the box score. Read only. How the numbers are
+made is on [../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml).
+`--date` lists every held slate whose `slate.json` day is that date. The redesign this is the first step of (one lock
+snapshot per slate, each date's data on its own, the pre-lock models re-run on it against the actuals) is
+[notes/backtest_redesign_2026-11-05.md](notes/backtest_redesign_2026-11-05.md).
 
 ## The walk-forward backtest of the projection (`scripts/nba/backtest_projection.py`)
 

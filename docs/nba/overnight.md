@@ -73,10 +73,14 @@ venv/bin/python scripts/nba/standings.py scrape --contest-ids 197054966,19705496
 venv/bin/python scripts/nba/standings.py derive [--contest-ids ...]            # parse final exports without a derived folder
 ```
 
-Per played slate (an archive capture with a lock in the window) it exports the `--public` largest public
-contests plus every contest in the entries file, through the logged-in Chrome profile
-(`chrome-selenium/dk-profile`; Chrome opens and waits for your login when the session expired; `--headless`
-only once the login is fresh). Raw exports go to `data/nba/raw/dk/standings/<contest id>/`, derived
+Per played slate (an archive capture with a lock in the window) it exports **every contest we played** (the
+slate's own entries file, `data/nba/slates/<dg>/input/entries.csv`; `--entries FILE` names them for a slate this
+machine does not hold) **plus the `--public` largest public classic contests** whether we played them or not,
+through the logged-in Chrome profile (`chrome-selenium/dk-profile`; Chrome opens and waits for your login when the
+session expired; `--headless` only once the login is fresh). `status` marks each contest ours or public and final,
+mid-slate or pending. Until 2026-11-05 the entries file was read from the pre-split shared path, which no longer
+existed, so only the public contests were scraped and the desk's backtest scored the rest from the late swap's
+mid-slate fetch. Raw exports go to `data/nba/raw/dk/standings/<contest id>/`, derived
 contests to `data/nba/derived/contests/<id>/` (`lineups.parquet` one row per unique lineup with copies,
 `players.csv` the side table joined to the pool, `field.json` summary with `final` and `locked_entries`).
 **DraftKings keeps standings about two weeks**, so scrape within days. The derived contests are what

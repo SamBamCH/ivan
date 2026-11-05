@@ -237,10 +237,14 @@ A past slate, read only (`ivan.sports.nba.slate_backtest`, terminal `scripts/nba
   fee-weighted; red when it claimed far more than happened).
 - **Contests**: fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, where the
   points came from. Our entries are the Entry IDs in the upload files the desk wrote (`chosen_entries.classic.*.csv`,
-  `lateswap.*.csv`); the field is the contest's newest standings export, every lineup rescored from the day's box
-  scores (DraftKings' names matched to the box by name, by name without suffixes, then by a unique last name; 99.6
-  to 100% of lineups equal DraftKings' final points on the finished exports checked), ranks with ties sharing the
-  payouts of the places they cover. Before the box scores arrive the export's own points stand.
+  `lateswap.*.csv`). A contest is scored only from a **final** standings export (every game over, no LOCKED slot,
+  `standings.export_is_final`): DraftKings' own points, ranks from them, ties sharing the payouts of the places they
+  cover (the payout table). A contest whose newest export is the late swap's mid-slate fetch (every not-yet-tipped
+  player reads LOCKED, ours included) or that has no export is listed **unscored**, greyed, with what it cost: it is
+  not in the tiles, and the line under them says how many and the fees until `scripts/nba/standings.py scrape` brings
+  the final export. Nothing is rescored from the box scores (2026-11-04: eleven such contests scored on one to four
+  visible players read as a $28.86 loss on a slate that made $194.82; the rescore of final exports also differed from
+  DraftKings' points by $46 across the slate).
 - **ROI through the night**: what our entries were expected to make at each point: the chooser's claim before lock,
   every late swap run's expected ROI for the entries as held and after its swaps (`lateswap.<stamp>.json`, the
   expected payouts it computed with the games started so far), then the final. Late news moves a slate after the first

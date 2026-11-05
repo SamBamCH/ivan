@@ -11,12 +11,14 @@ show the same.
     slate_backtest(session, dg)      everything for one slate: summary, contests, our entries, players by team
 
 Where the numbers come from:
-  our entries   the Entry IDs in the upload files the desk wrote for the slate's contests (data/nba/output/
+  our entries   the Entry IDs in the upload files the desk wrote for the slate's contests (the slate's output/
                 chosen_entries.classic.*.csv and lateswap.*.csv); their final lineups come from DraftKings' export
-  the field     the newest standings export of the contest (raw dk/standings/<id>: the late swap's Fetch standings,
-                or a scrape after the slate). Exports taken during the games carry live points, so every lineup is
-                rescored from the box scores of the slate's day when they are in (ranks and payouts then final; ties
-                share the payouts of the places they cover); before the box scores arrive the export's points stand
+  the field     the contest's newest standings export (raw dk/standings/<id>), and only when it is FINAL: every game
+                over, no LOCKED slot (standings.export_is_final). Points are DraftKings' own; ranks follow them, ties
+                sharing the payouts of the places they cover. The late swap's fetch (taken minutes after a tip) shows
+                every not-yet-tipped player as LOCKED, ours included, so it is never scored: such a contest shows as
+                unscored until it is scraped final (scripts/nba/standings.py scrape). Nothing is rescored from the box
+                scores (2026-11-04: eleven contests scored on one to four visible players read as a result)
   payouts       the payouts table (stored with the contest)
   the claim     the chooser's run for the contest closest before lock: chosen_roi and chosen_cash; per entry, the lineup's
                 own simulated ROI and cash rate (runs from 2026-10-29 keep them, by_lineup), matched through the
@@ -170,61 +172,32 @@ def ranked_payouts(points: np.ndarray, pay: np.ndarray) -> tuple[np.ndarray, np.
     return rank, won
 
 
-class BoxPoints(dict):
-    """{box name: fantasy points} for one day, looked up by DK's spelling: the name, the name without suffixes or spaces
-    ('Robert Williams' = 'Robert Williams III'), then the one player that day with the last name ('Gregory' = 'GG'
-    Jackson). A name still unknown scores 0 (he did not play)."""
-
-    def __init__(self, rows):
-        from ivan.sports.nba.experience import last_name, loose
-        super().__init__(rows)
-        self._loose = {loose(k): v for k, v in rows.items()}
-        by_last: Dict[str, list] = defaultdict(list)
-        for k, v in rows.items():
-            by_last[last_name(k)].append(v)
-        self._last = {k: v[0] for k, v in by_last.items() if len(v) == 1}
-        self._memo: Dict[str, float] = {}
-
-    def points(self, name: str) -> float:
-        if name in self._memo:
-            return self._memo[name]
-        from ivan.sports.nba.experience import last_name, loose
-        v = self.get(name)
-        if v is None:
-            v = self._loose.get(loose(name))
-        if v is None:
-            v = self._last.get(last_name(name), 0.0)
-        self._memo[name] = float(v)
-        return float(v)
+def unscored(contest: dict, ours: set, why: str, export_at: Optional[datetime] = None, field: int = 0, locked: int = 0) -> dict:
+    """A contest without a result yet: what we paid is known, what we won is not (won, net and ROI are None, never 0)."""
+    return dict(contest, ours=len(ours), found=0, final=False, scored=why, export_at=export_at, field=field, locked=locked, entries=[],
+                fees=float(contest["entry_fee"]) * len(ours), won=None, net=None, roi=None, best_rank=None, cashed=0, min_cash=None,
+                unique=None, max_copies=None, dup_share=None, winner=None, side=None)
 
 
-def box_points(session: Session, day: date) -> BoxPoints:
-    rows = session.execute(text("select player_name, dk_fpts from nba_stats where game_date = :d").bindparams(d=day.isoformat())).all()
-    return BoxPoints({str(n): float(f or 0.0) for n, f in rows})
-
-
-def contest_result(session: Session, contest: dict, ours: set, box) -> dict:
-    """One contest: the field from its newest export, rescored from the box scores when they are in; our entries in it."""
-    from ivan.sports.nba.standings import parse_export
+def score_contest(contest: dict, ours: set, ent: pd.DataFrame, pay: np.ndarray, export_at: Optional[datetime] = None) -> dict:
+    """
+    One contest from a parsed standings export (standings.parse_export) and its payout table. A final export (every game over,
+    no LOCKED slot) is scored as DraftKings scored it: its points, ranks from them, ties sharing the payouts of the places they
+    cover; the field's duplication; our entries in it. A mid-slate export is not scored (unscored(...)): the late swap's fetch
+    shows every not-yet-tipped player as LOCKED, ours included.
+    """
+    from ivan.sports.nba.standings import export_is_final, locked_entries
     cid = int(contest["contest_id"])
-    out = dict(contest, ours=len(ours), export_at=None, scored="no export", field=0, entries=[], fees=0.0, won=0.0, net=0.0,
-               best_rank=None, cashed=0, side=None)
-    out["fees"] = float(contest["entry_fee"]) * len(ours)
-    art = raw.latest("nba", "dk/standings", cid)
-    if art is None:
-        return out
-    ent, side = parse_export(raw.load(art.path, "nba"))
-    out["export_at"] = datetime.strptime(art.stamp, "%Y%m%d-%H%M%S")
-    out["field"] = len(ent); out["side"] = side
-    keys = ent.names.map(lambda ns: tuple(sorted(normalize_name(n) for n in ns if n)))
-    if box:
-        pts = np.array([sum(box.points(n) for n in k) for k in keys])
-        out["scored"] = "rescored from the box scores"
-    else:
-        pts = ent.points.fillna(0).to_numpy(dtype=float)
-        out["scored"] = f"DK export {out['export_at']:%m-%d %H:%M} (live points; no box scores yet)"
-    pay = payout_table(session, cid, len(ent))
+    n_locked = locked_entries(ent)
+    if not export_is_final(ent):
+        when = f" {export_at:%m-%d %H:%M}" if export_at else ""
+        return unscored(contest, ours, f"mid-slate export{when}: {n_locked:,} of {len(ent):,} entries show a LOCKED slot; scrape it final",
+                        export_at, len(ent), n_locked)
+    out = dict(contest, ours=len(ours), final=True, scored=f"DraftKings' final export{f' {export_at:%m-%d %H:%M}' if export_at else ''}",
+               export_at=export_at, field=len(ent), locked=n_locked, side=None)
+    pts = ent.points.fillna(0).to_numpy(dtype=float)
     rank, won = ranked_payouts(pts, pay)
+    keys = ent.names.map(lambda ns: tuple(sorted(normalize_name(n) for n in ns if n)))
     copies = Counter(keys)
     out["unique"] = len(copies)
     out["max_copies"] = max(copies.values()) if copies else 0
@@ -245,6 +218,21 @@ def contest_result(session: Session, contest: dict, ours: set, box) -> dict:
     out["cashed"] = sum(1 for r in rows if r["payout"] > 0)
     out["roi"] = out["net"] / out["fees"] if out["fees"] else None
     out["min_cash"] = float(pts[won > 0].min()) if (won > 0).any() else None
+    return out
+
+
+def contest_result(session: Session, contest: dict, ours: set) -> dict:
+    """One contest: our entries' result from its newest standings export when that is final (score_contest); unscored otherwise."""
+    from ivan.sports.nba.standings import parse_export
+    cid = int(contest["contest_id"])
+    art = raw.latest("nba", "dk/standings", cid)
+    if art is None:
+        return unscored(contest, ours, "no standings export: scrape it (scripts/nba/standings.py scrape)")
+    export_at = datetime.strptime(art.stamp, "%Y%m%d-%H%M%S")
+    ent, side = parse_export(raw.load(art.path, "nba"))
+    out = score_contest(contest, ours, ent, payout_table(session, cid, len(ent)), export_at)
+    if out["final"]:
+        out["side"] = side
     return out
 
 
@@ -412,6 +400,19 @@ def roi_timeline(results: List[dict], lock: Optional[datetime], day: Optional[da
     return out
 
 
+def summarize(results: List[dict]) -> dict:
+    """The slate's tiles over the contests with a final export; the rest listed as unscored with what they cost."""
+    scored = [r for r in results if r["final"]]
+    fees = sum(r["fees"] for r in scored); won = sum(r["won"] for r in scored)
+    claimed = [(r["claim"]["roi"], r["fees"]) for r in scored if r.get("claim") and r["claim"].get("roi") is not None]
+    return dict(contests=len(scored), entries=sum(r["found"] for r in scored), fees=fees, won=won, net=won - fees,
+                roi=(won - fees) / fees if fees else None, cashed=sum(r["cashed"] for r in scored),
+                claimed_roi=(sum(a * w for a, w in claimed) / sum(w for _, w in claimed)) if claimed else None,
+                final=bool(results) and len(scored) == len(results),
+                unscored=[dict(name=r["name"], contest_id=r["contest_id"], fees=r["fees"], ours=r["ours"], why=r["scored"]) for r in results if not r["final"]],
+                fees_unscored=sum(r["fees"] for r in results if not r["final"]))
+
+
 def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) -> dict:
     from ivan.sports.nba import validation as V
     now = now or datetime.now()
@@ -423,14 +424,13 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
         d0 = session.execute(text("select min(date) from historical_contest_information where draft_group_id = :d").bindparams(d=int(dg))).scalar()
         day = pd.Timestamp(d0).date() if d0 else None
     ids = our_entry_ids([c["contest_id"] for c in contests])
-    box = box_points(session, day) if day else {}
     claim = claims(ids.keys(), lock)
     results = []
     picked = chosen_lineups(ids.keys(), lock)
     for c in contests:
         if c["contest_id"] not in ids:
             continue
-        r = contest_result(session, c, ids[c["contest_id"]], box)
+        r = contest_result(session, c, ids[c["contest_id"]])
         r["claim"] = claim.get(c["contest_id"])
         by = (r["claim"] or {}).get("by_players") or {}
         for e in r["entries"]:                                    # each entry's own claim, when the chooser's run kept them
@@ -441,19 +441,15 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
         if r["claim"]:
             r["claim"].pop("by_players", None)
         results.append(r)
-    results.sort(key=lambda r: -r["fees"])
-    fees = sum(r["fees"] for r in results); won = sum(r["won"] for r in results)
-    claimed = [(r["claim"]["roi"], r["fees"]) for r in results if r.get("claim") and r["claim"].get("roi") is not None]
-    summary = dict(contests=len(results), entries=sum(r.get("found", 0) for r in results), fees=fees, won=won, net=won - fees,
-                   roi=(won - fees) / fees if fees else None, cashed=sum(r["cashed"] for r in results),
-                   claimed_roi=(sum(a * w for a, w in claimed) / sum(w for _, w in claimed)) if claimed else None,
-                   final=bool(box), missing_exports=[r["name"] for r in results if r["export_at"] is None])
-    # players: the scorecard join, our exposure, the field's ownership (the largest contest's export)
+    results.sort(key=lambda r: (not r["final"], -r["fees"]))
+    summary = summarize(results)
+    scored = [r for r in results if r["final"]]
+    # players: the scorecard join, our exposure, the field's ownership (the largest final export)
     players: Dict[str, list] = {}
     card = V.build_scorecard(session, int(dg)) if len(ours_cap) else None
-    entries = [e for r in results for e in r["entries"]]
+    entries = [e for r in scored for e in r["entries"]]
     exp = Counter(normalize_name(n) for e in entries for n in e["names"] if n)
-    biggest = max((r for r in results if r.get("side") is not None and len(r["side"])), key=lambda r: r["field"], default=None)
+    biggest = max((r for r in scored if r.get("side") is not None and len(r["side"])), key=lambda r: r["field"], default=None)
     own = {normalize_name(n): float(p) for n, p in zip(biggest["side"].name, biggest["side"].drafted_pct)} if biggest else {}
     own_proj = projected_ownership(session, int(dg))
     if card is not None and len(card.rows):
@@ -470,7 +466,7 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
             players[str(t)] = lst
     from ivan.sports.nba.validation import actuals_for
     tips = by_tip(session, int(dg), actuals_for(session, day)) if day else []
-    timeline = roi_timeline(results, lock, day)
+    timeline = roi_timeline(scored, lock, day)
     rotations = {}
     if day is not None:
         cells = archived_cells(session, int(dg))

@@ -14,9 +14,10 @@ exports it again, derive refuses it and removes a derived folder built from one.
 
 scrape needs the logged-in DraftKings Chrome profile (chrome-selenium/dk-profile);
 without --headless, Chrome opens and waits for you to log in when the session
-has expired. Per played slate it exports the --public largest public classic
-contests plus every contest in the entries file. DraftKings keeps standings
-about two weeks.
+has expired. Per played slate it exports every contest we played (the slate's
+own entries file, data/nba/slates/<dg>/input/entries.csv; --entries FILE for a
+slate this machine does not hold) plus the --public largest public classic
+contests. DraftKings keeps standings about two weeks.
 """
 from __future__ import annotations
 
@@ -25,16 +26,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ivan.core import raw
-from ivan.core.config import load_config
 from ivan.sports.nba import standings as S
 from ivan.sports.nba import slates as SL
-
-
-def entries_path() -> Path:
-    try:
-        return Path(load_config("nba")["paths"]["entries_csv"])
-    except Exception:   # noqa: BLE001
-        return Path("data/nba/input/entries.csv")
 
 
 def main() -> int:
@@ -45,6 +38,7 @@ def main() -> int:
         p = sub.add_parser(name)
         p.add_argument("--days", type=int, default=3, help="slates locked in the last N days (default 3)")
         p.add_argument("--public", type=int, default=3, help="largest public classic contests per slate (default 3)")
+        p.add_argument("--entries", default=None, help="a DraftKings entries file naming our contests, for a slate this machine does not hold")
     sub.choices["scrape"].add_argument("--contest-ids", default=None, help="export these ids instead")
     sub.choices["scrape"].add_argument("--headless", action="store_true")
     sub.choices["scrape"].add_argument("--no-derive", action="store_true")
@@ -55,14 +49,17 @@ def main() -> int:
     now = datetime.now()
 
     if a.cmd in ("status", "scrape") and not getattr(a, "contest_ids", None):
-        plan = S.contests_to_scrape(session, now - timedelta(days=a.days), now, public_n=a.public, entries_csv=entries_path(), now=now)
+        plan = S.contests_to_scrape(session, now - timedelta(days=a.days), now, public_n=a.public,
+                                    entries_csv=Path(a.entries) if a.entries else None, now=now)
         derived = S.derived_ids() - S.partial_derived_ids()
         for s in plan:
-            print(f"slate {s['slate_key']} locked {s['lock']:%a %m-%d %H:%M}: {len(s['contests'])} contests, {len(s['scraped'])} exported final, "
-                  f"{sum(1 for c in s['contests'] if c in derived)} derived, {len(s['to_scrape'])} to scrape")
+            print(f"slate {s['slate_key']} locked {s['lock']:%a %m-%d %H:%M}: {len(s['contests'])} contests ({len(s['ours'])} ours), "
+                  f"{len(s['scraped'])} exported final, {sum(1 for c in s['contests'] if c in derived)} derived, {len(s['to_scrape'])} to scrape")
+            if not s["ours"]:
+                print(f"    (no entries file for this slate: only the public contests; --entries FILE names ours)")
             for c in s["contests"]:
                 state = "final    " if c in s["scraped"] else ("mid-slate" if S.has_standings(c) else "pending  ")
-                print(f"    {c} {state} {'derived' if c in derived else '       '}  {s['names'].get(c, '')}")
+                print(f"    {c} {state} {'derived' if c in derived else '       '} {'ours  ' if c in s['ours'] else 'public'}  {s['names'].get(c, '')}")
         if not plan:
             print("no played slates in the window (a slate counts once its lock is 5 hours past)")
         else:

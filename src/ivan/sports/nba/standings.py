@@ -7,8 +7,10 @@ is calibrated against and what the dupe and ownership models will be fitted
 on.
 
 contests_to_scrape   per played slate (archive capture with a lock in the
-                     window), the largest public classic contests plus any
-                     contest in our entries file, minus those already exported
+                     window), every contest we played (the slate's own entries
+                     file, data/nba/slates/<dg>/input/entries.csv) plus the
+                     largest public classic contests, minus those already
+                     exported FINAL (a mid-slate export is scraped again)
 scrape               the export through a logged-in Chrome profile
                      (ivan.sports.common.draftkings), raw dk/standings/<id>
 derive_contest       the newest FINAL export parsed and matched by name to the
@@ -188,6 +190,7 @@ def played_slates(session: Session, since: datetime, until: datetime, now: Optio
 
 
 def entries_contest_ids(entries_csv: Optional[Path]) -> set:
+    """The Contest IDs in a DraftKings entries file; empty when there is no file."""
     if not entries_csv or not Path(entries_csv).exists():
         return set()
     try:
@@ -197,21 +200,41 @@ def entries_contest_ids(entries_csv: Optional[Path]) -> set:
         return set()
 
 
+def our_contest_ids(draft_group: int, entries_csv: Optional[Path] = None, root: Optional[Path] = None) -> set:
+    """
+    The contests we played on a slate: the Contest IDs of the slate's own entries file (data/nba/slates/<dg>/input/entries.csv,
+    the DraftKings export the desk works from), else of `entries_csv` when given (a machine that does not hold the slate).
+    Until 2026-11-05 this read the pre-split shared path, which no longer exists, so only the public contests were scraped.
+    """
+    from ivan.sports.nba import slates as SL
+    dg = int(draft_group)
+    if SL.holds(dg, root):
+        ours = entries_contest_ids(SL.paths(dg, root).entries_csv)
+        if ours:
+            return ours
+    return entries_contest_ids(entries_csv)
+
+
 def contests_to_scrape(session: Session, since: datetime, until: datetime, public_n: int = 3, entries_csv: Optional[Path] = None,
                        now: Optional[datetime] = None) -> List[dict]:
-    """Per played slate: {slate_key, lock, contests: [ids], scraped: [ids], to_scrape: [ids]} with the largest public contests + ours."""
-    ours = entries_contest_ids(entries_csv)
+    """
+    Per played slate: {slate_key, lock, contests: [ids], ours: [ids], scraped: [ids], to_scrape: [ids], names}. The contests are
+    every one we played (our_contest_ids) plus the public_n largest public classic contests by size whether we played them or not;
+    scraped are those with a FINAL export, to_scrape the rest (a mid-slate export counts as not scraped).
+    """
     out = []
     for cap in played_slates(session, since, until, now):
-        rows = slate_contests(session, int(cap.slate_key))
+        dg = int(cap.slate_key)
+        rows = slate_contests(session, dg)
+        ours = our_contest_ids(dg, entries_csv)
         # the lobby leaves contest_type empty on some contests (2026-11-02: the eight largest of slate 156054); a slate key is one
         # game type, so only a contest marked as something other than classic is left out
         pub = sorted([r for r in rows if not (r.contest_type and not str(r.contest_type).lower().startswith("classic")) and int(r.total_entries or 0) >= PUBLIC_MIN_ENTRIES],
                      key=lambda r: -int(r.total_entries or 0))[:public_n]
         ids = sorted({int(r.contest_id) for r in pub} | {int(r.contest_id) for r in rows if int(r.contest_id) in ours})
         scraped = [c for c in ids if has_final_standings(c)]
-        out.append(dict(slate_key=cap.slate_key, lock=cap.lock, contests=ids, scraped=scraped, to_scrape=[c for c in ids if c not in scraped],
-                        names={int(r.contest_id): r.name for r in rows if int(r.contest_id) in ids}))
+        out.append(dict(slate_key=cap.slate_key, lock=cap.lock, contests=ids, ours=sorted(c for c in ids if c in ours), scraped=scraped,
+                        to_scrape=[c for c in ids if c not in scraped], names={int(r.contest_id): r.name for r in rows if int(r.contest_id) in ids}))
     return out
 
 
