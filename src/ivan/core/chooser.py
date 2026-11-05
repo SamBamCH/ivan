@@ -157,3 +157,98 @@ def roi_worlds(sims) -> np.ndarray:
     if S == 0:
         return np.zeros((len(traces), 0), dtype=np.float32)
     return np.vstack([t[:S] for t in traces])
+
+
+def fpts_worlds(sims) -> np.ndarray:
+    """Candidates x worlds simulated-points matrix from simulation results, truncated to the shortest trace."""
+    traces = [np.asarray(res.fpts, dtype=np.float64) for res in sims]
+    S = min((t.size for t in traces), default=0)
+    if S == 0:
+        return np.zeros((len(traces), 0), dtype=np.float64)
+    return np.vstack([t[:S] for t in traces])
+
+
+# ------------------------------------------------------------------------------ what every chooser reports
+def quality_features(cash: np.ndarray, roi_matrix: np.ndarray, weights: dict):
+    """
+    Cash % and (shrunk) mean ROI per candidate, each scaled to [0, 1] across
+    the pool and blended by the weights (cash_pct, avg_roi_win). Returns (raw
+    N x 2, quality N, the two weights, (mins, maxs) of the scaling).
+    """
+    cash = np.asarray(cash, dtype=float).reshape(-1)
+    N = cash.size
+    raw = np.zeros((N, 2), dtype=float)
+    raw[:, 0] = cash
+    raw[:, 1] = roi_matrix.mean(axis=1) if roi_matrix.size else 0.0
+    mins, maxs = (raw.min(axis=0), raw.max(axis=0)) if N else (np.zeros(2), np.zeros(2))
+    norm = (raw - mins) / (maxs - mins + 1e-6)
+    w_feat = np.array([weights.get("cash_pct", 0), weights.get("avg_roi_win", 1)], dtype=float)
+    return raw, (norm * w_feat).sum(axis=1), w_feat, (mins, maxs)
+
+
+def viz_payload(lineup_ids: Sequence[int], raw, q, dist_mat, fpts_matrix, selected, top_q, trace, lam, weights, norm,
+                book=None, method: Optional[str] = None, max_points: int = 1500, seed: int = 0) -> dict:
+    """
+    What the chooser saw, for plotting: every candidate's cash %, ROI and
+    quality; a 2-D map of the simulated-points space (PCA of the fpts traces,
+    so distance on the map is roughly the diversity distance); which candidates
+    were picked (and in what order) or would have been picked on quality alone;
+    the greedy trace; how spread out each set is; and the book's simulated
+    return distribution. Candidates are subsampled to max_points for the page,
+    keeping every pick and quality-only pick.
+    """
+    ids = list(lineup_ids)
+    N = len(ids)
+    fpts_matrix = np.asarray(fpts_matrix, dtype=float)
+    Xc = fpts_matrix - fpts_matrix.mean(axis=0, keepdims=True) if fpts_matrix.size else np.zeros((N, 1))
+    U, S, _ = np.linalg.svd(Xc, full_matrices=False)
+    coords = U[:, :2] * S[:2] if S.size >= 2 else np.zeros((N, 2))
+    var = S ** 2
+    evr = (var / var.sum()).tolist() if var.sum() > 0 else [0.0, 0.0]
+
+    pick_order = {idx: k + 1 for k, idx in enumerate(selected)}
+    top_set = set(top_q)
+    keep = set(selected) | top_set
+    pool = [i for i in range(N) if i not in keep]
+    if len(keep) + len(pool) > max_points:
+        pool = [int(i) for i in np.random.default_rng(seed).choice(pool, size=max(0, max_points - len(keep)), replace=False)]
+    points = [{"lineup_id": ids[i], "cash": float(raw[i, 0]), "roi": float(raw[i, 1]), "q": float(q[i]),
+               "x": float(coords[i, 0]), "y": float(coords[i, 1]), "pick": pick_order.get(i), "top": i in top_set}
+              for i in sorted(keep | set(pool))]
+
+    if isinstance(dist_mat, SampledDistances):
+        mean_pair, mean_all = dist_mat.mean_pair, dist_mat.mean_all()
+    else:
+        def mean_pair(idx) -> Optional[float]:
+            idx = list(idx)
+            if len(idx) < 2:
+                return None
+            sub = dist_mat[np.ix_(idx, idx)]
+            return float(sub[np.triu_indices(len(idx), 1)].mean())
+        mean_all = float(dist_mat[np.triu_indices(N, 1)].mean()) if N > 1 else None
+
+    return {"n_candidates": N, "n_shown": len(points), "weights": dict(weights), "lambda": lam,
+            "method": (book or {}).get("method") or method or str(weights.get("method") or "greedy"), "bankroll": (book or {}).get("bankroll"),
+            "explained_variance": [float(evr[0]), float(evr[1]) if len(evr) > 1 else 0.0],
+            "norm": {"cash": [float(norm[0][0]), float(norm[1][0])], "roi": [float(norm[0][1]), float(norm[1][1])]},
+            "points": points, "trace": trace, "book": book,
+            "spread": {"chosen": mean_pair(selected), "top_quality": mean_pair(top_q), "all": mean_all}}
+
+
+def fill_stats(stats, n_results, n_after_roi, n_valid, n_unique, top_raw, sel_raw, selected, weights, n_missing,
+               by_lineup=None, book=None, trace=None) -> None:
+    """The selection's summary every choose run logs and writes: counts, the picks' and the quality-only picks' mean ROI / cash, the book."""
+    if stats is None:
+        return
+    top_raw, sel_raw = np.asarray(top_raw, dtype=float).reshape(-1, 2), np.asarray(sel_raw, dtype=float).reshape(-1, 2)
+    stats.update({
+        "results": int(n_results), "after_roi_filter": int(n_after_roi), "valid": int(n_valid), "unique": int(n_unique),
+        "missing_players": int(n_missing), "chosen": int(len(selected)), "weights": dict(weights),
+        "by_lineup": by_lineup or {},                      # lineup_id -> {cash_pct, avg_roi} of the picks
+        "book": book,                                      # method, bankroll, chosen / top_quality return distributions
+        "trace": trace or [],
+        "top_quality_roi": float(top_raw[:, 1].mean()) if len(top_raw) else None,
+        "top_quality_cash": float(top_raw[:, 0].mean()) if len(top_raw) else None,
+        "chosen_roi": float(sel_raw[:, 1].mean()) if len(sel_raw) else None,
+        "chosen_cash": float(sel_raw[:, 0].mean()) if len(sel_raw) else None,
+    })

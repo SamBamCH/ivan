@@ -53,7 +53,10 @@ or "locked") and its mode.
    4 **Sim**: simulations, field cap, duplicates in classic (`sim.py -n 1000 -c 10000 --entries data/nfl/input/web/entries.csv`);
    replaces earlier results.
    5 **Choose**: every contest of the entries file with its own knobs from the contests section
-   (`choose.py --weights-json data/nfl/input/web/weights.json`).
+   (`choose.py --weights-json data/nfl/input/web/weights.json`). **Slate book** beside it (resting the pointer opens its
+   one knob, the bankroll in dollars, remembered in `weights.json` as `default.bankroll_dollars`): the whole slate as
+   one book from the entries file and that bankroll alone, the per-contest knobs unused
+   (`choose.py --method slate --bankroll-dollars B`, [../nfl/chooser.md](../nfl/chooser.md)).
    **clear sims** / **clear lineups + sims** (`clear_sims.py`, `clear_all.py`; refused while a job runs).
    Under them: when the working slate was last ingested (amber after 3 hours), when the entries file was uploaded, the
    pool's rows and teams, how many players carry ownership, the lineups, the sim rows and contests. Then the job: its
@@ -98,7 +101,7 @@ or "locked") and its mode.
 |---|---|---|
 | **Players** `/players` (+ `.csv`) | `nfl_player` | the ingested pool with projections and ownership (the desk's Players section is the same pool) |
 | **Sim report** `/contests` | `contest_sim_report`, `diagnostics/*/report.json` | one report per simulated contest: Checks (payouts conserved, ties, rake, sampled scores vs projections, correlation), Field (duplication, top lineups, exposure vs projected ownership), Payouts (real vs scaled table), Simulation (cash line, winning score, best candidates), Correlation (target vs sampled per game), and with the conditioned sim the worlds' team points |
-| **Choose** `/choose` | `chosen_entries.choose.<stamp>.json` | per contest: candidates on the cash % vs ROI plane with the weight direction, the fpts-trace map, the greedy walk, the picks; the book summary for portfolio; "the slate as one book" tiles and per-contest table for the slate method; what to root for from the worlds |
+| **Choose** `/choose` | `chosen_entries.choose.<stamp>.json` | per contest: candidates on the cash % vs ROI plane with the weight direction, the fpts-trace map, the greedy walk, the picks; the book summary for portfolio; for the slate method "the slate as one book": the dollar tiles, the exchange pass, distinct and reused lineups, the per-contest table (entries, fee, mean net, mean ROI, cash, lineups also played elsewhere, honest ROI) and the lineups played in more than one contest; what to root for from the worlds |
 | **Exposures** `/exposures` | `chosen_entries.lineups/exposures.*.csv` | the chosen lineups per contest (players, salary, projection, team split, stack labels, sim cash % and ROI) and player exposure by slot |
 | **Downloads** `/downloads` | `output/web/` | the DraftKings upload file and the other CSVs of each run |
 | **Jobs** `/jobs`, `/jobs/{id}` | `data/nfl/jobs/` | every job's log; cancel |

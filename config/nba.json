@@ -33,7 +33,8 @@
   "avg_roi_win": 0.5,
   "diversity_lambda": 0.1,
   "method": "greedy",
-  "bankroll": 3.0
+  "bankroll": 3.0,
+  "bankroll_dollars": 1000.0
  },
  "projection": {
   "minutes_model": "rotation",

@@ -16,7 +16,7 @@ UI in `src/ivan/web/` ([../web/nfl-app.md](../web/nfl-app.md)).
 | [backtest-and-validation.md](backtest-and-validation.md) | Replay, repeats, as-of models, the Backtest hub and the per-slate builds page, what retention keeps and lets go, validation per component, the models scoreboard, settle and the after-tax report. |
 | [overnight.md](overnight.md) | The nightly timer, the manual overnight reset, settle, the scrapes, model builds, the sync to the server. |
 | [data.md](data.md) | Config keys, tables, the data directory, the models directory. |
-| [notes/](notes/) | Dated plans: the slate chooser. |
+| [notes/](notes/) | Dated plans and findings: the slate chooser plan, the slate book built for NFL and NBA (2026-11-05), the dupe backtest. |
 
 ## The flow in one picture
 

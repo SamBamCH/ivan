@@ -1,12 +1,16 @@
 # src/ivan/core/portfolio.py
 """
 Choose a book of lineups on how it does across simulated worlds, not lineup
-by lineup. Shared by the NFL and MMA choosers: each candidate carries its
-ROI in every simulated world; the greedy adds the lineup that most raises
+by lineup. Shared by the sports' choosers: each candidate carries its ROI in
+every simulated world; the greedy adds the lineup that most raises
 sum_w log(1 + net_w / bankroll), the book's log return summed over worlds.
 A lineup that wins in worlds the book already wins adds less than one that
 wins elsewhere, so the picks spread across outcomes; a lineup that won two
 of two thousand worlds no longer outranks one that cashes steadily.
+
+pick_portfolio is one contest's book in fee units; pick_book, improve_book
+and dollar_book_summary are the slate's book in dollars across groups of
+slots (ivan.core.slate_book drives them).
 """
 from __future__ import annotations
 
@@ -137,6 +141,82 @@ def pick_book(net: np.ndarray, bankroll: float, group: np.ndarray, slots: Sequen
         selected.append(j)
         trace.append({"pick": step + 1, "lineup_id": ids[j], "group": int(group[j]), "q": float(qv[j]), "div": g, "score": float(utility)})
     return selected, trace, {"clipped": clipped, "steps": len(selected)}
+
+
+def book_utility(book: np.ndarray, bankroll: float) -> float:
+    """sum_s log(1 + book_s / bankroll), the book's log utility over scenarios (clipped where it would lose the bankroll)."""
+    return float(np.log1p(np.maximum(np.asarray(book, dtype=np.float64) / float(bankroll), -0.999999)).sum())
+
+
+def improve_book(net: np.ndarray, bankroll: float, group: np.ndarray, selected: Sequence[int], shortlist: int = 300,
+                 passes: int = 3, tol: float = 1e-9, chunk: int = 2048) -> tuple[List[int], dict]:
+    """
+    Exchange pass after the greedy: one-for-one swaps that raise the book's
+    utility. The greedy adds each pick given the picks before it; once the
+    book is full an early pick may be worth less than a candidate it blocked,
+    and a lineup may do more in another contest than where it landed. Each
+    pass visits every pick in turn, scores the book without it against the
+    other candidates of that pick's contest (its group) that are not already
+    in the book, and replaces it by the best one when that raises the utility
+    by more than tol. Candidates considered are the `shortlist` rows per group
+    with the largest marginal gain on the finished greedy book (all of them
+    when the group is smaller), so a pass costs about one greedy step per
+    pick. Stops after `passes` passes or a pass with no swap. Returns the new
+    selection (same order; swapped picks keep their slot) and
+    {"passes", "swaps", "utility_before", "utility_after"}.
+    """
+    R = np.asarray(net, dtype=np.float32)
+    group = np.asarray(group, dtype=int)
+    selected = [int(j) for j in selected]
+    B = float(bankroll)
+    if not selected or R.size == 0 or B <= 0:
+        return selected, {"passes": 0, "swaps": 0, "utility_before": 0.0, "utility_after": 0.0}
+    book = R[selected].astype(np.float64).sum(axis=0)
+    before = book_utility(book, B)
+
+    def gains(rows: np.ndarray, base: np.ndarray) -> np.ndarray:
+        out = np.empty(rows.size, dtype=np.float64)
+        for a in range(0, rows.size, chunk):
+            block = R[rows[a:a + chunk]].astype(np.float64) / B
+            block += (base / B)[None, :]
+            np.maximum(block, -0.999999, out=block)
+            out[a:a + chunk] = np.log1p(block).sum(axis=1)
+        return out
+
+    # the shortlist per group: the rows with the largest marginal gain on the finished book, plus every pick
+    in_book = set(selected)
+    pool_by_group: dict[int, np.ndarray] = {}
+    for g in np.unique(group[selected]):
+        rows = np.flatnonzero(group == g)
+        if rows.size > shortlist:
+            top = np.argsort(-gains(rows, book))[:shortlist]
+            rows = np.union1d(rows[top], [j for j in selected if group[j] == g])
+        pool_by_group[int(g)] = rows
+
+    swaps: List[dict] = []
+    n_pass, utility = 0, before
+    for _ in range(max(0, int(passes))):
+        n_pass += 1
+        swapped = False
+        for k, j in enumerate(selected):
+            g = int(group[j])
+            base = book - R[j]
+            cands = np.array([c for c in pool_by_group[g] if c == j or c not in in_book], dtype=int)
+            if cands.size <= 1:
+                continue
+            u = gains(cands, base)
+            best = int(np.argmax(u))
+            c = int(cands[best])
+            if c != j and u[best] > utility + tol:
+                in_book.discard(j); in_book.add(c)
+                swaps.append({"slot": k, "group": g, "out": int(j), "in": c, "gain": float(u[best] - utility)})
+                selected[k] = c
+                book = base + R[c]
+                utility = float(u[best])
+                swapped = True
+        if not swapped:
+            break
+    return selected, {"passes": n_pass, "swaps": len(swaps), "swapped": swaps, "utility_before": before, "utility_after": utility}
 
 
 def dollar_book_summary(net_rows: np.ndarray, fees: float, bankroll: float) -> Optional[dict]:

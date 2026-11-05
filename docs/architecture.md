@@ -33,7 +33,7 @@ ingest ──► project ──► generate the field's candidate lineups ──
 | project | the pool, history, odds | per-player distribution on the pool (mean, sd, quantiles), a projections artifact, a capture row | |
 | generate | the pool's distributions | the `lineup` pool (correlated draws → ILP per sample, deduped) | `core.seed` |
 | simulate | the pool, the entries file, payouts | `lineup_simulation_results` per contest, a sim artifact, `contest_sim_report` | `sports.common.payouts`, `core.artifacts` |
-| choose | the sim results | the DK upload CSV, exposures, lineups, choose json, simroi npz | `core.chooser` (greedy quality, empirical-Bayes shrinkage, cross-fit), `core.portfolio` (log-utility book, the NFL slate book) |
+| choose | the sim results | the DK upload CSV, exposures, lineups, choose json, simroi npz | `core.chooser` (greedy quality, empirical-Bayes shrinkage, cross-fit, the stats and viz every run writes), `core.portfolio` (log-utility book, the greedy and exchange pass of the slate book), `core.slate_book` (the slate as one book, NFL and NBA) |
 | validate / settle | artifacts + box scores + real standings | scorecards, validation reports, slate status | `core.validation`, `core.slates` |
 
 The sport modules mirror each other by name (`ingest.py`, `field_generation.py`, `simulate_contest.py`,
@@ -55,8 +55,9 @@ question answered for one sport usually points at the same file in another.
 | `replay` | restores archived slates into a copy of the sport's database, pins the clock, runs the sport's pipeline through a `SportAdapter` (project → generate → simulate → choose), with repeats per slate under their own seed to measure the pipeline's own noise. Only NFL has an adapter today. |
 | `validation` | sport-agnostic frames for projected vs actual: `player_report`, `field_report`, `lineup_report`, `pool_report`, `build_checks`. A sport's `validation.py` builds the frames from its artifacts and actuals. |
 | `slates` | one status row per slate from the settle job (open / waiting / login_needed / settled / no_contests) for the Backtest page and the nightly loop. |
-| `chooser` | the choosers' numerics shared by the sports: greedy quality, `shrink_rows` (DerSimonian-Laird empirical Bayes on per-world ROI), `cash_feature`, `cross_fit_book` (select on even worlds, score on odd: honest ROI). |
-| `portfolio` | the book-level choosers: `pick_portfolio` (per-contest log utility over worlds, bankroll in multiples of fees), `pick_book` + `dollar_book_summary` (the NFL "slate" method: one bankroll in dollars across every contest). |
+| `chooser` | the choosers' numerics shared by the sports: greedy quality, `shrink_rows` (DerSimonian-Laird empirical Bayes on per-world ROI), `cash_feature`, `cross_fit_book` (select on even worlds, score on odd: honest ROI), `quality_features` / `viz_payload` / `fill_stats` (what every choose run reports). |
+| `portfolio` | the book-level pickers: `pick_portfolio` (one contest's log utility over worlds, bankroll in multiples of fees), `pick_book` (greedy on a dollar book across groups of slots), `improve_book` (the exchange pass: one-for-one swaps that raise the utility), `dollar_book_summary`. |
+| `slate_book` | the slate as one book, sport-agnostic: `ContestCandidates` (one contest's lineups with their per-world ROI), `choose_book` (shrink per contest, stack the (contest, lineup) pairs as net dollars per shared world, greedy + exchange pass on mean log(1 + book / bankroll), the honest cross-fit, the per-contest split and where every lineup went), `describe_book` (the log lines). The NFL and NBA `choose.choose_slate` load their rows and check the shared draw, then call it. |
 | `feed` | the data feed between two Ivans: `publish` named tables and files as gzipped bundles with a manifest (the NBA: one bundle per held slate beside the shared tables), `pull` over ssh (`publish` on the producer, rsync, `apply`) on the consumer, which replaces exactly those tables and keeps its own work. One spec per sport. |
 
 ## The database

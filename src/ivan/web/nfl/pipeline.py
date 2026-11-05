@@ -170,6 +170,15 @@ STEPS: list[Step] = [
         needs_entries=True,
         build=lambda f: _build_choose(f),
     ),
+    Step(
+        key="choose_slate", title="Choose the slate as one book",
+        blurb="Every contest of the entries file chosen at once from one bankroll, in dollars: the picks spread across the slate's "
+              "worlds and across contests, and the same lineup can be played where it does most. The per-contest knobs are not used.",
+        fields=[Field("bankroll_dollars", "Bankroll $", default=DEFAULT_WEIGHTS["bankroll_dollars"], min=1, step="50",
+                      help="the real bankroll in dollars: the scale of the log utility (a smaller figure asks for more caution)")],
+        needs_entries=True,
+        build=lambda f: _build_choose_slate(f),
+    ),
 ]
 
 
@@ -226,6 +235,35 @@ def _build_choose(form: dict) -> list[list[str]]:
     WEIGHTS_FILE.write_text(json.dumps({"default": DEFAULT_WEIGHTS, **weights}, indent=1))
     return [_script("choose.py") + ["--entries", str(CURRENT_ENTRIES), "--no-prompt",
                                     "--weights-json", str(WEIGHTS_FILE), "-o", str(WEB_OUTPUT_DIR / "chosen.csv")]]
+
+
+def saved_bankroll_dollars() -> float:
+    """The slate book's bankroll remembered in weights.json (default.bankroll_dollars), else the default."""
+    try:
+        return float((load_weights().get("default") or {}).get("bankroll_dollars") or DEFAULT_WEIGHTS["bankroll_dollars"])
+    except (TypeError, ValueError):
+        return float(DEFAULT_WEIGHTS["bankroll_dollars"])
+
+
+def _build_choose_slate(form: dict) -> list[list[str]]:
+    """The slate as one book (ivan.core.slate_book): the entries file and the bankroll are the only inputs. The bankroll is
+    remembered in weights.json's default; every contest is chosen by the slate method whatever its own knobs say."""
+    entries = entries_summary()
+    if not entries or entries.get("error"):
+        raise ValueError("Upload an entries file first.")
+    raw = str(form.get("bankroll_dollars", "")).strip()
+    try:
+        bankroll = float(raw) if raw else saved_bankroll_dollars()
+    except ValueError:
+        raise ValueError(f"'{raw}' is not a bankroll in dollars.")
+    if bankroll <= 0:
+        raise ValueError("The bankroll must be positive.")
+    saved = load_weights()
+    saved["default"] = {**DEFAULT_WEIGHTS, **(saved.get("default") or {}), "bankroll_dollars": bankroll}
+    WEB_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    WEIGHTS_FILE.write_text(json.dumps(saved, indent=1))
+    return [_script("choose.py") + ["--entries", str(CURRENT_ENTRIES), "--no-prompt", "--method", "slate", "--bankroll-dollars", "%g" % bankroll,
+                                    "-o", str(WEB_OUTPUT_DIR / "chosen.csv")]]
 STEP_BY_KEY = {s.key: s for s in STEPS}
 
 
