@@ -80,18 +80,28 @@ class Variant:
     balance: Optional[str] = None             # "slate": every slate carries the same weight in the fit (dupe_model.fit_weights)
 
 
-def default_variants(model: Optional[DM.ProductDupeModel] = None, train_since: Optional[str] = None) -> List[Variant]:
-    """The live file, the live terms on all history, on this season only, ownership only, and the live terms plus the entry-cap term."""
+def default_variants(model: Optional[DM.ProductDupeModel] = None, train_since: Optional[str] = None, ablation: bool = False) -> List[Variant]:
+    """
+    The live file and the live terms on all history (the "asof" row), then either the alternatives (this season only, slate-balanced,
+    ownership only, plus the candidate terms) or, with `ablation`, the live terms with each one dropped in turn and each candidate
+    term from ALL_TERMS added in turn: the term-by-term evidence for what stays in TERMS.
+    """
     season = train_since or SEASON_START
     out = []
     if model is not None:
         out.append(Variant("live file", None, model=model, note=f"dupe_model_v2.json fitted {model.fitted_on} on {model.contests.get('showdown', '?')} fields; scored after that date"))
-    out += [Variant("asof", DM.TERMS, note="the live terms, refitted on every field before the slate (copy-weighted: the biggest fields set the fit)"),
+    if ablation:
+        live = tuple(DM.TERMS)
+        out.append(Variant("asof", live, note=f"the live terms {list(live)}, refitted on every field before the slate"))
+        out += [Variant(f"asof -{t}", tuple(x for x in live if x != t), note=f"the live terms without {t}") for t in live]
+        out += [Variant(f"asof +{t}", live + (t,), note=f"the live terms plus {t}") for t in DM.ALL_TERMS if t not in live]
+        out.append(Variant("asof own only", (), note="ownership product alone (k, beta)"))
+        return out
+    out += [Variant("asof", DM.TERMS, note=f"the live terms {list(DM.TERMS)}, refitted on every field before the slate (copy-weighted: the biggest fields set the fit)"),
+            Variant("asof -emax", tuple(t for t in DM.TERMS if t != "emax"), note="the live terms without the entry-cap term (the model before 2026-11-05)"),
             Variant("asof balanced", DM.TERMS, balance="slate", note="the live terms, every past slate weighted the same in the fit"),
             Variant("asof season", DM.TERMS, train_since=season, note=f"the live terms, fields since {season} only"),
-            Variant("asof own only", (), note="ownership product alone (k, beta, captain)"),
-            Variant("asof +emax", tuple(DM.TERMS) + ("emax",), note="the live terms plus log(entries per user)"),
-            Variant("asof bal +emax", tuple(DM.TERMS) + ("emax",), balance="slate", note="slate-balanced, plus log(entries per user)")]
+            Variant("asof own only", (), note="ownership product alone (k, beta)")]
     return out
 
 
@@ -222,7 +232,7 @@ def forward(frame: pd.DataFrame, variants: Sequence[Variant], min_contests: int 
                 if tr.contest_id.nunique() < min_contests:
                     continue
                 n_slates = tr.slate.nunique()
-                p = DM._fit_format(tr, v.terms if n_slates >= DM.MIN_SLATES else (), method=DM.METHOD, balance=v.balance)
+                p = DM._fit_format(tr, v.terms if n_slates >= DM.MIN_SLATES else (), balance=v.balance)
                 n_train, train_slates = int(tr.contest_id.nunique()), int(n_slates)
             pr = DM.predict(p, te)
             preds[v.key][te_mask] = pr
@@ -230,8 +240,7 @@ def forward(frame: pd.DataFrame, variants: Sequence[Variant], min_contests: int 
             tr_2025 = int(tr[tr.date < pd.Timestamp(SEASON_START)].contest_id.nunique()) if v.terms is not None else None
             rows.append({"slate": s, "lock": lock, "variant": v.key, "contests": int(te.contest_id.nunique()), "train_contests": n_train, "train_slates": train_slates,
                          "train_before_season": tr_2025,
-                         "k": p["k"], "beta": p["beta"], "beta_cpt": p.get("beta_cpt"), "gamma": p.get("gamma", 0.0), "delta_logproj": p.get("delta_logproj", 0.0),
-                         "delta_emax": p.get("delta_emax", 0.0), **sc})
+                         **{k: p.get(k, 0.0) for k in DM.PARAM_KEYS}, **sc})
     return pd.DataFrame(rows), preds
 
 
@@ -350,9 +359,9 @@ class Result:
 
 
 def run(session, since: Optional[str] = SEASON_START, until: Optional[str] = None, train_since: Optional[str] = None,
-        model: Optional[DM.ProductDupeModel] = None, username: Optional[str] = None, actual_own: bool = True, log=print) -> Result:
+        model: Optional[DM.ProductDupeModel] = None, username: Optional[str] = None, actual_own: bool = True, ablation: bool = False, log=print) -> Result:
     model = DM.load() if model is None else model
-    variants = default_variants(model, train_since)
+    variants = default_variants(model, train_since, ablation)
     log(f"[dupe backtest] building the frame from every scraped showdown field...")
     frame = season_frame(session, since, until, username)
     if frame.empty:

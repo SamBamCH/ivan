@@ -118,22 +118,14 @@ def _stats(x: np.ndarray) -> dict:
             "p10": float(q[0]), "p25": float(q[1]), "p50": float(q[2]), "p75": float(q[3]), "p90": float(q[4])}
 
 def _dupe_features(session: Session, L, pid_to_col: Dict[int, int], player_ownership: np.ndarray, cpt_col_by_row) -> dict:
-    """The dupe model's captain and stack inputs for every lineup row (ivan.sports.nfl.dupe_model)."""
+    """The dupe model's per-lineup inputs beyond ownership and salary (ivan.sports.nfl.dupe_model): the projected points below the pool's best lineup."""
     from ivan.sports.nfl import dupe_model as DMv2
     cols = sorted(pid_to_col.items(), key=lambda kv: kv[1])
-    meta = {int(pid): (team, pos, fp, slot) for pid, team, pos, fp, slot in
-            session.query(NFLPlayer.id, NFLPlayer.team, NFLPlayer.position, NFLPlayer.fpts_mean, NFLPlayer.roster_slot_id).filter(NFLPlayer.id.in_([p for p, _ in cols])).all()}
-    teams = [meta.get(pid, ("", "", None, None))[0] for pid, _ in cols]
-    positions = [meta.get(pid, ("", "", None, None))[1] for pid, _ in cols]
-    fpts = [meta.get(pid, ("", "", None, None))[2] or 0.0 for pid, _ in cols]
-    is_cpt = [meta.get(pid, ("", "", None, None))[3] == CPT_SLOT for pid, _ in cols]
-    n_qb, mates = DMv2.lineup_stack_features(L, teams, positions)
-    out = {"qb_mates": mates, "n_qb": n_qb, "proj_gap": DMv2.lineup_proj_gap(L, fpts, is_cpt)}
-    if cpt_col_by_row is not None:
-        own = np.maximum(np.nan_to_num(np.asarray(player_ownership, dtype=float), nan=DMv2.MIN_OWN), DMv2.MIN_OWN) / 100.0
-        cpt = np.asarray(cpt_col_by_row)
-        out["log_own_cpt"] = np.where(cpt >= 0, np.log(own[np.maximum(cpt, 0)]), np.nan)
-    return out
+    meta = {int(pid): (fp, slot) for pid, fp, slot in
+            session.query(NFLPlayer.id, NFLPlayer.fpts_mean, NFLPlayer.roster_slot_id).filter(NFLPlayer.id.in_([p for p, _ in cols])).all()}
+    fpts = [meta.get(pid, (None, None))[0] or 0.0 for pid, _ in cols]
+    is_cpt = [meta.get(pid, (None, None))[1] == CPT_SLOT for pid, _ in cols]
+    return {"proj_gap": DMv2.lineup_proj_gap(L, fpts, is_cpt)}
 
 
 def lineup_rows(session: Session) -> list:
@@ -277,7 +269,7 @@ class SlateField:
         return self._memo["heuristic"]
 
     def dupe_features(self, session: Session, player_ownership: np.ndarray, captain: bool) -> dict:
-        """The dupe model's per-lineup features (_dupe_features); captain=True adds the captain's log ownership."""
+        """The dupe model's per-lineup features (_dupe_features), memoised per pool."""
         key = ("dupe_features", bool(captain))
         if key not in self._memo:
             self._memo[key] = _dupe_features(session, self.L, self.pid_to_col, player_ownership,
@@ -815,6 +807,19 @@ def sample_showdown_field_unified(
 # LEARNED MODEL SAMPLER (SHOWDOWN)
 # ==============================================================================
 
+def contest_entry_cap(session: Session, contest_id: Optional[int]) -> Optional[float]:
+    """The contest's entries-per-user cap (historical_contest_information.multi_entry) for the dupe model's entry-cap term; None when unknown."""
+    if not contest_id:
+        return None
+    from ivan.sports.nfl.models import HistoricalContest
+    c = session.get(HistoricalContest, int(contest_id))
+    try:
+        v = float(c.multi_entry) if c is not None and c.multi_entry is not None else None
+    except (TypeError, ValueError):
+        return None
+    return v if v and v > 0 else None
+
+
 def sample_showdown_field_learned(
     session: Session,
     field_size: int,
@@ -879,11 +884,13 @@ def sample_showdown_field_learned(
         dm = DMv2.load()
         slo = np.asarray(L @ np.log(np.maximum(player_ownership, DMv2.MIN_OWN) / 100.0), dtype=np.float64)
         feats = slate.dupe_features(session, player_ownership, captain=True)
-        predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float), **feats)
+        entry_cap = contest_entry_cap(session, contest_id)
+        predicted_dupes = dm.copies(total_entries, True, slo, salary_left=DMv2.SALARY_CAP - np.asarray(spends, dtype=float), max_entries=entry_cap, **feats)
         dupe_clip_floor = 1e-6
         dupe_info = {"model": "product", "params": dm.params["showdown"], "fitted_on": dm.fitted_on, "contests": dm.contests.get("showdown"),
-                     "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries)}
-        print(f"  dupes: {dm.describe().split(';')[0]}; candidates' expected copies at {int(total_entries)} entries: "
+                     "predicted_dupes": _stats(predicted_dupes), "total_entries": int(total_entries),
+                     "max_entries": entry_cap if entry_cap is not None else f"unknown (assumed {DMv2.EMAX_DEFAULT:.0f})"}
+        print(f"  dupes: {dm.describe().split(';')[0]}; candidates' expected copies at {int(total_entries)} entries, cap {dupe_info['max_entries']}: "
               f"median {np.median(predicted_dupes):.2f}, p90 {np.percentile(predicted_dupes, 90):.1f}, max {predicted_dupes.max():.1f}")
     else:
         raise ValueError(f"config field.dupe_model must be 'product' (got {dupe_mode!r}); the two-stage model was removed")
@@ -1082,8 +1089,9 @@ def sample_classic_field_learned(
         n_real = float(total_entries or field_size)
         salary_left = DMv2.SALARY_CAP - np.asarray(spends, dtype=float)
         feats = slate.dupe_features(session, player_ownership, captain=False)
-        predicted_copies_classic = dm.copies(n_real, False, slo, salary_left=salary_left, **feats)
-        weights = weights * dm.weights(False, slo, salary_left=salary_left, **feats)
+        entry_cap = contest_entry_cap(session, contest_id)
+        predicted_copies_classic = dm.copies(n_real, False, slo, salary_left=salary_left, max_entries=entry_cap, **feats)
+        weights = weights * dm.weights(False, slo, salary_left=salary_left, max_entries=entry_cap, **feats)
         print(f"  dupes (classic): {dm.params['classic']}; candidates' expected copies at {int(n_real)} entries: "
               f"median {np.median(predicted_copies_classic):.2f}, max {predicted_copies_classic.max():.1f}")
 

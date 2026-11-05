@@ -97,6 +97,31 @@ of the copies, and the fit weighs a lineup by its copies, so the parameters are 
 fields. The `asof balanced` variants give every past slate the same total weight in the fit
 (`dupe_model.fit_weights`); the scores were always one row per slate, weighted equally.
 
+## The term-by-term ablation and the model that went live (afternoon)
+
+`backtest_dupes.py --ablation --no-actual-own`, the live terms with each dropped in turn and each candidate
+added in turn, 16 slates forward:
+
+| variant | log MAE | log bias | slope | top lineup pred/actual |
+|---|---|---|---|---|
+| salary + cpt + logproj (the terms until today) | 0.80 | -0.09 | 0.93 | 0.98 |
+| without salary | 0.94 | -0.08 | 0.95 | 1.16 |
+| without the captain exponent | 0.80 | -0.10 | 0.93 | 0.97 |
+| without the projection gap | 0.85 | -0.12 | 0.97 | 0.22 |
+| plus the linear projection gap | 0.81 | -0.10 | 0.87 | 1.67 |
+| plus the QB-stack deltas | 0.81 | -0.09 | 0.93 | 1.06 |
+| plus the entry cap | 0.79 | -0.07 | 0.98 | 0.98 |
+| plus contest size (`logn`) | 0.78 | -0.17 [-0.28, -0.06] | 1.02 | 1.18 |
+
+Decision, one term per finding and nothing that the test does not pay for: **ownership, salary left,
+projection gap, entry cap** (`TERMS = ("salary", "logproj", "emax")`). The captain exponent came out
+(nothing changes without it), the linear gap and the stack deltas came out of the code with the
+zero-truncated Poisson fit (worse or nothing, twice now), and contest size stays a candidate only: its
+pooled error is the best of the table but its slate-level bias is the worst, and the slate level is the
+biggest open error. The samplers now read each contest's cap (`sample_field.contest_entry_cap`); a
+contest without one is predicted at the default cap of 20. The live and as-of model files were rebuilt
+with the new terms the same afternoon.
+
 ## What to run, and when
 
 After the nightly settle has scraped a slate's fields (the Monday after a week, or any morning):

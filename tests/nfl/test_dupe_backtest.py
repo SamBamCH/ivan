@@ -15,7 +15,7 @@ def _field(cid, day, n, k, beta, rng, emax=20, delta_emax=0.0, rows=300, slo_ran
     cnt = np.maximum(1, rng.poisson(lam))
     lineups = [f"CPT p{cid}_{i}|FLEX a|FLEX b{i}|FLEX c|FLEX d|FLEX e" for i in range(rows)]
     return pd.DataFrame({"contest_id": cid, "count": cnt, "entries": n, "is_showdown": 1.0, "n_players": 6, "sum_log_own": slo,
-                         "log_own_cpt": slo / 6, "salary_left": rng.choice([0, 300, 1200], rows), "n_qb": 1, "qb_mates": 1, "fpts_proj": 100.0,
+                         "salary_left": rng.choice([0, 300, 1200], rows), "fpts_proj": 100.0,
                          "proj_gap": rng.uniform(0, 20, rows), "lineup": lineups, "max_entries": float(emax), "entry_fee": 5.0,
                          "date": pd.Timestamp("2026-10-01 20:00") + pd.Timedelta(days=day)})
 
@@ -60,7 +60,7 @@ def test_forward_scores_only_slates_with_history_and_never_looks_ahead():
 def test_fixed_model_is_scored_only_after_its_fitted_on_date():
     rng = np.random.default_rng(1)
     df = _frame(rng)
-    m = DM.ProductDupeModel(params={"showdown": {"k": 0.05, "beta": 0.6, "beta_cpt": None, "gamma": 0.0, "delta_logproj": 0.0, "delta_emax": 0.0, "stack": {}}, "classic": dict(DM.DEFAULTS["classic"])},
+    m = DM.ProductDupeModel(params={"showdown": {"k": 0.05, "beta": 0.6, "gamma": 0.0, "delta_logproj": 0.0, "delta_emax": 0.0}, "classic": dict(DM.DEFAULTS["classic"])},
                             fitted_on="2026-10-04", contests={"showdown": 12})
     slates, _ = DB.forward(df, [DB.Variant("live file", None, model=m)])
     assert slates.lock.min() > pd.Timestamp("2026-10-04 23:59")
@@ -70,7 +70,8 @@ def test_fixed_model_is_scored_only_after_its_fitted_on_date():
 def test_entry_cap_term_is_recovered_and_shows_up_by_bucket():
     rng = np.random.default_rng(2)
     df = _frame(rng, delta_emax=-0.4, days=10)
-    slates, preds = DB.forward(df, [DB.Variant("asof", DM.TERMS), DB.Variant("asof +emax", tuple(DM.TERMS) + ("emax",))])
+    without = tuple(t for t in DM.TERMS if t != "emax")
+    slates, preds = DB.forward(df, [DB.Variant("asof", without), DB.Variant("asof +emax", without + ("emax",))])
     with_term = slates[slates.variant == "asof +emax"]
     assert abs(with_term.delta_emax.iloc[-1] + 0.4) < 0.1
     # without the term the single-entry fields are under-predicted and the 150-max fields over-predicted; with it both are flat

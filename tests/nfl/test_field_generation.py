@@ -50,7 +50,7 @@ def test_slate_field_builds_the_pool_once(tmp_path, monkeypatch):
     assert slate.spends.tolist() == [29000, 27000, 25000] and (slate.cpt_col_by_row == 0).all()
     assert slate.ownership.tolist() == [40.0, 20.0, 10.0, 5.0]
     calls = []
-    monkeypatch.setattr(SF, "_dupe_features", lambda *a, **k: calls.append(1) or {"qb_mates": None})
+    monkeypatch.setattr(SF, "_dupe_features", lambda *a, **k: calls.append(1) or {"proj_gap": None})
     assert slate.dupe_features(s, slate.ownership, captain=True) is slate.dupe_features(s, slate.ownership, captain=True)
     slate.dupe_features(s, slate.ownership, captain=False)
     assert len(calls) == 2                                              # one per captain flag, then memoised
