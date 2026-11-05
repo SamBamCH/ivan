@@ -62,7 +62,14 @@ def install_picker(app: FastAPI, sport: Sport) -> None:
         day = pick_day(days, wanted, now)
         if wanted is not None and day is None:
             day = Day(day=wanted, label=f"{wanted:%a %m-%d}", tag="", slates=[])
-        return templates.TemplateResponse(request, "picker.html", {"frame": ctx(request, sport, days, day, None, None, now), "day": day, "days": days})
+        ledger = None
+        if sport.ledger is not None:                                   # the money per day and over the season (local machine only)
+            try:
+                ledger = sport.ledger(now)
+            except Exception as e:   # noqa: BLE001 - the picker must open even when a ledger cannot be read
+                ledger = {"error": f"{type(e).__name__}: {e}", "overall": None, "days": {}}
+        return templates.TemplateResponse(request, "picker.html", {"frame": ctx(request, sport, days, day, None, None, now), "day": day, "days": days,
+                                                                   "ledger": ledger})
 
     @app.get("/", response_class=HTMLResponse)
     def picker_root(request: Request):

@@ -75,3 +75,17 @@ def test_a_mid_slate_export_is_not_a_field(session, tmp_path):
     s = S.derive_contest(session, 9, text=FINAL, out_dir=tmp_path, log=lambda m: None)
     assert s["final"] is True and s["locked_entries"] == 0 and s["entries_matched"] == 3
     assert S.derived_is_final(9, tmp_path) and not S.remove_partial(9, tmp_path) and S.derived_ids(tmp_path) == {9}
+
+
+def test_our_contest_ids_read_the_slates_own_entries_file(tmp_path):
+    """The contests we played come from data/nba/slates/<dg>/input/entries.csv (the shared pre-split path is gone)."""
+    from ivan.sports.nba import slates as SL
+    root = tmp_path / "slates"
+    p = SL.paths(555, root)
+    p.input.mkdir(parents=True); (p.root / "slate.sqlite").write_bytes(b"")
+    p.entries_csv.write_text("Entry ID,Contest Name,Contest ID,Entry Fee,PG,SG,SF,PF,C,G,F,UTIL\n"
+                             "1,Big,9,$5,,,,,,,,\n2,Big,9,$5,,,,,,,,\n3,Small,10,$1,,,,,,,,\n")
+    assert S.our_contest_ids(555, root=root) == {9, 10}
+    other = tmp_path / "e.csv"; other.write_text("Entry ID,Contest Name,Contest ID,Entry Fee,PG,SG,SF,PF,C,G,F,UTIL\n1,X,77,$1,,,,,,,,\n")
+    assert S.our_contest_ids(556, entries_csv=other, root=root) == {77}       # a slate not held here: the file given
+    assert S.our_contest_ids(556, root=root) == set()

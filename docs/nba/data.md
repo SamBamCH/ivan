@@ -58,11 +58,17 @@ data/nba/
 │   ├── input/
 │   │   ├── entries.csv             the DraftKings entries export the sim and chooser read (the desk's upload box)
 │   │   └── contest_weights.json    per-contest chooser knobs set on the desk's contests section (contest_weights.py); Choose passes it as --weights-json
-│   └── output/
-│       ├── projections/projections.<stamp>.csv       the projection artifact of each refresh and snapshot
-│       ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
-│       ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
-│       └── lateswap.<stamp>.csv + .json
+│   ├── output/
+│   │   ├── projections/projections.<stamp>.csv       the projection artifact of each refresh and snapshot
+│   │   ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
+│   │   ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
+│   │   └── lateswap.<stamp>.csv + .json
+│   ├── tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.tips, written once by archive_at_lock.py): meta.json,
+│   │                               players.json (the pool with projections, ownership, grid rows), odds.parquet (the props as stored:
+│   │                               the odds table is replaced per player at every refresh), game_lines.json, news.json (the slate's
+│   │                               news seen by then), edits/ (a copy of the day's edits). What a backtest of that game's models may read
+│   └── results/ledger.json         the money (ivan.sports.nba.results): our entries' result per contest from DraftKings' final exports,
+│                                   cached; complete once every contest has a final export, re-checked every 10 minutes until then
 ├── days/<YYYY-MM-DD>/              the day's edits, shared by its slates (a game is mapped once; the 6:00 and 6:30 slates read the
 │   │                               same files, the next day starts clean); a slate reaches them through the `day` in its slate.json
 │   ├── edits/

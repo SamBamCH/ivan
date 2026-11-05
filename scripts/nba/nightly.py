@@ -63,6 +63,12 @@ def main() -> int:
             logging.info(f"standings derived: {len(derived)}")
         except Exception as e:   # noqa: BLE001
             logging.warning(f"standings derive failed: {type(e).__name__}: {e}")
+        try:                                                                      # the money per slate (results.ledger_days), so the first page
+            from ivan.sports.nba import results                                   # after a scrape does not pay the parse; complete slates are not touched
+            led = results.ledger_days()
+            logging.info(f"results ledger: {led['overall']['slates']} slates, {led['overall']['incomplete']} incomplete, net {led['overall']['net']:+.2f}")
+        except Exception as e:   # noqa: BLE001
+            logging.warning(f"results ledger failed: {type(e).__name__}: {e}")
     try:
         from ivan.sports.nba import experience
         experience.fetch(log=logging.info)                                       # the rookie marks on the desk

@@ -35,9 +35,51 @@ as `review`.
 
 ## One slate's results (`ivan.sports.nba.slate_backtest`, `scripts/nba/backtest_slate.py`, the desk's backtest view)
 
-Per past slate: our entries' results rescored from the box scores against the chooser's claim, each contest, our
-lineups with their field copies, and every player's projection at lock against the box score. Read only. How the
-numbers are made is on [../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml).
+Per past slate: our entries' results from DraftKings' **final** standings exports (a contest with only a mid-slate
+export or none is listed unscored, never given a number) against the chooser's claim, each contest, our lineups
+with their field copies, and every player's projection at lock against the box score. Read only. How the numbers are
+made is on [../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml).
+`--date` lists every held slate whose `slate.json` day is that date. The redesign this is the first step of (one lock
+snapshot per slate, each date's data on its own, the pre-lock models re-run on it against the actuals) is
+[notes/backtest_redesign_2026-11-05.md](notes/backtest_redesign_2026-11-05.md).
+
+## The money (`ivan.sports.nba.results`, `scripts/nba/results.py`)
+
+```bash
+venv/bin/python scripts/nba/results.py                       # every held past slate summed per day and overall
+venv/bin/python scripts/nba/results.py --slate 156078        # one slate, per contest
+venv/bin/python scripts/nba/results.py --slate 156078 --force
+```
+
+What our entries made, from DraftKings' word only: each contest's **final** standings export and the payout table (ties
+share the places they cover). Our entries are the ones DraftKings lists under our user name (`config/nba.json`
+`backtest.dk_user`, "SamBamCH (3/10)") plus any Entry ID the desk's upload files name; the contests are those the slate's
+entries file names (unscored, with their fees, until scraped final) plus any final export where our name appears. Per
+slate the result is cached in `data/nba/slates/<dg>/results/ledger.json`: a slate whose every contest has a final export
+is **complete** and never recomputed (past results do not change); an incomplete one is re-checked at most every ten
+minutes and recomputed only when a newer final export is on disk. The nightly warms the ledgers after the standings
+derive, so the first page after a scrape does not pay the parse (about 2 s a slate).
+
+Where it shows, **on this machine only** (a consumer desk, the server, gets none of it: `Sport.ledger` is None there and
+the backtest view keeps only the model's columns): the Ivan home tile (the season), the NBA picker's strip under its
+heading (the season) and each day's row and heading (that day), and the slate's backtest view (that slate). The model's
+checks below are separate from this: the money is the actual, they are the claims.
+
+## The record at each game's tip (`ivan.sports.nba.tips`, `scripts/nba/tips.py`)
+
+```bash
+venv/bin/python scripts/nba/tips.py list --slate 156078
+venv/bin/python scripts/nba/tips.py backfill --slate 156078 | --all      # from the archive's at_tip captures (slates before 2026-11-05)
+venv/bin/python scripts/nba/tips.py show --slate 156078 --tip 2026-11-04T18:00
+```
+
+The source of truth for a backtest of a game: what the system knew when that game tipped, written once by the archive
+timer to `data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/` (the pool with its projections, ownership and grid rows; the props
+as stored; the game lines; the slate's news seen by then; a copy of the day's edits). A model re-run for a game may read
+that tip's record, the box scores and stints dated before the slate's day, and the slate's contests, payouts and
+entries: nothing dated after the tip. Tips backfilled from the archive captures carry players, props and lines only (no
+edits or news were kept then) and say so in `meta.json`. The layout and what is deliberately not stored are in the
+module's docstring and [data.md](data.md).
 
 ## The walk-forward backtest of the projection (`scripts/nba/backtest_projection.py`)
 
