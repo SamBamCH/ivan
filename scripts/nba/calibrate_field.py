@@ -30,7 +30,6 @@ import pandas as pd
 from ivan.core.config import load_config
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba import standings as S
-from ivan.sports.nba.models import HistoricalContest
 from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.utils import _coerce_positions
 
@@ -88,7 +87,9 @@ def main() -> int:
     lu, side, summary = S.load_field(a.contest_id, a.derived_dir) if a.derived_dir else S.load_field(a.contest_id)
     if lu is None:
         print(f"no derived field for {a.contest_id}: run scripts/nba/standings.py derive"); return 1
-    contest = session.get(HistoricalContest, a.contest_id)
+    contest = S.contest_row(session, a.contest_id)
+    if contest is None:
+        print(f"contest {a.contest_id} is not stored on this machine"); return 1
     cap, cap_players = S.capture_for_contest(session, contest)
     proj = S.projection_at_lock(session, int(contest.draft_group_id))
     cfg = load_config("nba")

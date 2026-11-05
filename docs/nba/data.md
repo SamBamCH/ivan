@@ -90,7 +90,8 @@ data/nba/
 │   ├── nba_api/pbp/<game id>/
 │   └── nba_live/{scoreboard,boxscore}/   (late swap --live)
 ├── derived/
-│   ├── contests/<id>/              lineups.parquet, players.csv, field.json from a standings export
+│   ├── contests/<id>/              lineups.parquet, players.csv, field.json from a FINAL standings export (field.json: final, locked_entries)
+│   ├── field_backtest/             the field backtest's model field per capture and public projection (a cache)
 │   ├── field_cache/                the two-group field per public-projection key
 │   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
 │   └── props_hist/                 parquet of the historical props
@@ -99,6 +100,7 @@ data/nba/
 ├── diagnostics/
 │   ├── <contest name>_<id>/report.json           the sim report per contest
 │   ├── scorecard/                                one CSV + JSON per scored slate
+│   ├── field_backtest/<stamp>/                   report.txt, contests.csv, players.csv, summary.json (backtest_field.py)
 │   └── backtest_projection_*.txt
 ├── jobs/                           the desk's job logs and json
 └── logs/                           nightly.log, archive.log, capture.log
@@ -119,7 +121,8 @@ cookie secret is `data/.desk_secret` (delete it to log everyone out).
   (edits, store, entries, outputs) as it stood.
 - **After lock**: the `at_tip` capture is the record of what we projected (the pool may change later
   by a refresh); the `ours` capture before lock is what the scorecard scores.
-- **The field**: the derived contest folders are the real fields; everything under `models/` about
-  the field is fitted from them.
+- **The field**: the derived contest folders are the real fields (final exports only: a mid-slate export is
+  refused, see [overnight.md](overnight.md)); everything under `models/` about the field is fitted from them and
+  checked against them by `backtest_field.py`.
 - **Raw first**: a parser change is a re-run over `raw/`, never a re-fetch (`pbp.py rebuild`,
   `fetch_historical_props.py --rebuild`, `standings.py derive`).

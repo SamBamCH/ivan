@@ -57,7 +57,8 @@ the game lines, plain box-score history), with a temperature that depends on ent
 It sees only what the public saw at lock (the archive capture the contest was matched to), never our
 projections. Fitting needs derived contests from the standings scrape ([overnight.md](overnight.md)).
 The DK lobby's %Drafted is **not** lineup ownership; the field's shape is per slate
-(finding 2026-10-23).
+(finding 2026-10-23). How far the field and its ownership are from the real fields of the season, contest by contest,
+is `scripts/nba/backtest_field.py` ([validation-and-backtests.md](validation-and-backtests.md#the-field-backtest-ivansportsnbafield_backtest-scriptsnbabacktest_fieldpy)).
 
 ## Simulate (`simulate_contest.py`)
 

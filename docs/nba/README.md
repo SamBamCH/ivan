@@ -52,7 +52,7 @@ Read in this order:
 | A player's minutes look wrong             | [projections.md](projections.md) minutes section; `scripts/nba/validate.py review --team XXX`               |
 | The brother's desk is stale               | [overnight.md](overnight.md) feed section; [../web/nba-desk.md](../web/nba-desk.md) consumer mode           |
 | No box scores / scorecards this morning   | [overnight.md](overnight.md): `data/nba/logs/nightly.log`, `systemctl --user list-timers`                   |
-| Field ownership looks off                 | [field-and-simulation.md](field-and-simulation.md) field model; `scripts/nba/field_model.py check`          |
+| Field ownership looks off                 | `scripts/nba/backtest_field.py` (real fields vs the model, [validation-and-backtests.md](validation-and-backtests.md)); [field-and-simulation.md](field-and-simulation.md) field model |
 | A past slate needs re-examining           | a past slate's page is its backtest; its Restore button loads it from its archive capture; [data.md](data.md) archive section  |
 |                                           |                                                                                                             |
 |                                           |

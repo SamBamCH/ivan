@@ -6,7 +6,11 @@ Real contest fields from DraftKings (ivan.sports.nba.standings).
 
     scripts/nba/standings.py status [--days 3]                 played slates and which contests are exported / derived
     scripts/nba/standings.py scrape [--days 3] [--public 3] [--contest-ids 1,2] [--headless]
-    scripts/nba/standings.py derive [--contest-ids 1,2]        parse every export without a derived folder
+    scripts/nba/standings.py derive [--contest-ids 1,2]        parse every final export without a derived folder
+
+An export taken while games were on (the late swap's standings fetch) shows the
+unplayed slots as LOCKED: it is not a field. status lists it as mid-slate, scrape
+exports it again, derive refuses it and removes a derived folder built from one.
 
 scrape needs the logged-in DraftKings Chrome profile (chrome-selenium/dk-profile);
 without --headless, Chrome opens and waits for you to log in when the session
@@ -52,14 +56,17 @@ def main() -> int:
 
     if a.cmd in ("status", "scrape") and not getattr(a, "contest_ids", None):
         plan = S.contests_to_scrape(session, now - timedelta(days=a.days), now, public_n=a.public, entries_csv=entries_path(), now=now)
-        derived = S.derived_ids()
+        derived = S.derived_ids() - S.partial_derived_ids()
         for s in plan:
-            print(f"slate {s['slate_key']} locked {s['lock']:%a %m-%d %H:%M}: {len(s['contests'])} contests, {len(s['scraped'])} exported, "
+            print(f"slate {s['slate_key']} locked {s['lock']:%a %m-%d %H:%M}: {len(s['contests'])} contests, {len(s['scraped'])} exported final, "
                   f"{sum(1 for c in s['contests'] if c in derived)} derived, {len(s['to_scrape'])} to scrape")
             for c in s["contests"]:
-                print(f"    {c} {'exported' if c in s['scraped'] else 'pending '} {'derived' if c in derived else '       '}  {s['names'].get(c, '')}")
+                state = "final    " if c in s["scraped"] else ("mid-slate" if S.has_standings(c) else "pending  ")
+                print(f"    {c} {state} {'derived' if c in derived else '       '}  {s['names'].get(c, '')}")
         if not plan:
             print("no played slates in the window (a slate counts once its lock is 5 hours past)")
+        else:
+            print("mid-slate: the only export was taken while games were on (the late swap's fetch); it is not a field and is scraped again")
         if a.cmd == "status":
             return 0
         ids = [c for s in plan for c in s["to_scrape"]]

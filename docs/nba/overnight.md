@@ -70,17 +70,25 @@ down while a desk job runs. `--only <draft group>`, `--no-props`, `--force` (ign
 venv/bin/python scripts/nba/standings.py status --days 3                      # played slates, which contests are exported / derived
 venv/bin/python scripts/nba/standings.py scrape --days 3 [--public 3] [--headless] [--no-derive]
 venv/bin/python scripts/nba/standings.py scrape --contest-ids 197054966,197054968
-venv/bin/python scripts/nba/standings.py derive [--contest-ids ...]            # parse exports without a derived folder
+venv/bin/python scripts/nba/standings.py derive [--contest-ids ...]            # parse final exports without a derived folder
 ```
 
 Per played slate (an archive capture with a lock in the window) it exports the `--public` largest public
-classic contests plus every contest in the entries file, through the logged-in Chrome profile
+contests plus every contest in the entries file, through the logged-in Chrome profile
 (`chrome-selenium/dk-profile`; Chrome opens and waits for your login when the session expired; `--headless`
 only once the login is fresh). Raw exports go to `data/nba/raw/dk/standings/<contest id>/`, derived
 contests to `data/nba/derived/contests/<id>/` (`lineups.parquet` one row per unique lineup with copies,
-`players.csv` the side table joined to the pool, `field.json` summary). **DraftKings keeps standings about
-two weeks**, so scrape within days. The derived contests are what `calibrate_field.py` and
-`field_model.py fit` learn from.
+`players.csv` the side table joined to the pool, `field.json` summary with `final` and `locked_entries`).
+**DraftKings keeps standings about two weeks**, so scrape within days. The derived contests are what
+`calibrate_field.py`, `field_model.py fit` and `backtest_field.py` learn from and are checked against.
+
+**Only a final export is a field.** The late swap's standings fetch (a minute after each tip) stores an export
+too, taken while games were on: the slots of players not yet tipped read `LOCKED`. `standings.export_is_final`
+calls an export final when at most 2 % of its entries show a locked slot (`PARTIAL_MAX_SHARE`); `status` lists a
+contest whose only export is such a one as **mid-slate** and `scrape` exports it again, `derive` refuses it and
+removes a derived folder that was built from one (2026-10-24 .. 11-04 the nightly had derived 31 of them as fields:
+16,812 entries into 43 lineups). Contest rows are read from wherever the slate's live since the split into one
+database per slate (`standings.slate_contests`: the slate's own file, else the history file's pre-split copy).
 
 ## The feed (`ivan.core.feed`, `scripts/nba/feed.py`)
 

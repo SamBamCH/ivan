@@ -83,7 +83,34 @@ checks the draw walk-forward against the independent sampler (minutes MAE of the
 the draw's mean, 10-90 coverage and width). Writes `data/nba/models/team_minutes.json`. `--lines`
 lets the draw know each game's spread (from `fetch_historical_lines.py`).
 
-## The field (`scripts/nba/calibrate_field.py`, `scripts/nba/field_model.py`)
+## The field backtest (`ivan.sports.nba.field_backtest`, `scripts/nba/backtest_field.py`)
+
+```bash
+venv/bin/python scripts/nba/backtest_field.py                                   # every final derived contest, model field of 3,000 entries
+venv/bin/python scripts/nba/backtest_field.py --since 2026-10-25 --field-size 10000 --workers 8
+venv/bin/python scripts/nba/backtest_field.py --contest-ids 197118943 --no-model   # lock and softmax ownership only, seconds
+```
+
+The real fields of the season (every derived contest from a **final** standings export, [overnight.md](overnight.md))
+against what the field model says they should have been, rebuilt from the slate's last archive capture before lock
+exactly as the live path builds it: the public projection (`public_projection.project` on the capture's pool, the
+props posted for that night, the box scores before that day), then the two-group field
+(`field_model.simulate_field` with `data/nba/models/field_two_group.json`) at `--field-size` entries, one per slate,
+every contest of the slate compared to it the way the sim slices one field per run. Two more columns stand beside
+it: **lock**, the ownership the desk showed when the slate locked (the `at_tip` capture's ownership column, archived
+since 2026-10-23), and **softmax**, the ownership model fitted on real contests (`field_model.predict`).
+
+Per contest: ownership MAE over the players the public could roster, MAE over the real top 20, Spearman, how many
+of the real top 10 the model also ranks there, and the chalk's concentration (the eight most-owned players' summed
+ownership) real against model; then the shape, real subsampled to the model's size against the model's field:
+lineup strength under the public projection relative to its optimal (p10/p50/p90, within 5 %/10 %), duplicate
+share, max copies, salary left. Across contests: calibration (players binned by predicted ownership against the
+real mean), bias by salary tier, by starter and by real ownership, the largest misses. Output under
+`data/nba/diagnostics/field_backtest/<stamp>/` (`report.txt`, `contests.csv`, `players.csv`, `summary.json`); the
+model field per slate is cached under `data/nba/derived/field_backtest/` by capture, public projection, parameters
+and seed, so a second run costs seconds. Findings: [notes/field_backtest_2026-11-05.md](notes/field_backtest_2026-11-05.md).
+
+## The field's parameters (`scripts/nba/calibrate_field.py`, `scripts/nba/field_model.py`)
 
 ```bash
 venv/bin/python scripts/nba/calibrate_field.py --contest-id 196456057 [--randomness 0.15,0.25,0.35,0.5] [--floors 0.85,0.9] [-n 300]
@@ -97,7 +124,10 @@ optimal), generates candidate pools in process from the slate's capture over a g
 floor and scores each on how closely it reproduces the curves; it is how `generate.randomness` 0.25
 and the floor were set. `field_model.py validate` is leave-one-slate-out on every derived contest
 against baselines, `fit` writes `data/nba/models/field_ownership.json`, `check` scores the saved
-model on slates it was not fitted on (the honest test; run after every scrape).
+model on slates it was not fitted on (the honest test; run after every scrape). The two-group field's own
+parameters (`field_two_group.json`: optimizer share, provider and personal noise) were fitted 2026-10-24 on the first
+29 contests by a one-off that was not kept; the field backtest above is how they are checked, and a refit is a
+grid over those knobs scored by it.
 
 ## Historical market data (the-odds-api, billed)
 
@@ -127,6 +157,7 @@ venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-r
 
 - A replay adapter for NBA (`ivan.core.replay` runs archived slates with today's code; only NFL plugs in),
   so there is no end-to-end "replay a month with the current pipeline" and no settle/tax report.
+- A refit of the two-group field's parameters from the field backtest (the one-off fit of 2026-10-24 was not kept).
 - Lineup and pool validation (did sim ROI rank lineups the way the real field did) from the sim
   artifacts, which `ivan.core.validation.lineup_report` / `pool_report` are built for; the NBA adapter is
   not written.
