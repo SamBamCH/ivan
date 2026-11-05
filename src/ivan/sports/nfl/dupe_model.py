@@ -46,12 +46,28 @@ top lineup is still under-predicted, a tail the product rule does not
 reach); classic k 4e-5, beta 0.07 on two slates, i.e. classic fields barely
 duplicate by ownership (3-6 copies per entry).
 
+The entry-max term (2026-11-05, from the season backtest): a contest's
+entries-per-user cap shapes how the public spreads: single-entry fields
+duplicate the chalk far more per entry than 150-max fields, where the
+optimizer crowd spreads over many unique lineups (the live model ran +0.3 to
++0.6 log too low on single-entry contests and -0.5 to -1.0 too high on
+150-max ones over 2026-10-16..11-03). The regressor is log(max entries per
+user), from `historical_contest_information.multi_entry`; it is in
+ALL_TERMS and the backtests' ablation, not in TERMS until the forward test
+says so and the live sampler passes the contest's cap through.
+
 The field samplers use the same function for their lineup weights (so the
 sampled field's concentration follows it) and for the predicted copies of
 every candidate (what the validation checks against real copies). Re-fit
 as slates accumulate:
 
     scripts/nfl/build_dupe_model.py backtest | build [--cutoff]
+
+`backtest` here is leave-one-slate-out over every field, which leaks the
+later slates into every fold and is dominated by whichever season has the
+most fields; the season test (ivan.sports.nfl.dupe_backtest,
+scripts/nfl/backtest_dupes.py) scores each slate only with the fields before
+it, which is what the live pipeline experiences.
 """
 from __future__ import annotations
 
@@ -79,9 +95,10 @@ SALARY_CAP = 50000
 SALARY_KNEE = 2000.0      # dollars left past which the salary effect stops growing
 MAX_MATES = 3
 STACK_KEYS = ("qb_mates", "two_qb", "no_qb")
-DEFAULTS = {"showdown": {"k": 0.044, "beta": 0.56, "beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "stack": {}},
-            "classic": {"k": 4e-5, "beta": 0.07, "beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "stack": {}}}   # 2026-10-13; extra terms off
-ALL_TERMS = ("salary", "cpt", "proj", "logproj", "stack")
+DEFAULTS = {"showdown": {"k": 0.044, "beta": 0.56, "beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "delta_emax": 0.0, "stack": {}},
+            "classic": {"k": 4e-5, "beta": 0.07, "beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "delta_emax": 0.0, "stack": {}}}   # 2026-10-13; extra terms off
+ALL_TERMS = ("salary", "cpt", "proj", "logproj", "stack", "emax")
+EMAX_DEFAULT = 20.0       # entries per user assumed when a contest's cap is unknown (the most common cap on the scraped fields)
 CPT_MULT = 1.5
 METHOD = "wls"            # copy-weighted least squares on log copies; "ztp" = zero-truncated Poisson likelihood (held-out worse, 2026-10-14: see docstring)
 TERMS = ("salary", "cpt", "logproj")   # the default fit (2026-10-14 held-out ablation); the linear gap and the stack deltas stay off
@@ -97,8 +114,12 @@ def _slot_id(token_slot: str, is_showdown: bool) -> int:
     return SLOT_IDS.get(token_slot, 70)
 
 
-def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj") -> Optional[pd.DataFrame]:
-    """One row per unique lineup of a scraped contest: copy count, field size, format, sum of log ownership from `own_col`."""
+def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj", cache: Optional[dict] = None) -> Optional[pd.DataFrame]:
+    """
+    One row per unique lineup of a scraped contest: copy count, field size, format, sum of log ownership from `own_col`.
+    `cache` (a dict the caller keeps across contests) holds the slate captures and each draft group's player blob,
+    which every contest of a slate shares.
+    """
     meta_p = DERIVED_DIR / str(contest_id) / "meta.json"
     if not meta_p.exists():
         return None
@@ -112,13 +133,18 @@ def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj
                        .bindparams(c=int(contest_id)))
     if players.empty or players[own_col].isna().all():
         return None
-    caps = {c.slate_key: c for c in archive.slates(session, "nfl")}
-    cap = caps.get(str(h.draft_group_id))
+    cache = cache if cache is not None else {}
+    if "caps" not in cache:
+        cache["caps"] = {c.slate_key: c for c in archive.slates(session, "nfl")}
+    cap = cache["caps"].get(str(h.draft_group_id))
     if cap is None:
         return None
-    names = {}
-    for p in archive.load_blobs(session, cap.id).get("players", []):
-        names[(int(p["roster_slot_id"]), normalize_name(str(p.get("name", ""))))] = (str(p.get("team")), str(p.get("position", "")).upper(), int(p.get("salary") or 0))
+    names = cache.setdefault("names", {}).get(cap.id)
+    if names is None:
+        names = {}
+        for p in archive.load_blobs(session, cap.id).get("players", []):
+            names[(int(p["roster_slot_id"]), normalize_name(str(p.get("name", ""))))] = (str(p.get("team")), str(p.get("position", "")).upper(), int(p.get("salary") or 0))
+        cache["names"][cap.id] = names
     by_key = {(int(r.slot), r.team, str(r.position).upper(), int(r.salary)): float(getattr(r, own_col)) for r in players.itertuples() if pd.notna(getattr(r, own_col))}
     fp_key = {(int(r.slot), r.team, str(r.position).upper(), int(r.salary)): float(r.fpts_proj) for r in players.itertuples() if pd.notna(r.fpts_proj)}
     lp = pd.read_parquet(DERIVED_DIR / str(contest_id) / "lineups.parquet")
@@ -151,7 +177,9 @@ def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj
         n_qb, mates = stack_features(members)
         rows.append({"contest_id": int(contest_id), "count": int(c), "entries": int(len(lp)), "is_showdown": float(is_showdown),
                      "n_players": len(lo), "sum_log_own": float(sum(lo)), "log_own_cpt": float(cpt_lo), "salary_left": int(SALARY_CAP - salary),
-                     "n_qb": int(n_qb), "qb_mates": int(mates), "fpts_proj": float(fpts)})
+                     "n_qb": int(n_qb), "qb_mates": int(mates), "fpts_proj": float(fpts), "lineup": str(lineup),
+                     "max_entries": float(h.multi_entry) if pd.notna(h.multi_entry) and float(h.multi_entry) > 0 else np.nan,
+                     "entry_fee": float(h.entry_fee) if pd.notna(h.entry_fee) else np.nan})
     if not rows:
         return None
     df = pd.DataFrame(rows)
@@ -159,21 +187,25 @@ def contest_lineup_rows(session, contest_id: int, own_col: str = "ownership_proj
     return df
 
 
+FRAME_COLUMNS = ["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "log_own_cpt", "salary_left", "n_qb", "qb_mates", "fpts_proj",
+                 "lineup", "max_entries", "entry_fee", "proj_gap", "date"]
+
+
 def training_frame(session, own_col: str = "ownership_proj", cutoff: Optional[str] = None) -> pd.DataFrame:
     ids = sorted(int(Path(p).parent.name) for p in glob.glob(str(DERIVED_DIR / "*" / "meta.json")))
     if not ids:
-        return pd.DataFrame(columns=["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "log_own_cpt", "salary_left", "n_qb", "qb_mates", "fpts_proj", "proj_gap", "date"])
+        return pd.DataFrame(columns=FRAME_COLUMNS)
     q = ",".join(map(str, ids))
     dates = read_sql(session, text(f"SELECT contest_id, date FROM historical_contest_information WHERE contest_id IN ({q})"))
     if cutoff:
         dates = dates[pd.to_datetime(dates.date) < pd.Timestamp(cutoff)]
-    frames = []
+    frames, cache = [], {}
     for cid in dates.contest_id.astype(int):
-        f = contest_lineup_rows(session, cid, own_col)
+        f = contest_lineup_rows(session, cid, own_col, cache)
         if f is not None and len(f):
             frames.append(f)
     if not frames:
-        return pd.DataFrame(columns=["contest_id", "count", "entries", "is_showdown", "n_players", "sum_log_own", "log_own_cpt", "salary_left", "n_qb", "qb_mates", "fpts_proj", "proj_gap", "date"])
+        return pd.DataFrame(columns=FRAME_COLUMNS)
     df = pd.concat(frames, ignore_index=True).merge(dates, on="contest_id")
     df["date"] = pd.to_datetime(df.date)
     return df
@@ -250,6 +282,13 @@ class ProductDupeModel:
         nq = np.asarray(n_qb, dtype=float)
         return (float(st.get("qb_mates", 0.0)) * m + float(st.get("two_qb", 0.0)) * (nq >= 2) + float(st.get("no_qb", 0.0)) * (nq == 0))
 
+    def _emax_term(self, p: dict, max_entries) -> np.ndarray:
+        """delta_emax x log(entries per user); 0 without the term, the default cap where a contest's is unknown."""
+        d = float(p.get("delta_emax", 0.0) or 0.0)
+        if d == 0.0 or max_entries is None:
+            return 0.0
+        return d * _log_emax(max_entries)
+
     def _proj_term(self, p: dict, proj_gap) -> np.ndarray:
         """
         delta_proj x points below the field's best lineup + delta_logproj x log(1 + points below): the top
@@ -262,26 +301,29 @@ class ProductDupeModel:
         g = np.maximum(np.nan_to_num(np.asarray(proj_gap, dtype=float), nan=0.0), 0.0)
         return d * g + dl * np.log1p(g)
 
-    def log_rate(self, is_showdown: bool, sum_log_own, salary_left=None, log_own_cpt=None, qb_mates=None, n_qb=None, proj_gap=None) -> np.ndarray:
-        """log of the lineup's relative weight: the ownership, salary, projection and stack terms (no scale)."""
+    def log_rate(self, is_showdown: bool, sum_log_own, salary_left=None, log_own_cpt=None, qb_mates=None, n_qb=None, proj_gap=None,
+                 max_entries=None) -> np.ndarray:
+        """log of the lineup's relative weight: the ownership, salary, projection, stack and entry-cap terms (no scale)."""
         p = self.params["showdown" if is_showdown else "classic"]
-        out = self._own_term(p, sum_log_own, log_own_cpt) + self._stack_term(p, qb_mates, n_qb) + self._proj_term(p, proj_gap)
+        out = self._own_term(p, sum_log_own, log_own_cpt) + self._stack_term(p, qb_mates, n_qb) + self._proj_term(p, proj_gap) + self._emax_term(p, max_entries)
         return out + np.log(self._salary_term(p, salary_left))
 
     def copies(self, entries: float, is_showdown: bool, sum_log_own: np.ndarray, salary_left=None, log_own_cpt=None, qb_mates=None, n_qb=None,
-               proj_gap=None) -> np.ndarray:
+               proj_gap=None, max_entries=None) -> np.ndarray:
         """
         Expected copies of each lineup in a field of `entries`. sum_log_own = sum over its players of
         log(own/100) (captain included), salary_left in dollars, log_own_cpt the captain's log(own/100),
         qb_mates / n_qb from stack_features, proj_gap the projected points below the best lineup
-        (captain at 1.5x). Terms whose inputs are not given fall back to the plain rule.
+        (captain at 1.5x), max_entries the contest's entries-per-user cap. Terms whose inputs are not
+        given fall back to the plain rule.
         """
         p = self.params["showdown" if is_showdown else "classic"]
-        return float(entries) * float(p["k"]) * np.exp(self.log_rate(is_showdown, sum_log_own, salary_left, log_own_cpt, qb_mates, n_qb, proj_gap))
+        return float(entries) * float(p["k"]) * np.exp(self.log_rate(is_showdown, sum_log_own, salary_left, log_own_cpt, qb_mates, n_qb, proj_gap, max_entries))
 
-    def weights(self, is_showdown: bool, sum_log_own: np.ndarray, salary_left=None, log_own_cpt=None, qb_mates=None, n_qb=None, proj_gap=None) -> np.ndarray:
+    def weights(self, is_showdown: bool, sum_log_own: np.ndarray, salary_left=None, log_own_cpt=None, qb_mates=None, n_qb=None, proj_gap=None,
+                max_entries=None) -> np.ndarray:
         """Relative lineup weights for the field sampler (the same function, without the scale)."""
-        return np.exp(self.log_rate(is_showdown, sum_log_own, salary_left, log_own_cpt, qb_mates, n_qb, proj_gap))
+        return np.exp(self.log_rate(is_showdown, sum_log_own, salary_left, log_own_cpt, qb_mates, n_qb, proj_gap, max_entries))
 
     def describe(self) -> str:
         parts = []
@@ -295,6 +337,8 @@ class ProductDupeModel:
                 t += f" x exp({p['delta_proj']:.3f} x pts below best)"
             if p.get("delta_logproj"):
                 t += f" x exp({p['delta_logproj']:.2f} x log(1 + pts below best))"
+            if p.get("delta_emax"):
+                t += f" x exp({p['delta_emax']:.2f} x log(entries per user))"
             st = p.get("stack") or {}
             if st:
                 t += " x exp(" + " ".join(f"{v:+.2f}*{k}" for k, v in st.items()) + ")"
@@ -311,6 +355,13 @@ class ProductDupeModel:
 
 def sum_log_own(ownerships: Sequence[float]) -> float:
     return float(sum(np.log(max(float(o), MIN_OWN) / 100.0) for o in ownerships))
+
+
+def _log_emax(max_entries) -> np.ndarray:
+    """log of the entries-per-user cap, the default cap where it is unknown or not positive."""
+    x = np.asarray(pd.to_numeric(pd.Series(np.asarray(max_entries, dtype=object).ravel()), errors="coerce").values, dtype=float)
+    x = np.where(np.isfinite(x) & (x > 0), x, EMAX_DEFAULT)
+    return np.log(x)
 
 
 def _salary_x(d: pd.DataFrame, knee: float = SALARY_KNEE) -> np.ndarray:
@@ -342,6 +393,10 @@ def _design(d: pd.DataFrame, terms, knee: float):
         lg = np.log1p(np.maximum(d.proj_gap.fillna(0).values.astype(float), 0.0))
         if lg.std() > 0:
             cols.append(lg); names.append("delta_logproj")
+    if "emax" in terms and "max_entries" in d and d.max_entries.notna().any():
+        le = _log_emax(d.max_entries.values)
+        if le.std() > 0:
+            cols.append(le); names.append("delta_emax")
     if "stack" in terms and "n_qb" in d:
         nq = d.n_qb.values.astype(float)
         for name, x in (("qb_mates", np.minimum(d.qb_mates.values.astype(float), MAX_MATES)), ("two_qb", (nq >= 2).astype(float)), ("no_qb", (nq == 0).astype(float))):
@@ -393,6 +448,7 @@ def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, method:
     p = {"k": float(np.exp(c["const"])), "beta": float(np.clip(c["beta"], 0.0, 2.0)), "beta_cpt": float(np.clip(c["beta_cpt"], 0.0, 2.0)) if "beta_cpt" in c else None,
          "gamma": float(np.clip(c.get("gamma", 0.0), -5.0, 1.0)), "knee": float(knee), "delta_proj": float(np.clip(c.get("delta_proj", 0.0), -2.0, 0.0)),
          "delta_logproj": float(np.clip(c.get("delta_logproj", 0.0), -5.0, 0.0)),
+         "delta_emax": float(np.clip(c.get("delta_emax", 0.0), -3.0, 1.0)),
          "stack": {k: float(np.clip(c[k], -3.0, 3.0)) for k in STACK_KEYS if k in c}, "method": method}
     if method == "wls":
         # least squares: re-centre k after clipping so the copy-weighted mean is still matched
@@ -400,7 +456,8 @@ def _fit_format(d: pd.DataFrame, terms=TERMS, knee: float = SALARY_KNEE, method:
         resid = y - m.log_rate(True, d.sum_log_own.values, d.salary_left.values if "salary_left" in d else None,
                                d.log_own_cpt.values if "log_own_cpt" in d else None,
                                d.qb_mates.values if "qb_mates" in d else None, d.n_qb.values if "n_qb" in d else None,
-                               d.proj_gap.values if "proj_gap" in d else None)
+                               d.proj_gap.values if "proj_gap" in d else None,
+                               d.max_entries.values if "max_entries" in d else None)
         p["k"] = float(np.exp((resid * counts).sum() / counts.sum()))
     return p
 
@@ -425,7 +482,7 @@ def load(model_dir=None) -> ProductDupeModel:
         return ProductDupeModel()
     try:
         raw = json.loads(path.read_text())
-        return ProductDupeModel(params={k: {"beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "delta_logproj": 0.0, "stack": {}, "method": "wls", **dict(v)} for k, v in raw["params"].items()}, fitted_on=raw.get("fitted_on"), cutoff=raw.get("cutoff"),
+        return ProductDupeModel(params={k: {"beta_cpt": None, "gamma": 0.0, "knee": SALARY_KNEE, "delta_proj": 0.0, "delta_logproj": 0.0, "delta_emax": 0.0, "stack": {}, "method": "wls", **dict(v)} for k, v in raw["params"].items()}, fitted_on=raw.get("fitted_on"), cutoff=raw.get("cutoff"),
                                 contests=raw.get("contests") or {}, cv=raw.get("cv") or {})
     except (OSError, ValueError, KeyError):
         return ProductDupeModel()
@@ -460,12 +517,13 @@ def predict(params: Dict[str, float], d: pd.DataFrame) -> np.ndarray:
                                                      log_own_cpt=d.log_own_cpt.values if "log_own_cpt" in d else None,
                                                      qb_mates=d.qb_mates.values if "qb_mates" in d else None,
                                                      n_qb=d.n_qb.values if "n_qb" in d else None,
-                                                     proj_gap=d.proj_gap.values if "proj_gap" in d else None)
+                                                     proj_gap=d.proj_gap.values if "proj_gap" in d else None,
+                                                     max_entries=d.max_entries.values if "max_entries" in d else None)
 
 
 ABLATION = (("none/wls", (), "wls"), ("salary+cpt/wls", ("salary", "cpt"), "wls"), ("salary+cpt+proj/wls", ("salary", "cpt", "proj"), "wls"),
             ("+logproj/wls", ("salary", "cpt", "proj", "logproj"), "wls"), ("logproj only/wls", ("salary", "cpt", "logproj"), "wls"),
-            ("all/wls", ALL_TERMS, "wls"))
+            ("+emax/wls", ("salary", "cpt", "logproj", "emax"), "wls"), ("all/wls", ALL_TERMS, "wls"))
 
 
 def backtest(df: pd.DataFrame, terms=TERMS, method: str = METHOD) -> dict:
@@ -488,7 +546,7 @@ def backtest(df: pd.DataFrame, terms=TERMS, method: str = METHOD) -> dict:
             sc = scores(te, predict(p, te))
             fold = {"held_out": held, "contests": int(te.contest_id.nunique()), "k": round(p["k"], 5), "beta": round(p["beta"], 3),
                     "beta_cpt": None if p["beta_cpt"] is None else round(p["beta_cpt"], 3), "gamma": round(p["gamma"], 3), "delta_proj": round(p["delta_proj"], 4),
-                    "delta_logproj": round(p["delta_logproj"], 3),
+                    "delta_logproj": round(p["delta_logproj"], 3), "delta_emax": round(p.get("delta_emax", 0.0), 3),
                     "stack": {k: round(v, 3) for k, v in p["stack"].items()}, **{k: sc[k] for k in keys}}
             fold["ablation"] = {}
             for name, t, meth in ABLATION:

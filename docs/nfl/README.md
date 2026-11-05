@@ -40,7 +40,7 @@ after the games: nightly.py (timer) → box scores, DST table, settle (standings
 | Symptom | Look at |
 |---|---|
 | A projection is off | [projections.md](projections.md); the ingest's validation line (how many stats came from a market vs the salary model, where each K/DST came from); the Validation page's projections table split by `volume_source` |
-| Ownership or dupes are off | [ownership-and-dupes.md](ownership-and-dupes.md); `/dupes`; the Validation page's ownership check |
+| Ownership or dupes are off | [ownership-and-dupes.md](ownership-and-dupes.md); `/dupes`; the Validation page's ownership check; `backtest_dupes.py` (the dupe model forward over the season, the acceptance test for a model change) |
 | A contest's sim looks wrong | the Contests page Checks tab; `data/nfl/diagnostics/contest_*/report.json`; [simulation.md](simulation.md) |
 | The chooser stacked one game script | [chooser.md](chooser.md); the Choose page; `compare_choosers.py` |
 | A slate will not settle | [overnight.md](overnight.md): `data/nfl/logs/nightly.log`, the slate's status on `/backtest/plan` (`login_needed` means log in to DraftKings in the scraper's Chrome window) |

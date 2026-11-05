@@ -53,3 +53,24 @@ decile, team split, QB stack, bring-back and salary left, the most duplicated li
 shown from the ownership we projected and from the ownership the field showed, so a miss is attributed
 to the dupe rule or to the ownership upstream. The dupe leak (our own lineups duplicated more than
 predicted) was one of the 2026-10-11 validation findings.
+
+**The season test** (`scripts/nfl/backtest_dupes.py`, `ivan.sports.nfl.dupe_backtest`) is the acceptance
+test for any change to the model: every slate since the season start is scored by a model fitted only on
+the fields locked before it (the rolling origin), the live `dupe_model_v2.json` is scored on the slates
+after its `fitted_on`, and the variants run side by side with a 90 % bootstrap band over slates: the live
+terms on all history, on this season only, ownership only, and the live terms plus the entry-cap term
+(`emax`, log entries per user from `historical_contest_information.multi_entry`; in `ALL_TERMS`, not in
+`TERMS`, because the live sampler does not pass the contest's cap yet). Per slate it reports the
+copy-weighted log MAE and bias (log(actual / pred), > 0 = the field duplicated more than predicted), the
+calibration slope, the top lineup's predicted / actual copies and the share of entries in the 100 most
+duplicated lineups; pooled, the calibration by predicted copies (from projected and from actual
+ownership) and by the contest's entries-per-user cap; and our own entries' predicted copies against the
+copies the field held. Output `data/nfl/diagnostics/dupe_backtest/<stamp>/` (`report.txt`, `slates.csv`,
+`summary.csv`, `calibration.csv`, `by_entry_max.csv`, `ours.csv`, `summary.json`); about ten minutes, half of it the actual-ownership rerun (`--no-actual-own`).
+`build_dupe_model.py backtest` (leave-one-slate-out) stays for the ablation but is not the acceptance
+test: it leaks the later slates into every fold and is weighted toward November 2025. First run
+2026-11-05 ([notes/dupe_backtest_2026-11-05.md](notes/dupe_backtest_2026-11-05.md)): the live file
+over-predicts 16 % copy-weighted on the 13 slates after its fit, the per-slate level swings a factor of
+two either way, single-entry fields are under-predicted 1.7x and 150-max fields over-predicted 0.75x
+(the entry-cap term flattens both), training on this season only is worse, and our own entries average
+about 95 copies in their fields, more than the field's average entry.

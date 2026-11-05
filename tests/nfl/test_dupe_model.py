@@ -39,7 +39,7 @@ def test_save_and_load_round_trip(tmp_path):
     m = DM.ProductDupeModel(params={"showdown": {"k": 0.05, "beta": 0.6}, "classic": {"k": 1e-4, "beta": 0.1}}, fitted_on="2026-10-13", contests={"showdown": 27})
     m.save(tmp_path)
     back = DM.load(tmp_path)
-    assert back.params["showdown"] == {"k": 0.05, "beta": 0.6, "beta_cpt": None, "gamma": 0.0, "knee": DM.SALARY_KNEE, "delta_proj": 0.0, "delta_logproj": 0.0, "stack": {}, "method": "wls"}   # an older file loads with the extra terms off
+    assert back.params["showdown"] == {"k": 0.05, "beta": 0.6, "beta_cpt": None, "gamma": 0.0, "knee": DM.SALARY_KNEE, "delta_proj": 0.0, "delta_logproj": 0.0, "delta_emax": 0.0, "stack": {}, "method": "wls"}   # an older file loads with the extra terms off
     assert back.contests == {"showdown": 27} and "27 fields" in back.describe()
     assert DM.load(tmp_path / "nowhere").params == DM.DEFAULTS
 
