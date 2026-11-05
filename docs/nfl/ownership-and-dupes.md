@@ -47,7 +47,8 @@ through `sample_field.contest_entry_cap` and use the same function for their lin
 candidate's predicted copies, so the sampled field's concentration and the dupe prediction of our own
 lineups agree. Classic fields barely duplicate by ownership and keep the ownership-only rule.
 `build_dupe_model.py backtest|build [--cutoff]` refits (`dupe_model_v2.json`; the as-of build writes a
-version per cutoff). Every term is there because the season backtest below keeps it (2026-11-05, 16
+version per cutoff). It is the only dupe model: there is no config switch, and the archived two-stage and
+pre-salary model files were deleted on 2026-11-05. Every term is there because the season backtest below keeps it (2026-11-05, 16
 slates forward): without the salary term the log MAE goes 0.80 to 0.94, without the projection gap the
 top lineup's predicted copies fall to 0.22x the real ones, the entry-cap term takes the single-entry
 bias from +0.51 to -0.02 and the 150-max bias from -0.29 to -0.13. Removed the same day because the test

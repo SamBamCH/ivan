@@ -24,9 +24,7 @@
       "max_ratio": 4.0,
       "min_target_pct": 0.05,
       "_note": "rake the field sampler's lineup weights so player exposures match projected ownership (sample_field.rake_weights_to_ownership)"
-    },
-    "dupe_model": "product",
-    "_dupe_note": "product: copies = N x k x prod(own)^beta fitted on real fields (models/dupe_model_v2.json, scripts/nfl/build_dupe_model.py build)"
+    }
   },
   "randomness": 0.5,
   "classic": {
