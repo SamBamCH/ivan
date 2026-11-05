@@ -518,7 +518,9 @@ async def pipeline_run(request: Request, step: str):
                     desk.flash.append(f"snapshot failed: {e}")
             try:
                 guard = _estimate(step, pipeline_form)
-                if guard["verdict"] == "late" and not form.get("force"):
+                # the guard holds only the long runs with a "run anyway" box under their knobs (generate, sim, the row); choose, the
+                # late swap and the field build finish in well under the margin and have no box, so they are never refused
+                if guard["verdict"] == "late" and not form.get("force") and step in ("generate", "sim", "all"):
                     desk.flash.append(f"not started: {guard['message']} Tick \"run anyway\" under the knobs to run it regardless, or make it smaller.")
                 else:
                     if guard["verdict"] != "ok":
