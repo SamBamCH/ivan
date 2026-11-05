@@ -120,7 +120,23 @@ zero-truncated Poisson fit (worse or nothing, twice now), and contest size stays
 pooled error is the best of the table but its slate-level bias is the worst, and the slate level is the
 biggest open error. The samplers now read each contest's cap (`sample_field.contest_entry_cap`); a
 contest without one is predicted at the default cap of 20. The live and as-of model files were rebuilt
-with the new terms the same afternoon.
+with the new terms the same afternoon. The live file, 222 showdown fields through 2026-11-03:
+
+```
+copies = N x 0.0987 x prod(own)^0.27 x exp(-0.98 x min($left, 2000)/1k) x exp(-1.05 x log(1 + pts below best)) x exp(-0.14 x log(entries per user))
+```
+
+so a single-entry contest holds exp(0.14 x log 150) = 2.0x the copies per entry of a 150-max contest at
+the same ownership, salary and projection. Classic keeps the ownership-only rule (k 3.8e-5, beta 0.07
+on 68 fields); with the terms it had started fitting a positive salary-left effect, and no classic
+field is in the season backtest. The as-of version for 2026-10-11 was rebuilt the same way (113 fields).
+
+The run after the rebuild (`diagnostics/dupe_backtest/20261105-124024`), the four-term model forward over the
+same 16 slates against the three-term one: log MAE 0.79 vs 0.80, bias -0.08 vs -0.10, slope 0.98 vs 0.93,
+top-100 share 0.163 vs 0.152 (real 0.192). By cap: single entry -0.04 (was +0.50), 2-5 +0.39 (was +0.71, two
+fields), 6-20 -0.19 (was -0.07), 21-150 -0.14 (was -0.30). On our own entries the bias is +0.07 in 20-max and
++0.05 in 150-max contests (was +0.19 and -0.11); our copies against the field's average entry in the same
+contests stay 77 vs 34 and 110 vs 56.
 
 ## What to run, and when
 
