@@ -105,16 +105,28 @@ class RotationMixin:
                 games = matches
             except Exception:   # noqa: BLE001 - the match is a convenience; the latest game is the fallback
                 matches = []
-        for i, g in enumerate(games):                         # the dropdown: a short title, the details on hover
+        # the dropdown: date, opponent, the final from the team's side and how many of the five had not started the game
+        # before; the group match and the oddities stay on hover
+        try:
+            scores = ROT.game_scores(self.session, [g["game_id"] for g in games])
+            new_starters = ROT.starter_changes(self.session, team, games)
+        except Exception:   # noqa: BLE001 - labels only; the list stands without them
+            scores, new_starters = {}, {}
+        for i, g in enumerate(games):
             try:
                 d = date.fromisoformat(str(g["game_date"])[:10])
                 day = f"{d:%a %m-%d}" if g.get("season") != "last" else f"{d:%m-%d-%y}"
             except ValueError:
                 day = str(g.get("game_date", ""))
-            n_diff = len(g.get("missing") or {}) + len(g.get("extra") or {})
-            tag = (" · same group" if g.get("exact") else (f" · {n_diff} change{'s' if n_diff != 1 else ''}" if "match" in g else ""))
-            g["short"] = f"{day}" + (f" vs {g['opp']}" if g.get("opp") else "") + (" · last" if i == 0 and g.get("season") == "this" else "") + tag + (" · odd" if g.get("odd") else "")
-            g["long"] = " · ".join(x for x in [str(g.get("game_date", "")), f"vs {g['opp']}" if g.get("opp") else "", g.get("match") or "",
+            sc = scores.get(str(g["game_id"])) or {}
+            us, them = sc.get(team), (sc.get(g["opp"]) if g.get("opp") else next((v for t, v in sc.items() if t != team), None))
+            g["final"] = f"{'W' if us > them else 'L' if us < them else 'T'} {us}-{them}" if us is not None and them is not None else ""
+            g["new_starters"] = new_starters.get(str(g["game_id"]))
+            g["short"] = " · ".join(x for x in [day + (f" vs {g['opp']}" if g.get("opp") else ""), g["final"],
+                                                 f"{g['new_starters']} new starter{'s' if g['new_starters'] != 1 else ''}" if g["new_starters"] is not None else ""] if x)
+            g["long"] = " · ".join(x for x in [str(g.get("game_date", "")), f"vs {g['opp']}" if g.get("opp") else "", g["final"],
+                                                f"{g['new_starters']} of the five had not started the game before" if g["new_starters"] is not None else "",
+                                                ("the last game" if i == 0 and g.get("season") == "this" else ""), ("tonight's group: " + g["match"]) if g.get("match") else "",
                                                 ("odd: " + ", ".join(g.get("reasons") or [])) if g.get("odd") else ""] if x)
         proj = self.proj.get(team)
         targets = rot.get("targets") or {}

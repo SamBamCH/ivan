@@ -113,7 +113,7 @@ or when news breaks.
    win over the defaults. Then the exposures panel: the candidate pool or the chosen entries.
 6. **Exposures** (folded; loaded when opened, below).
 
-Hover popups (a projection's stat lines, a player's recent games) open after a short pause on the cell, beside it
+Hover popups (a projection's stat lines, a player's recent games with an `S` in the `st` column for a game he started) open after a short pause on the cell, beside it
 rather than over the rows below, and close as soon as the pointer leaves the cell; the cell and its row are marked
 while one is open.
 
@@ -211,6 +211,7 @@ tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a play
 in nba_api's all-players list (`ivan.sports.nba.experience`, fetched by the nightly or `scripts/nba/experience.py
 fetch`), matched by name without suffixes, then by last name on his team; a name the list lacks is a rookie when no
 NBA game is on file before this season.
+The past-game dropdown lists the team's games with stints, this season then last: each option reads the date, the opponent, the final from the team's side (`W 112-105`) and how many of that night's five had not started the team's previous game (`2 new starters`; the oldest game in the list is compared with the game before it; blank when either five is unknown); hovering an option adds how close that game's group is to tonight's and why it was odd (`projection.rotation.game_scores` / `starter_changes`).
 A past game's grid (the dropdown) has two small rows above the minutes: each team's running score at the end of every
 3 minutes, the team's own row green while it leads and red while it trails, the final and home/away beside the name,
 and the score at each minute on hover (`Desk.score_strip` = `pbp.game_score`, the stored play-by-play, no fetch;

@@ -366,6 +366,56 @@ def played_sets(session: Session, team: str, game_ids: Iterable[str], min_minute
     return out
 
 
+def game_starters(session: Session, team: str, game_ids: Iterable[str]) -> Dict[str, set]:
+    """{game_id: the five who started} from the stints' starter flag (the box score's START_POSITION at ingest)."""
+    ids = [str(g) for g in game_ids]
+    if not ids:
+        return {}
+    q = text("select distinct game_id, player_name from nba_stint where team = :t and starter = 1 and game_id in (" + ",".join(f"'{g}'" for g in ids) + ")")
+    out: Dict[str, set] = {g: set() for g in ids}
+    for g, n in session.execute(q.bindparams(t=team)).all():
+        out[str(g)].add(str(n))
+    return out
+
+
+def game_scores(session: Session, game_ids: Iterable[str]) -> Dict[str, Dict[str, int]]:
+    """{game_id: {team: points}} from the box scores (nba_stats), both teams of each game."""
+    ids = [str(g) for g in game_ids]
+    if not ids:
+        return {}
+    q = text("select game_id, team_abbreviation, sum(points) from nba_stats where game_id in (" + ",".join(f"'{g}'" for g in ids) + ") group by game_id, team_abbreviation")
+    out: Dict[str, Dict[str, int]] = {}
+    for g, t, pts in session.execute(q).all():
+        if pts is not None:
+            out.setdefault(str(g), {})[str(t)] = int(pts)
+    return out
+
+
+def starter_changes(session: Session, team: str, games: List[dict]) -> Dict[str, Optional[int]]:
+    """
+    {game_id: how many of the game's starters had not started the team's previous game} for `games` (team_games rows,
+    newest first). The previous game is the next row, or for the oldest row the team's last game with stints before it;
+    None when either five is unknown (no stints, no starter flags).
+    """
+    if not games:
+        return {}
+    ids = [str(g["game_id"]) for g in games]
+    oldest = games[-1]
+    try:
+        d = date.fromisoformat(str(oldest["game_date"])[:10])
+        prior = team_games(session, team, before=d, limit=1)
+    except (ValueError, TypeError):
+        prior = []
+    chain = ids + [str(g["game_id"]) for g in prior]
+    five = game_starters(session, team, chain)
+    out: Dict[str, Optional[int]] = {}
+    for i, gid in enumerate(ids):
+        cur = five.get(gid) or set()
+        prev = five.get(chain[i + 1]) if i + 1 < len(chain) else None
+        out[gid] = len(cur - prev) if cur and prev else None
+    return out
+
+
 def lineup_matches(games: List[dict], played: Dict[str, Dict[str, float]], tonight: Dict[str, float]) -> List[dict]:
     """
     How close each played game's group is to tonight's: `tonight` = {player: usual minutes} for the players available

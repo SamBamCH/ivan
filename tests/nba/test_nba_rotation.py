@@ -109,3 +109,33 @@ def test_recorded_pairs_and_habits_drive_the_spot_chain():
     # no pairs, but the coach's habit: b2 usually comes in for the point guard
     S2, _ = R.spots_of(grid, starters=["pg", "sg", "sf", "pf", "c"], groups=groups, positions=pos, shares={"pg": {"b2": 0.8, "b1": 0.2}, "sf": {"b1": 0.9}})
     assert S2.loc["b2", 12] == 0 and S2.loc["b1", 12] == 2
+
+
+def test_dropdown_facts_final_score_and_new_starters(tmp_path):
+    """game_scores reads each side's points from the box; starter_changes counts the five who had not started the game before,
+    looking one game past the list for the oldest row and giving None where a five is unknown."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from ivan.sports.nba.models import NBABase, NBAStat
+    from ivan.sports.nba.pbp import NBAStint
+    from datetime import date
+    engine = create_engine(f"sqlite:///{tmp_path / 't.sqlite'}", future=True)
+    NBABase.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    fives = {"g1": ["a", "b", "c", "d", "e"], "g2": ["a", "b", "c", "d", "f"], "g3": ["a", "b", "g", "h", "f"], "g4": ["a", "b", "g", "h", "f"]}
+    days = {"g1": date(2026, 10, 22), "g2": date(2026, 10, 24), "g3": date(2026, 10, 26), "g4": date(2026, 10, 28)}
+    for gid, five in fives.items():
+        for n in five + ["x"]:
+            s.add(NBAStint(game_id=gid, game_date=days[gid], team="BOS", player_name=n, stint_no=1, start_sec=0, end_sec=600, minutes=10, starter=int(n in five)))
+        s.add(NBAStint(game_id=gid, game_date=days[gid], team="NYK", player_name="opp", stint_no=1, start_sec=0, end_sec=600, minutes=10, starter=1))
+        for t, pts in (("BOS", 50), ("NYK", 40 if gid != "g3" else 60)):
+            for k in range(2):
+                s.add(NBAStat(game_id=gid, game_date=days[gid], player_name=f"{t}{k}", team_abbreviation=t, minutes=20, points=pts))
+    s.commit()
+    games = R.team_games(s, "BOS", since=date(2026, 10, 23))          # g4, g3, g2 newest first; g1 is the one before the list
+    assert [g["game_id"] for g in games] == ["g4", "g3", "g2"] and games[0]["opp"] == "NYK"
+    sc = R.game_scores(s, [g["game_id"] for g in games])
+    assert sc["g4"] == {"BOS": 100, "NYK": 80} and sc["g3"] == {"BOS": 100, "NYK": 120}
+    assert R.starter_changes(s, "BOS", games) == {"g4": 0, "g3": 2, "g2": 1}
+    assert R.starter_changes(s, "BOS", R.team_games(s, "BOS", since=date(2026, 10, 1)))["g1"] is None     # nothing before the opener
+    assert R.starter_changes(s, "BOS", []) == {}
