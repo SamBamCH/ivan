@@ -93,7 +93,7 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
     meta_p = DERIVED_DIR / str(contest_id) / "meta.json"
     if not meta_p.exists():
         return None
-    h = read_sql(session, text("SELECT name, draft_group_id, contest_type, total_entries, entry_fee, date FROM historical_contest_information WHERE contest_id = :c")
+    h = read_sql(session, text("SELECT name, draft_group_id, contest_type, total_entries, entry_fee, date, multi_entry FROM historical_contest_information WHERE contest_id = :c")
                  .bindparams(c=int(contest_id)))
     if h.empty:
         return None
@@ -169,10 +169,8 @@ def field_lineups(session, contest_id: int, model: Optional[DM.ProductDupeModel]
     df["share"] = df["count"] / entries
     for s in SOURCES:
         slo = df[f"sum_log_own_{s}"].values
-        cpt_lo = df[f"cpt_log_own_{s}"].values
         pred = model.copies(entries, is_showdown, np.where(np.isnan(slo), 0.0, slo), salary_left=df["salary_left"].values,
-                            log_own_cpt=cpt_lo if is_showdown else None, qb_mates=df["qb_mates"].values, n_qb=df["n_qb"].values,
-                            proj_gap=df["proj_gap"].values)
+                            proj_gap=df["proj_gap"].values, max_entries=float(h.multi_entry) if pd.notna(h.multi_entry) and float(h.multi_entry) > 0 else None)
         pred = np.where(np.isnan(slo), np.nan, pred)
         df[f"pred_{s}"] = pred
         df[f"resid_{s}"] = np.log(df["count"].values / pred)

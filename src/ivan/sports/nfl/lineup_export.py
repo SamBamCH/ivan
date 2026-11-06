@@ -29,6 +29,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ivan.core.slate_book import describe_book
 from ivan.sports.nfl.choose import choose_lineup_ids, choose_slate, sim_roi_traces
 from ivan.sports.nfl.models import Lineup, NFLPlayer
 
@@ -257,22 +258,8 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
         log(f"\n=== Slate: {len(slate_contests)} contest(s) chosen as one book (bankroll ${max(banks):,.0f}) ===")
         slate = choose_slate(session, slate_contests, w_slate, log=log)
         run.slate_book = slate.get("book")
-        b = run.slate_book or {}
-        if b.get("chosen"):
-            ch, tq, cf = b["chosen"], b.get("top_quality") or {}, b.get("cross_fit")
-            log(f"  slate book: {b['entries']} entries, ${b['fees']:,.2f} in fees; mean net ${ch['mean']:+,.2f} ({ch['roi_mean']:+.0%}), "
-                f"median ${ch['p50']:+,.2f}, p5 ${ch['p5']:+,.2f}, P(loss) {ch['p_loss']:.0%}, P(lose half) {ch['p_lose_half']:.0%}, "
-                f"mean log growth {ch['log_growth']:+.4f}"
-                + (f"  (quality alone: mean ${tq['mean']:+,.2f}, p5 ${tq['p5']:+,.2f}, log growth {tq['log_growth']:+.4f})" if tq else ""))
-            if cf:
-                log(f"  honest expectation (chosen on {cf['worlds_fit']} worlds, scored on the other {cf['worlds_score']}): "
-                    f"mean net ${cf['out_of_sample']['mean']:+,.2f} ({cf['out_of_sample']['roi_mean']:+.0%}) vs "
-                    f"${cf['in_sample']['mean']:+,.2f} in-sample; selection bias ${cf['selection_bias']:+,.2f}")
-            for c in b.get("contests") or []:
-                hr = c.get("honest_roi")
-                log(f"    {c['contest_name']}: {c['entries']} entries, mean net ${c['mean_net']:+,.2f}"
-                    + (f", mean ROI {c['roi_mean']:+.0%}" if c.get("roi_mean") is not None else "")
-                    + (f", honest {hr:+.0%}" if hr is not None else ""))
+        for line in describe_book(run.slate_book):
+            log(line)
 
     for cid, group in groups:
         n_entries = len(group)

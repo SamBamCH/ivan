@@ -10,6 +10,7 @@ this is the command line around it.
     scripts/nba/choose.py                                   prompts for weights per contest
     scripts/nba/choose.py --no-prompt                       config choose.* defaults, no prompts
     scripts/nba/choose.py --method portfolio --bankroll 3
+    scripts/nba/choose.py --method slate --bankroll-dollars 1000     the whole slate as one book from one bankroll (the desk's "Slate book")
     scripts/nba/choose.py --weights-json '{"default": {"cash_pct": 0.3}, "123456": {"method": "portfolio"}}'
 """
 from __future__ import annotations
@@ -45,15 +46,17 @@ def main() -> int:
     w.add_argument("--cash-pct", type=float, default=None, help="weight on cash_pct for every contest")
     w.add_argument("--avg-roi-win", type=float, default=None, help="weight on avg_roi_win for every contest")
     w.add_argument("--diversity-lambda", type=float, default=None, help="diversity lambda for every contest")
-    w.add_argument("--method", choices=("greedy", "portfolio"), default=None, help="greedy (quality + diversity) or portfolio (book log utility)")
+    w.add_argument("--method", choices=("greedy", "portfolio", "slate"), default=None,
+                   help="greedy (quality + diversity), portfolio (one contest's book log utility) or slate (every contest at once as one book in dollars)")
     w.add_argument("--bankroll", type=float, default=None, help="portfolio method: utility scale in multiples of the entries' fees (default 3)")
+    w.add_argument("--bankroll-dollars", type=float, default=None, help="slate method: the real bankroll in dollars (default config choose.bankroll_dollars, 1000)")
     w.add_argument("--weights-json", default=None, help="file or JSON literal: {\"default\": {...}, \"<contest id or name>\": {...}}")
     w.add_argument("--no-prompt", action="store_true", help="use defaults for anything not given; never prompt")
     a = ap.parse_args()
     cfg = load_config("nba", a.config)
     defaults = {**DEFAULT_WEIGHTS, **{k: v for k, v in (cfg.get("choose") or {}).items() if k in DEFAULT_WEIGHTS}}
     weights_for = LE.weights_resolver(flags={"cash_pct": a.cash_pct, "avg_roi_win": a.avg_roi_win, "diversity_lambda": a.diversity_lambda,
-                                             "method": a.method, "bankroll": a.bankroll},
+                                             "method": a.method, "bankroll": a.bankroll, "bankroll_dollars": a.bankroll_dollars},
                                       overrides=LE.load_weights_json(a.weights_json), no_prompt=a.no_prompt, prompter=prompt_weights,
                                       defaults=defaults)
     dg, session = S.open(a.slate)

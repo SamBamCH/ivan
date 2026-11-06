@@ -38,15 +38,15 @@ from scipy.spatial.distance import pdist, squareform
 from sqlalchemy.orm import Session
 
 from ivan.core.chooser import (SampledDistances, cash_feature, cash_worlds, cross_fit_book,  # noqa: F401  (shared numerics)
-                               pick_greedy, roi_worlds, shrink_rows)
+                               fill_stats, fpts_worlds, pick_greedy, quality_features, roi_worlds, shrink_rows, viz_payload)
 from ivan.core.portfolio import (DEFAULT_BANKROLL, MIN_BANKROLL, book_summary, dollar_book_summary,  # noqa: F401  (shared picker)
                                  pick_book, pick_portfolio)
+from ivan.core.slate_book import DEFAULT_BANKROLL_DOLLARS, ContestCandidates, bankroll_dollars_of, choose_book  # noqa: F401  (the slate as one book)
 from ivan.sports.nfl.models import ContestSimReport, LineupSimulationResult, NFLPlayer
 
 METHODS = ("greedy", "portfolio", "slate")
 DEFAULT_METHOD = "greedy"
 DEFAULT_BANKROLL, MIN_BANKROLL = DEFAULT_BANKROLL, MIN_BANKROLL      # re-exported for callers and tests
-DEFAULT_BANKROLL_DOLLARS = 1000.0
 
 
 def method_of(weights: dict) -> str:
@@ -58,13 +58,6 @@ def method_of(weights: dict) -> str:
 
 def bankroll_of(weights: dict) -> float:
     return max(MIN_BANKROLL, float(weights.get("bankroll") or DEFAULT_BANKROLL))
-
-
-def bankroll_dollars_of(weights: dict) -> float:
-    b = float(weights.get("bankroll_dollars") or DEFAULT_BANKROLL_DOLLARS)
-    if b <= 0:
-        raise ValueError("bankroll_dollars must be positive")
-    return b
 
 
 def _candidates(session: Session, contest_name: str, roi_filter: bool):
@@ -97,16 +90,8 @@ def _candidates(session: Session, contest_name: str, roi_filter: bool):
 
 
 def _quality(sims, roi_matrix: np.ndarray, weights: dict):
-    """Cash % and (shrunk) mean ROI per candidate, each scaled to [0, 1] across the pool, blended by the weights."""
-    N = len(sims)
-    raw = np.zeros((N, 2), dtype=float)
-    for i, res in enumerate(sims):
-        raw[i, 0] = cash_feature(res)
-    raw[:, 1] = roi_matrix.mean(axis=1) if roi_matrix.size else 0.0
-    mins, maxs = raw.min(axis=0), raw.max(axis=0)
-    norm = (raw - mins) / (maxs - mins + 1e-6)
-    w_feat = np.array([weights.get("cash_pct", 0), weights.get("avg_roi_win", 1)], dtype=float)
-    return raw, (norm * w_feat).sum(axis=1), w_feat, (mins, maxs)
+    """Cash % and (shrunk) mean ROI per candidate, each scaled to [0, 1] across the pool, blended by the weights (chooser.quality_features)."""
+    return quality_features(np.array([cash_feature(res) for res in sims], dtype=float), roi_matrix, weights)
 
 
 def choose_lineup_ids(
@@ -221,159 +206,47 @@ def shared_worlds(session: Session, contest_names: Sequence[str]) -> dict:
     return {"method": kind, "draw": "slate" if kind != "conditioned" else f"seed {seeds.pop()}"}
 
 
+def _slate_candidates(session: Session, contest: dict) -> ContestCandidates:
+    """One contest's simulated lineups as the shared slate book reads them (every candidate: the book wants the steady cashers too)."""
+    sims, n_results, n_after_roi, n_valid, missing = _candidates(session, str(contest["contest_name"]), roi_filter=False)
+    return ContestCandidates(contest_id=int(contest.get("contest_id") or 0), contest_name=str(contest["contest_name"]), fee=float(contest["fee"]),
+                             slots=int(contest["entries"]), lineup_ids=[res.lineup_id for res in sims],
+                             roi_raw=roi_worlds(sims) if sims else np.zeros((0, 0), dtype=np.float32),
+                             fpts=fpts_worlds(sims) if sims else np.zeros((0, 0)),
+                             cash=np.array([cash_feature(res) for res in sims], dtype=float),
+                             counts=(n_results, n_after_roi, n_valid, len(sims), len(missing)))
+
+
 def choose_slate(session: Session, contests: Sequence[dict], weights: dict, log=None) -> dict:
     """
-    Choose every contest of the slate as one book in dollars.
+    Choose every contest of the slate as one book in dollars
+    (ivan.core.slate_book.choose_book: shrink per contest, stack the
+    (contest, lineup) pairs as net dollars per shared world, greedy on the
+    slate's log utility, then the exchange pass).
 
     contests: [{"contest_id", "contest_name", "entries", "fee"}], the entries
     file grouped by contest. weights: bankroll_dollars (the real bankroll),
     cash_pct / avg_roi_win (only for the quality shown on the page).
 
-    Each contest's candidates are loaded and shrunk as the per-contest methods
-    do; the shared world axis is checked (shared_worlds); the candidates are
-    stacked as (contest, lineup) pairs carrying fee x ROI dollars per world and
-    pick_book fills each contest's slots. Returns {"picks": {contest_name:
-    [lineup_id, ...]}, "stats": {contest_name: stats as choose_lineup_ids
-    fills them}, "book": the slate book (dollar distribution, per-contest
-    split, honest cross-fit)}.
+    The shared world axis is checked first (shared_worlds). Returns {"picks":
+    {contest_name: [lineup_id, ...]}, "stats": {contest_name: stats as
+    choose_lineup_ids fills them, the viz carrying the slate book and the
+    rooting guide}, "book": the slate book}.
     """
     log = log or (lambda *_: None)
     bankroll = bankroll_dollars_of(weights)
     names = [str(c["contest_name"]) for c in contests]
     shared = shared_worlds(session, names)
-    per = []
-    for c in contests:
-        sims, n_results, n_after_roi, n_valid, missing = _candidates(session, str(c["contest_name"]), roi_filter=False)
-        roi_raw = roi_worlds(sims) if sims else np.zeros((0, 0), dtype=np.float32)
-        roi_m, shrink = shrink_rows(roi_raw) if sims else (roi_raw, {})
-        per.append({"c": c, "sims": sims, "roi_raw": roi_raw, "roi_m": roi_m, "shrink": shrink, "fee": float(c["fee"]),
-                    "slots": int(c["entries"]), "counts": (n_results, n_after_roi, n_valid, len(sims), len(missing))})
-    worlds = {p["roi_m"].shape[1] for p in per if p["sims"]}
-    if len(worlds) > 1:
-        raise ValueError(f"the contests' sim results have different world counts {sorted(worlds)}; re-run the sim for the whole slate")
-    W = worlds.pop() if worlds else 0
-
-    # stack the slate: (contest, lineup) pairs, net dollars per world
-    blocks, groups, ids, qs, offsets = [], [], [], [], []
-    for g, p in enumerate(per):
-        offsets.append(sum(len(b) for b in blocks))
-        if not p["sims"]:
-            p["raw"], p["q"], p["norm"] = np.zeros((0, 2)), np.zeros(0), (np.zeros(2), np.zeros(2))
-            continue
-        p["raw"], p["q"], _, p["norm"] = _quality(p["sims"], p["roi_m"], weights)
-        blocks.append((p["roi_m"] * np.float32(p["fee"])).astype(np.float32))
-        groups.append(np.full(len(p["sims"]), g, dtype=int))
-        ids.extend(res.lineup_id for res in p["sims"])
-        qs.append(p["q"])
-    if not blocks:
-        return {"picks": {n: [] for n in names}, "stats": {n: {} for n in names}, "book": None}
-    net = np.vstack(blocks)
-    group = np.concatenate(groups)
-    q_all = np.concatenate(qs)
-    slots = [p["slots"] if p["sims"] else 0 for p in per]
-    fees_total = float(sum(p["fee"] * p["slots"] for p in per if p["sims"]))
-    log(f"  slate: {net.shape[0]:,} (contest, lineup) candidates x {W} shared worlds ({shared['method']}, draw {shared['draw']}); "
-        f"{sum(slots)} entries, ${fees_total:,.2f} in fees, bankroll ${bankroll:,.0f}")
-    selected, trace, diag = pick_book(net, bankroll, group, slots, q=q_all, ids=ids)
-    if diag.get("clipped"):
-        log(f"  WARNING: in {diag['clipped']} of {W} worlds the book loses more than the bankroll (the fees exceed it); utility clipped there")
-
-    # quality-only comparison book: each contest's top entries by quality
-    top_global = []
-    for g, p in enumerate(per):
-        if p["sims"]:
-            top_global.extend(offsets[g] + int(i) for i in np.argsort(-p["q"])[:p["slots"]])
-    cf = _cross_fit_slate(per, bankroll, slots, fees_total)
-    book = {"method": "slate", "bankroll_dollars": bankroll, "worlds": W, "shared": shared, "clipped_worlds": int(diag.get("clipped", 0)),
-            "fees": fees_total, "entries": int(len(selected)),
-            "chosen": dollar_book_summary(net[selected], fees_total, bankroll),
-            "top_quality": dollar_book_summary(net[top_global], fees_total, bankroll) if top_global else None,
-            "cross_fit": cf.get("slate") if cf else None, "contests": []}
-
-    picks, stats_by = {}, {}
-    for g, p in enumerate(per):
-        c, sims = p["c"], p["sims"]
-        name = str(c["contest_name"])
-        n_results, n_after_roi, n_valid, N, n_missing = p["counts"]
-        stats: dict = {}
-        if not sims:
-            _fill(stats, n_results, n_after_roi, n_valid, 0, [], [], [], weights, n_missing)
-            picks[name], stats_by[name] = [], stats
-            continue
-        sel = [j - offsets[g] for j in selected if group[j] == g]
-        top_q = [int(i) for i in np.argsort(-p["q"])[:p["slots"]]]
-        trace_c = [{**t, "slate_pick": t["pick"], "pick": k + 1} for k, t in enumerate(t for t in trace if t["group"] == g)]
-        fpts = np.vstack([np.array(res.fpts, dtype=float) for res in sims])
-        dist = SampledDistances(fpts, keep=set(sel) | set(top_q))
-        roi_m, roi_raw, raw = p["roi_m"], p["roi_raw"], p["raw"]
-        book_c = {"method": "slate", "bankroll": bankroll, "bankroll_dollars": bankroll, "shrinkage": p["shrink"],
-                  "chosen": book_summary(roi_m[sel]) if sel else None, "top_quality": book_summary(roi_m[top_q]),
-                  "chosen_unshrunk": book_summary(roi_raw[sel]) if sel else None,
-                  "cross_fit": (cf.get("contests") or {}).get(name) if cf else None}
-        net_c = net[offsets[g]:offsets[g] + N]
-        book["contests"].append({"contest_id": c.get("contest_id"), "contest_name": name, "entries": len(sel), "fee": p["fee"],
-                                 "fees": p["fee"] * len(sel), "mean_net": float(net_c[sel].sum(axis=0).mean()) if sel else 0.0,
-                                 "roi_mean": float(roi_m[sel].mean()) if sel else None,
-                                 "honest_roi": ((book_c["cross_fit"] or {}).get("out_of_sample") or {}).get("mean")})
-        _fill(stats, n_results, n_after_roi, n_valid, N, raw[top_q], raw[sel], sel, weights, n_missing,
-              by_lineup={sims[i].lineup_id: {"cash_pct": float(raw[i, 0]), "avg_roi": float(raw[i, 1])} for i in sel}, book=book_c)
-        stats["viz"] = _viz(sims, raw, p["q"], dist, fpts, sel, top_q, trace_c, 0.0, weights, p["norm"], book_c)
-        stats["viz"]["rooting"] = rooting_guide(session, name, roi_m[sel]) if sel else None
-        stats["viz"]["slate"] = book
-        picks[name], stats_by[name] = [sims[i].lineup_id for i in sel], stats
-    return {"picks": picks, "stats": stats_by, "book": book}
-
-
-def _cross_fit_slate(per: list, bankroll: float, slots: Sequence[int], fees_total: float) -> Optional[dict]:
-    """
-    The slate book's honest expectation: choose on the even worlds (shrunk
-    per contest, as the real pass does), score on the odd ones. Returns the
-    slate's in/out-of-sample dollar books and each contest's in/out-of-sample
-    ROI (what validate.honest_roi reads).
-    """
-    live = [p for p in per if p["sims"]]
-    if not live:
-        return None
-    S = live[0]["roi_raw"].shape[1]
-    if S < 20:
-        return None
-    fit = np.arange(S) % 2 == 0
-    fit_blocks, raw_fit_blocks, score_blocks, groups, RA_by, RB_by = [], [], [], [], [], []
-    for g, p in enumerate(per):
-        if not p["sims"]:
-            continue
-        RA, _ = shrink_rows(p["roi_raw"][:, fit])            # the selection sees shrunk rows, as the real pass does
-        RB = p["roi_raw"][:, ~fit]
-        RA_by.append(RA); RB_by.append(RB)
-        fit_blocks.append((RA * np.float32(p["fee"])).astype(np.float32))
-        raw_fit_blocks.append((p["roi_raw"][:, fit] * np.float32(p["fee"])).astype(np.float32))
-        score_blocks.append((RB * np.float32(p["fee"])).astype(np.float32))
-        groups.append(np.full(len(p["sims"]), g, dtype=int))
-    NA, NB, group = np.vstack(fit_blocks), np.vstack(score_blocks), np.concatenate(groups)
-    sel, _, _ = pick_book(NA, bankroll, group, slots)
-    sel = [int(i) for i in sel]
-    # both halves are scored on the raw rows, so the gap is selection alone (the shrunk in-sample book is kept for reference)
-    ins = dollar_book_summary(np.vstack(raw_fit_blocks)[sel], fees_total, bankroll)
-    ins_shrunk, oos = dollar_book_summary(NA[sel], fees_total, bankroll), dollar_book_summary(NB[sel], fees_total, bankroll)
-    if ins is None or oos is None:
-        return None
-    out = {"slate": {"worlds_fit": int(fit.sum()), "worlds_score": int((~fit).sum()), "in_sample": ins, "in_sample_shrunk": ins_shrunk,
-                     "out_of_sample": oos, "selection_bias": float(ins["mean"] - oos["mean"]),
-                     "selection_bias_roi": float(ins["roi_mean"] - oos["roi_mean"])},
-           "contests": {}}
-    offset, k = 0, 0
-    for g, p in enumerate(per):
-        if not p["sims"]:
-            continue
-        N = len(p["sims"])
-        sel_c = [j - offset for j in sel if group[j] == g]
-        if sel_c:
-            a, b = book_summary(RA_by[k][sel_c]), book_summary(RB_by[k][sel_c])
-            out["contests"][str(p["c"]["contest_name"])] = {"worlds_fit": int(fit.sum()), "worlds_score": int((~fit).sum()),
-                                                            "in_sample": a, "out_of_sample": b, "selection_bias": float(a["mean"] - b["mean"])}
-        offset += N
-        k += 1
-    return out
+    cands = [_slate_candidates(session, c) for c in contests]
+    out = choose_book(cands, bankroll, weights, shared=shared, log=log)
+    picks = dict(zip(names, out["picks"]))
+    stats = dict(zip(names, out["stats"]))
+    for name, c, st in zip(names, cands, out["stats"]):
+        if st.get("viz") is not None and picks[name]:
+            sel = [c.lineup_ids.index(lid) for lid in picks[name]]
+            roi_m, _ = shrink_rows(c.roi_raw)
+            st["viz"]["rooting"] = rooting_guide(session, name, roi_m[sel])
+    return {"picks": picks, "stats": stats, "book": out["book"]}
 
 
 def sim_roi_traces(session: Session, contest_name: str, lineup_ids, column: str = "roi") -> dict[int, np.ndarray]:
@@ -447,62 +320,10 @@ def rooting_guide(session: Session, contest_name: str, book_rows: np.ndarray) ->
 
 
 def _viz(sims, raw, q, dist_mat, fpts_matrix, selected, top_q, trace, lam, weights, norm, book=None, max_points=1500, seed=0) -> dict:
-    """
-    What the chooser saw, for plotting: every candidate's cash %, ROI and
-    quality; a 2-D map of the simulated-points space (PCA of the fpts traces,
-    so distance on the map is roughly the diversity distance); which candidates
-    were picked (and in what order) or would have been picked on quality alone;
-    the greedy trace; how spread out each set is; and the book's simulated
-    return distribution. Candidates are subsampled to max_points for the page,
-    keeping every pick and quality-only pick.
-    """
-    N = len(sims)
-    Xc = fpts_matrix - fpts_matrix.mean(axis=0, keepdims=True)
-    U, S, _ = np.linalg.svd(Xc, full_matrices=False)
-    coords = U[:, :2] * S[:2] if S.size >= 2 else np.zeros((N, 2))
-    var = S ** 2
-    evr = (var / var.sum()).tolist() if var.sum() > 0 else [0.0, 0.0]
-
-    pick_order = {idx: k + 1 for k, idx in enumerate(selected)}
-    top_set = set(top_q)
-    keep = set(selected) | top_set
-    pool = [i for i in range(N) if i not in keep]
-    if len(keep) + len(pool) > max_points:
-        pool = [int(i) for i in np.random.default_rng(seed).choice(pool, size=max(0, max_points - len(keep)), replace=False)]
-    points = [{"lineup_id": sims[i].lineup_id, "cash": float(raw[i, 0]), "roi": float(raw[i, 1]), "q": float(q[i]),
-               "x": float(coords[i, 0]), "y": float(coords[i, 1]), "pick": pick_order.get(i), "top": i in top_set}
-              for i in sorted(keep | set(pool))]
-
-    if isinstance(dist_mat, SampledDistances):
-        mean_pair, mean_all = dist_mat.mean_pair, dist_mat.mean_all()
-    else:
-        def mean_pair(idx) -> Optional[float]:
-            idx = list(idx)
-            if len(idx) < 2:
-                return None
-            sub = dist_mat[np.ix_(idx, idx)]
-            return float(sub[np.triu_indices(len(idx), 1)].mean())
-        mean_all = float(dist_mat[np.triu_indices(N, 1)].mean()) if N > 1 else None
-
-    return {"n_candidates": N, "n_shown": len(points), "weights": dict(weights), "lambda": lam,
-            "method": (book or {}).get("method", method_of(weights)), "bankroll": (book or {}).get("bankroll"),
-            "explained_variance": [float(evr[0]), float(evr[1]) if len(evr) > 1 else 0.0],
-            "norm": {"cash": [float(norm[0][0]), float(norm[1][0])], "roi": [float(norm[0][1]), float(norm[1][1])]},
-            "points": points, "trace": trace, "book": book,
-            "spread": {"chosen": mean_pair(selected), "top_quality": mean_pair(top_q), "all": mean_all}}
+    """What the chooser saw, for plotting (chooser.viz_payload on these results' lineup ids)."""
+    return viz_payload([res.lineup_id for res in sims], raw, q, dist_mat, fpts_matrix, selected, top_q, trace, lam, weights, norm,
+                       book=book, method=method_of(weights), max_points=max_points, seed=seed)
 
 
 def _fill(stats, n_results, n_after_roi, n_valid, n_unique, top_raw, sel_raw, selected, weights, n_missing, by_lineup=None, book=None):
-    if stats is None:
-        return
-    top_raw, sel_raw = np.asarray(top_raw, dtype=float).reshape(-1, 2), np.asarray(sel_raw, dtype=float).reshape(-1, 2)
-    stats.update({
-        "results": n_results, "after_roi_filter": n_after_roi, "valid": n_valid, "unique": n_unique,
-        "missing_players": n_missing, "chosen": len(selected), "weights": dict(weights),
-        "by_lineup": by_lineup or {},                      # lineup_id -> {cash_pct, avg_roi} of the picks
-        "book": book,                                      # method, bankroll, chosen / top_quality return distributions
-        "top_quality_roi": float(top_raw[:, 1].mean()) if len(top_raw) else None,
-        "top_quality_cash": float(top_raw[:, 0].mean()) if len(top_raw) else None,
-        "chosen_roi": float(sel_raw[:, 1].mean()) if len(sel_raw) else None,
-        "chosen_cash": float(sel_raw[:, 0].mean()) if len(sel_raw) else None,
-    })
+    fill_stats(stats, n_results, n_after_roi, n_valid, n_unique, top_raw, sel_raw, selected, weights, n_missing, by_lineup=by_lineup, book=book)

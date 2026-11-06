@@ -293,7 +293,7 @@ PUBLISH_RED_MIN = 10   # unpublished changes older than this turn the published 
 
 
 CHAIN_STEPS = [("snapshot", "snapshot", ("snapshot",)), ("field", "field", ("field",)), ("generate", "lineups", ("generate", "all")),
-               ("sim", "sim", ("sim", "all")), ("choose", "picks", ("choose", "all")), ("lateswap", "late swap", ("lateswap",))]
+               ("sim", "sim", ("sim", "all")), ("choose", "picks", ("choose", "choose_slate", "all")), ("lateswap", "late swap", ("lateswap",))]
 
 
 def _chain_info(now: datetime) -> dict:
@@ -446,10 +446,18 @@ def _submit(step: str, form: dict) -> list:
     if step in ("choose", "all"):
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
-               "--cash-pct", "%g" % ch["cash_pct"], "--avg-roi-win", "%g" % ch["avg_roi_win"], "--diversity-lambda", "%g" % ch["diversity_lambda"], "--bankroll", "%g" % ch["bankroll"]]
+               "--cash-pct", "%g" % ch["cash_pct"], "--avg-roi-win", "%g" % ch["avg_roi_win"], "--diversity-lambda", "%g" % ch["diversity_lambda"],
+               "--bankroll", "%g" % ch["bankroll"], "--bankroll-dollars", "%g" % ch.get("bankroll_dollars", 1000.0)]
         from ivan.sports.nba.lineup_export import contest_weights, contest_weights_json
         if contest_weights():                                     # the contests section's knobs win over the panel's for their contest
             cmd += ["--weights-json", str(contest_weights_json())]
+        jobs.append(_submit_job("choose", cmd, "choose", meta("choose")))
+    if step == "choose_slate":
+        # the slate as one book: the two inputs are the entries file and the bankroll (ivan.core.slate_book); every contest is chosen
+        # by the slate method whatever its own knobs say, so no --weights-json here
+        ch = json.loads(cfg.read_text())["choose"]
+        cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", "slate",
+               "--bankroll-dollars", "%g" % ch.get("bankroll_dollars", 1000.0)]
         jobs.append(_submit_job("choose", cmd, "choose", meta("choose")))
     return jobs
 
@@ -478,7 +486,7 @@ def pipeline(request: Request):
 
 @slate.post("/pipeline/{step}", response_class=HTMLResponse)
 async def pipeline_run(request: Request, step: str):
-    """generate | sim | choose | all | lateswap | field. Generate, sim, late swap and all take the snapshot first (ingest.capture_pool:
+    """generate | sim | choose | choose_slate | all | lateswap | field. Generate, sim, late swap and all take the snapshot first (ingest.capture_pool:
     the capture rows the scorecard scores and the projections CSV; the only snapshot there is, scripts/nba/snapshot.py from a
     terminal), so the record is what the run was built on and the pool is what you see on the grid (2026-10-25: a sim run on a
     stale pool after a repaint was the late-swap mess); choose and field (the public field + ownership, scripts/nba/field_ownership.py)
@@ -500,13 +508,13 @@ async def pipeline_run(request: Request, step: str):
             pipeline_form["fresh"] = "on" if form.get("fresh") else ""
         if step == "lateswap":
             pipeline_form["ls_live"] = "on" if form.get("ls_live") else ""
-        if step not in ("generate", "sim", "choose", "all", "lateswap", "field"):
+        if step not in ("generate", "sim", "choose", "choose_slate", "all", "lateswap", "field"):
             desk.flash.append(f"unknown step {step}")
         elif _active():
             desk.flash.append("a job is already running on this slate; wait for it or cancel it")
         else:
             ms = desk.mapped_summary()
-            if ms["n"] and ms["n_mapped"] < ms["n"] and step != "choose":
+            if ms["n"] and ms["n_mapped"] < ms["n"] and step not in ("choose", "choose_slate"):
                 desk.flash.append(f"heads up: {ms['n_mapped']} of {ms['n']} teams mapped and unchanged"
                                   + (f"; changed: {', '.join(ms['changed'])}" if ms["changed"] else "") + (f"; unmapped: {', '.join(ms['unmapped'])}" if ms["unmapped"] else ""))
             if step in ("generate", "sim", "lateswap", "all"):

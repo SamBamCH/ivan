@@ -30,21 +30,31 @@ the projection.
 
 ## Duplication (`dupe_model.py`, `dupe_analysis.py`)
 
-How many copies of a lineup the field holds, fitted on the real fields the settle job keeps:
+How many copies of a lineup the field holds, fitted on the real fields the settle job keeps. Four terms:
 
 ```
-copies(L) = N · k · ∏_flex (own_i/100)^beta · (own_cpt/100)^beta_cpt · exp(gamma · min(salary_left, knee)/1000) · [projection-gap term]
+copies(L) = N · k · ∏ (own_i/100)^beta · exp(gamma · min(salary_left, knee)/1000)
+              · exp(delta_logproj · log(1 + points below the best lineup)) · exp(delta_emax · log(entries per user))
 ```
 
-by copy-weighted least squares on the log scale (`METHOD = "wls"`; a zero-truncated Poisson fit was
-tried 2026-10-14 and was worse held out), per format, with `TERMS = ("salary", "cpt", "logproj")`: a
-salary-left term, a separate captain exponent and a projection-gap term, all held-out verified; the
-stack deltas are measured but left out. Classic fields barely duplicate by ownership. Both samplers
-use the same function for their lineup weights and for every candidate's predicted copies, so the
-sampled field's concentration and the dupe prediction of our own lineups agree. `build_dupe_model.py
-backtest|build [--cutoff]` refits; the as-of build writes a version per cutoff
-(`dupe_model_v2.json`). The two-stage quantile + GBM model that under-predicted the chalk 3x was removed
-in 2026-10.
+by copy-weighted least squares on the log scale, per format, `TERMS = ("salary", "logproj", "emax")`:
+ownership is the base, money left on the table cuts copies (flat past `knee` = $2,000), points below the
+best lineup cut copies (the optimizer crowd lands on the top projected lineups; at prediction time the
+reference is the candidate pool's best), and the contest's entries-per-user cap sets the level (a
+single-entry crowd lands on the chalk where a 150-max crowd spreads; from
+`historical_contest_information.multi_entry`, `EMAX_DEFAULT` 20 when unknown). Both samplers read the cap
+through `sample_field.contest_entry_cap` and use the same function for their lineup weights and for every
+candidate's predicted copies, so the sampled field's concentration and the dupe prediction of our own
+lineups agree. Classic fields barely duplicate by ownership and keep the ownership-only rule.
+`build_dupe_model.py backtest|build [--cutoff]` refits (`dupe_model_v2.json`; the as-of build writes a
+version per cutoff). It is the only dupe model: there is no config switch, and the archived two-stage and
+pre-salary model files were deleted on 2026-11-05. Every term is there because the season backtest below keeps it (2026-11-05, 16
+slates forward): without the salary term the log MAE goes 0.80 to 0.94, without the projection gap the
+top lineup's predicted copies fall to 0.22x the real ones, the entry-cap term takes the single-entry
+bias from +0.51 to -0.02 and the 150-max bias from -0.29 to -0.13. Removed the same day because the test
+showed nothing or worse: a separate captain exponent, a linear projection-gap term, the QB-stack deltas,
+the zero-truncated Poisson fit; a contest-size exponent (`logn`) stays a candidate in `ALL_TERMS` only.
+The two-stage quantile + GBM model that under-predicted the chalk 3x was removed in 2026-10.
 
 **Where it misses**: the Dupes page (`/dupes`) and `scripts/nfl/dupe_report.py [--contests] [--since]
 [--showdown-only]` put the model's expected copies against the copies every scraped field held,
@@ -53,3 +63,29 @@ decile, team split, QB stack, bring-back and salary left, the most duplicated li
 shown from the ownership we projected and from the ownership the field showed, so a miss is attributed
 to the dupe rule or to the ownership upstream. The dupe leak (our own lineups duplicated more than
 predicted) was one of the 2026-10-11 validation findings.
+
+**The season test** (`scripts/nfl/backtest_dupes.py`, `ivan.sports.nfl.dupe_backtest`) is the acceptance
+test for any change to the model: every slate since the season start is scored by a model fitted only on
+the fields locked before it (the rolling origin), the live `dupe_model_v2.json` is scored on the slates
+after its `fitted_on`, and the variants run side by side with a 90 % bootstrap band over slates: the live
+terms on all history (copy-weighted, the fit's default), the same without the entry-cap term (the model
+before 2026-11-05), the same with every past slate weighted equally (`dupe_model.fit_weights` "slate"),
+this season only, and ownership only; `--ablation` runs the live terms with each dropped in turn and each
+candidate of `ALL_TERMS` added in turn, which is how `TERMS` is decided. Per slate it reports the
+copy-weighted log MAE and bias (log(actual / pred), > 0 = the field duplicated more than predicted), the
+calibration slope, the top lineup's predicted / actual copies and the share of entries in the 100 most
+duplicated lineups; pooled, the calibration by predicted copies (from projected and from actual
+ownership) and by the contest's entries-per-user cap; and our own entries' predicted copies against the
+copies the field held, per slate and by cap next to the copies a random entry of the same fields has.
+Output `data/nfl/diagnostics/dupe_backtest/<stamp>/` (`report.txt`, `slates.csv`, `summary.csv`,
+`calibration.csv`, `by_entry_max.csv`, `ours.csv`, `ours_by_cap.csv`, `summary.json`); about ten minutes, half of it the actual-ownership rerun (`--no-actual-own`).
+`build_dupe_model.py backtest` (leave-one-slate-out) stays for the ablation but is not the acceptance
+test: it leaks the later slates into every fold and is weighted toward November 2025. First run
+2026-11-05 ([notes/dupe_backtest_2026-11-05.md](notes/dupe_backtest_2026-11-05.md)): the live file
+over-predicts 16 % copy-weighted on the 13 slates after its fit, the per-slate level swings a factor of
+two either way, single-entry fields are under-predicted 1.7x and 150-max fields over-predicted 0.75x
+(the entry-cap term flattens both, and is live since 2026-11-05), training on this season only or weighting
+every past slate equally is worse, and our own entries carry twice the copies of a random entry of the same
+fields (88 vs 44).
+The season has few slates because the archive started 2026-10-11 and holds only the games we play;
+the note says what a backfill of the September slates takes.

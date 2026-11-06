@@ -8,8 +8,10 @@ payouts   the contest's payout table, scaled to the sampled field
           (ivan.sports.common.payouts.scale_payouts_correctly)
 scores    one correlated draw per simulation for every player on the field
           (pre_lock.player.generate_player_samples: a Gaussian copula per
-          game on each player's fitted marginal), lineups scored and ranked,
-          ties sharing the pooled payout
+          game on each player's fitted marginal), drawn once per run
+          (slate_draw) so world w is the same games in every contest of the
+          run (the slate chooser adds the contests world by world); lineups
+          scored and ranked, ties sharing the pooled payout
 results   per unique lineup: fpts / payout / ROI / rank in every simulation,
           as lineup_simulation_results rows (the contest's earlier rows are
           replaced); a sim artifact (<artifact_dir>/contest_<id>.npz + .json,
@@ -133,9 +135,23 @@ def load_scaled_payouts(session: Session, contest_id: int, num_field_lineups: in
 
 
 # ----------------------------------------------------------------------------- scoring
-def player_samples_matrix(session: Session, pid_to_idx: Dict[int, int], n_samples: int, seed: Optional[int] = None):
-    """(P: simulations x players, raw: pid -> samples) from the correlated player sampler."""
+def slate_draw(session: Session, n_samples: int, log: Log = print) -> dict:
+    """
+    The run's one draw of every player's points: {"raw": pid -> samples, "n": worlds, "seed"}. Drawn once per sim run
+    (simulate_entries) and handed to every contest, so world w is the same games in each contest and the slate chooser
+    can add the contests' results world by world (ivan.core.slate_book). Seeded from IVAN_SEED when set.
+    """
+    seed = seed_for("sim/slate")
     raw = generate_player_samples(session, n_samples=int(n_samples), randomness=1.0, seed=seed)
+    ns = next((int(v.shape[0]) for v in raw.values() if isinstance(v, np.ndarray)), 0)
+    log(f"one shared draw of {len(raw)} players x {ns} worlds for every contest of the run" + (f" (seed {seed})" if seed is not None else ""))
+    return {"raw": raw, "n": ns, "seed": seed}
+
+
+def player_samples_matrix(session: Session, pid_to_idx: Dict[int, int], n_samples: int, seed: Optional[int] = None, raw: Optional[dict] = None):
+    """(P: simulations x players, raw: pid -> samples) from the correlated player sampler, or from the run's shared draw (`raw`)."""
+    if raw is None:
+        raw = generate_player_samples(session, n_samples=int(n_samples), randomness=1.0, seed=seed)
     ns = next((int(v.shape[0]) for v in raw.values() if isinstance(v, np.ndarray)), 0)
     P = np.zeros((ns, len(pid_to_idx)), dtype=np.float32)
     missing = []
@@ -188,9 +204,11 @@ def _simulate_chunk(start: int, end: int, lineup_ix: List[List[int]], P_chunk: n
 
 # ----------------------------------------------------------------------------- one contest
 def simulate_one_contest(session: Session, contest_id: int, contest_name: str, config_path: str, field_cap: int = 10000,
-                         num_sims: int = 1000, artifact_dir: str | Path | None = None, log: Log = print, own_out: Optional[dict] = None) -> dict:
+                         num_sims: int = 1000, artifact_dir: str | Path | None = None, log: Log = print, own_out: Optional[dict] = None,
+                         draw: Optional[dict] = None) -> dict:
     """Sample the field, score it, store the results, the artifact and the report. Returns the report.
-    `own_out`, when a dict, receives the field's exposure per player id in percent (and "total_entries")."""
+    `own_out`, when a dict, receives the field's exposure per player id in percent (and "total_entries"). `draw` is the run's
+    shared player draw (slate_draw); without it the contest draws its own worlds (report contest.draw = "contest")."""
     t0 = time.time()
     cfg = json.load(open(config_path, encoding="utf-8"))
     contest = C.ensure_contest(session, int(contest_id), log=log)
@@ -215,8 +233,8 @@ def simulate_one_contest(session: Session, contest_id: int, contest_name: str, c
     scaled = scale_payouts(tiers, M, field_sz, entry_fee)
     pay_by_rank = np.array([float(scaled.get(r, 0.0)) for r in range(1, M + 1)])
     paid_places = int(np.count_nonzero(pay_by_rank))
-    seed = seed_for(f"sim/{contest_id}")
-    P, ns, raw_samples, missing = player_samples_matrix(session, pid_to_idx, num_sims, seed=seed)
+    seed = draw["seed"] if draw else seed_for(f"sim/{contest_id}")
+    P, ns, raw_samples, missing = player_samples_matrix(session, pid_to_idx, num_sims, seed=seed, raw=draw["raw"] if draw else None)
     if ns == 0:
         raise ValueError("the player sampler returned nothing; project the slate first")
     if missing:
@@ -256,7 +274,8 @@ def simulate_one_contest(session: Session, contest_id: int, contest_name: str, c
     if own_out is not None:
         own_out.update({int(pid): 100.0 * n / max(1, M) for pid, n in exposure.items()}); own_out["total_entries"] = field_sz
     contest_info = {"id": int(contest_id), "name": contest_name, "entry_fee": entry_fee, "total_entries": field_sz, "field_cap": int(field_cap or 0),
-                    "multi_entry": contest_params["multi_entry"], "start": contest.date, "candidates": n_candidates}
+                    "multi_entry": contest_params["multi_entry"], "start": contest.date, "candidates": n_candidates,
+                    "draw": "slate" if draw else "contest"}
     if artifact_dir is not None:
         arrays, meta = build_sim_artifact(contest=contest_info, u_lids=u_lids, dupes=dupes, pid_lists_by_lid=pid_lists_by_lid,
                                           cash_pct=cash_pct, avg_roi=avg_roi, mean_rank=mean_rank, mean_score=mean_score, win_pct=win_pct,
@@ -423,15 +442,19 @@ def simulate_entries(session: Session, entries_csv, config_path, n_sims: int, fi
     cfg0 = json.load(open(config_path, encoding="utf-8"))
     if str(_cfg(cfg0, "field.sampler", "projection_model")) == "two_group":
         prebuild_field(session, contests["Contest ID"], field_cap, log=log)
+    # one draw of the players' points for the whole run: every contest scores its field and candidates in the same worlds,
+    # which is what lets the slate chooser read the contests' results as one book (world w = the same games everywhere)
+    draw = slate_draw(session, n_sims, log=log) if len(contests) else None
     for i, (cid, name) in enumerate(zip(contests["Contest ID"], contests["Contest Name"]), 1):
         log(f"--- {i}/{len(contests)} ---")
         try:
             own: dict = {}
             cfg = json.load(open(config_path, encoding="utf-8"))
             if str(_cfg(cfg, "field.sampler", "projection_model")) == "two_group":
-                report = simulate_vs_field(session, int(cid), name, field_cap=field_cap, num_sims=n_sims, log=log, own_out=own, artifact_dir=art)
+                report = simulate_vs_field(session, int(cid), name, field_cap=field_cap, num_sims=n_sims, log=log, own_out=own, artifact_dir=art, draw=draw)
             else:
-                report = simulate_one_contest(session, int(cid), name, str(config_path), field_cap=field_cap, num_sims=n_sims, artifact_dir=art, log=log, own_out=own)
+                report = simulate_one_contest(session, int(cid), name, str(config_path), field_cap=field_cap, num_sims=n_sims, artifact_dir=art, log=log,
+                                              own_out=own, draw=draw)
             out["reports"][int(cid)] = report; out["simulated"] += 1
             if own.get("total_entries", 0) >= biggest.get("total_entries", 0):
                 biggest = own
@@ -506,10 +529,13 @@ def pay_against(field_sorted: np.ndarray, scores: np.ndarray, copies: np.ndarray
 
 
 def simulate_vs_field(session: Session, contest_id: int, contest_name: str, field_cap: int = 10000, num_sims: int = 1000,
-                      log: Log = print, own_out: Optional[dict] = None, artifact_dir: str | Path | None = None) -> dict:
+                      log: Log = print, own_out: Optional[dict] = None, artifact_dir: str | Path | None = None,
+                      draw: Optional[dict] = None) -> dict:
     """Score every candidate lineup against the two-group field; store per-world results for the best KEEP_RESULTS. Returns a report.
     With artifact_dir, writes contest_<id>.npz / .json there: the sampled field (unique lineups x copies), its player exposures and
-    every candidate's mean ROI and cash rate, which the desk's exposures tab reads (a sampled field per simmed contest)."""
+    every candidate's mean ROI and cash rate, which the desk's exposures tab reads (a sampled field per simmed contest).
+    `draw` is the run's shared player draw (slate_draw), so world w is the same games in every contest of the run; without it the
+    contest draws its own (report contest.draw = "contest", which the slate chooser refuses)."""
     from collections import Counter
     from ivan.core.utils import coerce_player_ids
     t0 = time.time()
@@ -532,8 +558,8 @@ def simulate_vs_field(session: Session, contest_id: int, contest_name: str, fiel
     copies = Counter(field)
     pids = sorted({p for lu in field for p in lu} | {p for _, ids in cands for p in ids})
     col = {pid: i for i, pid in enumerate(pids)}
-    seed = seed_for(f"sim/{contest_id}")
-    P, ns, raw_samples, missing = player_samples_matrix(session, col, num_sims, seed=seed)
+    seed = draw["seed"] if draw else seed_for(f"sim/{contest_id}")
+    P, ns, raw_samples, missing = player_samples_matrix(session, col, num_sims, seed=seed, raw=draw["raw"] if draw else None)
     if ns == 0:
         raise ValueError("the player sampler returned nothing; project the slate first")
     F = np.sort(P[:, np.array([[col[p] for p in lu] for lu in field])].sum(axis=2), axis=1)       # worlds x field, ascending
@@ -589,7 +615,8 @@ def simulate_vs_field(session: Session, contest_id: int, contest_name: str, fiel
     fs = np.array([sum(float(players.get(p, {}).get('fpts_mean') or 0.0) for p in lu) for lu in field])
     report = {"version": REPORT_VERSION, "created_at": datetime.now().isoformat(timespec="seconds"), "seed": seed, "seconds": round(time.time() - t0, 1),
               "contest": {"id": int(contest_id), "name": contest_name, "entry_fee": entry_fee, "total_entries": field_sz, "field_cap": int(field_cap or 0),
-                          "multi_entry": int(contest.multi_entry or 150), "start": contest.date, "candidates": len(cands)},
+                          "multi_entry": int(contest.multi_entry or 150), "start": contest.date, "candidates": len(cands),
+                          "draw": "slate" if draw else "contest"},
               "field": {"sampler": {"sampler": "two_group", **{k: v for k, v in field_params().items() if k != "notes"}}, "sampled": int(n),
                         "unique": len(copies), "dup_share": _f(sum(c for c in copies.values() if c > 1) / n), "max_copies": int(max(copies.values())),
                         "median_projection": _f(np.median(fs)), "players_without_projection": missing,

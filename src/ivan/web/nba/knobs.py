@@ -25,7 +25,7 @@ def _pipeline_defaults() -> dict:
             "player_min_fpts": fmt(g.get("player_min_fpts", c.get("player_min_fpts", 15))),
             "max_salary": fmt(c.get("max_salary", 50000)), "min_salary": fmt(c.get("min_salary", 49000)), "max_salary_per_team": fmt(c.get("max_salary_per_team", 30000)),
             "cash_pct": fmt(ch.get("cash_pct", 0.5)), "avg_roi_win": fmt(ch.get("avg_roi_win", 0.5)), "diversity_lambda": fmt(ch.get("diversity_lambda", 0.1)),
-            "bankroll": fmt(ch.get("bankroll", 3.0)), "jam": "",
+            "bankroll": fmt(ch.get("bankroll", 3.0)), "bankroll_dollars": fmt(ch.get("bankroll_dollars", 1000.0)), "jam": "",
             "ls_candidates": "10", "ls_field_cap": "5000", "ls_sims": "1000", "ls_source": "auto", "ls_field": "shared", "ls_live": ""}
 
 
@@ -89,9 +89,11 @@ def write_desk_config(form: dict) -> Path:
             g[key] = v
     if str(form.get("player_min_fpts") or "").strip():
         c["player_min_fpts"] = g["player_min_fpts"]
-    for key in ("cash_pct", "avg_roi_win", "diversity_lambda", "bankroll"):
+    for key in ("cash_pct", "avg_roi_win", "diversity_lambda", "bankroll", "bankroll_dollars"):
         v = _field(form.get(key), key)
         if v is not None:
+            if key == "bankroll_dollars" and v <= 0:
+                raise ValueError("the bankroll must be positive")
             ch[key] = v
     if form.get("jam"):
         ch["diversity_lambda"] = 0.0                              # jam: the top lineups by quality, no spread between them

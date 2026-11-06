@@ -73,6 +73,9 @@
         <div class="knobs"><div class="knobs-title">sim</div>{% for f in step_fields.sim %}{{ knob(f) }}{% endfor %}</div></form>
       <form method="post" action="{{ root }}/run/choose" class="step"><i>5</i>
         <button class="primary" {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}pick each contest's lineups and write the DraftKings upload CSV; each contest's knobs are set in the contests section, a blank one is the default (choose.py --weights-json){% elif not entries %}upload the entries export first{% else %}run the sim first{% endif %}">Choose</button></form>
+      <form method="post" action="{{ root }}/run/choose_slate" class="step has-knobs">
+        <button {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}the slate as one book: every contest of the entries file chosen at once from this bankroll, in dollars (the per-contest knobs are not used); scripts/nfl/choose.py --method slate --bankroll-dollars B{% elif not entries %}upload the entries export first{% else %}run the sim first{% endif %}">Slate book</button>
+        <div class="knobs"><div class="knobs-title">slate book</div>{% for f in step_fields.choose_slate %}{{ knob(f) }}{% endfor %}</div></form>
       <span class="spacer"></span>
       <form method="post" action="{{ root }}/reset/sims" onsubmit="return confirm('Clear every simulation result of this slate?')"><button class="danger" title="scripts/nfl/clear_sims.py">clear sims</button></form>
       <form method="post" action="{{ root }}/reset/lineups" onsubmit="return confirm('Clear the generated lineups and every simulation result?')"><button class="danger" title="scripts/nfl/clear_all.py">clear lineups + sims</button></form>

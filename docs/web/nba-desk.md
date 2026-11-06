@@ -96,7 +96,10 @@ or when news breaks.
    team, randomness, min fpts frac, player min fpts; sim's sims and field cap. A button sends only its own knobs
    (3–5 in a row sends both); the desk keeps every knob it was last sent, seeded from `config/nba.json`, and the jobs
    read them through `data/nba/jobs/desk_config.json`. Choose has no panel knobs: they are set per contest in the
-   contests section, a blank one is the desk default.
+   contests section, a blank one is the desk default. **Slate book** beside Choose (its one knob under it: the bankroll
+   in dollars, seeded from `config/nba.json → choose.bankroll_dollars`) chooses the whole slate as one book from the
+   entries file and that bankroll alone, the per-contest knobs unused (`scripts/nba/choose.py --method slate
+   --bankroll-dollars B`, [../nba/field-and-simulation.md](../nba/field-and-simulation.md#choose-choosepy-lineup_exportpy)).
    6 **Late swap** opens the late swap view.
    Under the steps (the producer only; a consumer has the header's one stamp): when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
    the news was read, the slate's lineups and sim rows; then the job status, its log, the exports and the latest picks.
@@ -110,7 +113,7 @@ or when news breaks.
    checked against the loaded slate (`historical_contest_information`): green the loaded slate, red another slate's
    (the sim skips those contests and says so in its log, `simulate_contest.simulate_entries`), grey not stored yet
    (checked when the sim starts, one DraftKings lookup). Each contest's **choose** cell sets the chooser's knobs for
-   that contest alone (method, cash, roi, diversity, bankroll; blank = the desk default from `config/nba.json`, shown greyed). They save
+   that contest alone (method greedy / portfolio / slate, cash, roi, diversity, bankroll, the slate's bankroll in dollars; blank = the desk default from `config/nba.json`, shown greyed). They save
    as they are typed (`/contest/<id>/weights` = `scripts/nba/contest_weights.py set <id> knob=value`) into
    `data/nba/input/contest_weights.json`, and Choose passes that file as `--weights-json`, so a contest's own knobs
    win over the defaults. Then the exposures panel: the candidate pool or the chosen entries.

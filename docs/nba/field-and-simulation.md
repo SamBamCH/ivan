@@ -7,7 +7,7 @@ Three stage modules with the same shapes as the NFL ones, each wrapped by one sc
 | Generate the candidate pool | `ivan.sports.nba.field_generation.generate_field` | `scripts/nba/generate_lineups.py N JOBS` |
 | The field (who else is in the contest) | `ivan.sports.nba.field_model`, `public_field`, `sample_field` | (inside the sim) |
 | Simulate each contest | `ivan.sports.nba.simulate_contest.simulate_entries` | `scripts/nba/sim.py` |
-| Choose | `ivan.sports.nba.choose` + `lineup_export.run_choose` (numerics in `ivan.core.chooser`, `ivan.core.portfolio`) | `scripts/nba/choose.py` |
+| Choose | `ivan.sports.nba.choose` + `lineup_export.run_choose` (numerics in `ivan.core.chooser`, `ivan.core.portfolio`, `ivan.core.slate_book`) | `scripts/nba/choose.py` |
 
 ## Generate (`field_generation.py`, `pre_lock/`)
 
@@ -69,7 +69,7 @@ venv/bin/python scripts/nba/sim.py [--entries data/nba/input/entries.csv] [-n 10
 For every contest in the entries file (fetching contest and payout rows it lacks through
 `contests.ensure_contest`): the field is drawn at `field_cap` entries (the two-group field: a slice of the
 one field built up front for the run), the payout table scaled to it
-(`ivan.sports.common.payouts.scale_payouts_correctly`), then `n_sims` correlated draws score every
+(`ivan.sports.common.payouts.scale_payouts_correctly`), then the run's `n_sims` correlated draws score every
 player on the field, lineups are ranked, ties share the pooled payout. Per unique lineup the result is
 fpts / payout / ROI / rank in every simulation as `lineup_simulation_results` rows (the contest's
 earlier rows are replaced). Each contest also leaves a sim artifact (`data/nba/output/sim/<stamp>/contest_<id>.npz`
@@ -77,8 +77,12 @@ earlier rows are replaced). Each contest also leaves a sim artifact (`data/nba/o
 row + `data/nba/diagnostics/<contest name>_<id>/report.json`) with the field's shape, the payout scaling,
 the score distribution and the conservation checks (the field should collect the whole prize pool).
 
-The simulation is plain Monte Carlo (each candidate scored in each world against a sampled field);
-the NFL's conditioned closed-form sim has no NBA counterpart yet.
+**One draw per run.** The players' points are drawn once per sim run (`simulate_contest.slate_draw`, seed
+`sim/slate` under `IVAN_SEED`) and every contest scores its field and candidates in those same worlds, so world
+*w* is the same games in every contest and the slate chooser can add the contests' results world by world. The
+report records it as `contest.draw = "slate"` (a contest simulated on its own would say `"contest"`, and the slate
+chooser refuses it). The simulation is plain Monte Carlo (each candidate scored in each world against a sampled
+field); the NFL's conditioned closed-form sim has no NBA counterpart yet.
 
 ## Choose (`choose.py`, `lineup_export.py`)
 
@@ -86,19 +90,32 @@ the NFL's conditioned closed-form sim has no NBA counterpart yet.
 venv/bin/python scripts/nba/choose.py                                   # prompts for weights per contest
 venv/bin/python scripts/nba/choose.py --no-prompt                       # config choose.* for everything
 venv/bin/python scripts/nba/choose.py --method portfolio --bankroll 3
+venv/bin/python scripts/nba/choose.py --method slate --bankroll-dollars 1000    # the whole slate as one book (the desk's Slate book)
 venv/bin/python scripts/nba/choose.py --weights-json '{"default": {"cash_pct": 0.3}, "123456": {"method": "portfolio"}}'
 ```
 
 Every candidate's per-world ROI row is first pulled toward the pool by its own standard error
-(`chooser.shrink_rows`, empirical Bayes), so neither method ranks on noise. Then per contest:
+(`chooser.shrink_rows`, empirical Bayes), so no method ranks on noise. Then:
 
-- **greedy** (default): quality = `cash_pct` × cash rate + `avg_roi_win` × average ROI, minus
+- **greedy** (default, per contest): quality = `cash_pct` × cash rate + `avg_roi_win` × average ROI, minus
   `diversity_lambda` × distance between the lineups' simulated point traces, picked one at a time.
-- **portfolio**: judge the book, not the lineup; each step adds the lineup that most raises the book's
+- **portfolio** (per contest): judge the book, not the lineup; each step adds the lineup that most raises the book's
   log utility summed over worlds, with the bankroll as `bankroll` × the entries' fees (default 3).
+- **slate** (every contest at once; `choose.choose_slate` on `ivan.core.slate_book`, shared with NFL): the whole slate
+  as one book in dollars from one bankroll (`bankroll_dollars`). The candidates are (contest, lineup) pairs carrying
+  fee × ROI in every world of the run's shared draw; the greedy adds the pair that most raises the mean over worlds of
+  log(1 + book / bankroll), each contest filling the entries file's count, a lineup at most once per contest, then an
+  exchange pass swaps picks one for one wherever that raises the utility. A lineup's vector differs per contest (its
+  payout table), so a steady casher lands in the flat or single-entry contests and a tail lineup in the top-heavy ones,
+  and the log spreads the book across worlds instead of stacking one script. It needs every contest's sim report to
+  say `contest.draw = "slate"` (one sim run over the entries file) and refuses otherwise. Its only inputs are the
+  entries file and the bankroll; a contest's own knobs are ignored when the desk's **Slate book** runs it, and a
+  contest set to `slate` in the contests section joins the book when plain **Choose** runs (the largest
+  `bankroll_dollars` among them wins). Unbacktested: see
+  [../nfl/notes/slate_book_2026-11-05.md](../nfl/notes/slate_book_2026-11-05.md).
 
-Config `choose`: `cash_pct` 0.5, `avg_roi_win` 0.5, `diversity_lambda` 0.1, `method` greedy, `bankroll` 3.
-The NFL's whole-slate "slate" method (one bankroll in dollars across contests) is not ported to NBA.
+Config `choose`: `cash_pct` 0.5, `avg_roi_win` 0.5, `diversity_lambda` 0.1, `method` greedy, `bankroll` 3,
+`bankroll_dollars` 1000.
 
 Outputs under `data/nba/output/`, stamped:
 
@@ -107,7 +124,7 @@ Outputs under `data/nba/output/`, stamped:
 | `chosen_entries.classic.<stamp>.csv` | the DK upload file: your entry rows with PG..UTIL filled as "Name (id)" |
 | `chosen_entries.exposures.<stamp>.csv` | player exposure across the chosen entries |
 | `chosen_entries.lineups.<stamp>.csv` | one row per player per chosen entry with the lineup's sim cash % and ROI |
-| `chosen_entries.choose.<stamp>.json` | what the chooser saw per contest: counts, the book, the greedy trace, cross-fit honest expectation |
+| `chosen_entries.choose.<stamp>.json` | what the chooser saw per contest: counts, the book, the greedy trace, cross-fit honest expectation; for the slate method the slate book under each contest it chose (`slate`: dollar distribution, exchange pass, per-contest split, placements) |
 | `chosen_entries.simroi.<stamp>.npz` | each pick's per-simulation ROI, for the luck and calibration tests |
 
 The desk's **exposures** view reads the newest choose run that covered the loaded slate's contests

@@ -16,7 +16,7 @@ UI in `src/ivan/web/` ([../web/nfl-app.md](../web/nfl-app.md)).
 | [backtest-and-validation.md](backtest-and-validation.md) | Replay, repeats, as-of models, the Backtest hub and the per-slate builds page, what retention keeps and lets go, validation per component, the models scoreboard, settle and the after-tax report. |
 | [overnight.md](overnight.md) | The nightly timer, the manual overnight reset, settle, the scrapes, model builds, the sync to the server. |
 | [data.md](data.md) | Config keys, tables, the data directory, the models directory. |
-| [notes/](notes/) | Dated plans: the slate chooser. |
+| [notes/](notes/) | Dated plans and findings: the slate chooser plan, the slate book built for NFL and NBA (2026-11-05), the dupe backtest. |
 
 ## The flow in one picture
 
@@ -40,7 +40,7 @@ after the games: nightly.py (timer) → box scores, DST table, settle (standings
 | Symptom | Look at |
 |---|---|
 | A projection is off | [projections.md](projections.md); the ingest's validation line (how many stats came from a market vs the salary model, where each K/DST came from); the Validation page's projections table split by `volume_source` |
-| Ownership or dupes are off | [ownership-and-dupes.md](ownership-and-dupes.md); `/dupes`; the Validation page's ownership check |
+| Ownership or dupes are off | [ownership-and-dupes.md](ownership-and-dupes.md); `/dupes`; the Validation page's ownership check; `backtest_dupes.py` (the dupe model forward over the season, the acceptance test for a model change) |
 | A contest's sim looks wrong | the Contests page Checks tab; `data/nfl/diagnostics/contest_*/report.json`; [simulation.md](simulation.md) |
 | The chooser stacked one game script | [chooser.md](chooser.md); the Choose page; `compare_choosers.py` |
 | A slate will not settle | [overnight.md](overnight.md): `data/nfl/logs/nightly.log`, the slate's status on `/backtest/plan` (`login_needed` means log in to DraftKings in the scraper's Chrome window) |
