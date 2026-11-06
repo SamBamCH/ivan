@@ -45,8 +45,11 @@ aliases (`names.ALIASES`: "Gregory Jackson" = "GG Jackson", "Yang Hansen" = "Han
 `normalize_name` from `names`, so the DK pool, Rotowire's starters and news, the props, the box scores, the play-by-play and
 the standings exports meet on the same key on input (2026-11-05: starters and headlines keyed with the suffix found no box
 scores). Rows stored before the rule are re-keyed once by `scripts/nba/normalize_names.py` (dry run by default, `--apply`
-writes: the history tables and every held slate's; a row whose new spelling already exists under the same unique key is
-left and listed). A new alias goes into `names.ALIASES` and the script is run again.
+writes): the history tables, every held slate's database (its pool `nba_player.name` included: a past slate never
+refreshes, so its pool would keep the old spelling and its players lose their history on the team page), its projection
+store records (the frames' index, the rotation inputs) and the days' edit files (pins CSV, drawn grids, scenarios, the
+published layer); a row whose new spelling already exists under the same unique key is left and listed. Stop the desk
+first or reload the slate afterwards. A new alias goes into `names.ALIASES` and the script is run again.
 
 The slate tables (`slates.SLATE_TABLES`) are created in the slate's file by `slates.ensure_slate_schema`, the rest in the
 history file by `ingest.ensure_schema`; a history table created in a slate file would shadow the real one, so the two
