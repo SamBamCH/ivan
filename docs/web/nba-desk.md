@@ -213,7 +213,7 @@ refresh, a scratch call) voids the mapping on its own (`ivan.sports.nba.mapping`
 re-projection, `ingest.void_stale_mappings` inside the refresh; `scripts/nba/mapping.py`): the grid and the team's positive
 minutes pins go, the model's rotation for the new pool shows, the card says so and reads unmapped; the old mapping is kept
 as a scenario assuming him in. The refresh note and the team's dot carry it ("mapping void: Johnson out"). Spot colours mark the slot each player
-inherited, with the key (spot number and its first holder) between the grid and the lanes under it; fouls are shown on
+inherited (the lanes under the grid name each spot's holders; there is no separate key); fouls are shown on
 historical views (a digit in a cell is that player's n-th foul in that minute). The row sums are the minutes projection; the foot row adds them up under `min` and, under `proj`, adds up the team's projected fantasy points beside its trailing average.
 Rookies carry a purple **R** badge with their games played this season (`R4`) and a purple edge on the name, on
 tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a player whose first NBA season is this one
