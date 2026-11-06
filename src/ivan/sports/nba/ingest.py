@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from ivan.core import raw
 from ivan.core.archive import archive_slate, ensure_tables as ensure_archive_tables
 from ivan.core.config import require_env
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.database.session import add_missing_columns
 from ivan.sports.common.draftkings import (get_players_for_slate, _derive_opponent_for_player,
                                            _parse_gametime_to_local, list_slates)
@@ -166,6 +166,8 @@ def fetch_slate(session: Session, draft_group_id: int, *, update_odds: bool, sta
         key = api_key or require_env("ODDS_API_KEY")
         odds = get_odds(ODDS_SPORT, key, sorted(out.teams), markets=NBA_MARKETS, raw_sport="nba")
         df = parse_odds(odds)
+        if len(df) and "player" in df.columns:
+            df["player"] = df["player"].map(normalize_name)        # the NBA key (names.py): the shared parser keeps a suffix the pool drops
         if df is None or len(df) == 0:
             raise IngestError("the-odds-api returned no NBA props; check ODDS_API_KEY and the plan. Nothing changed.")
         out.odds = df

@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Optional
 import numpy as np
 import pandas as pd
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
 from ivan.sports.nba.projection.groups import group_of as SK_group

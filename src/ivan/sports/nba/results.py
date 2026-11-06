@@ -34,7 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ivan.core import raw
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 SPORT = "nba"
 RECHECK = timedelta(minutes=10)          # how often an incomplete slate's exports are looked at again

@@ -50,6 +50,7 @@ Read in this order:
 |-------------------------------------------|-------------------------------------------------------------------------------------------------------------|
 | The desk shows one thing, the sim another | [game-day.md](game-day.md): only Publish writes the pool; sim/lateswap/generate from the desk publish first |
 | A player's minutes look wrong             | [projections.md](projections.md) minutes section; `scripts/nba/validate.py review --team XXX`               |
+| A starter or a headline has no history    | [data.md](data.md) player names: one key for every source (`names.py`); `scripts/nba/normalize_names.py` re-keys old rows |
 | The brother's desk is stale               | [overnight.md](overnight.md) feed section; [../web/nba-desk.md](../web/nba-desk.md) consumer mode           |
 | No box scores / scorecards this morning   | [overnight.md](overnight.md): `data/nba/logs/nightly.log`, `systemctl --user list-timers`                   |
 | Field ownership looks off                 | `scripts/nba/backtest_field.py` (real fields vs the model, [validation-and-backtests.md](validation-and-backtests.md)); [field-and-simulation.md](field-and-simulation.md) field model |

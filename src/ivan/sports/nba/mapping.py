@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Dict, Iterable, List, Optional
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import scenarios as SC
 from ivan.sports.nba.projection import rotation as ROT
 from ivan.sports.nba.projection.live import OUT_STATUSES, override_of

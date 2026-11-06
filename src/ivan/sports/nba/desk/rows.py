@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 import numpy as np
 import pandas as pd
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team

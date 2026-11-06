@@ -20,7 +20,7 @@ import pandas as pd
 import requests
 
 from ivan.core import raw
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.rates import DK_WEIGHTS
 
 Log = Callable[[str], None]

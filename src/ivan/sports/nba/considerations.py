@@ -24,7 +24,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 import pandas as pd
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 QUESTION_STATUSES = {"Q", "GTD", "D", "P"}

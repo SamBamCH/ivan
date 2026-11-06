@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import Dict
 from ivan.sports.nba.models import NBAPlayer
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 def _build_name_map(session: Session) -> Dict[str, int]:
     """Return normalized_name -> player_id map from NBAPlayer and ProjectionSnapshot."""

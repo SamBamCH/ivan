@@ -3,7 +3,7 @@ The lineup pool's slates: which draft group each generated lineup belongs to, an
 """
 from __future__ import annotations
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import Lineup, LineupPool, NBAPlayer
 
 

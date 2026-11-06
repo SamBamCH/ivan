@@ -35,7 +35,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.core import archive
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.paths import MODELS_DIR, NBA_DATA_DIR
 
 DERIVED_DIR = NBA_DATA_DIR / "derived" / "contests"

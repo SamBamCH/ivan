@@ -21,7 +21,7 @@ import re
 from datetime import datetime
 from typing import Dict, Optional
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.paths import NBA_DATA_DIR
 
 EXPERIENCE_JSON = NBA_DATA_DIR / "derived" / "players" / "experience.json"

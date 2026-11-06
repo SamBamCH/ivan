@@ -30,7 +30,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import slates as S
 
 MINUTES = 48

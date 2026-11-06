@@ -26,7 +26,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
 from ivan.core import raw
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBANews
 from ivan.sports.nba.projection.live import OUT_STATUSES
 

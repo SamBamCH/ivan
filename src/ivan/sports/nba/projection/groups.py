@@ -20,7 +20,7 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 GROUP_HALFLIFE = 10.0
 GROUP_SD_FLOOR = 8.0

@@ -17,7 +17,7 @@ from typing import Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 PROJ_MOVE = 3.0
 

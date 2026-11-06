@@ -12,7 +12,7 @@ A note belongs to its slate and stands until cleared; the slate's scorecard list
 """
 import argparse
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import notes as N
 from ivan.sports.nba.models import NBAPlayer
 from ivan.sports.nba import slates as S

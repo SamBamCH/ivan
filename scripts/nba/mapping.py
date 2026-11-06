@@ -14,7 +14,7 @@ from ivan.sports.nba import mapping as MAP
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.ingest import void_stale_mappings
 from ivan.sports.nba.models import NBAPlayer
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 
 def main() -> int:

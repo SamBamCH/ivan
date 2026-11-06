@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBAPlayerNote
 
 

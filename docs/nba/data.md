@@ -38,6 +38,16 @@ The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-0
 | `contest_sim_report` | slate | one report per simulated contest (field, payouts, scores, checks) | `sim.py` | no |
 | `raw_artifact` | history | the index of raw payloads (mirror of `raw/index.jsonl`) | `ivan.core.raw.store` | no |
 
+**Player names** are keyed one way in every NBA table and frame: `ivan.sports.nba.names.normalize_name` = the shared
+`ivan.core.utils.normalize_name` (accents, punctuation, case), then the generational suffix dropped (`jr`, `sr`, `ii`,
+`iii`, `iv`, `v` at the end: nba_api writes "Jimmy Butler III", DraftKings and Rotowire "Jimmy Butler"), then the NBA
+aliases (`names.ALIASES`: "Gregory Jackson" = "GG Jackson", "Yang Hansen" = "Hansen Yang", ...). Every NBA module imports
+`normalize_name` from `names`, so the DK pool, Rotowire's starters and news, the props, the box scores, the play-by-play and
+the standings exports meet on the same key on input (2026-11-05: starters and headlines keyed with the suffix found no box
+scores). Rows stored before the rule are re-keyed once by `scripts/nba/normalize_names.py` (dry run by default, `--apply`
+writes: the history tables and every held slate's; a row whose new spelling already exists under the same unique key is
+left and listed). A new alias goes into `names.ALIASES` and the script is run again.
+
 The slate tables (`slates.SLATE_TABLES`) are created in the slate's file by `slates.ensure_slate_schema`, the rest in the
 history file by `ingest.ensure_schema`; a history table created in a slate file would shadow the real one, so the two
 lists are explicit. A slate's lineups, sims and reports are its own and nothing clears them for another slate;

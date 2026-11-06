@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 
 from ivan.core import raw
 from ivan.core.seed import seed_for
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import contests as C
 from ivan.sports.nba.lineup_export import BASE_COLS, POSITION_ORDER, assign_player_order_classic, read_entries
 from ivan.sports.nba.models import HistoricalContest, NBAPlayer

@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 from ivan.core import feed
 from ivan.sports.nba import autopilot
-from ivan.core.utils import PROJECT_ROOT, normalize_name
+from ivan.core.utils import PROJECT_ROOT
+from ivan.sports.nba.names import normalize_name
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, project_team
 from ivan.sports.nba.projection import store as PSTORE

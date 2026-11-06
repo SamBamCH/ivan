@@ -414,7 +414,7 @@ def review_team(slate, team: str, proj: pd.DataFrame, recent: Dict[str, List[flo
     alerts: team-level notes (rotation depth, history sum). Flags, in rough order of cost when wrong:
       new team, no history, dnp-prone, above recent max, deep bench, market minutes gap, questionable, pinned
     """
-    from ivan.core.utils import normalize_name
+    from ivan.sports.nba.names import normalize_name
     from ivan.sports.nba.projection.live import OUT_STATUSES
     overrides = overrides or {}
     state = slate.state
@@ -515,7 +515,7 @@ def replay_slate(session: Session, draft_group: int, params=None, log: Log = pri
     What a tuning change would have projected for a slate already played.
     """
     from ivan.core import archive
-    from ivan.core.utils import normalize_name
+    from ivan.sports.nba.names import normalize_name
     from ivan.sports.nba.projection.engine import ProjectionParams, RosterPlayer, project_team
     from ivan.sports.nba.projection.history import build_history, load_box_scores
     from ivan.sports.nba.projection.live import OUT_STATUSES

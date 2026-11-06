@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBAPlayer, StartingLineups, NBAMarketRate, NBABase
 from .history import load_box_scores, build_history, HistoryState
 from .engine import project_team, RosterPlayer, ProjectionParams

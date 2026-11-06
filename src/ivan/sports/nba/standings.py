@@ -38,7 +38,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.core import archive, raw
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBAProjectionCapture
 from ivan.sports.nba.paths import NBA_DATA_DIR
 

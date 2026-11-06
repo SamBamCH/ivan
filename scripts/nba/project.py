@@ -26,7 +26,7 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, read_overrides
 from ivan.sports.nba import slates as S

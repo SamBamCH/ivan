@@ -7,7 +7,7 @@ from typing import List, Dict, Tuple
 import re
 
 from ivan.sports.nba.models import HistoricalContest, ClassicContestMetadata, ProjectionSnapshot
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 BINS = 20
 PROJECTION_MIN = 200.0  # Fixed lower bound for projection normalization

@@ -45,7 +45,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from ivan.core.utils import PROJECT_ROOT, normalize_name
+from ivan.core.utils import PROJECT_ROOT
+from ivan.sports.nba.names import normalize_name
 
 PUBLIC = "https://nba.prattflix.com/nba"
 TAILNET = "http://ivan.prattflix.com/nba"

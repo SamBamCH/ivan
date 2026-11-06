@@ -39,7 +39,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.core import archive
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import field_model as FM
 from ivan.sports.nba import standings as S
 from ivan.sports.nba.paths import DIAG_DIR, NBA_DATA_DIR

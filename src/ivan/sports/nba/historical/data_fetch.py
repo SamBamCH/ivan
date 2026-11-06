@@ -11,7 +11,7 @@ from requests.exceptions import ReadTimeout, ConnectionError, RequestException
 import pandas as pd
 from ivan.database.session import init_db, get_session
 from ivan.sports.nba.models import StartingLineups, NBAStat
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 
 from ivan.sports.nba.historical.data_clean import _transfer_boxscore_to_model
 

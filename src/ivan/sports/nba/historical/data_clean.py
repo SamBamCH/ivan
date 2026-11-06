@@ -1,5 +1,5 @@
 import pandas as pd
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from pathlib import Path
 from datetime import timedelta
 import shutil

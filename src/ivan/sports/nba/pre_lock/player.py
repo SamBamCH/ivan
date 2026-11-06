@@ -16,7 +16,7 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBAPlayer, ProjectionSnapshot
 from ivan.sports.nba.projection.correlation import (load_league, PairHistory, build_game_correlation,
                                                     draw_from_marginals)

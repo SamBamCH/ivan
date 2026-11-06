@@ -41,7 +41,7 @@ from sqlalchemy import Column, Date, Float, Integer, String, UniqueConstraint, t
 from sqlalchemy.orm import Session
 
 from ivan.core import raw
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBABase
 
 Log = Callable[[str], None]

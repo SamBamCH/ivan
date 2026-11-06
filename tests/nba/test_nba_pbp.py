@@ -95,7 +95,7 @@ def test_fouls_are_resolved_counted_and_technicals_kept_apart():
     one = f[f.player_name == "a one"]
     assert one.foul_no.tolist() == [1, 2, None, 3] and one.personal.tolist() == [1, 1, 0, 1]
     assert one.elapsed.tolist() == [120.0, 240.0, 1080.0, 1140.0] and one.period.tolist() == [1, 1, 2, 2]
-    smith = f[f.player_name == "jabari smith jr"]
+    smith = f[f.player_name == "jabari smith"]                          # the NBA key drops the suffix (ivan.sports.nba.names)
     assert smith.foul_no.tolist() == [1, 2] and smith.kind.tolist() == ["Loose Ball", "Personal"]
 
 

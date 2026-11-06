@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from ivan.sports.nba import scenarios as SC
 from typing import Optional
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection import rotation as ROT
 from .state import QUESTION_STATUSES
 from ivan.sports.nba import slates as S

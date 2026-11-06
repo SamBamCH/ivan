@@ -49,7 +49,7 @@ def main() -> int:
 
 def print_slate(session) -> int:
     """The three lists of newsfeed.slate_news (what the desk's news table shows), as text."""
-    from ivan.core.utils import normalize_name
+    from ivan.sports.nba.names import normalize_name
     from ivan.sports.nba.projection.live import LiveSlate, read_overrides_full
     slate = LiveSlate(session)
     calls = {}

@@ -28,7 +28,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.core.seed import seed_for
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.models import NBAPlayer
 from ivan.sports.nba.paths import DIAG_DIR, MODELS_DIR
 from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer
@@ -151,7 +151,7 @@ def refresh_public_projection(session: Session, history, log: Log = print, on: O
     # ownership are then built on it (the field key carries pub_fpts, so the field is re-sampled)
     try:
         from ivan.sports.nba.projection.live import read_overrides_full
-        from ivan.core.utils import normalize_name
+        from ivan.sports.nba.names import normalize_name
         ov = read_overrides_full()
     except Exception:   # noqa: BLE001
         ov = {}
