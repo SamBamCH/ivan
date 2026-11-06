@@ -70,7 +70,8 @@ or when news breaks.
    background (the board shows "refreshing from the laptop…" and reloads when it is in). Every refresh
    reads the news too; the public field and ownership are not rebuilt by it.
    2 **Field + ownership** (`scripts/nba/field_ownership.py`, about 45 s). When it is done the page reloads on the new
-   ownership (the status poll that finds a field or sim job finished answers `HX-Refresh`; `pipeline.POOL_WRITERS`).
+   ownership (every job reloads the page when it is done: the status poll that finds a job finished answers `HX-Refresh`;
+   a failed job keeps the panel and its log on the screen).
    Beside it **the chain**: `pool HH:MM › snapshot › field › lineups › sim › picks` (`_chain_info`), the
    pool's time being its newest write (any edit, refresh or `project.py`) and each stage the time of its last run on
    this desk (the job runner; the snapshot from the capture table): green when built after the pool's last write,
@@ -283,8 +284,10 @@ needs, every contest slices it, and the largest contest's field becomes the owne
 **Field + ownership** (`/pipeline/field` = `scripts/nba/field_ownership.py`, about 45s) builds the field on
 the stored public projection and writes ownership from it, on demand; nothing else does on a slate day. The desk warns
 when a team's mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
-`/pipeline/status`, cancel at `/pipeline/cancel/<job id>`, logs under `data/nba/jobs/`. The entries upload
-(`/entries`, the contests section) replaces `data/nba/input/entries.csv`.
+`/pipeline/status` (polled every 2 s while a job runs; the poll that finds the job done reloads the whole page, so every
+section shows what it wrote; a failed job leaves its log on the screen), cancel at `/pipeline/cancel/<job id>`, logs
+under `data/nba/jobs/`. The entries upload (`/entries`, the contests section) replaces the slate's
+`data/nba/slates/<dg>/input/entries.csv`.
 
 ## Exposures (a section of pre-lock and post-lock: `GET /exposures`, `_nba_exposures.html`; `/pipeline/exposures` toggles the contests side panel's entries vs pool)
 
@@ -296,7 +299,10 @@ pub, status (OUT struck in red), value; team totals; sortable.
 ## Late swap (post-lock, view `lateswap`, `_nba_lateswap.html`)
 
 Under the buttons, **Upload entries CSV** (the same `/entries` upload as the contests section, with the file's time and
-entry count): after lock, the DraftKings entries export with the lineups as they stand, which is what the swap edits.
+entry count): after lock, the DraftKings entries export with the lineups as they stand, which is what the swap edits. The
+file is the slate's own (`slates/<dg>/input/entries.csv`): a new slate starts with none. A contest in it that the stored
+contest table puts on another draft group (an older slate's export) is listed apart in red and not swapped (the run logs
+"contest of slate N, not this slate; skipped"); the view says to upload this slate's export.
 
 Two buttons. **Fetch standings** (`/lateswap/fetch`, job `fetch_standings` = `scripts/nba/fetch_standings.py`;
 producer only) downloads every entries contest's standings export through the logged-in Chrome profile

@@ -17,7 +17,7 @@
   .bar > * { flex:0 0 auto } .bar form, .bar button { flex:0 0 auto }
   .bar .fresh { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis }  /* the freshness strip gives way first; the buttons never clip */
   .bar .spacer { flex:1 0 12px }
-  .bar select { font:inherit; font-size:13px; max-width:280px; padding:5px 8px } .bar .clock { font-variant-numeric:tabular-nums }
+  .bar select { font:inherit; font-size:13px; max-width:280px; padding:5px 8px }
   .bar label { font-size:12px; color:var(--muted); display:flex; gap:6px; align-items:center }
   .bar .brand { font-weight:700; font-size:16px } .bar .muted { color:var(--muted); font-size:12px }
   .bar form { display:inline } .bar button { font:inherit; font-size:13px; padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
@@ -358,7 +358,6 @@
   <span class="news-sum muted" title="when this slate's projection was last written: the laptop's refresh as pulled here{% if header.refreshed_at %} (the laptop refreshed it {{ header.refreshed_at.strftime('%H:%M') }}{% if header.refreshed_by %} by {{ header.refreshed_by }}{% endif %}{% if header.pulled_at %}, pulled here {{ header.pulled_at.strftime('%H:%M') }}{% endif %}){% endif %}, or a team re-figured on this desk by an edit. Refresh from laptop pulls this slate now; the server's timer pulls every slate every 30 minutes{% if prod %} · laptop autopilot {{ 'on' if prod.autopilot else 'off' }}{% endif %}">projections {% if header.pool_at %}<b>{{ header.pool_at.strftime('%H:%M') }}</b>{% elif header.pulled_at %}pulled <b>{{ header.pulled_at.strftime('%H:%M') }}</b>, not projected{% else %}not pulled yet{% endif %}</span>
   {% endif %}
   <span class="zoom" title="page size: fit fills the window's width; A− / A+ size by hand (remembered in this browser)"><button type="button" id="zoom-out">A−</button><button type="button" id="zoom-fit">fit</button><button type="button" id="zoom-in">A+</button></span>
-  <span class="muted clock">{{ now.strftime('%H:%M:%S') }}</span>
 </span>{% endcall %}
 
 </header>

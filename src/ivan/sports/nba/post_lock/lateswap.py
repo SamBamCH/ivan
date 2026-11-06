@@ -52,7 +52,7 @@ from ivan.core.seed import seed_for
 from ivan.core.utils import normalize_name
 from ivan.sports.nba import contests as C
 from ivan.sports.nba.lineup_export import BASE_COLS, POSITION_ORDER, assign_player_order_classic, read_entries
-from ivan.sports.nba.models import NBAPlayer
+from ivan.sports.nba.models import HistoricalContest, NBAPlayer
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
 from ivan.sports.nba.pre_lock.lineup_generation import SLOT_NAMES, FieldPlayer, generate_single_classic_lineup
@@ -588,6 +588,17 @@ def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = No
                settings=dict(candidates=n_candidates, field_cap=field_cap, sims=num_sims, live=use_live, shared_field=shared_field),
                contests=[], failed=[], field_source=None)
     wanted = [int(cid) for cid in by_contest if not only or int(cid) in {int(x) for x in only}]
+    # the entries belong to the slate: a contest the stored contest table puts on another draft group (an older slate's export
+    # left in the file) is left alone and said so (its players are not in this pool)
+    dg = S.current_or_none()
+    if dg is not None and wanted:
+        groups = {int(c): g for c, g in session.query(HistoricalContest.contest_id, HistoricalContest.draft_group_id)
+                  .filter(HistoricalContest.contest_id.in_(wanted)).all()}
+        foreign = [c for c in wanted if groups.get(c) is not None and int(groups[c]) != int(dg)]
+        for c in foreign:
+            log(f"{c}: contest of slate {groups[c]}, not {dg}; skipped (this slate's entries are the ones to upload)")
+            out["failed"].append(dict(contest_id=c, why=f"contest of slate {groups[c]}, not this slate"))
+        wanted = [c for c in wanted if c not in foreign]
     shared = None
     if shared_field and wanted:
         try:
