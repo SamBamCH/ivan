@@ -227,8 +227,10 @@ else the archive's grid rows at that day's lock (`slate_backtest.grid_for_day`);
 orange played but not in ours, hatched in ours but sat, a player we projected who did not play is a DNP row, the minutes
 column reads played / ours, and the bar gives the share of the 240 player-minutes on the floor in both and where ours came
 from (`Desk.overlay_ours`, `/rotation/propose` with `overlay=1`; the box stays on across the dropdown's games).
-A past game's grid (the dropdown) has two small rows above the minutes: each team's running score at the end of every
-3 minutes, the team's own row green while it leads and red while it trails, the final and home/away beside the name,
+The past game's grid sits right under tonight's, always open, with no header of its own (the dropdown names the game).
+It has two small rows above the minutes: each team's running score at the end of every
+3 minutes, the team's own row green while it leads and red while it trails; the team, home/away and the final sit at the
+right end of the rows, past the minutes columns,
 and the score at each minute on hover (`Desk.score_strip` = `pbp.game_score`, the stored play-by-play, no fetch;
 overtime folds into the last cell like the grid; no rows when the game's feed is not on disk).
 

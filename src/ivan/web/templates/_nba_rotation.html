@@ -25,22 +25,22 @@
   {% if not rot.rows %}<div class="muted small rot-empty">{% if rot.kind == 'last' or rot.kind == 'none' %}no played game with stints yet{% elif not rot.has_history %}no stints for these players{% else %}nobody available{% endif %}</div>{% else %}
   {% set wide = rot.kind != 'last' and info is defined %}
   {# the left block is frozen: lock 16 + name 214 + pos 44 + 48 minutes x 12 = 850; the player columns scroll beside it #}
-  {% set rights = [('min', 54), ('hist', 72), ('fppm', 56), ('hfppm', 60), ('proj', 78), ('sim', 54), ('val', 44), ('pub', 54), ('pval', 44), ('own', 42)] if wide else [('min', 44), ('pf', 36)] %}
+  {% set rights = [('min', 54), ('hist', 72), ('fppm', 56), ('hfppm', 60), ('proj', 78), ('sim', 54), ('val', 44), ('pub', 54), ('pval', 44), ('own', 42)] if wide else ([('min', 44), ('pf', 36), ('lab', 200)] if rot.kind == 'last' and rot.score else [('min', 44), ('pf', 36)]) %}
   {% set tw = 850 + (rights|map(attribute=1)|sum) %}
   <div class="grid-scroll">
   <table class="rot-grid {% if rot.kind == 'last' %}hist{% endif %} {% if wide %}wide{% endif %}" style="width:{{ tw }}px;min-width:{{ tw }}px" {% if rot.shares_json %}data-shares='{{ rot.shares_json }}'{% endif %}>
     <colgroup><col style="width:16px"><col style="width:214px"><col style="width:44px">{% for m in range(48) %}<col style="width:12px">{% endfor %}{% for k, w in rights %}<col style="width:{{ w }}px">{% endfor %}</colgroup>
     <thead>{% if rot.kind == 'last' and rot.score %}{% set sc = rot.score %}
     {% for side in ('us', 'them') %}<tr class="score-row {{ side }}">
-      <th class="rl fz" style="left:0"></th><th class="rn fz score-lab" style="left:16px" colspan="2" title="the running score at the end of every {{ sc.step }} minutes (stored play-by-play); hover a cell for each minute{% if sc.overtime %} · overtime folded into the last cell{% endif %}">{% if side == 'us' %}{{ sc.team }}{% else %}{{ sc.opp }}{% endif %} <span class="muted">{% if side == 'us' %}{{ 'home' if sc.home else 'away' }} · final {{ sc.final[0] }}-{{ sc.final[1] }}{% if sc.overtime %} OT{% endif %}{% else %}score every {{ sc.step }}'{% endif %}</span></th>
+      <th class="rl fz" style="left:0"></th><th class="rn fz" style="left:16px" colspan="2"></th>
       {% for c in sc.cells %}<th class="sc fz {% if c.start % 12 == 0 %}q{% endif %} {% if side == 'us' %}{% if c.margin > 0 %}lead{% elif c.margin < 0 %}trail{% endif %}{% endif %}" colspan="{{ sc.step }}" style="left:{{ 274 + c.start * 12 }}px" title="{{ sc.team }}-{{ sc.opp }} · {{ c.tip }}">{{ c.us if side == 'us' else c.them }}</th>{% endfor %}
-      <th colspan="{{ rights|length }}"></th>
+      <th class="px" colspan="2"></th><th class="score-lab" title="the running score at the end of every {{ sc.step }} minutes (stored play-by-play); hover a cell for each minute{% if sc.overtime %} · overtime folded into the last cell{% endif %}">{% if side == 'us' %}{{ sc.team }}{% else %}{{ sc.opp }}{% endif %} <span class="muted">{% if side == 'us' %}{{ 'home' if sc.home else 'away' }} · final {{ sc.final[0] }}-{{ sc.final[1] }}{% if sc.overtime %} OT{% endif %}{% else %}score every {{ sc.step }}'{% endif %}</span></th>
     </tr>{% endfor %}{% endif %}
     <tr>
       <th class="rl fz" style="left:0" title="locked rows are held exactly; click to unlock"></th><th class="rn fz" style="left:16px">player</th><th class="pos fz" style="left:230px" title="starter call (S = starts; click to flip) · position">st · pos</th>
       {% for m in range(48) %}<th class="rc fz {% if m % 12 == 0 %}q{% endif %}" style="left:{{ 274 + m * 12 }}px">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% elif m % 6 == 0 %}·{% endif %}</th>{% endfor %}
       {% if wide %}<th class="px n" title="projected minutes: the grid's row (type a number to pin, 0 scratches, blank hands him back to the grid)">min</th><th class="px n" title="this season's minutes per game; hover for the recent games">hist min</th><th class="px n" title="projected fantasy points per minute (green = from the props; type to override)">fppm</th><th class="px n" title="this season's fantasy points per minute">hist fppm</th><th class="px n ours" title="the model's projection ± sd; hover for the props behind it">proj</th><th class="px n ours" title="the fantasy points the sim and the lineups use: the model's unless you type a number here (blank = the model's)">sim</th><th class="px n" title="the sim's number per $1k">val</th><th class="px n pubh" title="the PUBLIC projection the field and ownership are built on: the replica's unless you type a number here (blank = the replica's; the field is rebuilt on a change)">pub</th><th class="px n pubh" title="the public projection per $1k">val</th><th class="px n" title="projected ownership (the field)">own</th>
-      {% else %}<th class="px n" title="minutes played">min</th><th class="px n" title="personal fouls">pf</th>{% endif %}
+      {% else %}<th class="px n" title="minutes played">min</th><th class="px n" title="personal fouls">pf</th>{% if rot.score %}<th class="px"></th>{% endif %}{% endif %}
     </tr></thead>
     <tbody class="rows">
     {% for r in rot.rows %}{% set p = info.get(r.key) if wide else none %}
@@ -69,7 +69,7 @@
         <td class="px n">{{ '%.0f%%'|format(p.own) if p.own is not none else '—' }}</td>
         {% else %}<td class="px" colspan="10"></td>{% endif %}
         {% else %}
-        <td class="px n {% if r.foul_short %}fshort{% endif %}" {% if r.min_ours is defined %}title="played {{ r.minutes }} · ours {{ r.min_ours }}"{% endif %}>{{ r.minutes }}{% if r.min_ours is defined %}<span class="muted small">/{{ r.min_ours }}</span>{% endif %}</td><td class="px n pf {% if r.pf and r.pf >= 4 %}hi{% endif %}">{% if r.pf %}{{ r.pf }}{% endif %}</td>
+        <td class="px n {% if r.foul_short %}fshort{% endif %}" {% if r.min_ours is defined %}title="played {{ r.minutes }} · ours {{ r.min_ours }}"{% endif %}>{{ r.minutes }}{% if r.min_ours is defined %}<span class="muted small">/{{ r.min_ours }}</span>{% endif %}</td><td class="px n pf {% if r.pf and r.pf >= 4 %}hi{% endif %}">{% if r.pf %}{{ r.pf }}{% endif %}</td>{% if rot.score %}<td class="px"></td>{% endif %}
         {% endif %}
       </tr>
     {% endfor %}
