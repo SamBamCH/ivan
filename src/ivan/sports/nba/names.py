@@ -24,17 +24,13 @@ SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 # the spelling the other sources use -> the one nba_api's box scores use (after the shared normalize and the suffix drop);
 # both sides are written normalized
 ALIASES = {
-    "gregory jackson": "gg jackson",
-    "yang hansen": "hansen yang",
-    "nicolas claxton": "nic claxton",
-    "herbert jones": "herb jones",
+    "gregory jackson": "gg jackson",       # GG Jackson II: the books and Rotowire write the given name
+    "yang hansen": "hansen yang",          # Rotowire writes the family name first
     "cameron thomas": "cam thomas",
+    "kenyon martin": "kj martin",          # Kenyon Martin Jr.
+    "ronald holland": "ron holland",       # the shared overrides map "ronald holland ii"; without the suffix it reaches here
+    "nicolas claxton": "nic claxton",      # the shared overrides map it too; kept so the rule reads whole here
     "alexandre sarr": "alex sarr",
-    "moritz wagner": "moe wagner",
-    "kenyon martin": "kj martin",
-    "ronald holland": "ron holland",
-    "jeenathan williams": "nate williams",
-    "trey murphy iii": "trey murphy",
 }
 
 
