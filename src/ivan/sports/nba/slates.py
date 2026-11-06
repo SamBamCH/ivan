@@ -298,11 +298,11 @@ def main_slate_today(now: Optional[datetime] = None, root: Optional[Path] = None
     return best[1] if best else None
 
 
-def resolve(arg: Optional[str] = None, root: Optional[Path] = None) -> int:
+def resolve(arg: Optional[str] = None, root: Optional[Path] = None, now: Optional[datetime] = None) -> int:
     """The slate a script works: --slate DG when given, else today's main held slate; NoSlate with the held list otherwise."""
     if arg not in (None, ""):
         return int(arg)
-    dg = main_slate_today(root=root)
+    dg = main_slate_today(now, root=root)
     if dg is None:
         have = ", ".join(str(d) for d in held(root)) or "none"
         raise NoSlate(f"no open slate today on this machine; give --slate DG (held: {have})")
@@ -326,6 +326,18 @@ def open(arg=None, *, create: bool = False):
     use(dg)
     ensure_schema(init_db("nba"))
     return dg, session(dg)
+
+
+def open_any(arg=None, root: Optional[Path] = None):
+    """The entry of a script that spans slates (standings, the field backtest): --slate DG when given, else today's main held
+    slate, else the newest held slate (2026-11-06: `standings.py status` refused to run the morning after, when no slate was
+    open). Any held slate's session reaches the shared history, which is what these scripts read."""
+    if arg in (None, "") and main_slate_today(root=root) is None:
+        have = held(root)
+        if not have:
+            raise NoSlate("no slate held on this machine; scripts/nba/ingest.py --draft-group DG fetches one")
+        arg = have[0]
+    return open(arg)
 
 
 # ------------------------------------------------------------------------------ engines

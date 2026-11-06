@@ -25,7 +25,8 @@ venv/bin/python scripts/nba/ingest.py --draft-group 155647 --update-odds  # also
 
 `ingest.py` and the desk use the same transaction (`ingest.refresh_pool`) on the slate's own database, so the script can
 run while the desk is up; the desk shows "new data · load". Every other script takes `--slate DG` (default: today's main
-held slate, `slates.resolve`).
+held slate, `slates.resolve`); the scripts that span slates (`standings.py`, `backtest_field.py`; `slates.open_any`) fall
+back to the newest held slate on a day with no open one, since any slate's session reaches the shared history.
 
 ## 2. Refresh through the day
 
