@@ -328,9 +328,9 @@ def test_nba_refresh_shows_a_progress_banner_with_its_log(open_site):
     assert r.headers.get("HX-Refresh") == "true"
 
 
-def test_nba_run_estimate_guards_the_lock(open_site, monkeypatch):
-    """The knobs popover's estimate answers for the step's knobs, and a run the estimate puts inside the margin before lock is not
-    started unless "run anyway" is ticked; the job's record carries the estimate."""
+def test_nba_run_estimate_warns_but_never_refuses(open_site, monkeypatch):
+    """The knobs popover's estimate answers for the step's knobs; a run the estimate puts inside the margin before lock starts
+    anyway with a "heads up" flash (no run-anyway box, nothing refused); the job's record carries the estimate."""
     from ivan.web import nba as D
     from ivan.web.nba import pipeline as P
     from ivan.sports.nba import job_time as JT
@@ -347,12 +347,10 @@ def test_nba_run_estimate_guards_the_lock(open_site, monkeypatch):
     monkeypatch.setattr(P, "capture_pool", lambda *a, **k: type("I", (), {"players": 1})())
     r = open_site.post(f"/nba/{day}/{dg}/pipeline/sim", data={"sims": "1000", "field_cap": "10000"})
     assert r.status_code == 200
+    assert len(submitted) == 1 and submitted[0][0] == "sim" and submitted[0][1]["estimate"] == 360000
+    assert "not started:" not in r.text and "run anyway" not in r.text                                 # the refusal flash is gone
     if has_lock and min(p.gametime for p in d.slate.players if p.gametime) > __import__("datetime").datetime.now():
-        assert submitted == [] and "not started" in r.text and "run anyway" in r.text                  # inside the margin: refused
-        r = open_site.post(f"/nba/{day}/{dg}/pipeline/sim", data={"sims": "1000", "field_cap": "10000", "force": "1"})
-        assert r.status_code == 200 and len(submitted) == 1 and submitted[0][0] == "sim" and submitted[0][1]["estimate"] == 360000
-    else:
-        assert len(submitted) == 1                                                                      # a locked or lockless slate: nothing to beat
+        assert "heads up" in r.text                                                                     # inside the margin: warned, started
 
 
 def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(open_site, monkeypatch):

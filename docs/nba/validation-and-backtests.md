@@ -150,7 +150,9 @@ share, max copies, salary left. Across contests: calibration (players binned by 
 real mean), bias by salary tier, by starter and by real ownership, the largest misses. Output under
 `data/nba/diagnostics/field_backtest/<stamp>/` (`report.txt`, `contests.csv`, `players.csv`, `summary.json`); the
 model field per slate is cached under `data/nba/derived/field_backtest/` by capture, public projection, parameters
-and seed, so a second run costs seconds. Findings: [notes/field_backtest_2026-11-05.md](notes/field_backtest_2026-11-05.md).
+and seed, so a second run costs seconds. Findings: [notes/field_backtest_2026-11-05.md](notes/field_backtest_2026-11-05.md);
+the sampler's knobs against simpler variants by slate size (one noise knob scaled by the game count matches the real
+fields better than the five-knob two-group model; not applied): [notes/field_sampler_ablation_2026-11-05.md](notes/field_sampler_ablation_2026-11-05.md).
 
 ## The field's parameters (`scripts/nba/calibrate_field.py`, `scripts/nba/field_model.py`)
 
