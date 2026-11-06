@@ -330,18 +330,20 @@ class DeskBase:
 
     @staticmethod
     def recent_games(box: pd.DataFrame, n: int = 10, fouls: Optional[dict] = None) -> dict:
-        """player -> his last n games played, newest first: (date, team, started, minutes, fppm, pf, foul_short). foul_short marks a
-        game with FOUL_SHORT_PF fouls or more and minutes under FOUL_SHORT_SHARE of his average over these games: the
-        minutes were probably cut by fouls, not by the coach's plan."""
+        """player -> his last n games in a box score, played or not (a DNP row shows the risk), newest first: (date, team, played,
+        started, minutes, fppm, pf, foul_short). foul_short marks a game with FOUL_SHORT_PF fouls or more and minutes under
+        FOUL_SHORT_SHARE of his average over the games he played: the minutes were probably cut by fouls, not by the coach's plan."""
         out = {}; fouls = fouls or {}
-        sub = box[box.played].sort_values(["game_date", "game_id"])
+        sub = box.sort_values(["game_date", "game_id"])
         for name, g in sub.groupby("player_name"):
             tail = g.tail(n)
-            avg = float(tail.minutes.mean()) if len(tail) else 0.0
+            played = tail[tail.played]
+            avg = float(played.minutes.mean()) if len(played) else 0.0
             rows = []
             for r in tail.itertuples():
                 pf = fouls.get((str(r.game_id), name))
-                rows.append(dict(date=str(r.game_date), team=r.team, started=bool(float(getattr(r, "starter", 0) or 0) > 0), minutes=float(r.minutes), fpts=float(r.dk_fpts),
+                rows.append(dict(date=str(r.game_date), team=r.team, played=bool(r.played), started=bool(float(getattr(r, "starter", 0) or 0) > 0),
+                                 minutes=float(r.minutes), fpts=float(r.dk_fpts),
                                  fpm=float(r.dk_fpts) / float(r.minutes) if r.minutes > 0 else None, pf=pf,
                                  foul_short=bool(pf is not None and pf >= FOUL_SHORT_PF and avg > 0 and float(r.minutes) < FOUL_SHORT_SHARE * avg)))
             out[name] = rows[::-1]

@@ -7,7 +7,6 @@
   {% if c.published and c.published.consumer %}{% if c.published.grid == 'published' or c.published.pins %}<span class="pill published" title="the producer's published grid and pins: Refresh pulls the latest; type over any number for your own view (blank goes back to the published one)">published{% if c.published.grid == 'local' %} · your grid{% endif %}</span>{% endif %}{% if c.published.own %}<span class="pill own" title="values you typed on top of the published projection; Clear locks drops them">{{ c.published.own }} of your own</span>{% endif %}{% endif %}
   {% if c.rotation.locked %}<span class="pill lk">{{ c.rotation.locked|length }} locked</span>{% endif %}
   {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
-  <span class="score" title="team projected fpts vs trailing">{{ c.team_fpts|round(0)|int }}{% if c.trailing %} / {{ c.trailing|round(0)|int }}{% endif %} fpts</span>
 </h2>
 <form class="news" hx-post="{{ root }}/team/{{ c.team }}/news" hx-target="#card-{{ c.team }}" hx-swap="innerHTML" title="late news in one move: the call, the team re-allocated and written to the pool, the next job queued">
   <b>late news</b>

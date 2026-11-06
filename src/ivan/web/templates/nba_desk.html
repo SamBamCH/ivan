@@ -81,7 +81,8 @@
   table.rot-grid tr.score-row th { font-size:9px; font-weight:600; height:13px; padding:0; color:var(--muted); background:var(--card); text-transform:none } table.rot-grid tr.score-row th.sc { text-align:center; font-variant-numeric:tabular-nums; border-left:1px solid var(--line) } table.rot-grid tr.score-row th.sc.q { border-left:2px solid #bbb }
   table.rot-grid tr.score-row.us th.sc { color:var(--ink) } table.rot-grid tr.score-row th.sc.lead { color:var(--ok) } table.rot-grid tr.score-row th.sc.trail { color:var(--bad) } table.rot-grid tr.score-row th.score-lab { text-align:left; font-size:10px; color:var(--ink) } table.rot-grid tr.score-row th.score-lab .muted { font-weight:400 }
   table.rot-grid tr.rookie td.rn { box-shadow:inset 3px 0 0 #7c3aed } table.rot-grid .rk { font-size:9px; font-weight:700; color:#fff; background:#7c3aed; border-radius:3px; padding:0 3px; margin-left:3px; cursor:help }   /* rookies: no NBA game before this season */
-  table.rot-grid .rsal { font-size:9px; color:var(--muted); font-weight:400; margin-left:3px } .status.drop { color:var(--warn) }
+  table.rot-grid .rsal { font-size:9px; color:var(--muted); font-weight:400; margin-left:3px } .status.drop { color:var(--warn) } .status.new { color:var(--accent) } .pop table.mini tr.dnp td { color:var(--bad) }
+  table.rot-grid tbody.spots-key td.spots { text-align:left; padding:4px 0 2px 4px; border-top:4px solid #fff; white-space:nowrap }
   table.rot-grid td.rn form.drop { display:inline; margin-left:4px } table.rot-grid td.rn form.drop button.x { font:inherit; font-size:11px; line-height:12px; padding:0 4px; border:0; background:none; color:#bbb; cursor:pointer; visibility:hidden } table.rot-grid tr:hover td.rn form.drop button.x { visibility:visible } table.rot-grid td.rn form.drop button.x:hover { color:var(--bad) }
   table.rot-grid td.rn form.inline { display:inline }
   .rot { margin-top:6px } .rot-pair .rot-game { margin-top:14px; padding-top:10px; border-top:1px dashed var(--line) } .rot-empty { padding:6px 0 }
@@ -378,12 +379,10 @@
       <span class="tip {% if g and g.mins_to_tip is not none and 0 < g.mins_to_tip < 60 %}soon{% endif %}">{% if g %}{{ g.teams[0].team }}{% if g.teams|length == 2 %} @ {{ g.teams[1].team }}{% endif %} · {{ g.tip.strftime('%a %H:%M') if g.tip else 'no tip time' }}{% if g.mins_to_tip is not none and g.mins_to_tip > 0 %} <span class="muted">in {{ (g.mins_to_tip // 60)|int }}h {{ (g.mins_to_tip % 60)|int }}m</span>{% endif %}{% else %}{{ team }}{% endif %}</span>
       {% if g and g.fav %}<span class="muted" title="the consensus spread of tonight's game">{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line for tonight's game</span>{% endif %}
       {% if g and g.teams|length == 2 %}{% set other = (g.teams|rejectattr('team', 'equalto', team)|first).team %}<span class="muted small">· <a class="other" href="{{ here }}{{ other }}/">the other side ({{ other }})</a></span>{% endif %}
-      <span class="spacer"></span>{% include "_nba_minfpts.html" %}
     </div>
     <div class="sides">
       <div class="side" id="card-{{ team }}" hx-get="{{ root }}/team/{{ team }}" hx-trigger="load" hx-swap="innerHTML"><div class="loading"><span class="spin"></span> loading {{ team }}…</div></div>
     </div>
-    <p class="muted" style="font-size:12px;margin:10px 0 0">Every edit on this page (a pin, a starter call, a painted row, a late-news call) re-projects {{ team }} and writes it into the pool at once: the slate page, the sim, the chooser and the other desk read what you see here. Leaving the page loses nothing.</p>
   </div>
   {% else %}
   <div id="board" hx-get="{{ root }}/board?view={{ view }}{% if dg %}&dg={{ dg }}{% endif %}" hx-trigger="load" hx-swap="innerHTML">

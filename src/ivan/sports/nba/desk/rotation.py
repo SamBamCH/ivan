@@ -60,7 +60,8 @@ class RotationMixin:
                            (ivan.sports.nba.projection.skeleton). Out players show their usual stretches faintly (the vacated
                            slots), players the schedule left off the floor are listed under the grid with an add button.
           source "propose" the same grid with every lock lifted (a preview, nothing saved)
-          source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute
+          source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute, the
+                           starters who had not started the game before flagged (new_starter)
         """
         from ivan.sports.nba import pbp as PBP
         from ivan.sports.nba.projection.live import OUT_STATUSES
@@ -78,35 +79,8 @@ class RotationMixin:
         games += [dict(g, season="last") for g in ROT.team_games(self.session, team, before=season_start, since=last_start, limit=100)]   # has barely played)
         rot = self.rot.get(team) or {}
         curve = rot.get("curve")
-        # which played game is the last time tonight's group played together: tonight's rotation (available, with history
-        # minutes, or a named starter) against each game's players with 5+ minutes; the dropdown says how close each one is
-        matches: list = []
-        if games:
-            try:
-                usual = {} if curve is None or curve.empty else {str(n): float(curve.loc[n, "minutes"]) for n in curve.index}
-                grid_now = rot.get("grid")                      # tonight's grid when it exists: its players with minutes are the group
-                if grid_now is not None and len(grid_now):
-                    tonight = {str(n): max(usual.get(str(n), 0.0), float(grid_now.loc[n].sum())) for n in grid_now.index if float(grid_now.loc[n].sum()) > 0 and not is_out.get(str(n), False)}
-                else:
-                    tonight = {n: usual.get(n, 0.0) for n, p in names.items() if not is_out[n] and (n in starters or usual.get(n, 0.0) >= ROTATION_MIN)}
-                matches = ROT.lineup_matches(games, ROT.played_sets(self.session, team, [g["game_id"] for g in games]), tonight)
-                oddities = ROT.game_oddities(self.session, team, [g["game_id"] for g in games], usual)
-                for m in matches:
-                    m.update(oddities.get(str(m["game_id"]), {}))
-                def label(m):
-                    if m["exact"]:
-                        return "same group"
-                    bits = [f"{n.split()[-1]} out" for n in sorted(m["missing"], key=lambda k: -m["missing"][k])[:2]] + \
-                           [f"{n.split()[-1]} played" for n in sorted(m["extra"], key=lambda k: -m["extra"][k])[:2]]
-                    more = len(m["missing"]) + len(m["extra"]) - len(bits)
-                    return ", ".join(bits) + (f" +{more}" if more > 0 else "")
-                for m in matches:
-                    m["match"] = label(m)
-                games = matches
-            except Exception:   # noqa: BLE001 - the match is a convenience; the latest game is the fallback
-                matches = []
         # the dropdown: date, opponent, the final from the team's side and how many of the five had not started the game
-        # before; the group match and the oddities stay on hover
+        # before
         try:
             scores = ROT.game_scores(self.session, [g["game_id"] for g in games])
             new_starters = ROT.starter_changes(self.session, team, games)
@@ -126,8 +100,7 @@ class RotationMixin:
                                                  f"{g['new_starters']} new starter{'s' if g['new_starters'] != 1 else ''}" if g["new_starters"] is not None else ""] if x)
             g["long"] = " · ".join(x for x in [str(g.get("game_date", "")), f"vs {g['opp']}" if g.get("opp") else "", g["final"],
                                                 f"{g['new_starters']} of the five had not started the game before" if g["new_starters"] is not None else "",
-                                                ("the last game" if i == 0 and g.get("season") == "this" else ""), ("tonight's group: " + g["match"]) if g.get("match") else "",
-                                                ("odd: " + ", ".join(g.get("reasons") or [])) if g.get("odd") else ""] if x)
+                                                ("the last game" if i == 0 and g.get("season") == "this" else "")] if x)
         proj = self.proj.get(team)
         targets = rot.get("targets") or {}
         base = dict(team=team, games=games, kind="none", drawn=False, locked=[], rows=[], counts=[], benched=[], game_id=None, last_game=None,
@@ -135,14 +108,13 @@ class RotationMixin:
                     fouls=False, owners=[])
 
         if source == "last":
-            # the default comes from this season when it has any game; last season's are there to pick, not to pick from
-            this_season = [m for m in matches if m.get("season") == "this"]
-            best = ROT.best_match(this_season or matches) if (game_id is None and matches) else None
-            if best is not None:
-                game_id = best["game_id"]
-            last = ROT.last_game_grid(self.session, team, since=season_start, game_id=game_id)
+            last = ROT.last_game_grid(self.session, team, since=season_start, game_id=game_id)      # the latest game unless one is picked
             if last is None:
                 return base
+            try:
+                fresh = ROT.new_starters(self.session, team, last["game_id"], last["game_date"])    # started this game, not the one before
+            except Exception:   # noqa: BLE001
+                fresh = set()
             grid = last["grid"]
             fouls: dict = {}
             try:
@@ -186,14 +158,12 @@ class RotationMixin:
                 for m, no in fouls.get(n, []):
                     cell_tips[m] = (f"foul {no}" if no is not None else "technical") + (f" · {cell_tips[m]}" if cell_tips[m] else "")
                 rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, status=((names[n].status or '').upper() if n in names else ''),
-                                 starter=bool(cells[0]), out=bool(is_out.get(n, False)), gone=n not in names, vacated=False, locked=False, minutes=mins, target=None,
+                                 starter=bool(cells[0]), new_starter=bool(cells[0]) and n in fresh, out=bool(is_out.get(n, False)), gone=n not in names, vacated=False, locked=False, minutes=mins, target=None,
                                  hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips,
                                  group=SK_group(names[n].position) if n in names else "wing", rank=ROT._spot_rank(names[n].position if n in names else None, None),
                                  foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
-            match = next((m for m in matches if str(m["game_id"]) == str(last["game_id"])), None)
             return {**base, "kind": "last", "rows": rows, "counts": ROT.column_counts(grid), "game_id": last["game_id"], "last_game": last["game_date"], "fouls": True,
-                    "score": self.score_strip(team, last["game_id"]),
-                    "owners": owners, "match": match, "games": games, "garbage_from": (match or {}).get("garbage_from")}
+                    "score": self.score_strip(team, last["game_id"]), "owners": owners, "games": games}
 
         grid = rot.get("grid")
         if grid is None or proj is None:
@@ -291,62 +261,12 @@ class RotationMixin:
         return {n: i for i, n in enumerate(names)}
 
     def game_grid(self, team: str, game_id: Optional[str] = None) -> dict:
-        """A played game's grid for the comparison under tonight's: rows in the same order as tonight's panel, then the rest by minutes."""
+        """A played game's grid for the panel under tonight's: rows in the same order as tonight's panel, then the rest by minutes."""
         rot = self.rotation(team, source="last", game_id=game_id)
         # the game's starters first (struck through when out tonight: those are the minutes to give away), then the bench
         rot["rows"] = self.mark_starter_rule(self.order_rows(rot.get("rows") or [], rot.get("owners") or []))
         rot["lanes"] = self.lanes_of(rot["rows"], rot.get("owners") or [])
-        if rot.get("game_id"):
-            try:
-                rot["proj"], rot["proj_meta"], rot["missed"] = self.game_projection(team, rot["game_id"], rot["last_game"], {r["key"] for r in rot["rows"]})
-            except Exception as e:   # noqa: BLE001 - the comparison is a convenience; the grid stands without it
-                rot["proj"], rot["proj_meta"], rot["missed"] = {}, dict(error=f"{type(e).__name__}: {e}"), []
         return rot
-
-    def game_projection(self, team: str, game_id: str, game_date, grid_keys: set) -> tuple[dict, dict, list]:
-        """
-        What we projected for this team's players at this game, next to what they did: the at-tip archive of the game
-        (scripts/nba/archive_at_lock.py) when one exists, else the last projection published before the tip, else the last
-        one captured for the game. Returns ({player: pmin, pfpts, psd, pstarter, min_act, fpts_act, status}, meta, missed)
-        where `missed` lists players we projected minutes for who are not on the grid (did not play).
-        """
-        from sqlalchemy import text as _t
-        day = str(game_date)[:10]
-        caps = pd.read_sql(_t("select captured_at, source, draft_group_id, gametime, player_name, status, starter, minutes_proj, fpts_mean, fpts_std, pinned "
-                              "from nba_projection_capture where team = :t and date(gametime) = :d and source in ('at_tip', 'ours')").bindparams(t=team, d=day),
-                           self.session.get_bind())
-        if caps.empty:
-            return {}, dict(none=True), []
-        caps["captured_at"] = pd.to_datetime(caps["captured_at"]); caps["gametime"] = pd.to_datetime(caps["gametime"])
-        tip = caps["gametime"].max()
-        at_tip = caps[caps.source == "at_tip"]
-        if len(at_tip):
-            pick, how = at_tip[at_tip.captured_at == at_tip.captured_at.max()], "at tip"
-        else:
-            before = caps[(caps.source == "ours") & (caps.captured_at <= tip)]
-            src = before if len(before) else caps[caps.source == "ours"]
-            pick, how = src[src.captured_at == src.captured_at.max()], ("published" if len(before) else "captured after the tip")
-        pick = pick.drop_duplicates("player_name", keep="last")
-        act = pd.read_sql(_t("select player_name, minutes, dk_fpts, position from nba_stats where game_id = :g and team_abbreviation = :t").bindparams(g=str(game_id), t=team),
-                          self.session.get_bind())
-        act_by = {str(r.player_name): r for r in act.itertuples()}
-        by, missed = {}, []
-        for r in pick.itertuples():
-            n = str(r.player_name); a = act_by.get(n)
-            d = dict(pmin=None if pd.isna(r.minutes_proj) else float(r.minutes_proj), pfpts=None if pd.isna(r.fpts_mean) else float(r.fpts_mean),
-                     psd=None if pd.isna(r.fpts_std) else float(r.fpts_std), pstarter=str(r.starter or ""), status=str(r.status or ""), pinned=bool(r.pinned),
-                     min_act=None if a is None else float(a.minutes), fpts_act=None if a is None else float(a.dk_fpts),
-                     started_act=bool(a is not None and a.position and a.position != "BENCH" and float(a.minutes) > 0))
-            by[n] = d
-            if n not in grid_keys and (d["pmin"] or 0) >= 1:
-                missed.append(dict(name=n, pmin=d["pmin"], pfpts=d["pfpts"], status=d["status"]))
-        missed.sort(key=lambda m: -(m["pmin"] or 0))
-        stamp = pick.captured_at.max().to_pydatetime()
-        meta = dict(how=how, captured_at=stamp, draft_group=int(pick.draft_group_id.iloc[0]) if pick.draft_group_id.notna().any() else None,
-                    before_tip=None if tip is None or pd.isna(tip) else (tip.to_pydatetime() - stamp).total_seconds() / 60.0,
-                    n=len(by), pmin_sum=float(pick.minutes_proj.fillna(0).sum()), pfpts_sum=float(pick.fpts_mean.fillna(0).sum()),
-                    min_sum=float(act.minutes.sum()) if len(act) else 0.0, fpts_sum=float(act.dk_fpts.sum()) if len(act) else 0.0)
-        return by, meta, missed
 
     @staticmethod
     def order_rows(rows: list[dict], owners: list[str]) -> list[dict]:

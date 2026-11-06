@@ -116,7 +116,7 @@ or when news breaks.
    win over the defaults. Then the exposures panel: the candidate pool or the chosen entries.
 6. **Exposures** (folded; loaded when opened, below).
 
-Hover popups (a projection's stat lines, a player's recent games with an `S` in the `st` column for a game he started) open after a short pause on the cell, beside it
+Hover popups (a projection's stat lines, a player's last ten box-score games with an `S` in the `st` column for a game he started and a red `DNP` row for a game he dressed and did not play) open after a short pause on the cell, beside it
 rather than over the rows below, and close as soon as the pointer leaves the cell; the cell and its row are marked
 while one is open.
 
@@ -208,13 +208,14 @@ refresh, a scratch call) voids the mapping on its own (`ivan.sports.nba.mapping`
 re-projection, `ingest.void_stale_mappings` inside the refresh; `scripts/nba/mapping.py`): the grid and the team's positive
 minutes pins go, the model's rotation for the new pool shows, the card says so and reads unmapped; the old mapping is kept
 as a scenario assuming him in. The refresh note and the team's dot carry it ("mapping void: Johnson out"). Spot colours mark the slot each player
-inherited; fouls are shown on historical views. The row sums are the minutes projection.
+inherited, with the key (spot number and its first holder) between the grid and the lanes under it; fouls are shown on
+historical views (a digit in a cell is that player's n-th foul in that minute). The row sums are the minutes projection; the foot row adds them up under `min` and, under `proj`, adds up the team's projected fantasy points beside its trailing average.
 Rookies carry a purple **R** badge with their games played this season (`R4`) and a purple edge on the name, on
 tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a player whose first NBA season is this one
 in nba_api's all-players list (`ivan.sports.nba.experience`, fetched by the nightly or `scripts/nba/experience.py
 fetch`), matched by name without suffixes, then by last name on his team; a name the list lacks is a rookie when no
 NBA game is on file before this season.
-The past-game dropdown lists the team's games with stints, this season then last: each option reads the date, the opponent, the final from the team's side (`W 112-105`) and how many of that night's five had not started the team's previous game (`2 new starters`; the oldest game in the list is compared with the game before it; blank when either five is unknown); hovering an option adds how close that game's group is to tonight's and why it was odd (`projection.rotation.game_scores` / `starter_changes`).
+The past-game dropdown lists the team's games with stints, this season then last: each option reads the date, the opponent, the final from the team's side (`W 112-105`) and how many of that night's five had not started the team's previous game (`2 new starters`; the oldest game in the list is compared with the game before it; blank when either five is unknown) (`projection.rotation.game_scores` / `starter_changes`). The default is the latest game. On the game's grid those starters carry a blue **NEW** badge (`new_starters`). The panel has no header line: the dropdown names the game.
 A past game's grid (the dropdown) has two small rows above the minutes: each team's running score at the end of every
 3 minutes, the team's own row green while it leads and red while it trails, the final and home/away beside the name,
 and the score at each minute on hover (`Desk.score_strip` = `pbp.game_score`, the stored play-by-play, no fetch;

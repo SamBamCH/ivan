@@ -391,6 +391,20 @@ def game_scores(session: Session, game_ids: Iterable[str]) -> Dict[str, Dict[str
     return out
 
 
+def new_starters(session: Session, team: str, game_id: str, game_date) -> set:
+    """The game's starters who had not started the team's previous game with stints; empty when either five is unknown."""
+    try:
+        d = date.fromisoformat(str(game_date)[:10])
+    except (ValueError, TypeError):
+        return set()
+    prior = team_games(session, team, before=d, limit=1)
+    if not prior:
+        return set()
+    five = game_starters(session, team, [str(game_id), prior[0]["game_id"]])
+    cur, prev = five.get(str(game_id)) or set(), five.get(str(prior[0]["game_id"])) or set()
+    return (cur - prev) if cur and prev else set()
+
+
 def starter_changes(session: Session, team: str, games: List[dict]) -> Dict[str, Optional[int]]:
     """
     {game_id: how many of the game's starters had not started the team's previous game} for `games` (team_games rows,
