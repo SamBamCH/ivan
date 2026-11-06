@@ -33,7 +33,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-model", action="store_true", help="skip the two-group field (lock and softmax ownership only)")
     a = ap.parse_args()
-    dg, session = S.open(a.slate)
+    dg, session = S.open_any(a.slate)                  # spans slates: any held slate's session reaches the history
     ids = [int(x) for x in a.contest_ids.split(",") if x.strip()] if a.contest_ids else None
     out = FB.run(session, field_size=a.field_size, workers=a.workers, seed=a.seed, since=a.since, until=a.until, contest_ids=ids,
                  with_model=not a.no_model, log=lambda m: print(m, flush=True))

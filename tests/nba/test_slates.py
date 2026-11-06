@@ -65,10 +65,27 @@ def test_held_open_and_main(root):
     S.create(103, lock=now + timedelta(days=1), games=12)                                      # tomorrow
     assert S.held() == [103, 102, 101, 100] and S.holds(101) and not S.holds(99)
     assert S.open_slates(now) == [101, 102, 103]
-    assert S.main_slate_today(now) == 102 and S.resolve(None) in S.held()
+    assert S.main_slate_today(now) == 102 and S.resolve(None, now=now) == 102                 # the test's clock, not the wall's
     assert S.resolve("101") == 101
     with pytest.raises(S.NoSlate):
         S.open(99)
+
+
+def test_open_any_falls_back_to_the_newest_held_slate(root, monkeypatch):
+    """A script that spans slates (standings, the field backtest) runs the morning after: with no open slate it opens the newest
+    held one; --slate still wins; nothing held is still an error."""
+    now = datetime(2026, 11, 6, 8, 0)
+    monkeypatch.setattr(S, "main_slate_today", lambda now_=None, root=None: None)
+    with pytest.raises(S.NoSlate):
+        S.open_any(None)
+    S.create(100, lock=now - timedelta(days=2), games=8)
+    S.create(101, lock=now - timedelta(days=1), games=3)
+    dg, sess = S.open_any(None)
+    assert dg == 101
+    sess.close()
+    dg, sess = S.open_any(100)
+    assert dg == 100
+    sess.close()
 
 
 def test_edits_are_the_days_shared_by_its_slates(root):

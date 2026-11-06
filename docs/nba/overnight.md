@@ -91,7 +91,8 @@ existed, so only the public contests were scraped and the desk's backtest scored
 mid-slate fetch. Raw exports go to `data/nba/raw/dk/standings/<contest id>/`, derived
 contests to `data/nba/derived/contests/<id>/` (`lineups.parquet` one row per unique lineup with copies,
 `players.csv` the side table joined to the pool, `field.json` summary with `final` and `locked_entries`).
-**DraftKings keeps standings about two weeks**, so scrape within days. The derived contests are what
+**DraftKings keeps standings about two weeks**, so scrape within days. The script runs on any day, open slate or
+not (`slates.open_any`: the newest held slate's session when none is open today). The derived contests are what
 `calibrate_field.py`, `field_model.py fit` and `backtest_field.py` learn from and are checked against.
 
 **Only a final export is a field.** The late swap's standings fetch (a minute after each tip) stores an export

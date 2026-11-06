@@ -44,7 +44,7 @@ def main() -> int:
     sub.choices["scrape"].add_argument("--no-derive", action="store_true")
     d = sub.add_parser("derive"); d.add_argument("--contest-ids", default=None)
     a = ap.parse_args()
-    dg, session = SL.open(a.slate)
+    dg, session = SL.open_any(a.slate)                 # spans slates: any held slate's session reaches the history (--slate to pick one)
     raw.ensure_tables(session.get_bind())
     now = datetime.now()
 
