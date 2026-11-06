@@ -56,7 +56,7 @@ def _box_scores(dg: int, day: date, root: Optional[Path] = None) -> dict:
     with eng.connect() as con:
         teams = {t for (t,) in con.execute(text("select distinct team from nba_player where team is not null")).all()}
         try:
-            have = {t for (t,) in con.execute(text("select distinct team from hist.nba_stats where game_date = :d").bindparams(d=day.isoformat())).all()}
+            have = {t for (t,) in con.execute(text("select distinct team_abbreviation from hist.nba_stats where date(game_date) = :d").bindparams(d=day.isoformat())).all()}
         except Exception:   # noqa: BLE001 - a history file without the table (a test)
             have = set()
     missing = sorted(t for t in teams if t not in have)

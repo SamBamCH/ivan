@@ -15,7 +15,7 @@ def root(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "SLATES_DIR", tmp_path / "slates")
     hist = tmp_path / "nba_history.sqlite"
     con = sqlite3.connect(hist)
-    con.execute("create table nba_stats (id integer primary key, player_name text, team text, game_date text, minutes real)")
+    con.execute("create table nba_stats (id integer primary key, player_name text, team_abbreviation text, game_date text, minutes real)")
     con.execute("insert into nba_stats values (1, 'a b', 'AAA', '2026-11-04', 30.0)")
     con.execute("insert into nba_stats values (2, 'c d', 'BBB', '2026-11-04', 30.0)")
     con.commit(); con.close()

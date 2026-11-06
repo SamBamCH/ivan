@@ -27,6 +27,15 @@ HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
 
 
+def static_version() -> int:
+    """The shared stylesheet's file time: the templates put it on the link (ivan.css?v=...), so a browser or the tunnel never
+    serves a changed stylesheet from its cache (2026-11-06: the calendar came up unstyled on a cached ivan.css)."""
+    try:
+        return int((HERE / "static" / "ivan.css").stat().st_mtime)
+    except OSError:
+        return 0
+
+
 def site_root(request: Request) -> str:
     """The main app's root: the sport sub-apps are mounted one level below it."""
     root = auth.root_of(request)
@@ -56,7 +65,7 @@ def ctx(request: Request, sport: Optional[Sport], days: Optional[list[Day]] = No
                 state=(status.get(d.iso) or {}).get("state", ""), why=(status.get(d.iso) or {}).get("why", "")) for d in (days or [])]
     return {"site": site, "root": root, "sport": sport, "sports": list(REGISTRY.values()), "days": days or [], "day": day, "slate": slate,
             "view": view, "views": sport.views if sport else [], "tools": sport.tools if sport else [],
-            "login": auth.configured(), "now": now, "status": status, "cal": cal}
+            "login": auth.configured(), "now": now, "status": status, "cal": cal, "v": static_version()}
 
 
 def install_picker(app: FastAPI, sport: Sport) -> None:
