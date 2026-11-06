@@ -33,6 +33,20 @@ column, and in the printed report with each player's minutes and points projecte
 built before a note existed gets it with `--force`. The desk's cards carry the same flags
 as `review`.
 
+## Is a day ready to backtest? (`ivan.sports.nba.readiness`, `scripts/nba/readiness.py`)
+
+```bash
+venv/bin/python scripts/nba/readiness.py                 # every day with a held past slate: ready / pending / failed, why
+venv/bin/python scripts/nba/readiness.py --slate 156176  # one slate: the box scores, the money, the scrape record
+```
+
+Per held past slate: **ready** when the box scores of every team of the slate are on file (`nba_stats` on the slate's day)
+and, where we played, the results ledger is complete (a final standings export of every contest of ours); **failed** when
+a fetch failed and nothing can be backtested until it is fixed (a standings scrape recorded failures or a needed login,
+`slates/<dg>/results/scrape.json`; box scores still missing 36 hours after lock; a ledger that cannot be read);
+**pending** otherwise. A day is failed when any of its slates is, ready when all are. The calendar in the bar and the
+picker's day list colour the day by it (green, red, none); the status is cached two minutes per process.
+
 ## One slate's results (`ivan.sports.nba.slate_backtest`, `scripts/nba/backtest_slate.py`, the desk's backtest view)
 
 Per past slate: our entries' results from DraftKings' **final** standings exports (a contest with only a mid-slate

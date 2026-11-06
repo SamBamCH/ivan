@@ -69,6 +69,10 @@ class Sport:
     tools: list[tuple[str, str]] = field(default_factory=list)   # (label, path under the sport root) for pages that are not one slate's
     ledger: Optional[Callable[[datetime], dict]] = None          # the money: {"overall": agg, "days": {iso: agg}} (ivan.sports.nba.results.ledger_days);
                                                                   # None on a machine that must not show it (a consumer desk)
+    day_status: Optional[Callable[[datetime], dict]] = None      # a past day's readiness for the backtest: {iso: {"state": ready|pending|failed, "why"}}
+                                                                  # (ivan.sports.nba.readiness.day_status); the calendar and the picker colour the day by it
+    actions: list = field(default_factory=list)                  # [{label, path, title}] sport-level buttons on the picker (POST to <root><path>), e.g. fetch upcoming
+    job: Optional[Callable[[], Optional[dict]]] = None           # the sport's running job for the picker: {"name", "status", "log"} or None
     default_view: Callable[[SlateInfo, datetime], str] = lambda s, now: "backtest"
     main_slate: Callable[[Day, datetime], Optional[SlateInfo]] = lambda d, now: main_slate(d)
     app: object = None                    # the mounted sub-application (FastAPI), None while it is not built

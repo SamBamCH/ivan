@@ -14,17 +14,30 @@ server's `ivan-web` unit runs the same on the Tailscale IP, port 80 ([../deploym
 ```
 
 The bar on every page is the frame (`ivan.web.frame`, `templates/_frame.html`): **Ivan › sport › day ›
-slate › view**, each a dropdown that goes where it says, ‹ › through the slates in time order, the sport's
-tools on the right, sign out. The page always shows the slate in the bar: a **day** opens on its main slate
+slate › view**, each going where it says, ‹ › through the slates in time order, the sport's
+tools on the right, sign out. The **day is a calendar**: the bar's day button opens one month at a time, a day with
+slates is a link (its number is how many), the open day is filled, today dashed, a day held on this machine ringed, and a
+**past day is coloured by its readiness for the backtest** (`Sport.day_status`, NBA: `ivan.sports.nba.readiness`,
+`scripts/nba/readiness.py`): **green** when every input is on file (the box scores of every team of its slates and, where
+we played, a final standings export of every contest of ours), **red** when a fetch failed and the day cannot be
+backtested until it is fixed (a standings scrape recorded a failure or a needed login, `slates/<dg>/results/scrape.json`;
+box scores still missing 36 hours after lock), **no colour** when nothing was attempted yet. The picker's day list carries
+the same colour as a left edge. The page always shows the slate in the bar: a **day** opens on its main slate
 (`/<sport>/<day>/` redirects to the held slate of that day, else the one with the most games, else its only
 one, `Sport.main_slate`; `?pick` shows the day's list instead, as does a day whose main slate cannot be told),
 and a slate's page shows that slate, fetching it first when the sport has to (the NBA desk loads a lobby slate
 it does not hold when its page is opened, [nba-desk.md](nba-desk.md)).
 
+A sport may put **actions** on its picker (`Sport.actions`, POST buttons under the heading) and show its sport-level
+**job** there (`Sport.job`: name, status, the log's tail; the page refreshes every 5 s while it runs). NBA (the laptop
+only): **Fetch upcoming slates** = `scripts/nba/fetch_upcoming.py` as a job: every classic slate the lobby lists (today,
+tomorrow) that the desk does not hold is loaded into its own directory, then every contest of those slates and each one's
+payout table are stored (free; a few minutes the first time, one request per payout table).
+
 | Piece | Module | What |
 |---|---|---|
 | main | `ivan.web.main` | builds the app: `/static`, the login, the home page, one sub-application per sport mounted at `/<sport>`. A sport whose module fails to import (a missing dependency, no database) is listed with the error and the rest of the site runs. `IVAN_SPORTS` or `--sports nba,nfl` mounts a subset. |
-| the sports | `ivan.web.sports` | `Sport`: key, label, the slate views, the tools, `days(now)` (the slate index the picker and the dropdowns read), `summary(now)` (the home tile). `SlateInfo` / `Day` are what the index returns. `REGISTRY` is what main mounted. |
+| the sports | `ivan.web.sports` | `Sport`: key, label, the slate views, the tools, `days(now)` (the slate index the picker and the calendar read), `summary(now)` (the home tile), `ledger` (the money), `day_status` (a past day's readiness), `actions` and `job` (the picker's buttons and running job). `SlateInfo` / `Day` are what the index returns. `REGISTRY` is what main mounted. |
 | the frame | `ivan.web.frame` | the bar's context (`ctx`), the picker pages installed at every sport's root (`install_picker`), the shared Jinja environment |
 | NBA | `ivan.web.nba` (package; model in `ivan.sports.nba.desk`) | the desk: pre-lock, players, post-lock (late swap), backtest, the team page. [nba-desk.md](nba-desk.md) |
 | NFL | `ivan.web.nfl` (package: `core.py`, `pipeline.py`, `backtest_hub.py`, `*_view.py`) | the desk (the NBA desk's look: games strip, actions, contests, the open game's correlation check, the pool), sim report, choose, exposures, backtest (the slate's builds); tools: the backtest runs hub, models, validation, dupes, jobs. [nfl-app.md](nfl-app.md) |

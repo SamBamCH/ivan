@@ -13,6 +13,14 @@
   {% macro money(x) %}{% if x is none %}—{% else %}{{ '-' if x < 0 else '+' }}${{ '%.2f'|format(x|abs) }}{% endif %}{% endmacro %}
   {% macro pct(x) %}{% if x is none %}—{% else %}{{ '%+.0f%%'|format(100 * x) }}{% endif %}{% endmacro %}
   <h1>{{ frame.sport.label }} <span class="muted small">pick a date, then a slate{% if day and day.slates|length > 1 %} · this day has {{ day.slates|length }}: the bar's day picks the main one{% endif %}</span></h1>
+  {% if frame.sport.actions or job or msg %}
+  <div class="sport-acts">
+    {% for a in frame.sport.actions %}<form method="post" action="{{ frame.root }}{{ a.path }}" style="display:inline"><button type="submit" title="{{ a.title }}" {% if job and job.status in ('running', 'queued') %}disabled{% endif %}>{{ a.label }}</button></form>{% endfor %}
+    {% if msg %}<span class="small">{{ msg }}</span>{% endif %}
+    {% if job %}<span class="job small"><b>{{ job.name }}</b> · {{ job.status }}{% if job.duration %} · {{ '%.0f'|format(job.duration) }} s{% endif %}{% if job.status in ('running', 'queued') %} · this page refreshes every 5 s{% endif %}</span>{% if job.log %}<pre>{{ job.log }}</pre>{% endif %}{% endif %}
+  </div>
+  {% if job and job.status in ('running', 'queued') %}<meta http-equiv="refresh" content="5">{% endif %}
+  {% endif %}
   {% if ledger %}{% set ov = ledger.overall %}
   <div class="ledger" title="what our entries made, from DraftKings' final standings exports and the payout tables (ivan.sports.nba.results); this machine only">
     {% if ledger.error %}<span class="muted small">results unavailable: {{ ledger.error }}</span>
@@ -28,8 +36,9 @@
       {% for d in days %}
         {% if d.day < frame.now.date() and not ns.past %}{% set ns.past = true %}{% if not loop.first %}<div class="gap"></div>{% endif %}{% endif %}
         {% set lg = ledger.days.get(d.iso) if ledger and ledger.days else none %}
-        <a href="{{ frame.root }}/{{ d.iso }}/?pick" class="{{ 'on' if day and d.day == day.day }}">
-          <span>{{ d.label }}</span><span class="n">{% if lg and lg.contests %}<b class="{{ 'lo' if lg.net < 0 else 'hi' }}" title="{{ pct(lg.roi) }} ROI on ${{ '%.2f'|format(lg.fees) }} · {{ lg.cashed }}/{{ lg.entries }} cashed{% if lg.incomplete %} · {{ lg.incomplete }} slate not final{% endif %}">{{ money(lg.net) }}</b> · {% elif lg and lg.unscored %}<b class="warn" title="contests played, none scraped final yet">unscored</b> · {% endif %}{{ d.slates|length }} slate{{ '' if d.slates|length == 1 else 's' }}{% if d.slates|selectattr('loaded')|list %} · held{% endif %}</span>
+        {% set st = frame.status.get(d.iso) if frame.status else none %}
+        <a href="{{ frame.root }}/{{ d.iso }}/?pick" class="{{ 'on' if day and d.day == day.day }} {% if st %}st-{{ st.state }}{% endif %}" {% if st %}title="{{ st.state }}{% if st.why %}: {{ st.why }}{% endif %}"{% endif %}>
+          <span>{{ d.label }}</span><span class="n">{% if st and st.state != 'pending' %}<span class="st {{ st.state }}">{{ st.state }}</span> · {% endif %}{% if lg and lg.contests %}<b class="{{ 'lo' if lg.net < 0 else 'hi' }}" title="{{ pct(lg.roi) }} ROI on ${{ '%.2f'|format(lg.fees) }} · {{ lg.cashed }}/{{ lg.entries }} cashed{% if lg.incomplete %} · {{ lg.incomplete }} slate not final{% endif %}">{{ money(lg.net) }}</b> · {% elif lg and lg.unscored %}<b class="warn" title="contests played, none scraped final yet">unscored</b> · {% endif %}{{ d.slates|length }} slate{{ '' if d.slates|length == 1 else 's' }}{% if d.slates|selectattr('loaded')|list %} · held{% endif %}</span>
         </a>
       {% else %}
         <p class="empty small">no slates known: the DraftKings lobby lists none and the archive is empty</p>

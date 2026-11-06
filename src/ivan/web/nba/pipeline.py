@@ -556,6 +556,20 @@ async def entries_upload(request: Request, file: UploadFile = File(...)):
     return Response(status_code=200, headers={"HX-Refresh": "true"})
 
 
+@app.post("/fetch-upcoming")
+def fetch_upcoming(request: Request):
+    """The picker's Fetch upcoming slates button = scripts/nba/fetch_upcoming.py as a job (no slate: the picker shows it): every
+    classic slate in the lobby not held here is loaded into its own directory, then every contest of those slates and each
+    one's payout table are stored. One job at a time with the slates' jobs (the runner is the sport's)."""
+    from urllib.parse import quote
+    if CONSUMER:
+        return RedirectResponse(auth.root_of(request) + "/?msg=" + quote("a consumer desk does not fetch DraftKings: the laptop does"), status_code=303)
+    if runner.current() is not None or any(j.is_active for j in runner.all()):
+        return RedirectResponse(auth.root_of(request) + "/?msg=" + quote("a job is running; the fetch waits for it: press again when it is done"), status_code=303)
+    runner.submit("fetch_upcoming", [sys.executable, str(SCRIPTS / "fetch_upcoming.py")], meta=dict(step="fetch_upcoming", slate=None))
+    return RedirectResponse(auth.root_of(request) + "/?msg=" + quote("fetching the upcoming slates, their contests and payouts"), status_code=303)
+
+
 @app.post("/slate")
 def switch_slate(request: Request, draft_group: int = Form(...), source: str = Form("lobby"), day: str = Form("")):
     """Load another slate (begin_switch): the picker's button and the slate page's fallback form; opening a slate's page starts

@@ -46,9 +46,17 @@ def ctx(request: Request, sport: Optional[Sport], days: Optional[list[Day]] = No
         days = sport.days(now)
     if sport and slate is not None and day is None:
         day = next((d for d in days or [] if d.day == slate.day), None)
+    status = {}
+    if sport and sport.day_status is not None:                        # a past day's readiness: the calendar's and the picker's colour
+        try:
+            status = sport.day_status(now) or {}
+        except Exception as e:   # noqa: BLE001 - a page must open without it
+            status = {"error": f"{type(e).__name__}: {e}"}
+    cal = [dict(iso=d.iso, label=d.label, n=len(d.slates), held=any(s.loaded for s in d.slates),
+                state=(status.get(d.iso) or {}).get("state", ""), why=(status.get(d.iso) or {}).get("why", "")) for d in (days or [])]
     return {"site": site, "root": root, "sport": sport, "sports": list(REGISTRY.values()), "days": days or [], "day": day, "slate": slate,
             "view": view, "views": sport.views if sport else [], "tools": sport.tools if sport else [],
-            "login": auth.configured(), "now": now}
+            "login": auth.configured(), "now": now, "status": status, "cal": cal}
 
 
 def install_picker(app: FastAPI, sport: Sport) -> None:
@@ -68,8 +76,14 @@ def install_picker(app: FastAPI, sport: Sport) -> None:
                 ledger = sport.ledger(now)
             except Exception as e:   # noqa: BLE001 - the picker must open even when a ledger cannot be read
                 ledger = {"error": f"{type(e).__name__}: {e}", "overall": None, "days": {}}
+        job = None
+        if sport.job is not None:
+            try:
+                job = sport.job()
+            except Exception:   # noqa: BLE001
+                job = None
         return templates.TemplateResponse(request, "picker.html", {"frame": ctx(request, sport, days, day, None, None, now), "day": day, "days": days,
-                                                                   "ledger": ledger})
+                                                                   "ledger": ledger, "job": job, "msg": request.query_params.get("msg", "")})
 
     @app.get("/", response_class=HTMLResponse)
     def picker_root(request: Request):

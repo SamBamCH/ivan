@@ -95,6 +95,10 @@ contests to `data/nba/derived/contests/<id>/` (`lineups.parquet` one row per uni
 not (`slates.open_any`: the newest held slate's session when none is open today). The derived contests are what
 `calibrate_field.py`, `field_model.py fit` and `backtest_field.py` learn from and are checked against.
 
+`scrape` notes its outcome on every held slate it touched (`standings.record_scrape` → `slates/<dg>/results/scrape.json`:
+the contests, which exported, which failed, whether a login was needed); a failure there turns the day **red** on the
+calendar and the picker until a later scrape succeeds (`ivan.sports.nba.readiness`, [../web/README.md](../web/README.md)).
+
 **Only a final export is a field.** The late swap's standings fetch (a minute after each tip) stores an export
 too, taken while games were on: the slots of players not yet tipped read `LOCKED`. `standings.export_is_final`
 calls an export final when at most 2 % of its entries show a locked slot (`PARTIAL_MAX_SHARE`); `status` lists a
@@ -138,6 +142,7 @@ consumer that cannot receive rsync.
 ## Checking that last night happened
 
 ```bash
+venv/bin/python scripts/nba/readiness.py                              # every past day: ready / pending / failed and why (the calendar's colours)
 grep -n "box scores for\|scorecards written\|stints\|standings derived\|pushed" data/nba/logs/nightly.log | tail
 venv/bin/python scripts/nba/validate.py history                      # the headline numbers per scored slate
 venv/bin/python scripts/nba/standings.py status --days 3

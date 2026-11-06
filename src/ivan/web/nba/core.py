@@ -14,6 +14,7 @@ import contextvars
 import os
 import re
 import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -314,12 +315,31 @@ def nba_summary(now: datetime) -> dict:
     return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else "", "ledger": ledger}
 
 
+def sport_job() -> Optional[dict]:
+    """The sport-level job on the picker (fetch upcoming): the newest job with no slate, its status and the tail of its log."""
+    jobs = [j for j in runner.all() if (j.meta or {}).get("slate") is None]
+    if not jobs:
+        return None
+    j = jobs[0]
+    if not j.is_active and j.finished and (time.time() - j.finished) > 1800:
+        return None                                                   # an old run: nothing to say
+    return dict(id=j.id, name=j.name, status=j.status, duration=j.duration, log=runner.read_log(j, tail_lines=8))
+
+
+ACTIONS = [dict(label="Fetch upcoming slates", path="/fetch-upcoming",
+                title="load every classic slate the DraftKings lobby lists (today and tomorrow) that this desk does not hold yet, then store "
+                      "every contest of those slates and the payout table of each (scripts/nba/fetch_upcoming.py; free; a few minutes)")]
+
+
 def sport() -> Sport:
     """The description ivan.web.main mounts: the desk with the frame's picker at its root."""
     global SPORT
     from ivan.sports.nba.slate_backtest import mode_for
+    from ivan.sports.nba import readiness
     SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nba_days, summary=nba_summary, tools=[], app=app,
                   ledger=None if CONSUMER else results.ledger_days,       # the picker's money per day; never on the consumer (the server)
+                  day_status=None if CONSUMER else readiness.day_status,  # a past day's readiness for the backtest: the calendar's colours
+                  actions=[] if CONSUMER else ACTIONS, job=None if CONSUMER else sport_job,
                   default_view=lambda s, now: {"lateswap": "lateswap", "backtest": "backtest"}.get(mode_for(s.day, s.lock, now), "games"))
     frame.install_picker(app, SPORT)
     return SPORT

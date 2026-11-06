@@ -255,6 +255,33 @@ def contests_to_scrape(session: Session, since: datetime, until: datetime, publi
 
 
 # ----------------------------------------------------------------------------- scrape
+def record_scrape(plan: List[dict], result: dict, now: Optional[datetime] = None, root: Optional[Path] = None) -> List[Path]:
+    """Note the scrape's outcome on every held slate it touched: slates/<dg>/results/scrape.json = {at, contests, ok, failed,
+    login_needed}. The readiness of a past day (ivan.sports.nba.readiness: the calendar's red) reads it; a later scrape that
+    succeeds overwrites it."""
+    from ivan.sports.nba import slates as SL
+    now = now or datetime.now()
+    ok = {int(c) for c in result.get("ok") or []}; failed = {int(c) for c in result.get("failed") or []}
+    out = []
+    for s in plan:
+        dg = int(s["slate_key"])
+        mine = [int(c) for c in s.get("to_scrape") or []]
+        if not mine or not SL.holds(dg, root):
+            continue
+        rec = dict(at=now.isoformat(timespec="seconds"), contests=mine, ok=sorted(c for c in mine if c in ok),
+                   failed=sorted(c for c in mine if c in failed), login_needed=bool(result.get("login_needed")))
+        p = SL.paths(dg, root).root / "results" / "scrape.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(rec, indent=1))
+        out.append(p)
+    try:
+        from ivan.sports.nba import readiness
+        readiness.forget()
+    except Exception:   # noqa: BLE001
+        pass
+    return out
+
+
 def scrape(ids: Sequence[int], headless: bool = False, log: Log = print) -> dict:
     """Export every contest in ids through the logged-in Chrome profile. Returns {ok, failed, login_needed}."""
     from ivan.sports.common.draftkings import build_requests_session_from_chrome, download_contest_dataframe

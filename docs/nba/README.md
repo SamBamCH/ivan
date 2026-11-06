@@ -14,7 +14,7 @@ Read in this order:
 | [game-day.md](game-day.md)                                 | What do I do on a slate day, in order, from loading the slate to the late swap?                                   |
 | [projections.md](projections.md)                           | How is a player's projection built (props, minutes, the rotation grid, fantasy points, correlation)?              |
 | [field-and-simulation.md](field-and-simulation.md)         | How are the field, the simulation and the chooser built, and what do they write?                                  |
-| [overnight.md](overnight.md)                               | What runs on timers (nightly box scores, archive at tip, feed pull) and what do I run by hand (standings scrape)? |
+| [overnight.md](overnight.md)                               | What runs on timers (nightly box scores, archive at tip, feed pull) and what do I run by hand (standings scrape)? Is yesterday ready to backtest (`readiness.py`)? |
 | [validation-and-backtests.md](validation-and-backtests.md) | How do I check the model against what happened, refit it, and calibrate the field?                                |
 | [data.md](data.md)                                         | What is in the database and on disk, and who writes each table and file?                                          |
 | [../web/nba-desk.md](../web/nba-desk.md)                   | The desk page: cards, grids, pins, Publish, actions bar, exports, the consumer mode.                           |

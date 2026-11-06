@@ -1,6 +1,7 @@
 {# The bar every Ivan page shares (ivan.web.frame.ctx -> `frame`): Ivan › sport › day › slate › view, the sport's tools, sign out.
-   Each level is a dropdown; changing one goes there: a day to its main slate (frame.install_picker), a slate to its page,
-   which shows that slate (the NBA desk loads a slate it does not hold when its page is opened). #}
+   Each level goes where it says: the day is a calendar (a day with slates opens on its main slate, frame.install_picker; past days
+   coloured by their readiness for the backtest, frame.status), a slate to its page, which shows that slate (the NBA desk loads a
+   slate it does not hold when its page is opened). #}
 {% macro bar(frame) %}
 <nav class="frame" data-site="{{ frame.site }}" data-root="{{ frame.root }}">
   <a class="brand" href="{{ frame.site }}/" title="every sport">Ivan</a>
@@ -11,15 +12,20 @@
   </select>
   {% if frame.sport %}
   <span class="sep">›</span>
-  <select class="crumb crumb-day" title="the day" onchange="location.href = this.value">
-    {% if not frame.day %}<option value="{{ frame.root }}/" selected>date…</option>{% endif %}
-    {% for d in frame.days %}<option value="{{ frame.root }}/{{ d.iso }}/" {% if frame.day and d.day == frame.day.day %}selected{% endif %}>{{ d.label }}{% if d.slates|length > 1 %} ({{ d.slates|length }}){% endif %}</option>{% endfor %}
-  </select>
+  <span class="crumb-cal">
+    <button type="button" class="crumb cal-btn" aria-haspopup="dialog" aria-expanded="false" title="the day: pick one on the calendar (a day opens on its main slate; past days are coloured green when every input of the backtest is on file, red when a fetch failed)">{{ frame.day.label if frame.day else 'date…' }} <span class="caret">▾</span></button>
+    <div class="cal" hidden data-root="{{ frame.root }}" data-today="{{ frame.now.date().isoformat() }}" data-open="{{ frame.day.iso if frame.day else '' }}">
+      <script type="application/json" class="cal-days">{{ frame.cal|tojson }}</script>
+      <div class="cal-head"><button type="button" class="cal-nav" data-m="-1" title="the month before">‹</button><b class="cal-title"></b><button type="button" class="cal-nav" data-m="1" title="the month after">›</button></div>
+      <div class="cal-grid"></div>
+      <div class="cal-key"><i class="sw st-ready"></i> ready to backtest <i class="sw st-failed"></i> a fetch failed <i class="sw held"></i> held here <span class="muted">· a number is the day's slates</span></div>
+    </div>
+  </span>
   {% if frame.day %}
   <span class="sep">›</span>
   <span class="crumb-slates">
     <button type="button" class="step" data-step="-1" title="the slate before">&lsaquo;</button>
-    <select class="crumb crumb-slate" title="the day's slates: pick one to open it" onchange="ivanPickSlate(this)">
+    <select class="crumb crumb-slate" title="the day's slates: lock time · games · DK's slate title; pick one to open it" onchange="ivanPickSlate(this)">
       {% if not frame.slate %}<option value="" selected>slate…</option>{% endif %}
       {% for d in frame.days %}{% for s in d.slates %}
         <option value="{{ s.path(frame.root) }}" data-day="{{ d.iso }}"
@@ -70,6 +76,43 @@
       if (i < 0 || i >= all.length || i === cur) return;
       const o = all[i]; o.hidden = false; sel.value = o.value; o.selected = true; ivanPickSlate(sel);
     }));
+  })();
+  // the day is a calendar: one month at a time, a day with slates is a link to /<sport>/<day>/ (its main slate), the others are
+  // blank; the open day is marked, today outlined, a held day ringed, a past day coloured by its readiness for the backtest
+  // (frame.status: green = every input on file, red = a fetch failed, no colour = not attempted yet)
+  (() => {
+    const wrap = document.querySelector(".crumb-cal"); if (!wrap) return;
+    const btn = wrap.querySelector(".cal-btn"), cal = wrap.querySelector(".cal");
+    const days = {}; (JSON.parse(wrap.querySelector(".cal-days").textContent || "[]")).forEach(d => { days[d.iso] = d; });
+    const root = cal.dataset.root, today = cal.dataset.today, open = cal.dataset.open;
+    const iso = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    let [y, m] = (open || today).split("-").map(Number); m -= 1;
+    const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    function render() {
+      cal.querySelector(".cal-title").textContent = `${names[m]} ${y}`;
+      const g = cal.querySelector(".cal-grid"); g.innerHTML = "";
+      ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].forEach(h => { const e = document.createElement("span"); e.className = "h"; e.textContent = h; g.appendChild(e); });
+      const first = new Date(y, m, 1).getDay(), n = new Date(y, m + 1, 0).getDate();
+      for (let i = 0; i < first; i++) { const e = document.createElement("span"); e.className = "d pad"; g.appendChild(e); }
+      for (let d = 1; d <= n; d++) {
+        const k = iso(y, m, d), info = days[k];
+        let e;
+        if (info) {
+          e = document.createElement("a"); e.href = `${root}/${k}/`;
+          e.className = "d has" + (info.state ? ` st-${info.state}` : "") + (info.held ? " held" : "");
+          e.title = info.label + (info.n ? ` · ${info.n} slate${info.n === 1 ? "" : "s"}` : "") + (info.held ? " · held here" : "") + (info.state ? ` · ${info.state}` : "") + (info.why ? `: ${info.why}` : "");
+          e.innerHTML = `${d}<small>${info.n || ""}</small>`;
+        } else { e = document.createElement("span"); e.className = "d"; e.textContent = d; }
+        if (k === today) e.classList.add("today");
+        if (k === open) e.classList.add("on");
+        g.appendChild(e);
+      }
+    }
+    function show(on) { cal.hidden = !on; btn.setAttribute("aria-expanded", on ? "true" : "false"); if (on) render(); }
+    btn.addEventListener("click", () => show(cal.hidden));
+    cal.querySelectorAll(".cal-nav").forEach(b => b.addEventListener("click", () => { m += parseInt(b.dataset.m, 10); if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } render(); }));
+    document.addEventListener("click", e => { if (!cal.hidden && !wrap.contains(e.target)) show(false); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && !cal.hidden) { show(false); btn.focus(); } });
   })();
 </script>
 {% endmacro %}

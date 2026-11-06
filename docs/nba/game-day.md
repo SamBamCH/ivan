@@ -18,10 +18,17 @@ contests and edits in its directory; nothing is filed away or cleared by opening
 Terminal:
 
 ```bash
-venv/bin/python scripts/nba/ingest.py --list                              # today's classic draft groups
+venv/bin/python scripts/nba/ingest.py --list                              # today's classic draft groups (lock, name, DK's slate title)
 venv/bin/python scripts/nba/ingest.py --draft-group 155647                # DK pool + Rotowire, project (free) into slates/155647/
 venv/bin/python scripts/nba/ingest.py --draft-group 155647 --update-odds  # also the player props (credits)
+venv/bin/python scripts/nba/fetch_upcoming.py                             # every lobby slate not held yet, then every contest and payout table (free)
 ```
+
+**Fetch upcoming slates** on the NBA picker (`/nba/`) runs `fetch_upcoming.py` as a job: every classic slate the lobby
+lists for today and tomorrow is loaded into its own directory (the ones held already are left alone; `--refresh`
+refreshes them too), then every contest of those slates and the payout table of each one are stored, so the sim and the
+chooser meet no unknown contest and the picker's cards show the counts. The picker shows the job and the tail of its log
+while it runs. A consumer desk has no such button (the laptop fetches).
 
 `ingest.py` and the desk use the same transaction (`ingest.refresh_pool`) on the slate's own database, so the script can
 run while the desk is up; the desk shows "new data · load". Every other script takes `--slate DG` (default: today's main

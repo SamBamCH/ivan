@@ -78,6 +78,8 @@ def main() -> int:
         print(f"exporting {len(ids)} contest(s)...")
         r = S.scrape(ids, headless=a.headless, log=print)
         print(f"exported {len(r['ok'])}, failed {len(r['failed'])}" + (" (login needed: run without --headless and log in)" if r["login_needed"] else ""))
+        if not getattr(a, "contest_ids", None):
+            S.record_scrape(plan, r, now=now)                   # the calendar's red: a failed scrape on a held slate (scripts/nba/readiness.py)
         raw.sync_index(session, "nba")
         if a.no_derive or not r["ok"]:
             return 0 if not r["failed"] else 2
