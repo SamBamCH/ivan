@@ -11,7 +11,9 @@ a day is [../nba/game-day.md](../nba/game-day.md); this page is what is on the s
 The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README.md)) with the desk's own items after it.
 
 - **Slate**: the desk shows the slate in the bar, always, and holds as many slates as you open (one directory each,
-  [../nba/data.md](../nba/data.md)). `/nba/` lists the days, `/nba/<day>/` opens the day's **main slate** (the held
+  [../nba/data.md](../nba/data.md)). A slate reads **lock time · games · DK's slate title** ("19:00 · 8 games · Early Only";
+  the main slate of the night has no title: `Lobby.slate_label`, the title from the lobby's `ContestStartTimeSuffix`, kept
+  in the held slate's `slate.json` as `title` once the desk loads it). `/nba/` lists the days, `/nba/<day>/` opens the day's **main slate** (the held
   one, else the one with the most games, else its only one; `/nba/<day>/?pick` lists the day's classic draft groups
   instead: from the DK lobby for today and tomorrow, from the archive for past days, every held slate marked **held**),
   `/nba/<day>/<draft group>/` one slate. In the bar the day dropdown goes to the day's main slate, the slate dropdown
@@ -157,10 +159,12 @@ when the news was last read. One table, one row per player whose night is news, 
 3. **Already out** (folded; **show** opens them): OUT and out of the team's last game too, or never in a box score.
 
 Each list is ordered earliest tip first, then the most usual minutes. The headline is the newest `nba_news`
-row for the player within 7 days (its source link; hover for the text), with its age, the item count and
-**new** when it arrived after the team was mapped (within 3 hours when the team is unmapped). "No news on
-file" means nothing stored: Refresh reads the news. The team's last game is the newest box score on file, so
-until the nightly brings last night's game the "last game" is the one before it.
+row for the player **since his team's last game** (after 21:00 on the day it played, so post-game reports count and
+what was said before that game does not: every game is a new decision; `newsfeed.since_last_game`; within 7 days at
+most), with its source link (hover for the text), its age, the count of such items and **new** when it arrived after
+the team was mapped (within 3 hours when the team is unmapped). "No news on file" means nothing since the last game:
+Refresh reads the news. The team's last game is the newest box score on file, so until the nightly brings last night's
+game the "last game" is the one before it (and that night's pre-game headlines still show).
 
 ### The card
 

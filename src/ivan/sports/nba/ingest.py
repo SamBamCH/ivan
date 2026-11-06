@@ -14,6 +14,8 @@ Nothing here prompts; scripts/nba/ingest.py and capture.py pass the draft group.
 """
 from __future__ import annotations
 
+import re
+
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -60,8 +62,16 @@ def ensure_schema(engine) -> None:
 
 
 # ------------------------------------------------------------------------------ slates
+def slate_title(suffix) -> Optional[str]:
+    """DraftKings' slate title from the lobby's ContestStartTimeSuffix: " (Early Only)" -> "Early Only"; None when the slate has none
+    (the main slate of the night carries no suffix)."""
+    t = re.sub(r"^[\s(]+|[\s)]+$", "", str(suffix or "")).strip()
+    return t or None
+
+
 def classic_slates(day: Optional[datetime] = None) -> list[dict]:
-    """Today's (or `day`'s) classic NBA draft groups from the DK lobby: id, start, name, contests."""
+    """Today's (or `day`'s) classic NBA draft groups from the DK lobby: id, start, name, contests, games, lock, title (DK's slate
+    title when it has one, e.g. "Early Only")."""
     out = []
     for s in list_slates("NBA"):
         if str(s.get("game_type", "")).lower() != "classic":
@@ -75,7 +85,7 @@ def classic_slates(day: Optional[datetime] = None) -> list[dict]:
             except ValueError:
                 lock = None
         out.append({"id": int(s["id"]), "start": s.get("start"), "name": s.get("name"), "contests": s.get("contests"),
-                    "games": s.get("games"), "lock": lock})
+                    "games": s.get("games"), "lock": lock, "title": slate_title(s.get("suffix"))})
     return out
 
 

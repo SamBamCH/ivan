@@ -58,6 +58,22 @@ def test_group_news_orders_by_tip_then_minutes():
     assert [r["name"] for r in t["questionable"]] == ["c sixth", "b bench", "a star"]
 
 
+def test_news_before_the_teams_last_game_is_not_this_slates():
+    """Every game is a new decision: a headline seen before the team's last game (2026-10-27 here) is about that game and stays
+    out of the table; one seen on that evening (after 21:00, a post-game report) or later counts."""
+    now = datetime(2026, 10, 29, 12, 0)
+    old = SimpleNamespace(headline="old", text="", source_url=None, url="u", injury=None, first_seen=datetime(2026, 10, 27, 15, 0))
+    post = SimpleNamespace(headline="post-game", text="", source_url=None, url="u", injury=None, first_seen=datetime(2026, 10, 27, 22, 30))
+    fresh = SimpleNamespace(headline="fresh", text="", source_url=None, url="u", injury=None, first_seen=datetime(2026, 10, 29, 9, 0))
+    players = [_player("C Sixth", "AAA", "Q")]
+    assert NF.group_news(players, _box(), _state(), {"c sixth": [old]}, now=now)["questionable"][0]["news"] is None
+    q = NF.group_news(players, _box(), _state(), {"c sixth": [fresh, post, old]}, now=now)["questionable"][0]
+    assert q["news"]["headline"] == "fresh" and q["news"]["n"] == 2
+    assert NF.since_last_game([old, post], date(2026, 10, 27)) == [post]
+    assert NF.since_last_game([old], None) == [old]                   # no game on file: every headline counts
+    assert NF.news_cutoff("2026-10-27") == datetime(2026, 10, 27, 21, 0)
+
+
 def test_group_news_new_flag_uses_mapped_time():
     now = datetime(2026, 10, 29, 12, 0)
     seen = now - timedelta(hours=5)

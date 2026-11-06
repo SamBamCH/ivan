@@ -10,12 +10,13 @@ a time, so first_seen is the news clock: minutes behind the tweet when the check
 
     check(session)                    fetch, store, return what is new
     latest(session, names, hours=48)  {player: [items newest first]} for the pool's players
+    since_last_game(items, last_game) the headlines that came after the team's last game: the ones that are about tonight
     slate_news(session, slate)        the slate's open questions and outs in three lists (the desk's news table, newsfeed.py slate)
 """
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -128,8 +129,40 @@ def age(ts: datetime, now: Optional[datetime] = None) -> str:
 
 
 QUESTION_STATUSES = {"Q", "GTD", "D", "P"}      # DK statuses that leave the player's night open
-NEWS_HOURS = 7 * 24                              # how far back the table looks for a headline
+NEWS_HOURS = 7 * 24                              # how far back the table looks for a headline at most
 NEW_HOURS = 3.0                                  # a headline this fresh is marked new when the team has no mapped time to compare with
+POST_GAME_HOUR = 21                              # a headline seen after this hour on the team's last game day is about the next game
+
+
+def _as_date(d):
+    """A box score's game_date (date, datetime, Timestamp or ISO text) as a date; None when it cannot be read."""
+    if d is None:
+        return None
+    if hasattr(d, "date") and callable(d.date):
+        try:
+            return d.date()
+        except Exception:   # noqa: BLE001
+            pass
+    if isinstance(d, date):
+        return d
+    try:
+        return date.fromisoformat(str(d)[:10])
+    except ValueError:
+        return None
+
+
+def news_cutoff(last_game) -> Optional[datetime]:
+    """The moment from which a headline is this slate's: the evening of the team's last game (POST_GAME_HOUR on that day, so the
+    post-game reports count and the pre-game ones do not). None when the team has no game on file: every headline counts.
+    Every game is a new decision: what was said about the player before his last game is about that game, not tonight's."""
+    d = _as_date(last_game)
+    return datetime.combine(d, time(POST_GAME_HOUR)) if d is not None else None
+
+
+def since_last_game(items: list, last_game, now: Optional[datetime] = None) -> list:
+    """The player's headlines (newest first) that came after his team's last game (news_cutoff)."""
+    cut = news_cutoff(last_game)
+    return [x for x in items if cut is None or x.first_seen > cut]
 
 
 def group_news(players, box: pd.DataFrame, state: pd.DataFrame, news: Dict[str, List[NBANews]], now: Optional[datetime] = None,
@@ -146,8 +179,10 @@ def group_news(players, box: pd.DataFrame, state: pd.DataFrame, news: Dict[str, 
     play_ewm), the model's minutes now (`minutes`, when given), the desk's call (`calls`: player -> text, when given),
     whether he started last game, the team's last game (date, his minutes in it, whether he played), and the latest
     headline on file (`news`: latest()'s output) with its age and whether it is new: after the team's mapped time
-    (`mapped_at`, team -> datetime) when known, else within NEW_HOURS. Within each list: earliest tip first, then the
-    most minutes at stake.
+    (`mapped_at`, team -> datetime) when known, else within NEW_HOURS. Only the headlines since the team's last game count
+    (since_last_game: after POST_GAME_HOUR on that day; every game is a new decision, so what was said before the last
+    game stays out of this slate's table and the player reads "no news on file"). Within each list: earliest tip first,
+    then the most minutes at stake.
     """
     now = now or datetime.now()
     calls = calls or {}; minutes = minutes or {}; starters = starters or {}; mapped_at = mapped_at or {}
@@ -177,7 +212,7 @@ def group_news(players, box: pd.DataFrame, state: pd.DataFrame, news: Dict[str, 
         played_last = bool(lr is not None and lr[0] > 0)
         if bucket is None:
             bucket = "new_out" if played_last else "out"
-        items = news.get(n) or []
+        items = since_last_game(news.get(n) or [], d, now)
         item = None
         if items:
             x = items[0]

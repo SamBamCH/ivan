@@ -108,7 +108,7 @@ class Lobby:
             for sl in classic_slates():                       # every day the lobby lists; the day picker places each on its day
                 start = str(sl.get("start") or "")
                 out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None, start=start, name=sl.get("name"),
-                                          games=sl.get("games"), lock=sl.get("lock"))
+                                          games=sl.get("games"), lock=sl.get("lock"), title=sl.get("title"))
         except Exception as e:   # noqa: BLE001 - the lobby is a convenience
             self.flash.append(f"could not list the lobby's slates ({type(e).__name__}); showing the known ones")
         return out
@@ -129,12 +129,19 @@ class Lobby:
             cache[key] = None
         return cache[key]
 
+    @staticmethod
+    def slate_label(when: str, games, title: Optional[str] = None, tail: str = "") -> str:
+        """What the bar's slate dropdown and the picker card read: the lock time, the games, DK's slate title when it has one
+        ("19:00 · 8 games · Early Only"); the main slate of the night has no title."""
+        return " · ".join(x for x in [when, f"{games} game{'s' if games != 1 else ''}" if games else "", title or "", tail] if x)
+
     def slate_days(self, now: datetime) -> list:
         """
-        [(date iso, date label, [slate, ...])] newest day first, each slate {id, label, source, loaded, games}: the DraftKings lobby's
-        draft groups placed on their day (DK gives a weekday + time), then every slate with an archive capture (loadable from
+        [(date iso, date label, [slate, ...])] newest day first, each slate {id, label, source, loaded, games, title}: the DraftKings
+        lobby's draft groups placed on their day (DK gives a weekday + time), then every slate with an archive capture (loadable from
         the capture: scripts/nba archive at ingest and at tip), and every slate this machine holds (a directory under
-        data/nba/slates; `loaded` = held). The picker: a day, then its slates.
+        data/nba/slates; `loaded` = held; its title from slate.json, written when the desk loads it from the lobby). The picker: a
+        day, then its slates.
         """
         days: dict = {}
         seen = set()
@@ -153,9 +160,10 @@ class Lobby:
             if lk is not None:
                 d = lk.date()
             when = f"{lk:%H:%M}" if lk is not None else (start.split(" ", 1)[1] if " " in start else start)
-            days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=when + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
+            title = v.get("title") or (held.get(int(key)) or {}).get("title")
+            days.setdefault(d.isoformat(), []).append(dict(id=str(key), label=self.slate_label(when, ng, title),
                                                            source="lobby", sort=(lk.strftime("%H:%M") if lk is not None else start), loaded=int(key) in held,
-                                                           lock=lk.isoformat(timespec="minutes") if lk is not None else None, contests=v.get("contests"), games=ng))
+                                                           lock=lk.isoformat(timespec="minutes") if lk is not None else None, contests=v.get("contests"), games=ng, title=title))
             seen.add(str(key))
         from sqlalchemy import text as _t
         for key, lock, src, n in self.session.execute(_t("select slate_key, min(lock), max(source), count(*) from archived_slate where sport = 'nba' group by slate_key")).all():
@@ -166,8 +174,9 @@ class Lobby:
             except (TypeError, ValueError):
                 continue
             ng = self.slate_games(str(key))
-            days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=f"{t:%H:%M}" + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else "") + " · archived",
-                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=int(key) in held, lock=t.isoformat(timespec="minutes"), games=ng))
+            title = (held.get(int(key)) or {}).get("title")
+            days.setdefault(t.date().isoformat(), []).append(dict(id=str(key), label=self.slate_label(f"{t:%H:%M}", ng, title, "archived"),
+                                                                  source="archive", sort=t.strftime("%H:%M"), loaded=int(key) in held, lock=t.isoformat(timespec="minutes"), games=ng, title=title))
             seen.add(str(key))
         for hdg, m in held.items():                           # held slates the lobby no longer lists and the archive never saw
             if str(hdg) in seen:
@@ -175,9 +184,9 @@ class Lobby:
             lock = S.meta_time(m, "lock")
             d = (lock or now).date().isoformat()
             ng = m.get("games")
-            days.setdefault(d, []).append(dict(id=str(hdg), label=(m.get("label") or (f"{lock:%H:%M}" if lock else "held")) + (f" · {ng} game{'s' if ng != 1 else ''}" if ng else ""),
+            days.setdefault(d, []).append(dict(id=str(hdg), label=self.slate_label(m.get("label") or (f"{lock:%H:%M}" if lock else "held"), ng, m.get("title")),
                                                source="held", sort=(lock.strftime("%H:%M") if lock else ""), loaded=True,
-                                               lock=lock.isoformat(timespec="minutes") if lock else None, games=ng))
+                                               lock=lock.isoformat(timespec="minutes") if lock else None, games=ng, title=m.get("title")))
             seen.add(str(hdg))
         out = []
         for d in sorted(days, reverse=True):

@@ -518,7 +518,8 @@ def list_slates(sport) -> list[dict]:
     for dg, info in slate_info.items():
         g = _last_lobby_draft_groups.get(int(dg), {})
         out.append({"id": dg, "game_type": info["gameType"], "contests": info["count"], "start": info["sdstring"], "name": info["name"],
-                    "games": g.get("GameCount"), "start_utc": g.get("StartDate")})      # from the lobby's draft-group block, when present
+                    "games": g.get("GameCount"), "start_utc": g.get("StartDate"),       # from the lobby's draft-group block, when present
+                    "suffix": g.get("ContestStartTimeSuffix")})                          # DK's slate title: " (Early Only)", " (Turbo)", " (ORL @ PHX)"
     return out
 
 

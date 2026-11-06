@@ -22,7 +22,7 @@ from ivan.sports.nba.ingest import after_pull, capture_pool, refresh_pool, Inges
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAPlayer
 from ivan.sports.nba.paths import NBA_DATA_DIR
 from ivan.web import auth
-from .core import CONSUMER, LIMITED, LOADING, LOCK, PROGRESS, MAX_JOBS, NEWS_AUTO_SECONDS, SCRIPTS, _active, _busy, _here, _render, _submit as _submit_job, app, desk, desk_for, runner, slate, slate_jobs
+from .core import CONSUMER, LIMITED, LOADING, LOBBY, LOCK, PROGRESS, MAX_JOBS, NEWS_AUTO_SECONDS, SCRIPTS, _active, _busy, _here, _render, _submit as _submit_job, app, desk, desk_for, runner, slate, slate_jobs
 from ivan.sports.nba import slates as S
 from .edits import _apply_typed_pins
 from .exposures import _side_ctx
@@ -162,6 +162,9 @@ def begin_switch(draft_group: int, source: str = "lobby") -> Optional[str]:
     elif source == "archive":
         _start_restore(dg)
     else:
+        title = (LOBBY.lobby_slates().get(str(dg)) or {}).get("title")
+        if title:
+            S.write_meta(dg, title=title)                     # DK's slate title ("Early Only") stays with the slate once the lobby drops it
         _start_refresh(f"loading slate {dg}", dg, update_odds=False)
     return None
 

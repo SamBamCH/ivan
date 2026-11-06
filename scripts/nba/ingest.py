@@ -39,7 +39,7 @@ def main() -> int:
     try:
         if args.list:
             for s in classic_slates():
-                print(f"{s['id']}  {s['start']}  {s['name']}  ({s['contests']} contests)")
+                print(f"{s['id']}  {s['start']}  {s['name']}" + (f"  [{s['title']}]" if s.get('title') else "") + f"  ({s['contests']} contests)")
             return 0
         if args.stok_csv:
             record_external_projections(session, args.stok_csv)

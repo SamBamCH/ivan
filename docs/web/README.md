@@ -43,7 +43,8 @@ lineups, sims and edits). Every button is a script in `scripts/<sport>/`; the jo
 Each sport's `days(now)` lists what it knows, by the day the slate locks:
 
 - **NBA**: the DraftKings lobby's classic draft groups (today, tomorrow), every slate with an archive
-  capture, every held slate (`Lobby.slate_days`), each with its game count. A lobby slate not held carries
+  capture, every held slate (`Lobby.slate_days`), each labelled lock time · game count · DK's slate title when it has
+  one ("Early Only", "Turbo"; the main slate has none). A lobby slate not held carries
   a **load** form (the picker's button; its page starts the same load by itself).
 - **NFL**: the lobby's showdown and classic draft groups, the archive's ingest captures with the settle
   job's status (`slate_status`), the slates any backtest run replayed (`run_index`), and the working slate
