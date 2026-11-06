@@ -1,9 +1,8 @@
 {# the time estimate under a step's knobs (ivan.web.nba.pipeline.pipeline_estimate / ivan.sports.nba.job_time): how long, done when,
-   against the slate's lock (the late swap: the next tip); re-read as the knobs change. late = would end inside the margin: the run
-   needs the "run anyway" box #}
-<span class="est {{ verdict }}" title="from this machine's last {{ est.n }} {{ step }} run(s){% if est.basis == 'default' %} (fewer than needed: a conservative default){% endif %}; the run must leave {{ margin|int }} min before {{ label }}">
+   against the slate's lock (the late swap: the next tip); re-read as the knobs change. late = would end inside the margin. Advice
+   only: the run starts whatever the verdict, with a "heads up" flash #}
+<span class="est {{ verdict }}" title="from this machine's last {{ est.n }} {{ step }} run(s){% if est.basis == 'default' %} (fewer than needed: a conservative default){% endif %}; the run should leave {{ margin|int }} min before {{ label }}">
   {% if verdict == 'ok' %}≈ {{ fmt(est.seconds) }}, done {{ est.ends_at.strftime('%H:%M') }}{% if deadline %} · {{ label }} {{ deadline.strftime('%a %H:%M' if deadline.date() != est.ends_at.date() else '%H:%M') }}{% endif %}
   {% elif verdict == 'tight' %}≈ {{ fmt(est.seconds) }}, done {{ est.ends_at.strftime('%H:%M') }}, up to {{ est.upto_at.strftime('%H:%M') }} · {{ label }} {{ deadline.strftime('%a %H:%M' if deadline.date() != est.ends_at.date() else '%H:%M') }}: tight
-  {% else %}≈ {{ fmt(est.seconds) }}, done {{ est.ends_at.strftime('%H:%M') }}{% if deadline %} · {{ label }} {{ deadline.strftime('%a %H:%M' if deadline.date() != est.ends_at.date() else '%H:%M') }}: <b>too late</b>{% endif %}
-  <label class="force"><input type="checkbox" name="force" value="1"> run anyway</label>{% endif %}
+  {% else %}≈ {{ fmt(est.seconds) }}, done {{ est.ends_at.strftime('%H:%M') }}{% if deadline %} · {{ label }} {{ deadline.strftime('%a %H:%M' if deadline.date() != est.ends_at.date() else '%H:%M') }}: <b>too late</b>{% endif %}{% endif %}
 </span>

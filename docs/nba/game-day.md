@@ -139,8 +139,9 @@ When a refresh, a **Field + ownership** build or a sim finishes, the page reload
 
 **How long will it take?** Before a job starts the desk estimates it from this machine's past runs
 (`ivan.sports.nba.job_time`, shown under the Generate and Sim knobs and in the job's status line) and checks the end against
-the slate's lock less 5 minutes: a run that would end inside that margin is refused until you tick **run anyway** or make
-it smaller (2026-11-03: a sim too big for the time left missed lock). From a terminal:
+the slate's lock less 5 minutes: a run that would end inside that margin is flagged red and starts with a **heads up** in
+the flash; nothing is refused (2026-11-03: a sim too big for the time left missed lock; the refusal that followed was
+dropped on 2026-11-05 when it held a 56 s sim two minutes before lock). From a terminal:
 
 ```bash
 venv/bin/python scripts/nba/job_time.py fit                                                   # the model: seconds per unit per step

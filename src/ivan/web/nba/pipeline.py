@@ -404,7 +404,7 @@ def _estimate(step: str, form: dict, now: Optional[datetime] = None) -> dict:
 @slate.get("/pipeline/estimate", response_class=HTMLResponse)
 def pipeline_estimate(request: Request, step: str = "sim"):
     """The estimate under a step's knobs, re-read as the knobs change (the popover's hx-get sends them): how long, done when, against
-    the slate's lock; red when the run would end inside the margin before lock, with a "run anyway" box."""
+    the slate's lock; red when the run would end inside the margin before lock (advice only: the run is never refused)."""
     if step not in JT.STEPS:
         return HTMLResponse("")
     knobs = {k: v for k, v in request.query_params.items() if k != "step"}
@@ -517,15 +517,13 @@ async def pipeline_run(request: Request, step: str):
                 except IngestError as e:
                     desk.flash.append(f"snapshot failed: {e}")
             try:
+                # the estimate against the lock is advice, never a refusal: a run that would end inside the margin starts with a
+                # warning (2026-11-05: the guard refused a 56 s sim at 19:58 for a 20:00 lock and its "run anyway" box was not
+                # on the screen; the desk's user decides what to run)
                 guard = _estimate(step, pipeline_form)
-                # the guard holds only the long runs with a "run anyway" box under their knobs (generate, sim, the row); choose, the
-                # late swap and the field build finish in well under the margin and have no box, so they are never refused
-                if guard["verdict"] == "late" and not form.get("force") and step in ("generate", "sim", "all"):
-                    desk.flash.append(f"not started: {guard['message']} Tick \"run anyway\" under the knobs to run it regardless, or make it smaller.")
-                else:
-                    if guard["verdict"] != "ok":
-                        desk.flash.append(("forced: " if guard["verdict"] == "late" else "heads up: ") + guard["message"])
-                    _submit(step, pipeline_form)
+                if guard["verdict"] != "ok":
+                    desk.flash.append("heads up: " + guard["message"])
+                _submit(step, pipeline_form)
             except (TypeError, ValueError) as e:
                 desk.flash.append(f"bad setting: {e}")
         return _render(request, "_nba_pipeline.html", **_pipeline_ctx())
