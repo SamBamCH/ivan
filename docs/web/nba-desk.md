@@ -218,6 +218,12 @@ in nba_api's all-players list (`ivan.sports.nba.experience`, fetched by the nigh
 fetch`), matched by name without suffixes, then by last name on his team; a name the list lacks is a rookie when no
 NBA game is on file before this season.
 The past-game dropdown lists the team's games with stints, this season then last: each option reads the date, the opponent, the final from the team's side (`W 112-105`) and how many of that night's five had not started the team's previous game (`2 new starters`; the oldest game in the list is compared with the game before it; blank when either five is unknown) (`projection.rotation.game_scores` / `starter_changes`). The default is the latest game. On the game's grid those starters carry a blue **NEW** badge (`new_starters`). The panel has no header line: the dropdown names the game.
+**vs our grid** (a box in the past game's bar) lays what we projected for that game over what was played, as the backtest
+view does under each team: our grid for that day is the one drawn on the desk that day (`data/nba/days/<day>/edits/rotations/`),
+else the archive's grid rows at that day's lock (`slate_backtest.grid_for_day`); blue cells were on the floor in both,
+orange played but not in ours, hatched in ours but sat, a player we projected who did not play is a DNP row, the minutes
+column reads played / ours, and the bar gives the share of the 240 player-minutes on the floor in both and where ours came
+from (`Desk.overlay_ours`, `/rotation/propose` with `overlay=1`; the box stays on across the dropdown's games).
 A past game's grid (the dropdown) has two small rows above the minutes: each team's running score at the end of every
 3 minutes, the team's own row green while it leads and red while it trails, the final and home/away beside the name,
 and the score at each minute on hover (`Desk.score_strip` = `pbp.game_score`, the stored play-by-play, no fetch;

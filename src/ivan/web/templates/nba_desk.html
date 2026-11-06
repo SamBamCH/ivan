@@ -110,6 +110,10 @@
   table.rot-grid.wideh { width:1160px; min-width:1160px }          /* the played game: our projection vs the box score, 3x52 + 2x44 = 244 */
   table.rot-grid col.c-hp { width:52px } table.rot-grid col.c-hd { width:44px } table.rot-grid td.hp { color:var(--muted) } table.rot-grid td.hf { font-weight:700 }
   table.rot-grid td.hd { color:#999 } table.rot-grid td.hd.mid { color:var(--warn); font-weight:600 } table.rot-grid td.hd.big { color:var(--bad); font-weight:700 }
+  table.rot-grid.hist td.cell.ov-both.on { background:var(--accent) !important } table.rot-grid.hist td.cell.ov-act.on { background:#f59e0b !important }
+  table.rot-grid.hist td.cell.ov-ours { background:repeating-linear-gradient(45deg,#dbeafe 0 2px,#93c5fd 2px 4px) !important }
+  .rot-bar label.ov-toggle { font-size:12px; color:var(--muted); display:inline-flex; gap:4px; align-items:center; cursor:pointer } .rot-bar .ov-note { white-space:nowrap }
+  .rot-bar .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin:0 2px 0 6px } .rot-bar .sw.ov-both { background:var(--accent) } .rot-bar .sw.ov-act { background:#f59e0b } .rot-bar .sw.ov-ours { background:repeating-linear-gradient(45deg,#dbeafe 0 2px,#93c5fd 2px 4px) }
   table.rot-grid.hist td.cell.gt.on { opacity:.35 } table.rot-grid.hist td.cell.gt { background:repeating-linear-gradient(45deg,#f1f1f1 0 2px,#e4e4e4 2px 4px) } .rot-bar b.warn { color:var(--warn) } .rot-bar b.ok { color:var(--ok) }
   .pill.mapped { background:#dcfce7; color:var(--ok) } .pill.changed { background:#fef3c7; color:#92400e } .pill.unmapped { background:#f1f1f1; color:var(--muted) }
   .questions-sum { font-size:12px; color:#92400e } .questions-sum.ok { color:var(--ok) } .questions-sum a { color:inherit; font-weight:600 } .news-sum { font-size:12px } .news-check button, .news-auto label { font-size:12px }

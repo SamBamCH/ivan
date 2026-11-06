@@ -42,9 +42,12 @@ class RotationMixin:
         return dict(team=team, opp=opp, step=step, cells=cells, final=(sc[team][-1], sc[opp][-1]), overtime=sc["overtime"],
                     home=sc["home"] == team)
 
-    def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
-        """The rotation grid (_rotation) with each row's rookie mark (rookie_of): the same on tonight's grid and a past game's."""
+    def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None, overlay: bool = False) -> dict:
+        """The rotation grid (_rotation) with each row's rookie mark (rookie_of): the same on tonight's grid and a past game's.
+        `overlay` (a past game only): what we projected for that game over what was played (overlay_ours)."""
         rot = self._rotation(team, source=source, game_id=game_id)
+        if overlay and rot.get("kind") == "last":
+            self.overlay_ours(team, rot)
         notes = self.notes() if rot.get("kind") != "last" else {}
         for r in rot.get("rows") or []:
             r["note"] = notes[r["key"]].text if r["key"] in notes else None
@@ -260,9 +263,47 @@ class RotationMixin:
         names = sorted(mins, key=lambda n: (-mins[n], -sal.get(n, 0), n))
         return {n: i for i, n in enumerate(names)}
 
-    def game_grid(self, team: str, game_id: Optional[str] = None) -> dict:
-        """A played game's grid for the panel under tonight's: rows in the same order as tonight's panel, then the rest by minutes."""
-        rot = self.rotation(team, source="last", game_id=game_id)
+    def overlay_ours(self, team: str, rot: dict) -> dict:
+        """
+        Our grid for the game's day over the played grid (slate_backtest.grid_for_day: the grid drawn on the desk that day, else the
+        archive's grid rows at that day's lock): each row gets `ours` (our 48 cells) and `cmp` per minute ("both" on the floor in
+        both, "act" played but not in ours, "ours" in ours but sat, ""), players we projected who did not play are added as
+        DNP rows, and rot["overlay"] says where ours came from and the share of the 240 player-minutes on the floor in both
+        (None when we have no grid for that day). What the backtest view draws under each team, on the team page.
+        """
+        from ivan.sports.nba import slate_backtest as SB
+        day = rot.get("last_game")
+        try:
+            d = date.fromisoformat(str(day)[:10])
+        except (TypeError, ValueError):
+            rot["overlay"] = dict(found=False, source="the game's day is not known", agreement=None); return rot
+        ours, src = SB.grid_for_day(self.session, team, d)
+        if ours is None:
+            rot["overlay"] = dict(found=False, source=src, agreement=None); return rot
+        both = 0; seen = set()
+        for r in rot.get("rows") or []:
+            n = r["key"]; seen.add(n)
+            o = [bool(x) for x in ours.loc[n].values] if n in ours.index else [False] * 48
+            r["ours"] = o; r["min_ours"] = sum(o)
+            r["cmp"] = [("both" if a and b else "act" if a else "ours" if b else "") for a, b in zip(r["cells"], o)]
+            both += sum(1 for a, b in zip(r["cells"], o) if a and b)
+        names = {normalize_name(p.name): p for p in self.players(team)}
+        for n in ours.index:
+            if n in seen or int(ours.loc[n].sum()) <= 0:
+                continue
+            o = [bool(x) for x in ours.loc[n].values]
+            p = names.get(n)
+            rot["rows"].append(dict(name=n, key=n, pos=p.position if p else "", salary=p.salary if p else None, status=(p.status or "").upper() if p else "",
+                                    starter=False, new_starter=False, out=False, gone=p is None, vacated=False, locked=False, minutes=0, target=None, hist=None,
+                                    cells=[False] * 48, marks=[None] * 48, pf=0, spots=[-1] * 48, tips=[None] * 48, group="wing", rank=9.0, foul_short=False,
+                                    heir_of="", ours=o, min_ours=sum(o), cmp=["ours" if b else "" for b in o], dnp=True))
+        rot["overlay"] = dict(found=True, source=src, agreement=both / 240.0)
+        return rot
+
+    def game_grid(self, team: str, game_id: Optional[str] = None, overlay: bool = False) -> dict:
+        """A played game's grid for the panel under tonight's: rows in the same order as tonight's panel, then the rest by minutes.
+        `overlay`: our grid for that day over it (overlay_ours)."""
+        rot = self.rotation(team, source="last", game_id=game_id, overlay=overlay)
         # the game's starters first (struck through when out tonight: those are the minutes to give away), then the bench
         rot["rows"] = self.mark_starter_rule(self.order_rows(rot.get("rows") or [], rot.get("owners") or []))
         rot["lanes"] = self.lanes_of(rot["rows"], rot.get("owners") or [])

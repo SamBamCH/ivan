@@ -185,6 +185,33 @@ def our_grid(session: Session, dg: int, team: str, cells: Optional[tuple] = None
     return None, "no grid of ours on file (none drawn; the archive kept grid rows from 2026-10-29)"
 
 
+def grid_for_day(session: Session, team: str, day: date, root: Optional[Path] = None) -> tuple[Optional[pd.DataFrame], str]:
+    """
+    (our grid for the team on `day`, where it came from) whatever slate held the game: the grid drawn on the desk that day
+    (data/nba/days/<day>/edits/rotations/<TEAM>.json, shared by the day's slates), else the grid rows of the newest archive
+    capture at or just after the lock of a slate of that day whose pool has the team (rotation_cells, kept from 2026-10-29).
+    None when neither exists. The team page's "vs our grid" toggle on a past game reads it (Desk.game_grid).
+    """
+    from ivan.core import archive
+    from ivan.sports.nba.projection.rotation import MINUTES
+    p = S.days_dir(root) / day.isoformat() / "edits" / "rotations" / f"{team}.json"
+    if p.exists():
+        try:
+            d = json.loads(p.read_text())
+            g = pd.DataFrame(np.array(d["grid"], dtype=bool).reshape(len(d["players"]), MINUTES), index=d["players"], columns=list(range(MINUTES)))
+            return g, f"drawn on the desk ({str(d.get('saved_at') or '')[5:16].replace('T', ' ')})"
+        except (OSError, ValueError, KeyError):
+            pass
+    start = datetime.combine(day, datetime.min.time()); end = start + pd.Timedelta(days=1)
+    caps = [c for c in archive.captures(session, "nba", since=start, until=end) if c.captured_at <= c.lock + pd.Timedelta(minutes=15)]
+    for cap in sorted(caps, key=lambda c: c.captured_at, reverse=True):
+        rows = {normalize_name(r["name"]): r["rotation_cells"] for r in archive.load_blobs(session, cap.id).get("players", [])
+                if str(r.get("team")) == team and r.get("rotation_cells")}
+        if rows:
+            return pd.DataFrame({n: [bool(x) for x in v][:MINUTES] for n, v in rows.items()}).T, f"the projection at {cap.captured_at:%H:%M} (slate {cap.slate_key})"
+    return None, "no grid of ours on file for that day (none drawn; the archive keeps grid rows from 2026-10-29)"
+
+
 def rotation_overlay(session: Session, dg: int, team: str, day: date, min_proj: Dict[str, float], cells: Optional[tuple] = None) -> Optional[dict]:
     """The team's game as played over our grid: rows (actual and ours per minute), the agreement, where ours came from."""
     from ivan.sports.nba.projection import rotation as ROT

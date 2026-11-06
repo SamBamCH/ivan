@@ -155,11 +155,12 @@ async def rotation_apply(request: Request, team: str):
 
 
 @slate.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
-def rotation_propose(request: Request, team: str, source: str = Form("propose"), game_id: str = Form("")):
-    """source=propose: tonight's grid with every lock lifted (the top panel, nothing saved); source=last: a played game for the panel under it."""
+def rotation_propose(request: Request, team: str, source: str = Form("propose"), game_id: str = Form(""), overlay: str = Form("")):
+    """source=propose: tonight's grid with every lock lifted (the top panel, nothing saved); source=last: a played game for the panel
+    under it, with our grid of that day over it when `overlay` is set (the panel's "vs our grid" box)."""
     with LOCK:
         if source == "last":
-            return _render(request, "_nba_rotation.html", rot=desk.game_grid(team, game_id=game_id.strip() or None))
+            return _render(request, "_nba_rotation.html", rot=desk.game_grid(team, game_id=game_id.strip() or None, overlay=bool(overlay.strip())))
         return _render(request, "_nba_rotation.html", rot=desk.rotation(team, source="propose"))
 
 
