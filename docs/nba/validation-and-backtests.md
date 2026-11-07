@@ -212,6 +212,21 @@ venv/bin/python scripts/nba/pbp.py rotation --team NYK --games 10 [--before 2026
 venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-reconstruct stints, fouls, pairs from stored raw (no fetch)
 ```
 
+## The game simulation's data (`ivan.sports.nba.gamesim`, `scripts/nba/gamesim.py`)
+
+```bash
+venv/bin/python scripts/nba/gamesim.py events [--since 2026-10-01] [--rebuild]     # the events store from the stored feeds (incremental)
+venv/bin/python scripts/nba/gamesim.py check [--game-ids 0022500001]              # the parse against the box score
+```
+
+`events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
+substitution) with the possession it ends and the five on the floor for both teams
+(`data/nba/derived/gamesim/events.parquet`, 763 games in under a minute). `check` reconciles it with `nba_stats`:
+shots, makes and free throws match exactly, points and rebounds on 99.6-99.8% of player-games (the rest are feed gaps),
+counted possessions sit 0.3 per game below the classic estimate FGA - OREB + TOV + 0.44 FTA and the two teams' counts
+differ by 0.9 on average (2026-11-07, 763 games). The layers of the game sim fit on this store
+([notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md)).
+
 ## What does not exist yet
 
 - A replay adapter for NBA (`ivan.core.replay` runs archived slates with today's code; only NFL plugs in),
