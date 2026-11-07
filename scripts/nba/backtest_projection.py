@@ -205,10 +205,13 @@ def main():
         print(f"wrote {CORRELATION_JSON} and {RESIDUALS_CSV} ({len(r)} player-games)")
 
     if args.market_day:
-        from ivan.sports.nba.projection.market import market_means, market_rates
+        from ivan.sports.nba.projection.market import load_odds, market_means, market_rates, parse_utc
         day = date.fromisoformat(args.market_day)
-        odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.get_bind())
-        odds = odds[pd.to_datetime(odds.last_update).dt.date == day]
+        odds = load_odds(session)
+        # the day's games by their tip (local) where the row knows its game, else by the day the book posted the line
+        game_day = parse_utc(odds.commence_time).dt.tz_convert("America/Chicago").dt.date
+        posted_day = parse_utc(odds.last_update).dt.tz_convert("America/Chicago").dt.date
+        odds = odds[game_day.where(game_day.notna(), posted_day) == day]
         means = market_means(odds)
         # players play on the day or the next (the fetch takes each team's next event)
         mcases = [c for c in build_cases(box, day, day + timedelta(days=1), dnp_available=args.dnp_available)]

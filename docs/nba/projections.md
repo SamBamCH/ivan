@@ -194,9 +194,16 @@ projection.n_sims` (4000; the draws cost nothing next to the solve, 0.15 s a tea
 
 ## Market rates
 
-**Only tonight's props count.** The odds table keeps a player's latest rows whatever game they were posted for, so every
-reader of it (the market rates at refresh, the public projection, the desk's consensus prices) goes through
-`projection.market.fresh_odds`: a row counts when the book posted it within 36 hours before the player's own tip on this
-slate and not after it. A player the books did not price tonight gets no market rate and projects from his history alone
-(2026-11-04: IND's Toppin, Huff and Nance carried Nov 2 and Oct 30 props into Nov 4, 33 projected points each on prices
-for another game; 2026-10-28: O'Neale on week-old props).
+**Only this slate's games' props count.** Every prop row carries the game it prices (the odds API event: `game_id`,
+`commence_time`, the two teams; `parse_odds(games=True)` at the fetch), and the odds table holds other games and other
+days beside it (a back-to-back's two games, a player the books did not price tonight). So every reader of the table (the
+market rates at refresh, the public projection, the desk's consensus prices, the archive at tip, the restore) goes through
+`projection.market.fresh_odds` / `fresh_rows`: a row counts when its game tips within 2 hours of the player's own DK tip on
+this slate (`GAME_TOLERANCE_HOURS`; a team never plays twice in two hours, so this is the game itself, whenever the line
+was posted). A row without a game (stored before 2026-11-07, or in an archive capture from then) counts only when the book
+posted it within 12 hours before the tip and not after it (`FALLBACK_HOURS`; the 36-hour window this replaced let the first
+game of a back-to-back price the second). A player with no row for his game gets no market rate and projects from his
+history alone (2026-11-04: IND's Toppin, Huff and Nance carried Nov 2 and Oct 30 props into Nov 4, 33 projected points each
+on prices for another game; 2026-10-28: O'Neale on week-old props). `scripts/nba/odds_games.py` shows a slate's props by
+game and, with `--player`, why each of a player's rows is kept or ignored; `--backfill --apply` gives the rows stored
+before the game columns their game from the raw payloads.

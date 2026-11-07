@@ -34,6 +34,7 @@ from ivan.database.session import init_db
 from ivan.sports.nba.ingest import GAME_LINE_COLS, ensure_schema
 from ivan.sports.nba.models import NBAPlayer, NBAProjectionCapture, StartingLineups
 from ivan.sports.nba.paths import LOGS_DIR, NBA_DATA_DIR
+from ivan.sports.nba.projection.market import load_odds
 
 STATE = NBA_DATA_DIR / "archive_state.json"
 ARCHIVE_WINDOW = 12            # minutes after a tip during which it is still archived (a missed timer run or a busy desk)
@@ -71,7 +72,7 @@ def archive_tip(session, players, tip, now, dg) -> dict:
                  fpts_mean=p.fpts_mean, fpts_std=p.fpts_std, ownership=p.ownership, pub_fpts=p.pub_fpts,
                  rotation_cells=p.rotation_cells, minutes_p10=p.minutes_p10, minutes_p90=p.minutes_p90) for p in players]   # the grid row: the backtest's "our grid" for teams not drawn by hand
     pool = {p.name for p in players}
-    odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.get_bind())
+    odds = load_odds(session)                                     # with each row's game, so a backtest of the record reads only this slate's games
     odds = odds[odds.player.isin(pool)]
     lines = pd.read_sql("select * from game_odds", session.get_bind())
     teams = {p.team for p in players}

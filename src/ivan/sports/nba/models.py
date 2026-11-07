@@ -150,6 +150,12 @@ class NBAProjectionCapture(NBABase):
 
 
 class NBAOdds(NBABase):
+    """
+    Player props, one row per (book, market, side, line), each tied to the game it prices (the-odds-api event: game_id,
+    commence_time as the ISO UTC string the API gives, the two teams). A slate reads only the rows of the games it plays
+    (projection/market.fresh_rows); a row without a game was stored before 2026-11-07 and counts only by its last_update
+    (scripts/nba/odds_games.py --backfill gives it its game from the raw payloads).
+    """
     __tablename__ = "odds"
 
     id              = Column(Integer, primary_key=True, autoincrement=True)
@@ -160,6 +166,10 @@ class NBAOdds(NBABase):
     point           = Column(Float,   nullable=True)
     price           = Column(Integer, nullable=True)
     last_update     = Column(String,  nullable=True)
+    game_id         = Column(String,  nullable=True, index=True)   # the-odds-api event id
+    commence_time   = Column(String,  nullable=True)               # the game's tip, ISO UTC ("2026-11-07T01:10:00Z")
+    home_abbr       = Column(String,  nullable=True)
+    away_abbr       = Column(String,  nullable=True)
 
 class NBAMarketRate(NBABase):
     """Per-minute rate implied by the props at fetch time (see projection/market.py)."""

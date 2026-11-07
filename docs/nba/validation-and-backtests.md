@@ -110,7 +110,8 @@ play). `--grid` and friends search the model's knobs; `--calibrate` fits the per
 the minutes sd into `data/nba/models/projection_calibration.json`; `--compare` scores the same
 player-games against the Stokastic projections kept in `projection_snapshot`; `--fit-correlation`
 refits the role-pair correlation table (`correlation.json`); `--market-day` evaluates market rates
-from the props stored for that day. Reports: `data/nba/diagnostics/backtest_projection_*.txt`.
+from the stored props of the games that tipped that day (rows without a game: by the day the book posted
+them). Reports: `data/nba/diagnostics/backtest_projection_*.txt`.
 Result 2026-10-06 under live conditions: level with Stokastic (MAE 7.44 vs 7.41 on 3,410 player-games),
 a 50/50 blend beats both, the parameters survive a held-out half and the playoffs.
 

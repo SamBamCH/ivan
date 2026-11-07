@@ -222,15 +222,28 @@ def get_odds(sport, api_key, relevant_teams, markets=None, raw_sport=None):
 
     return odds_by_team
 
-def parse_odds(odds_by_team: dict) -> pd.DataFrame:
+def parse_odds(odds_by_team: dict, games: bool = False) -> pd.DataFrame:
     """
     Flatten the nested odds JSON into a DataFrame with columns:
     player (pk), market, sportsbook, side, point, price, last_update
+
+    games=True adds the event each row prices, as the /events/{id}/odds response names it: game_id, commence_time (the
+    ISO UTC string, "2026-11-07T01:10:00Z"), home_abbr, away_abbr; an event listed under both of its teams is parsed
+    once. The NBA stores these so a slate reads only its own games' rows (ivan.sports.nba.projection.market.fresh_rows).
     """
     rows = []
+    seen_events: set = set()
     for _, ev in odds_by_team.items():
         if not ev or not ev.get("bookmakers"):
             continue
+        game: dict = {}
+        if games:
+            if ev.get("id") in seen_events:
+                continue
+            seen_events.add(ev.get("id"))
+            game = {"game_id": ev.get("id"), "commence_time": ev.get("commence_time"),
+                    "home_abbr": map_team_name_to_abbreviation(ev["home_team"]) if ev.get("home_team") else None,
+                    "away_abbr": map_team_name_to_abbreviation(ev["away_team"]) if ev.get("away_team") else None}
 
         for bm in ev["bookmakers"]:
             sportsbook = bm["key"]
@@ -252,7 +265,8 @@ def parse_odds(odds_by_team: dict) -> pd.DataFrame:
                         "side": side,
                         "point": point,
                         "price": price,
-                        "last_update": last_update
+                        "last_update": last_update,
+                        **game,
                     })
     df = pd.DataFrame(rows)
     return df

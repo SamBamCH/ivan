@@ -14,6 +14,7 @@ alternate lines). Turnovers are never priced and stay on history.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -86,30 +87,68 @@ def means_from_tails(points: np.ndarray, p_overs: np.ndarray, ks: np.ndarray, it
     return mu[np.asarray(inverse).reshape(-1)]
 
 
-FRESH_HOURS = 36.0      # a prop counts for a game when the book posted it within this many hours before the tip
+ODDS_COLS = ["player", "market", "sportsbook", "side", "point", "price", "last_update", "game_id", "commence_time", "home_abbr", "away_abbr"]
+GAME_TOLERANCE_HOURS = 2.0   # a row's game is the player's game on this slate when the two tips are this close (a team never plays twice in 2 h)
+FALLBACK_HOURS = 12.0        # a row without a game (stored before 2026-11-07): counts when the book posted it within this long before the tip
 
 
-def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FRESH_HOURS) -> pd.DataFrame:
+def parse_utc(strings: pd.Series) -> pd.Series:
+    """UTC time strings -> tz-aware UTC. format="ISO8601" because the odds table mixes "2026-10-25T22:54:18Z" (the fetch) with
+    "2026-10-25 22:54:18" (captures restored before 2026-11-07); pandas infers one format from the first row and coerces the
+    other to NaT, which silently dropped every restored row."""
+    return pd.to_datetime(strings, errors="coerce", utc=True, format="ISO8601")
+
+
+def _to_local(utc_strings: pd.Series) -> pd.Series:
+    """ISO UTC strings -> naive local datetimes (the pool's gametime is naive local)."""
+    return parse_utc(utc_strings).dt.tz_convert(datetime.now().astimezone().tzinfo).dt.tz_localize(None)
+
+
+def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FALLBACK_HOURS) -> pd.DataFrame:
     """
-    Only the odds rows priced for the player's game on this slate: `last_update` (UTC) within `hours` before his tip (`gametimes`:
-    DK name -> local tip) and not after it. The odds table keeps a player's latest rows whatever game they were posted for, so
-    without this a player the books did not price tonight kept the rates of his last priced game (2026-11-04: IND's Toppin,
-    Walker, Huff and Nance carried Nov 2 and Oct 30 props into Nov 4). A player with no fresh row has no market rate: the
-    projection falls back to his history alone.
+    Only the odds rows priced for the player's game on this slate (`gametimes`: DK name -> naive local tip).
+
+    A row that carries its game (`commence_time`, from the odds API event, since 2026-11-07) is kept exactly when that game tips
+    within GAME_TOLERANCE_HOURS of the player's DK tip: the game is identified, so when it was posted does not matter. A row without
+    a game (an older table row, an older archive capture) is kept when the book posted it (`last_update`) within `hours` before
+    the tip and not after it; a wide window here is the lazy filter this replaced (36 h let a back-to-back's first game price the
+    second). The odds table keeps rows of other games and other days, so without this a player the books did not price tonight
+    kept the rates of his last priced game (2026-11-04: IND's Toppin, Walker, Huff and Nance carried Nov 2 and Oct 30 props into
+    Nov 4; 2026-10-28: O'Neale on week-old props). A player with no row for his game has no market rate: the projection falls back
+    to his history alone.
     """
     if odds is None or odds.empty or "last_update" not in odds.columns:
         return odds.iloc[0:0] if odds is not None else pd.DataFrame()
-    lu = pd.to_datetime(odds["last_update"], errors="coerce", utc=True)
-    local = lu.dt.tz_convert(datetime.now().astimezone().tzinfo).dt.tz_localize(None)
     tip = pd.to_datetime(odds["player"].map(lambda n: gametimes.get(n)), errors="coerce")
-    keep = tip.notna() & local.notna() & (local >= tip - pd.Timedelta(hours=hours)) & (local <= tip + pd.Timedelta(hours=1))
+    posted = _to_local(odds["last_update"])
+    game = _to_local(odds["commence_time"]) if "commence_time" in odds.columns else pd.Series(pd.NaT, index=odds.index)
+    linked = game.notna()
+    keep_linked = linked & ((game - tip).abs() <= pd.Timedelta(hours=GAME_TOLERANCE_HOURS))
+    keep_legacy = ~linked & posted.notna() & (posted >= tip - pd.Timedelta(hours=hours)) & (posted <= tip + pd.Timedelta(hours=1))
+    keep = tip.notna() & (keep_linked | keep_legacy)
     return odds[keep.values]
 
 
-def fresh_odds(session, gametimes: dict, hours: float = FRESH_HOURS) -> pd.DataFrame:
-    """The odds table's rows the projection may use for this pool (fresh_rows over `select ... from odds`)."""
-    odds = pd.read_sql("select player, market, sportsbook, side, point, price, last_update from odds", session.connection())
-    return fresh_rows(odds, gametimes, hours)
+def load_odds(bind) -> pd.DataFrame:
+    """Every row of the odds table with ODDS_COLS (`bind`: a session, connection or engine); the game columns NaN on a table
+    that predates them."""
+    if hasattr(bind, "get_bind"):                                     # a Session
+        bind = bind.get_bind()
+    with (bind.connect() if hasattr(bind, "connect") else nullcontext(bind)) as conn:     # an Engine, or a Connection as is
+        # pragma rather than the inspector: a slate session reaches the odds table through an attached history database,
+        # where SQLAlchemy's inspector (main.table_info) does not look
+        have = {r[1] for r in conn.exec_driver_sql("pragma table_info(odds)").fetchall()}
+        cols = [c for c in ODDS_COLS if c in have]
+        odds = pd.read_sql(f"select {', '.join(cols)} from odds", conn)
+    for c in ODDS_COLS:
+        if c not in odds.columns:
+            odds[c] = None
+    return odds
+
+
+def fresh_odds(session, gametimes: dict, hours: float = FALLBACK_HOURS) -> pd.DataFrame:
+    """The odds table's rows the projection may use for this pool (fresh_rows over load_odds)."""
+    return fresh_rows(load_odds(session), gametimes, hours)
 
 
 def market_means(odds: pd.DataFrame, dispersion: dict[str, float] | None = None) -> pd.DataFrame:

@@ -18,7 +18,7 @@ import re
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Callable, Optional
 
@@ -165,7 +165,7 @@ def fetch_slate(session: Session, draft_group_id: int, *, update_odds: bool, sta
     if update_odds:
         key = api_key or require_env("ODDS_API_KEY")
         odds = get_odds(ODDS_SPORT, key, sorted(out.teams), markets=NBA_MARKETS, raw_sport="nba")
-        df = parse_odds(odds)
+        df = parse_odds(odds, games=True)                               # each row carries its game: a slate reads only its own games' rows
         if len(df) and "player" in df.columns:
             df["player"] = df["player"].map(normalize_name)        # the NBA key (names.py): the shared parser keeps a suffix the pool drops
         if df is None or len(df) == 0:
@@ -293,6 +293,39 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     return out["stored"], out["projected"], out["news"], out["changes"]
 
 
+PROPS_KEEP_DAYS = 3        # odds rows of a game that tipped longer ago than this are dropped at the next props store (the captures keep them)
+
+
+def store_props(session: Session, odds: pd.DataFrame) -> int:
+    """
+    Replace the odds table's rows for the games a fetch priced. The rows of every game in `odds` (game_id) go, then the fetched rows
+    come in; a row without a game (stored before 2026-11-07, or a capture made then) is replaced by player, as the table used to be.
+    Other games' rows stay: a fetch for one slate's teams must not strip another slate's games, and a back-to-back's two games
+    sit side by side, each read by its own slate (market.fresh_rows). Games that tipped more than PROPS_KEEP_DAYS ago are dropped
+    (legacy rows by last_update). Returns the rows stored.
+    """
+    if odds is None or len(odds) == 0:
+        return 0
+    odds = odds.copy()
+    for c in ("game_id", "commence_time", "home_abbr", "away_abbr"):
+        if c not in odds.columns:
+            odds[c] = None
+    odds = odds.astype(object).where(odds.notna(), None)              # NaN -> NULL
+    games = [str(g) for g in odds.game_id.dropna().unique()]
+    for i in range(0, len(games), 500):
+        session.query(NBAOdds).filter(NBAOdds.game_id.in_(games[i:i + 500])).delete(synchronize_session=False)
+    players = [str(x) for x in odds[odds.game_id.isna()].player.dropna().unique()]
+    for i in range(0, len(players), 500):
+        session.query(NBAOdds).filter(NBAOdds.player.in_(players[i:i + 500])).delete(synchronize_session=False)
+    session.bulk_insert_mappings(NBAOdds, odds.to_dict("records"))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=PROPS_KEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    session.query(NBAOdds).filter(NBAOdds.commence_time.isnot(None), NBAOdds.commence_time < cutoff).delete(synchronize_session=False)
+    session.query(NBAOdds).filter(NBAOdds.commence_time.is_(None), NBAOdds.last_update.isnot(None),
+                                  NBAOdds.last_update < cutoff).delete(synchronize_session=False)
+    session.commit()
+    return int(len(odds))
+
+
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
     info = StoreInfo()
     # the pool: replace in full (one slate at a time in nba_player)
@@ -304,18 +337,11 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
     if fetched.starters is not None:
         info.starters = store_starting_lineups(session, fetched.starters, fetched_at=fetched.fetched_at)
     if fetched.odds is not None:
-        # refresh the players just fetched; other players keep their latest lines (a fetch for one
-        # slate's teams must not strip the market rates of another slate's games)
-        players = [str(x) for x in fetched.odds.player.dropna().unique()]
-        for i in range(0, len(players), 500):
-            session.query(NBAOdds).filter(NBAOdds.player.in_(players[i:i + 500])).delete(synchronize_session=False)
-        session.bulk_insert_mappings(NBAOdds, fetched.odds.to_dict("records"))
-        session.commit()
-        info.odds = len(fetched.odds)
+        info.odds = store_props(session, fetched.odds)
     if fetched.game_lines is not None and len(fetched.game_lines):
         info.game_lines = store_game_lines(session, fetched.game_lines, fetched_at=fetched.fetched_at)
-    # market rates for this pool from the props posted for tonight's games only (market.fresh_odds: within 36 h before each
-    # player's tip; a player the books did not price tonight gets no market rate rather than his last game's)
+    # market rates for this pool from the props of its own games only (market.fresh_odds: the row's game is the player's game on
+    # this slate; a player the books did not price tonight gets no market rate rather than his last game's)
     odds_df = fresh_odds(session, {r["name"]: r.get("gametime") for r in fetched.players})
     if len(odds_df):
         pool = {r["name"] for r in fetched.players}
@@ -724,15 +750,9 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
             session.commit()
             if odds_rows:
                 odf = pd.DataFrame(odds_rows)
-                recs = odf.to_dict("records")
-                for r in recs:                                        # the blob holds ISO strings; sqlite binds datetimes, not pandas Timestamps
-                    lu = pd.to_datetime(r.get("last_update"), errors="coerce", utc=True)
-                    r["last_update"] = None if pd.isna(lu) else lu.tz_localize(None).to_pydatetime()
-                names = [str(x) for x in odf.player.dropna().unique()]
-                for i in range(0, len(names), 500):
-                    session.query(NBAOdds).filter(NBAOdds.player.in_(names[i:i + 500])).delete(synchronize_session=False)
-                session.bulk_insert_mappings(NBAOdds, recs)
-                session.commit()
+                lu = pd.to_datetime(odf["last_update"], errors="coerce", utc=True) if "last_update" in odf else pd.Series(pd.NaT, index=odf.index)
+                odf["last_update"] = lu.dt.strftime("%Y-%m-%dT%H:%M:%SZ")        # the ISO UTC string the live table holds
+                store_props(session, odf[[c for c in odf.columns if c in NBAOdds.__table__.columns.keys()]])
             if line_rows:
                 store_game_lines(session, pd.DataFrame(line_rows), fetched_at=cap.captured_at)
             odds_df = fresh_odds(session, {r["name"]: r.get("gametime") for r in players})
