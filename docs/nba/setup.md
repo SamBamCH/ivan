@@ -43,7 +43,7 @@ The models read history that is not fetched on a slate day:
   (`nba_stint`, `nba_foul`, `nba_sub`) come from `scripts/nba/pbp.py fetch --since 2025-10-01`.
 - **Model parameters** in `data/nba/models/`: `projection_calibration.json` (per-stat dispersion, minutes sd),
   `team_minutes.json`, `correlation.json`, `field_two_group.json`, `field_ownership.json`,
-  `field_distribution_model.pkl`. They are tracked files; the refits are in
+  `field_distribution_model.pkl`, `gamesim/script.json` and `gamesim/teams.json`. They are tracked files; the refits are in
   [validation-and-backtests.md](validation-and-backtests.md).
 
 A consumer gets all of this from the reference bundle of the feed instead (`scripts/nba/feed.py pull`).

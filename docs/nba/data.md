@@ -96,11 +96,13 @@ data/nba/
 │   └── stok.csv                    a Stokastic export to record as a yardstick (ingest.py --stok-csv)
 ├── models/
 │   ├── projection_calibration.json per-stat dispersion, minutes sd (backtest_projection.py --calibrate)
-│   ├── team_minutes.json           τ, β per role (fit_team_minutes.py)
-│   ├── correlation.json, correlation_residuals.csv   role-pair correlation table (backtest_projection.py --fit-correlation)
+│   ├── team_minutes.json           the projection's game constants: scratch probabilities by status and salary, margin sd, overtime rate (hand-kept; measured 2026-10)
+│   ├── correlation.json            the measured role-pair correlation table (backtest_projection.py --fit-correlation): the game sim's check target
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)
 │   ├── field_ownership.json        the ownership model fitted on real contests (field_model.py fit)
 │   ├── field_distribution_model.pkl, marginals_*.pkl   last season's bin sampler (field.sampler = projection_model)
+│   ├── gamesim/script.json         the game script's parameters (gamesim.py fit-script) and the World's calibrated knobs (world_*, calibrate-world), with the fit window and the commit
+│   ├── gamesim/teams.json          every team's trailing pace and the league coupling constants the World falls back on (fit-script)
 │   └── salary_minutes.json         (when fitted) the salary → minutes prior curve
 ├── raw/                            every payload as received, gzip, plus index.jsonl (ivan.core.raw)
 │   ├── dk/{lobby,draftables,payouts,standings}/
@@ -112,6 +114,10 @@ data/nba/
 │   ├── contests/<id>/              lineups.parquet, players.csv, field.json from a FINAL standings export (field.json: final, locked_entries)
 │   ├── field_backtest/             the field backtest's model field per capture and public projection (a cache)
 │   ├── field_cache/                the two-group field per public-projection key
+│   ├── gamesim/events.parquet      one row per play-by-play event with its possession bookkeeping and the five on the floor
+│   │                               (a slate's reruns by the current code live with the slate: slates/<dg>/rerun/<stamp>-<commit>/ with meta.json
+│   │                               (the scorecard, the games), players.json (published, actual) and arrays.npz (every stat x world x player))
+│   │                               (ivan.sports.nba.gamesim.possessions; scripts/nba/gamesim.py events, incremental): the game sim's fitting data
 │   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
 │   └── props_hist/                 parquet of the historical props
 ├── output/                         cross-slate outputs only (a slate's are under slates/<dg>/output)

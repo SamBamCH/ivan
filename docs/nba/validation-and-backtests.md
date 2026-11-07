@@ -100,7 +100,7 @@ module's docstring and [data.md](data.md).
 ```bash
 venv/bin/python scripts/nba/backtest_projection.py [--start 2025-11-15 --end 2026-01-15] [--dnp-available]
     [--grid | --kgrid | --rgrid | --sgrid] [--calibrate] [--compare] [--fit-correlation]
-    [--market-day 2025-11-30] [--minutes-model independent|team|both]
+    [--market-day 2025-11-30]
 ```
 
 Every team-game from `--start` on is projected using only games before that date, with availability
@@ -109,7 +109,7 @@ model and not injury-news timing. `--dnp-available` is the live condition (dress
 play). `--grid` and friends search the model's knobs; `--calibrate` fits the per-stat dispersion and
 the minutes sd into `data/nba/models/projection_calibration.json`; `--compare` scores the same
 player-games against the Stokastic projections kept in `projection_snapshot`; `--fit-correlation`
-refits the role-pair correlation table (`correlation.json`); `--market-day` evaluates market rates
+measures the role-pair correlation table (`correlation.json`, the game simulation's check target); `--market-day` evaluates market rates
 from the stored props of the games that tipped that day (rows without a game: by the day the book posted
 them). Reports: `data/nba/diagnostics/backtest_projection_*.txt`.
 Result 2026-10-06 under live conditions: level with Stokastic (MAE 7.44 vs 7.41 on 3,410 player-games),
@@ -127,18 +127,6 @@ the mean, `rotation.propose`'s grid as the shape) on last season's box scores: m
 error and bias (players with 5+ games), 10-90 coverage, and what the skeleton drops (players it leaves
 off the floor who did play). `--pool` adds the last-game pool rule; run it before switching
 `projection.pool`. The depth cut's own numbers are in the `_depth_note` of `config/nba.json`.
-
-## The team minutes draw (`scripts/nba/fit_team_minutes.py`)
-
-```bash
-venv/bin/python scripts/nba/fit_team_minutes.py [--fit-end 2026-01-31] [--eval-start 2026-02-01 --eval-end 2026-03-15] [-n 300]
-    [--no-write] [--no-eval] [--lines data/nba/input/historical_lines.csv]
-```
-
-Fits τ (share noise) and β (minutes per point of final margin) per role on the box scores and
-checks the draw walk-forward against the independent sampler (minutes MAE of the allocation and of
-the draw's mean, 10-90 coverage and width). Writes `data/nba/models/team_minutes.json`. `--lines`
-lets the draw know each game's spread (from `fetch_historical_lines.py`).
 
 ## The field backtest (`ivan.sports.nba.field_backtest`, `scripts/nba/backtest_field.py`)
 
@@ -212,6 +200,92 @@ venv/bin/python scripts/nba/pbp.py rotation --team NYK --games 10 [--before 2026
 venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-reconstruct stints, fouls, pairs from stored raw (no fetch)
 ```
 
+## The game simulation's data (`ivan.sports.nba.gamesim`, `scripts/nba/gamesim.py`)
+
+```bash
+venv/bin/python scripts/nba/gamesim.py events [--since 2026-10-01] [--rebuild]     # the events store from the stored feeds (incremental)
+venv/bin/python scripts/nba/gamesim.py check [--game-ids 0022500001]              # the parse against the box score
+venv/bin/python scripts/nba/gamesim.py exits [--team BOS]                         # who inherits a mid-game exit: the heir rules scored
+venv/bin/python scripts/nba/gamesim.py fit-script [--no-write]                     # layer A: the game script's parameters from the lined games
+venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                      # layer A: PIT coverage of totals and margins, pace, overtime, garbage time
+venv/bin/python scripts/nba/gamesim.py check-usage [--start --end]                 # layer C: shares over the real fives vs per-minute rates, true minutes plugged in
+venv/bin/python scripts/nba/gamesim.py check-rotation [--start --end] [-n 300]     # layer B: the rotation draw vs the current sampler, the real margin path plugged in
+venv/bin/python scripts/nba/gamesim.py draw-world --slate DG [-n 1000]             # the World on a slate: moments vs the lines, every player's line vs the pool
+venv/bin/python scripts/nba/gamesim.py calibrate-world --slate DG [-n 400]         # the World's four game-level knobs against the real spread of totals, margins, team points, overtime
+```
+
+`events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
+substitution) with the possession it ends and the five on the floor for both teams
+(`data/nba/derived/gamesim/events.parquet`, 763 games in under a minute). `check` reconciles it with `nba_stats`:
+shots, makes and free throws match exactly, points and rebounds on 99.6-99.8% of player-games (the rest are feed gaps),
+counted possessions sit 0.3 per game below the classic estimate FGA - OREB + TOV + 0.44 FTA and the two teams' counts
+differ by 0.9 on average (2026-11-07, 763 games). The layers of the game sim fit on this store
+([notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md)).
+
+`exits` measures who inherits the minutes of a player who leaves for good mid-game (`gamesim.fouls`): every exit with
+four or more minutes left outside garbage time and blowouts, each teammate's gain over his own trailing curve, and six
+heir rules scored on a held-out half (pairs, group, the sampler's best-substitute slot, proportional, the fitted flow
+matrix, nobody). Finding 2026-11-07: single exits are noise, the aggregate flow is by position group (a big's minutes
+40% to bigs, the backup big 22% himself, a fifth lost), and the sampler's slot rule is the worst
+([notes/midgame_exits_2026-11-07.md](notes/midgame_exits_2026-11-07.md)). `--team` adds the team's own exits and who
+gained; `--csv` writes `data/nba/diagnostics/gamesim/exits.csv` (+ `_heirs.csv`).
+
+`fit-script` / `check-script` are layer A, the game script (`gamesim.script`): each team's trailing pace and the books'
+total and spread give the game's expected possessions and each team's points per possession; a world draws the pace,
+the possessions per six-minute segment, the points per segment with the lead pulling the efficiencies back (the
+leader eases off), garbage time off the margin path and overtime from a tie (close games tie more than possession
+noise says). `fit-script` takes every parameter from a moment of the lined games (the historical lines CSV and this
+season's `game_odds`, matched to the stored feeds by date and teams; 221 games on 2026-11-07) and writes
+`data/nba/models/gamesim/script.json` with the window and the commit. `check-script` draws every lined game with its own
+line: the real total and margin should sit inside the drawn 10-90 band 80% of the time with flat PIT fifths, the drawn
+overtime and garbage-time rates should match the stints'. Result 2026-11-07 in
+[notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md).
+
+`check-usage` is layer C (`gamesim.usage`): each player's share of the possessions he is on the floor for (attempts,
+threes, trips, turnovers per own possession; assists per teammate make; rebounds per miss; steals per opponent
+possession; blocks per opponent attempt), trailing and shrunk toward his position group, and the team's pie (its own
+endings per possession, its shares of misses and makes) that the five on the floor split. The check replays every game
+of the window possession by possession with the real fives and scores the shares' expected counts against the real
+ones, next to the current model's way (the trailing stat per minute times the true minutes). Result 2026-11-07 in the
+same note: level on attempts when the minutes are known (7 of 9 stats a hair better), and the pie removes the bias on
+nights a 25-minute teammate sat.
+
+`check-rotation` is layer B (`gamesim.rotation`): the skeleton grid's substitutions jittered once per world and rasterised
+to each player's coverage of every minute (five on the floor in every minute of every world, by construction), then the
+game happening to the plan: scratches and foul-outs handed to heirs by the measured flow matrix and the room inside a
+group, fouls as a process along each player's floor time at his own trailing rate with the coach's measured reaction
+after the fourth and fifth, garbage time off the margin path (closers out only while the lead holds, the end of the
+bench in), overtime for the five at the buzzer. The check proposes each team-game's grid from the stints before that
+date, plugs in the real margin path and overtime, and scores the draw against the box score next to the current sampler
+on the same grid: minutes MAE, bias and 10-90 coverage by role, by final margin and for the players who really reached
+five fouls. Result 2026-11-07 in the same note.
+
+`draw-world` / `calibrate-world` are the World itself (`gamesim.world`, the sampler the field, the sim and the chooser
+read; [field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)). `calibrate-world` sets its four
+game-level knobs on a slate's games so the drawn totals, margins, team points and overtime rate have the real spread
+(the script's fit holds the real numbers); `draw-world` prints a slate's moments, the per-team reconciliation factor
+(how far the pool's points sit from the lines) and every player's simulated line next to the pool's mean.
+
+## The as-of rerun of a past slate (`ivan.sports.nba.gamesim.rerun`, `scripts/nba/rerun_slate.py`, the backtest view)
+
+```bash
+venv/bin/python scripts/nba/rerun_slate.py --slate 156184 [-n 1000] [--seed 0] [--tip 1800]      # the first tip record unless --tip
+venv/bin/python scripts/nba/rerun_slate.py --slate 156184 --list
+```
+
+The World drawn from the slate's **tip record** ([data.md](data.md): the pool with its minutes, grid rows and scratch
+probabilities as the desk had them, the props and the game lines at the tip) with the history cut at that day (the
+per-minute rates rebuilt the way the live projection built them: history before the day, the books' means over the
+projected minutes where priced; shooting profiles and foul rates before the day; each team's pace from the events before
+the day), then scored against the actuals **one layer at a time**: possessions and the finals per game from the events
+store, every player's minutes, attempts, makes and outcomes and fantasy points from `nba_stats`, each as the drawn mean's
+MAE and bias, the share of actuals inside the drawn 10-90 band and the mean percentile of the actual, with the error of
+what was published at the tip (the projection, the line) beside it. The record (`slates/<dg>/rerun/<stamp>-<commit>/`)
+keeps every stat of every player in every world, so the backtest view draws each player's distribution with his actual
+inside it ([../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-viewbacktestdgdraft-group-_nba_backtesthtml)).
+A slate archived before 2026-10-23 has no tip record and cannot be rerun. First result (slate 156184, 2026-11-06, 500
+worlds): [notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md).
+
 ## What does not exist yet
 
 - A replay adapter for NBA (`ivan.core.replay` runs archived slates with today's code; only NFL plugs in),
@@ -220,7 +294,8 @@ venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-r
 - Lineup and pool validation (did sim ROI rank lineups the way the real field did) from the sim
   artifacts, which `ivan.core.validation.lineup_report` / `pool_report` are built for; the NBA adapter is
   not written.
-- Foul-trouble and blowout sampler models beyond the team minutes draw (deferred 2026-10-24).
+- Foul-trouble and blowout sampler models beyond the team minutes draw (deferred 2026-10-24); the game simulation
+  that would carry them, with a check per layer, is planned in [notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md).
 
 The decision rule for paying for Stokastic (phase 5 of [notes/plan_2026-27.md](notes/plan_2026-27.md))
 waits on a season of `--compare` numbers: the market consensus and Stokastic correlate at 0.994, so

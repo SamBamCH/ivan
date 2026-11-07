@@ -33,6 +33,8 @@
       <td class="n">{{ '%.1f'|format(x.min_mae_pre) }} → <b>{{ '%.1f'|format(x.min_mae_tip) }}</b></td><td class="n">{{ '%.1f'|format(x.fpts_mae_pre) }} → <b>{{ '%.1f'|format(x.fpts_mae_tip) }}</b></td><td class="n">{{ '%+.1f'|format(x.fpts_bias_pre) }} → <b>{{ '%+.1f'|format(x.fpts_bias_tip) }}</b></td>
       <td class="small lineup">{% for m in x.moved %}{{ m.name }} {{ '%+.0f'|format(m.moved) }} (scored {{ '%.0f'|format(m.fpts_act) }}){% if not loop.last %} · {% endif %}{% else %}<span class="muted">nothing moved after lock</span>{% endfor %}</td></tr>{% endfor %}</tbody></table>{% endif %}
 
+  {% if rr_dg is defined %}{% include "_nba_rerun.html" %}{% endif %}
+
   {% if bt.contests and actuals %}<h3>Contests</h3>
   <table class="players sortable bt-contests">
     <thead><tr><th>contest</th><th class="n">fee</th><th class="n" title="entries in the export">field</th><th class="n">ours</th><th class="n">best</th><th class="n">cashed</th><th class="n" title="the lowest score that cashed">cash line</th><th class="n">won</th><th class="n">net</th><th class="n">ROI</th><th class="n" title="the chooser's claimed ROI for these entries (its run closest before lock)">claimed</th><th>scored from</th></tr></thead>

@@ -17,9 +17,9 @@ from .history import HistoryState, STATS
 from .minutes import MinutesInputs, allocate_team_minutes, baseline_minutes, salary_weight
 from .rates import shrunk_rates, fpts_per_minute, apply_usage_bump, USAGE_RECOVERY
 from .market import blend_rates
-from .team_minutes import load_params as load_team_params, role_of, sample_team_minutes, scratch_probability, tau_from_band
+from .team_minutes import load_params as load_team_params, role_of, scratch_probability, tau_from_band
 
-MINUTES_MODELS = ("independent", "team", "rotation")
+MINUTES_MODELS = ("rotation",)
 
 
 @dataclass
@@ -54,7 +54,7 @@ class ProjectionParams:
     dispersion: dict | None = None
     market_weight: float = 1.0
     quantiles: int = 101          # points of the marginal kept for the correlated sampler
-    minutes_model: str = "independent"   # "independent": each player's minutes a clipped normal; "team": the joint team draw
+    minutes_model: str = "rotation"      # the rotation grid's worlds give the minutes band; a player the grid does not hold gets a clipped normal
     rebalance: bool = False              # True: a pin re-allocates the rest of the team to 241; False: the others keep the model's
                                          # minutes and the difference is left for a person to place (the desk shows it)
     rotation: dict | None = None         # minutes_model "rotation": {"grid": DataFrame, "spreads": {name: sd}, "curve": DataFrame|None}
@@ -253,7 +253,7 @@ def project_team(
     if params.minutes_model not in MINUTES_MODELS:
         raise ValueError(f"unknown minutes_model {params.minutes_model!r}; expected one of {MINUTES_MODELS}")
     by_name = {p.name: p for p in avail}
-    team_params = params.team_params or (load_team_params() if params.minutes_model in ("team", "rotation") else None)
+    team_params = params.team_params or load_team_params()
     roles, p_out = {}, {}
     for name in alloc.index:
         p = by_name[name]
@@ -291,12 +291,6 @@ def project_team(
         class _D:  # the TeamDraw shape the loop below reads
             minutes = M
         draw = _D()
-    elif params.minutes_model == "team" and simulate and params.n_sims > 0 and len(alloc):
-        names = list(alloc.index)
-        # a pin sets the mean (the allocation already holds it); a band sets the player's own spread; nobody is frozen
-        taus = [tau_from_band(by_name[n].minutes_low, by_name[n].minutes_high) for n in names]
-        draw = sample_team_minutes(alloc["minutes"].values, [roles[n] for n in names], params.n_sims, rng, spread=params.spread,
-                                   p_out=[p_out[n] for n in names], params=team_params, tau_override=taus, budget=budget)
 
     rows = []
     for j, name in enumerate(alloc.index):

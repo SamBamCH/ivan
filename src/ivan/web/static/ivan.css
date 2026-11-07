@@ -68,3 +68,10 @@ nav.frame .cal-key { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:cen
 .sport-acts { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin:-6px 0 14px; font-size:13px }
 .sport-acts button { font:inherit; font-size:13px; padding:5px 11px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
 .sport-acts .job { color:var(--warn) } .sport-acts pre { margin:0; font-size:11px; color:var(--muted); max-width:720px; white-space:pre-wrap }
+/* the backtest's "current code" block (_nba_rerun.html): the rerun's scorecard, the games, each player's drawn distribution */
+.rr { margin:18px 0 } .rr-controls { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin:4px 0 8px; font-size:13px }
+.rr-controls input[type=number] { width:72px } .rr-controls button { font:inherit; font-size:13px; padding:4px 10px; border-radius:6px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer }
+.rr-controls button:disabled { opacity:.5; cursor:default } .rr-log { margin:0 0 8px; font-size:11px; color:var(--muted); white-space:pre-wrap; max-width:720px }
+.rr-card tr.layer-first td { border-top:2px solid #e5e7eb } .rr-pick { margin:10px 0 6px; font-size:13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+.rr-spark { display:block } .rr-spark .b { fill:#cbd5e1 } .rr-spark .b.band { fill:#93c5fd } .rr-spark .b.act { fill:#1d4ed8 } .rr-spark .mark { fill:#b91c1c }
+.rr-players td { white-space:nowrap }

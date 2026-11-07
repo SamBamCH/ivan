@@ -15,10 +15,10 @@ Three stage modules with the same shapes as the NFL ones, each wrapped by one sc
 venv/bin/python scripts/nba/generate_lineups.py 10000 8 [--fresh] [--randomness 0.25] [--min-fpts 260] [--no-progress]
 ```
 
-The count is split over worker processes. Each worker opens its own session, draws one correlated
-universe of player scores per sample (`pre_lock.player.generate_player_samples`: every player with
-stored quantiles through a Gaussian copula per game with the role-pair correlation; players without
-quantiles as Normals on the same copula) and solves one classic lineup per jittered sample
+The count is split over worker processes. Each worker opens its own session, draws the slate's games
+(`pre_lock.player.generate_player_samples`: the game simulation, `ivan.sports.nba.gamesim.world.World`, up to 2,000
+worlds per call and resampled beyond that, every player's points in a world coming from the same simulated game) and
+solves one classic lineup per jittered sample
 (`pre_lock.lineup_generation.generate_single_classic_lineup`, an ILP under DK's roster PG/SG/SF/PF/C/G/F/UTIL,
 salary cap, min salary, max salary per team). Duplicate compositions are removed at the end. Draws are
 seeded from `IVAN_SEED` when set.
@@ -83,6 +83,25 @@ the score distribution and the conservation checks (the field should collect the
 report records it as `contest.draw = "slate"` (a contest simulated on its own would say `"contest"`, and the slate
 chooser refuses it). The simulation is plain Monte Carlo (each candidate scored in each world against a sampled
 field); the NFL's conditioned closed-form sim has no NBA counterpart yet.
+
+**The draw is the game simulation** (`ivan.sports.nba.gamesim.world.World`, plan and findings in
+[notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md) and [notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md)).
+Every game of the slate is simulated minute by minute, n worlds at once: the script (`gamesim.script`) draws the night's
+pace and each six-minute segment's possessions around the two teams' trailing paces (`data/nba/models/gamesim/teams.json`)
+and the books' total and spread; the rotation (`gamesim.rotation`) turns each team's skeleton grid into every player's
+coverage of every minute, with scratches and foul-outs handed to heirs by the measured flow across position groups,
+fouls at each player's own rate and the coach's measured reaction, garbage time off the emergent score (closers out
+while the lead holds) and overtime for the five at the buzzer; each minute the team's possessions end once each as
+two-point attempts, three-point attempts, free-throw trips and turnovers at the roster's pie, split among the five on
+the floor by the pool's per-minute rates times coverage (so a priced player's props drive his share), makes by each
+player's trailing shooting percentages (`gamesim.profiles`) with the attempts scaled by one team factor so the expected
+points are what the lines say; the misses are rebounded at the team's share and by the other five, the turnovers become
+the other team's steals, the missed shots its blocks, the makes carry assists. Four game-level knobs (a team's pull toward
+its own expected scoring, the lead's pull-back, the pace-efficiency coupling, the endgame tie bump) are calibrated on the
+World against the real spread of totals, margins, team points and the overtime rate (`scripts/nba/gamesim.py
+calibrate-world --slate DG`, stored as `world_*` in `data/nba/models/gamesim/script.json`). `scripts/nba/gamesim.py
+draw-world --slate DG` draws a slate and prints the moments, the reconciliation factors and every player's line against
+the pool. A thousand worlds of a four-game slate take about six seconds.
 
 ## Choose (`choose.py`, `lineup_export.py`)
 

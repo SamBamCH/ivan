@@ -1,0 +1,51 @@
+{# the backtest view's "current code" block (ivan.web.nba.rerun = scripts/nba/rerun_slate.py): the game simulation drawn from the slate's
+   tip record with the history cut at that day, scored layer by layer against the actuals; each player's drawn distribution of one stat
+   with his actual marked. Polls itself while a rerun job of this slate runs. #}
+{% macro f1(x) %}{% if x is none %}—{% else %}{{ '%.1f'|format(x) }}{% endif %}{% endmacro %}
+{% macro spark(h) %}{% if h %}<svg class="rr-spark" viewBox="0 0 96 26" width="96" height="26" title="drawn {{ '%.1f'|format(h.mean) }} · actual {% if h.pit is not none %}at the {{ '%.0f'|format(100 * h.pit) }}th percentile{% else %}—{% endif %} · range {{ '%.0f'|format(h.lo) }}–{{ '%.0f'|format(h.hi) }}">
+  {% for b in h.bars %}<rect x="{{ loop.index0 * 4 }}" y="{{ 24 - (b * 22)|round(1) }}" width="3.4" height="{{ (b * 22)|round(1) }}" class="b {% if h.band[0] <= loop.index0 <= h.band[1] %}band{% endif %} {% if h.at is not none and loop.index0 == h.at %}act{% endif %}"></rect>{% endfor %}
+  {% if h.at is not none %}<rect x="{{ h.at * 4 + 1.2 }}" y="0" width="1" height="26" class="mark"></rect>{% endif %}</svg>{% endif %}{% endmacro %}
+<div class="rr" id="rerun" {% if rr_job %}hx-get="{{ root }}/rerun?stat={{ rr_stat }}" hx-trigger="every 4s" hx-swap="outerHTML"{% endif %}>
+  <h3>Current code <span class="muted small">the game simulation drawn from this slate's tip record (what the desk knew at lock), the history cut at that day, against what happened · <code>scripts/nba/rerun_slate.py --slate {{ rr_dg }}</code></span></h3>
+  <form class="rr-controls" hx-post="{{ root }}/rerun/run" hx-target="#rerun" hx-swap="outerHTML">
+    <label>sims <input type="number" name="sims" value="{{ rr_meta.n if rr_meta else 1000 }}" min="100" max="{{ rr_sims_max }}" step="100"></label>
+    {% if rr_tips|length > 1 %}<label>tip <select name="tip"><option value="">first ({{ rr_tips[0].strftime('%H:%M') }})</option>{% for t in rr_tips[1:] %}<option value="{{ t.strftime('%H%M') }}">{{ t.strftime('%H:%M') }}</option>{% endfor %}</select></label>{% endif %}
+    <input type="hidden" name="stat" value="{{ rr_stat }}">
+    <button type="submit" {% if rr_job or not rr_tips %}disabled{% endif %} title="{% if not rr_tips %}this slate has no tip record (archived before 2026-10-23){% else %}queue the rerun as a job (a few seconds per 500 sims per game){% endif %}">Rerun with the current code</button>
+    {% if rr_job %}<span class="muted small">running: {{ rr_job.name }} {{ rr_job.status }}{% if rr_job.duration %} · {{ '%.0f'|format(rr_job.duration) }} s{% endif %}</span>{% elif rr_last and rr_last.status == 'failed' %}<span class="flash small">the last rerun failed</span>{% endif %}
+    {% if rr_meta %}<span class="muted small">on file: {{ rr_meta.written_at[:16] }} · commit {{ rr_meta.commit }}{% if rr_meta.dirty %}*{% endif %} · {{ rr_meta.n }} sims · tip {{ rr_meta.tip[-5:] }}{% if rr_names|length > 1 %} · {{ rr_names|length }} reruns kept{% endif %}</span>{% endif %}
+  </form>
+  {% if rr_log %}<pre class="rr-log small">{{ rr_log }}</pre>{% endif %}
+  {% if not rr_meta %}<p class="muted small">{% if rr_tips %}no rerun on file yet for this slate{% else %}no tip record for this slate: nothing to rerun from{% endif %}</p>
+  {% else %}
+  <table class="players rr-card"><thead><tr><th>layer</th><th>metric</th><th class="n">n</th><th class="n" title="mean absolute error of the drawn mean">MAE</th><th class="n" title="drawn mean minus actual">bias</th><th class="n" title="share of actuals inside the drawn 10-90 band (80% when calibrated)">in band</th><th class="n" title="mean percentile of the actual inside the draw (50% when centred)">PIT</th><th class="n" title="the same error for what was published at the tip (the projection, or the line)">published</th><th></th></tr></thead>
+    <tbody>{% for r in rr_meta.scorecard %}<tr class="{% if loop.first or rr_meta.scorecard[loop.index0 - 1].layer != r.layer %}layer-first{% endif %}">
+      <td>{% if loop.first or rr_meta.scorecard[loop.index0 - 1].layer != r.layer %}<b>{{ r.layer }}</b>{% endif %}</td><td>{{ r.metric }}</td><td class="n">{{ r.n or '' }}</td>
+      <td class="n">{{ f1(r.mae) }}</td><td class="n">{% if r.bias is not none %}{{ '%+.1f'|format(r.bias) }}{% endif %}</td>
+      <td class="n {% if r.in_band is not none and (r.in_band < 0.72 or r.in_band > 0.88) %}lo{% endif %}">{% if r.in_band is not none %}{{ '%.0f%%'|format(100 * r.in_band) }}{% endif %}</td>
+      <td class="n">{% if r.pit is not none %}{{ '%.0f%%'|format(100 * r.pit) }}{% endif %}</td>
+      <td class="n">{{ f1(r.mae_published) }}</td><td class="muted small">{{ r.note or '' }}</td></tr>{% endfor %}</tbody></table>
+  <table class="players rr-games"><thead><tr><th>game</th><th class="n" title="the books' total → drawn mean → actual">total</th><th class="n" title="home margin: the spread's → drawn → actual">margin</th><th class="n" title="possessions: drawn → actual">poss</th><th class="n" title="the share of worlds in garbage time / overtime">garbage · OT</th><th class="n" title="the factor that scaled each team's attempts so its expected points met the line (below 1: the pool projected more than the line allowed)">pool vs line</th></tr></thead>
+    <tbody>{% for g in rr_meta.games %}{% set a = g.actual %}<tr><td>{{ g.away }} @ {{ g.home }}</td>
+      <td class="n">{{ f1(g.total) }} → {{ f1(g.drawn_total) }}{% if a %} → <b>{{ '%.0f'|format(a.pts_home + a.pts_away) }}</b>{% endif %}</td>
+      <td class="n">{% if g.spread_home is not none %}{{ '%+.1f'|format(-g.spread_home) }}{% else %}—{% endif %} → {{ '%+.1f'|format(g.drawn_margin) }}{% if a %} → <b>{{ '%+.0f'|format(a.pts_home - a.pts_away) }}</b>{% endif %}</td>
+      <td class="n">{{ f1(g.drawn_poss) }}{% if a %} → <b>{{ '%.1f'|format(a.poss) }}</b>{% endif %}</td>
+      <td class="n">{{ '%.0f%%'|format(100 * g.garbage) }} · {{ '%.1f%%'|format(100 * g.p_ot) }}</td>
+      <td class="n small">{% for t, f in g.factor.items() %}{{ t }} {{ '%.2f'|format(f) }}{% if not loop.last %} · {% endif %}{% endfor %}</td></tr>{% endfor %}</tbody></table>
+  <div class="rr-pick">show <select hx-get="{{ root }}/rerun" hx-target="#rerun" hx-swap="outerHTML" name="stat">{% for k, label in rr_stats %}<option value="{{ k }}" {% if k == rr_stat %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    <span class="muted small">per player: the drawn distribution (bars; the 10-90 band shaded) with the actual marked; published → drawn → actual for minutes and fantasy points</span></div>
+  <div class="bt-teams">
+  {% for team, rows in rr_players|dictsort %}
+    <details class="bt-team" open><summary><b>{{ team }}</b> <span class="muted small">fpts published {{ '%.0f'|format(rows|map(attribute='fpts_pub')|select('number')|sum) }} · drawn {{ '%.0f'|format(rows|map(attribute='fpts_sim')|select('number')|sum) }} · actual {{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }}</span></summary>
+    <table class="players rr-players"><thead><tr><th>player</th><th class="n" title="minutes: published → drawn → played">min</th><th class="n" title="fantasy points: published → drawn mean (sd) → scored">fpts</th><th class="n">{{ dict(rr_stats)[rr_stat] }} drawn → actual</th><th>distribution</th><th class="n" title="where the actual fell inside the draw">pct</th></tr></thead>
+    <tbody>{% for p in rows %}<tr class="{% if not p.played %}dnp{% endif %}"><td>{{ p.name }}{% if not p.played %} <span class="status">DNP</span>{% endif %}</td>
+      <td class="n">{{ f1(p.min_pub) }} → {{ f1(p.min_sim) }} → <b>{{ f1(p.min_act) }}</b></td>
+      <td class="n">{{ f1(p.fpts_pub) }} → {{ f1(p.fpts_sim) }} <span class="muted small">({{ f1(p.fpts_sd_sim) }})</span> → <b>{{ f1(p.fpts_act) }}</b></td>
+      <td class="n">{{ f1(p.stat_sim) }} → <b>{{ f1(p.stat_act) }}</b></td>
+      <td>{{ spark(p.hist) }}</td>
+      <td class="n {% if p.hist and p.hist.pit is not none and (p.hist.pit < 0.1 or p.hist.pit > 0.9) %}lo{% endif %}">{% if p.hist and p.hist.pit is not none %}{{ '%.0f'|format(100 * p.hist.pit) }}{% endif %}</td></tr>{% endfor %}</tbody></table>
+    </details>
+  {% endfor %}
+  </div>
+  {% endif %}
+</div>
