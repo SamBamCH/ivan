@@ -135,9 +135,15 @@ def starter_toggle(request: Request, team: str, player: str = Form(...)):
         else:
             new = 0.0 if rw else 1.0
         desk.set_override(key, starter=new)
-        # his props priced the role he had: the lines posted before this call are set aside and the market rates rebuilt without
-        # them (he projects from history until the books post again), then the team re-projects on the new rates
-        CH.touch_status(desk.session, key)
+        # a call that benches him: his props priced the starter; the lines posted before this are set aside and the market rates
+        # rebuilt without them (he projects from history until the books post again), then the team re-projects on the new rates.
+        # A call that starts him (or clears back to a start) lifts the stamp; nothing else moves.
+        was = (float(cur) > 0) if cur is not None else bool(rw)
+        now_starting = (float(new) > 0) if new is not None else bool(rw)
+        if was and not now_starting:
+            CH.touch_status(desk.session, key)
+        elif now_starting and not was:
+            CH.touch_status(desk.session, key, clear=True)
         try:
             refresh_market_rates(desk.session, {normalize_name(p.name): p.gametime for p in desk.slate.players}, {normalize_name(p.name) for p in desk.slate.players},
                                  history=desk.history())

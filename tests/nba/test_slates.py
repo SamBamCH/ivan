@@ -172,9 +172,10 @@ def test_overrides_file_carries_stat_totals_and_reads_older_files(root):
         assert got["c"]["minutes"] == 28.0 and got["c"]["fppm"] == 1.1 and all(got["c"][k] is None for k in STAT_KEYS)
 
 
-def test_status_marks_carry_across_the_pool_replace_and_move_on_a_change(root):
-    """changes.mark_status_changes: after the pool is replaced, a player whose DK status or starter flag moved is stamped now, the
-    rest carry their earlier stamp, a newcomer carries none; touch_status stamps one player; status_cutoffs lists the stamped."""
+def test_status_marks_carry_across_the_pool_replace_and_move_on_a_downgrade(root):
+    """changes.mark_status_changes: after the pool is replaced, a player downgraded (to an out status, out of the five) is stamped
+    now, one upgraded (into the five, back from out) loses his stamp, questionable either way is nothing, the rest carry their
+    earlier stamp, a newcomer carries none; touch_status stamps or clears one player; status_cutoffs lists the stamped."""
     from ivan.sports.nba import changes as CH
     from ivan.sports.nba.models import NBAPlayer, StartingLineups
     S.create(500, lock=datetime(2026, 11, 7, 19, 0), games=2)
@@ -197,15 +198,23 @@ def test_status_marks_carry_across_the_pool_replace_and_move_on_a_change(root):
         assert CH.mark_status_changes(sess, CH.status_state(sess), now=t0) == []             # nothing moved: nothing stamped
         before = CH.status_state(sess)
         assert before["a one"] == dict(status="", starter=True, at=None)
-        pool("Q"); five(["b two", "c three"])                                                # a one: Q and out of the five; c three: into the five
+        pool("Q"); five(["b two", "c three"])                                                # a one: Q (nothing) and out of the five (a downgrade); c three: into the five (an upgrade)
         t1 = datetime(2026, 11, 7, 17, 30)
-        assert CH.mark_status_changes(sess, before, now=t1) == ["a one", "c three"]
-        assert CH.status_cutoffs(sess) == {"a one": t1, "c three": t1}
+        assert CH.mark_status_changes(sess, before, now=t1) == ["a one"]
+        assert CH.status_cutoffs(sess) == {"a one": t1}
         before = CH.status_state(sess)
-        pool("Q", names=("a one", "b two", "c three", "d four")); five(["b two", "c three"])   # the next refresh: nothing moved, d four is new
+        pool(None, names=("a one", "b two", "c three", "d four")); five(["b two", "c three"])   # a one Q -> active: nothing; d four is new
         t2 = datetime(2026, 11, 7, 18, 0)
-        assert CH.mark_status_changes(sess, before, now=t2) == [] and CH.status_cutoffs(sess) == {"a one": t1, "c three": t1}
+        assert CH.mark_status_changes(sess, before, now=t2) == [] and CH.status_cutoffs(sess) == {"a one": t1}
+        before = CH.status_state(sess)
+        pool("OUT", names=("a one", "b two", "c three", "d four")); five(["a one", "b two"])    # a one ruled out (a downgrade, stamped again) ... and c three out of the five
+        t3 = datetime(2026, 11, 7, 18, 10)
+        assert CH.mark_status_changes(sess, before, now=t3) == ["a one", "c three"] and CH.status_cutoffs(sess) == {"a one": t3, "c three": t3}
+        before = CH.status_state(sess)
+        pool(None, names=("a one", "b two", "c three", "d four")); five(["a one", "b two", "c three"])   # a one ruled in, c three back in the five: both stamps lifted
+        assert CH.mark_status_changes(sess, before, now=datetime(2026, 11, 7, 18, 20)) == [] and CH.status_cutoffs(sess) == {}
         assert CH.touch_status(sess, "b two", now=t2) and CH.status_cutoffs(sess)["b two"] == t2
+        assert CH.touch_status(sess, "b two", now=t3, clear=True) and "b two" not in CH.status_cutoffs(sess)
         assert not CH.touch_status(sess, "nobody", now=t2)
     sess.close()
 

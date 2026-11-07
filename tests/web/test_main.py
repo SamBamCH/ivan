@@ -407,10 +407,15 @@ def test_nba_starter_toggle_posts_the_rows_player(open_site):
     from ivan.sports.nba import changes as CH
     from ivan.sports.nba.names import normalize_name as _nn
     stamp_before = CH.status_cutoffs(d.session).get(key)
+    rotowire_starter = key in (d.slate.starters.get(team) or set())
     try:
         r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
         assert r.status_code == 200 and override_of(d.overrides, key).get("starter") is not None               # a hand call now
-        assert CH.status_cutoffs(d.session).get(key) is not None and CH.status_cutoffs(d.session).get(key) != stamp_before   # his props posted before are set aside
+        stamp = CH.status_cutoffs(d.session).get(key)
+        if rotowire_starter:
+            assert stamp is not None and stamp != stamp_before                                                  # benched by hand: his props posted before are set aside
+        else:
+            assert stamp is None                                                                                 # made a starter: an upgrade sets nothing aside
         r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
         assert r.status_code == 200 and override_of(d.overrides, key).get("starter") == before                  # cleared back
     finally:

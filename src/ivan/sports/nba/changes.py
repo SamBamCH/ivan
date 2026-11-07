@@ -10,14 +10,16 @@ prints it.
     snapshot(session)                 the pool's statuses, starters and projections now
     diff(before, after, news=None)    {team: [{kind, player, text}]}
 
-The props' freshness after news (2026-11-07): a book's line priced the role the player had when it was posted, so once his
-DK status or his starter flag moves (Rotowire's five, or the desk's hand call over it) the lines posted before that are set
-aside until the books post again (the next props fetch replaces the game's rows):
+The props' freshness after news (2026-11-07): a book's line priced the role the player had when it was posted, so once he is
+DOWNGRADED (his DK status goes to an out status, or he leaves the starting five: Rotowire's, or the desk's hand call over it)
+the lines posted before that are set aside until the books post again (the next props fetch replaces the game's rows). An
+upgrade (questionable to active, into the five) is not a reason to drop his lines, and an upgrade back out of a downgrade
+(ruled in after all, back in the five) clears the stamp: the lines priced the role he has again.
 
     status_state(session)                       player -> {status, starter, at}
-    mark_status_changes(session, before, now)   after the pool was replaced: nba_player.status_changed_at = now where the
-                                                state moved since `before`, the earlier stamp carried for the rest
-    touch_status(session, name, now)            a hand call on the desk moves one player now
+    mark_status_changes(session, before, now)   after the pool was replaced: nba_player.status_changed_at = now where he was
+                                                downgraded since `before`, None where upgraded, the earlier stamp carried else
+    touch_status(session, name, now, clear)     a hand call on the desk benches one player now (clear: makes him a starter again)
     status_cutoffs(session)                     player -> status_changed_at, what market.fresh_rows drops rows before
 """
 from __future__ import annotations
@@ -69,10 +71,26 @@ def status_state(session: Session) -> dict:
     return out
 
 
+def _out(status: str) -> bool:
+    from ivan.sports.nba.projection.live import OUT_STATUSES
+    return status in OUT_STATUSES
+
+
+def downgraded(before: dict, after: dict) -> bool:
+    """He went to an out status, or left the starting five."""
+    return (_out(after["status"]) and not _out(before["status"])) or (bool(before["starter"]) and not bool(after["starter"]))
+
+
+def upgraded(before: dict, after: dict) -> bool:
+    """He came back from an out status, or into the starting five."""
+    return (_out(before["status"]) and not _out(after["status"])) or (not bool(before["starter"]) and bool(after["starter"]))
+
+
 def mark_status_changes(session: Session, before: Optional[dict], now: Optional[datetime] = None) -> List[str]:
-    """After the pool was replaced (the rows are new, their stamps blank): every player whose status or starter flag differs from
-    `before` (status_state taken before the store) is stamped `now`; the rest carry the stamp they had. A player new to the pool
-    carries none. Returns the players stamped, flushed (the caller's transaction commits)."""
+    """After the pool was replaced (the rows are new, their stamps blank): every player downgraded since `before` (status_state taken
+    before the store: to an out status, or out of the five) is stamped `now`; one upgraded (back from out, into the five) loses his
+    stamp; the rest carry the stamp they had. Questionable to active, or active to questionable, is neither. A player new to the
+    pool carries none. Returns the players stamped, flushed (the caller's transaction commits)."""
     from ivan.sports.nba.models import NBAPlayer
     now = now or datetime.now()
     after = status_state(session)
@@ -82,21 +100,24 @@ def mark_status_changes(session: Session, before: Optional[dict], now: Optional[
         b = (before or {}).get(n); a = after.get(n)
         if b is None or a is None:
             continue
-        if a["status"] != b["status"] or bool(a["starter"]) != bool(b["starter"]):
+        if downgraded(b, a):
             p.status_changed_at = now; marked.append(n)
+        elif upgraded(b, a):
+            p.status_changed_at = None
         else:
             p.status_changed_at = b.get("at")
     session.flush()
     return marked
 
 
-def touch_status(session: Session, name: str, now: Optional[datetime] = None) -> bool:
-    """A hand call on the desk (a starter toggled) moves the player's state now: his props posted before this are set aside."""
+def touch_status(session: Session, name: str, now: Optional[datetime] = None, clear: bool = False) -> bool:
+    """A hand call on the desk benched the player now: his props posted before this are set aside. `clear`: the call made him a
+    starter (again): the stamp goes, his lines count."""
     from ivan.sports.nba.models import NBAPlayer
     key = normalize_name(name); hit = False
     for p in session.query(NBAPlayer).all():
         if normalize_name(p.name) == key:
-            p.status_changed_at = now or datetime.now(); hit = True
+            p.status_changed_at = None if clear else (now or datetime.now()); hit = True
     session.flush()
     return hit
 
