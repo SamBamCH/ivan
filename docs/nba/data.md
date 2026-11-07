@@ -115,6 +115,8 @@ data/nba/
 │   ├── field_backtest/             the field backtest's model field per capture and public projection (a cache)
 │   ├── field_cache/                the two-group field per public-projection key
 │   ├── gamesim/events.parquet      one row per play-by-play event with its possession bookkeeping and the five on the floor
+│   │                               (a slate's reruns by the current code live with the slate: slates/<dg>/rerun/<stamp>-<commit>/ with meta.json
+│   │                               (the scorecard, the games), players.json (published, actual) and arrays.npz (every stat x world x player))
 │   │                               (ivan.sports.nba.gamesim.possessions; scripts/nba/gamesim.py events, incremental): the game sim's fitting data
 │   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
 │   └── props_hist/                 parquet of the historical props

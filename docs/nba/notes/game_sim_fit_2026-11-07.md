@@ -154,3 +154,27 @@ the spreads.
 call, resampled beyond), so the field, the contest sim, the late swap and the chooser draw from the game. The Gaussian
 copula on stored quantiles, the independent and team minutes draws and the negative-binomial stats at minutes x rate are
 no longer called by anything on this branch (step 8 removes them).
+
+## The first as-of rerun (slate 156184, 2026-11-06, the 18:00 tip record, 500 worlds)
+
+`scripts/nba/rerun_slate.py --slate 156184 -n 500`: seven games, 128 players who played, the history cut at 11-06.
+
+| layer | metric | MAE drawn | bias | in the 10-90 band | MAE published |
+|---|---|---|---|---|---|
+| possessions | poss | 2.9 | | 7 of 7 | |
+| points and margin | total | 14.0 | | 86% | 13.2 (the line) |
+| | margin | 14.5 | | 57% | 14.5 (the spread) |
+| minutes | minutes | 4.89 | +1.1 | 82% | 5.06 (the projection) |
+| attempts | FGA / FTA | 2.7 / 1.8 | +0.1 / -0.2 | 81% / 89% | |
+| makes and outcomes | pts | 5.1 | +0.3 | 78% | |
+| | reb | 2.0 | +0.8 | 84% | |
+| | ast / stl / blk / tov / 3PM | 1.6 / 0.8 / 0.5 / 1.0 / 1.1 | small | 87-97% | |
+| fantasy points | fpts | 8.87 | +2.2 | 71% | 8.91 (the projection) |
+
+One slate is one slate (WAS @ ATL finished 271 against a 228.5 line and a 229.7 draw; PHI @ CLE +24 against a drawn
+-4.5), but the shape is what the layered scorecard is for: the World's fantasy error is level with the projection's,
+its minutes are a little better, it runs **2.2 fantasy points high** (rebounds +0.8 of it, minutes +1.1 of it: the
+bench gains what garbage time takes from the closers, and this night had fewer blowouts than drawn) and its 10-90
+band holds 71% of the actuals, so it is a touch too confident per player while the steals, blocks and turnovers bands
+are too wide (94-97%). Which of those is the night and which is the model, the next slates will say; the screen now
+shows every one of them.

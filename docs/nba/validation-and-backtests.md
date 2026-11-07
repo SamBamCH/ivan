@@ -264,9 +264,27 @@ five fouls. Result 2026-11-07 in the same note.
 read; [field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)). `calibrate-world` sets its four
 game-level knobs on a slate's games so the drawn totals, margins, team points and overtime rate have the real spread
 (the script's fit holds the real numbers); `draw-world` prints a slate's moments, the per-team reconciliation factor
-(how far the pool's points sit from the lines) and every player's simulated line next to the pool's mean. What the World
-cannot be checked against yet is the actuals of past slates (every player's real line inside his simulated
-distribution, the field's real scores inside the simulated field): that is the as-of runner, step 7 of the plan.
+(how far the pool's points sit from the lines) and every player's simulated line next to the pool's mean.
+
+## The as-of rerun of a past slate (`ivan.sports.nba.gamesim.rerun`, `scripts/nba/rerun_slate.py`, the backtest view)
+
+```bash
+venv/bin/python scripts/nba/rerun_slate.py --slate 156184 [-n 1000] [--seed 0] [--tip 1800]      # the first tip record unless --tip
+venv/bin/python scripts/nba/rerun_slate.py --slate 156184 --list
+```
+
+The World drawn from the slate's **tip record** ([data.md](data.md): the pool with its minutes, grid rows and scratch
+probabilities as the desk had them, the props and the game lines at the tip) with the history cut at that day (the
+per-minute rates rebuilt the way the live projection built them: history before the day, the books' means over the
+projected minutes where priced; shooting profiles and foul rates before the day; each team's pace from the events before
+the day), then scored against the actuals **one layer at a time**: possessions and the finals per game from the events
+store, every player's minutes, attempts, makes and outcomes and fantasy points from `nba_stats`, each as the drawn mean's
+MAE and bias, the share of actuals inside the drawn 10-90 band and the mean percentile of the actual, with the error of
+what was published at the tip (the projection, the line) beside it. The record (`slates/<dg>/rerun/<stamp>-<commit>/`)
+keeps every stat of every player in every world, so the backtest view draws each player's distribution with his actual
+inside it ([../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-viewbacktestdgdraft-group-_nba_backtesthtml)).
+A slate archived before 2026-10-23 has no tip record and cannot be rerun. First result (slate 156184, 2026-11-06, 500
+worlds): [notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md).
 
 ## What does not exist yet
 

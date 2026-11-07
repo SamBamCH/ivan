@@ -273,6 +273,22 @@ A past slate, read only (`ivan.sports.nba.slate_backtest`, terminal `scripts/nba
 - **By tip**: each tip's games judged on the projection before lock and on the newest capture taken by that tip (ours
   or the archive's at-tip capture, up to 12 minutes after it): minutes and points MAE and bias of the rotation
   players, and the players the late news moved most, with what they scored.
+- **Current code** (`_nba_rerun.html`, `ivan.web.nba.rerun`; terminal `scripts/nba/rerun_slate.py --slate N [-n 1000]
+  [--tip HHMM]`): what the game simulation on this checkout says about the slate, drawn from its **tip record** (the
+  pool, grid rows, props and lines as the desk had them at the first tip; [../nba/data.md](../nba/data.md)) with the
+  history cut at that day, against what happened. **Rerun with the current code** queues the script as a job with the
+  sims count typed in the box (100 to 5,000; a few seconds per 500 sims per game) and, with several tip records, the tip
+  to rerun from; the block polls while it runs and shows the newest record on file (its commit and time). Then: the
+  **layered scorecard** (possessions, points and margin, minutes, attempts, makes and outcomes, fantasy points: the
+  drawn mean's MAE and bias, the share of actuals inside the drawn 10-90 band, the mean percentile of the actual, and the
+  same error for what was published at the tip or for the line), the **games** (line → drawn → actual for the total and
+  margin, possessions, garbage time and overtime shares, and the factor by which each team's attempts were scaled to meet
+  the line: below 1 means the pool projected more points than the line allowed), and **per team every player**: minutes
+  and fantasy points as published → drawn → actual, the chosen stat's drawn mean and actual, and the drawn
+  **distribution** of that stat as bars (the 10-90 band shaded, the actual's bin dark with a red mark) with the
+  percentile the actual fell at (red under 10 or over 90). The stat select (fantasy points, minutes, points, rebounds,
+  assists, threes, steals, blocks, turnovers, attempts, free throws) re-renders the block. Records live under
+  `data/nba/slates/<dg>/rerun/<stamp>-<commit>/`; a slate archived before 2026-10-23 has no tip record and the button says so.
 - **Fields**: per contest the entries, unique lineups, the share duplicated, the most copies, the winning score, our
   entries' mean copies; the most-owned players of the largest contest, DraftKings' ownership against our projected
   ownership at the first tip and our exposure.

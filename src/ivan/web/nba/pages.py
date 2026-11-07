@@ -223,9 +223,14 @@ def _backtest_board(request: Request, dg: Optional[int]):
         bt, err = None, f"{type(e).__name__}: {e}"
     finally:
         sess.close()
+    from .rerun import rerun_ctx
+    try:
+        rr = rerun_ctx(int(dg), request.query_params.get("stat")) if S.holds(dg) else {}     # the current code's rerun of this slate (its tip records live in its directory)
+    except Exception:   # noqa: BLE001 - a record from another version of the code: the block says there is none
+        rr = {}
     return _render(request, "_nba_board.html", busy=None, view="backtest", bt=bt, bt_error=err, menu=[], games=[], players=[],
                    lateswap=None, exposures=None, card=None, game=None, open_team=None,
-                   actuals=not CONSUMER)                                # the money (our entries, contests, the ROI timeline) is this machine's only
+                   actuals=not CONSUMER, **rr)                          # the money (our entries, contests, the ROI timeline) is this machine's only
 
 
 VIEW_ALIAS = {"exposures": "games"}                           # the exposures are a section of pre-lock
