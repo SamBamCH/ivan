@@ -186,9 +186,10 @@ sim uses; type to pin), **val**, **pub** and its **val**, **own**. The foot row 
 Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line
 (when the book posted it, the line, the over and under prices) and the alternates condensed to one row per book (the
 lines within 3 of the consensus line with the over price; alternates price overs only), headed by ours, the books' mean
-and the minutes it was priced over. A line the book posted before the player's status or starter flag last moved is struck
-through and the header says how many are set aside and when he moved: those lines priced his old role and the projection does
-not read them (`changes.mark_status_changes` at the refresh, `touch_status` on a hand starter call; [../nba/projections.md](../nba/projections.md),
+and the minutes it was priced over. A line the book posted before the player was last downgraded (to an out status, or out
+of the starting five) is struck through and the header says how many are set aside and when he moved: those lines priced his
+old role and the projection does not read them; an upgrade never sets lines aside and one back out of a downgrade counts them
+again (`changes.mark_status_changes` at the refresh, `touch_status` on a hand starter call; [../nba/projections.md](../nba/projections.md),
 Market rates). **Type a total** (9 rebounds) and that stat is his for the game: its per-minute rate
 becomes total / minutes and the other stats keep the model's, so a pin says "the books are wrong on his boards" without
 touching his points. Blank restores the model's. Turnovers are never priced: that column is history alone.
@@ -200,8 +201,8 @@ Inputs on the row:
   assists, fg3m, steals, blocks, turnovers`); the team re-projects and is written to the pool (`/team/<TEAM>/pin`;
   **Refigure** and the pipeline buttons send every typed box the same way). The older **fppm** pin (every rate scaled
   together) is still read from the file and noted in the fpts hover; the stat boxes override it stat by stat.
-- **starter** toggle (`/starter`): the hand call, and his props posted before the click are set aside (the market rates are
-  rebuilt without them before the team re-projects; `ingest.refresh_market_rates`).
+- **starter** toggle (`/starter`): the hand call; a call that benches him sets his props posted before the click aside, one
+  that starts him counts them again (the market rates are rebuilt before the team re-projects; `ingest.refresh_market_rates`).
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
 - **Clear** (`/clear`): drop the team's pins and grid.
 

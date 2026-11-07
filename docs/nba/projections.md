@@ -211,15 +211,17 @@ on prices for another game; 2026-10-28: O'Neale on week-old props). `scripts/nba
 game and, with `--player`, why each of a player's rows is kept or ignored; `--backfill --apply` gives the rows stored
 before the game columns their game from the raw payloads.
 
-**A line priced the role the player had when the book posted it.** Once his DK status or his starter flag moves (Rotowire's
-five at a refresh, or the desk's hand call over it), the lines posted before that moment are set aside: `ivan.sports.nba.changes`
-stamps `nba_player.status_changed_at` at the store (`mark_status_changes`: the state before the pool was replaced against the
-state after, the earlier stamp carried when nothing moved; `touch_status` for a hand call) and `fresh_rows` takes the stamps
-as `cutoffs` (`status_cutoffs`), dropping a row the book posted before the player's stamp. The market rates are rebuilt past
+**A line priced the role the player had when the book posted it.** Once he is downgraded (his DK status goes to an out
+status, or he leaves the starting five: Rotowire's at a refresh, or the desk's hand call over it), the lines posted before that
+moment are set aside: `ivan.sports.nba.changes` stamps `nba_player.status_changed_at` at the store (`mark_status_changes`: the
+state before the pool was replaced against the state after, the earlier stamp carried when nothing moved; `touch_status` for a
+hand call that benches him) and `fresh_rows` takes the stamps as `cutoffs` (`status_cutoffs`), dropping a row the book posted
+before the player's stamp. An upgrade is never a reason to drop his lines (questionable to active, into the five: the books priced
+him playing), and an upgrade back out of a downgrade (ruled in after all, back in the five, a hand call cleared) lifts the stamp. The market rates are rebuilt past
 the cutoffs at every refresh and after every hand starter call (`ingest.refresh_market_rates`), so a player demoted at 17:30
 projects from his history over the solve's minutes until the books post him again, when the next props fetch replaces his
 game's rows (`store_props` replaces every row of the games a fetch priced, so a market the books withdrew is gone at that
 fetch too). The desk's hover keeps the set-aside lines in sight, struck through, with when his status moved. The minutes
 side needs no rule: a priced player's rate is the books' mean over the minutes he was priced at, so a smaller role lowers
-his total through the grid at once; the rule is for the rate itself. A lineup that flips back and forth before confirmation
-sets the team's early lines aside each time, for one fetch cycle at most.
+his total through the grid at once; the rule is for the rate itself. A lineup that flips a player out and back in before
+confirmation sets his early lines aside and then counts them again.
