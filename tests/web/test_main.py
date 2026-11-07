@@ -196,7 +196,9 @@ def test_nba_slate_page_reads_and_the_team_page_edits(open_site):
     card = open_site.get(f"/nba/{day}/{dg}/team/{team}")
     assert card.status_code == 200 and 'name="minutes"' in card.text and f'/nba/{day}/{dg}/team/{team}/' in card.text   # the card is where the pins are
     r = open_site.get(f"/nba/desk/?open={team}", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].endswith(f"/{team}/") and "/nba/" in r.headers["location"]   # the main held slate's team page
+    assert r.status_code == 303 and "/nba/" in r.headers["location"]
+    if S.main_slate_today():                                                                                      # the main held slate's team page; the picker on a day none is held
+        assert r.headers["location"].endswith(f"/{team}/")
     # a second held slate (when there is one) serves at the same time, its own desk bound
     others = [x for x in S.held() if x != dg]
     if others:
