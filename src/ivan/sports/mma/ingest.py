@@ -32,6 +32,7 @@ from typing import Iterable, Optional
 from sqlalchemy.orm import Session
 
 from ivan.sports.mma.fight import DEFAULT_SCORING, Fight, Fighter, project_fighter
+from ivan.sports.mma.hazard import DEFAULTS as FIGHT_DEFAULTS, HazardFight, build_fight
 from ivan.sports.mma.models import MMAFight, MMAPlayer
 from ivan.sports.mma.odds import to_float
 
@@ -202,10 +203,21 @@ def pick_slate(game_type: str = "Classic") -> dict:
 
 FIGHT_ODDS_COLS = ["fight", "u60 sec", "1st round", "itd"]
 PLAYER_ODDS_COLS = ["player", "1st round win", "ITD", "Win", "sig strikes", "takedowns"]
+# the hazard model (hazard.py) reads one finish market: the templates carry only what it uses
+HAZARD_FIGHT_ODDS_COLS = ["fight", "itd"]
+HAZARD_PLAYER_ODDS_COLS = ["player", "ITD", "Win", "sig strikes", "takedowns"]
 
 
-def write_odds_templates(fights: dict[str, dict], fight_path: Path, player_path: Path, win_odds: dict[int, float]) -> None:
-    """Fresh fight_odds.csv / player_odds.csv for this card: names in, Win from the API, the rest blank."""
+def write_odds_templates(fights: dict[str, dict], fight_path: Path, player_path: Path, win_odds: dict[int, float],
+                         hazard: bool = True) -> None:
+    """
+    Fresh fight_odds.csv / player_odds.csv for this card: names in, Win from
+    the API, the rest blank. The hazard model's templates omit the u60 and
+    round-1 columns it does not read (the loaders read by column name, so a
+    file with the full set still loads).
+    """
+    fight_cols = HAZARD_FIGHT_ODDS_COLS if hazard else FIGHT_ODDS_COLS
+    player_cols = HAZARD_PLAYER_ODDS_COLS if hazard else PLAYER_ODDS_COLS
     ordered = sorted(fights.values(), key=lambda f: (f["gametime"] or datetime.min, f["id"]))
     for path in (fight_path, player_path):
         path = Path(path)
@@ -216,17 +228,20 @@ def write_odds_templates(fights: dict[str, dict], fight_path: Path, player_path:
             log.info("%s described another card; moved to %s", path.name, prev.name)
     with open(fight_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(FIGHT_ODDS_COLS)
+        w.writerow(fight_cols)
         for fi in ordered:
             a, b = sorted(fi["fighters"], key=lambda x: -x["salary"])
-            w.writerow([f"{a['name']} vs {b['name']}", "", "", ""])
+            w.writerow([f"{a['name']} vs {b['name']}"] + [""] * (len(fight_cols) - 1))
     with open(player_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(PLAYER_ODDS_COLS)
+        w.writerow(player_cols)
         for fi in ordered:
             for x in sorted(fi["fighters"], key=lambda x: -x["salary"]):
                 wo = win_odds.get(x["id"])
-                w.writerow([x["name"], "", "", "" if wo is None else int(wo), "", ""])
+                row = {c: "" for c in player_cols}
+                row["player"] = x["name"]
+                row["Win"] = "" if wo is None else int(wo)
+                w.writerow([row[c] for c in player_cols])
 
 
 def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None = None,
@@ -243,6 +258,8 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
     """
     paths = cfg.get("paths", {})
     scoring = {**DEFAULT_SCORING, **cfg.get("scoring", {})}
+    fight_cfg = {**FIGHT_DEFAULTS, **cfg.get("fight", {})}
+    hazard = str(fight_cfg.get("model", "hazard")).lower() != "tree"
     if num_5_round_fights is None:
         num_5_round_fights = int(cfg.get("slate", {}).get("num_5_round_fights", 1))
     fight_path = Path(fight_odds_csv or paths["fight_odds_csv"])
@@ -294,7 +311,7 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
         log.warning("%s / %s: %d of %d names are in this slate (an earlier card?): writing fresh templates",
                     fight_path.name, player_path.name, n_hit, len(names))
     if not matched_any:
-        write_odds_templates(fights, fight_path, player_path, api_win)
+        write_odds_templates(fights, fight_path, player_path, api_win, hazard=hazard)
         fight_rows, player_rows = [], []
     fights_with_odds = 0
     for fo in fight_rows:
@@ -318,10 +335,24 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
     five = five_round_fight_ids(fights, num_5_round_fights)
     for fid in fights:
         fights[fid]["rounds"] = 5 if fid in five else 3
-    for r in rows:
-        f = Fighter(id=r["id"], name=r["name"], salary=r["salary"], win_odds=r.get("win_odds"), itd_odds=r.get("itd_odds"),
-                    r1_win_odds=r.get("r1_win_odds"), sig_strikes=r.get("sig_strikes") or 0.0, takedowns=r.get("takedowns") or 0.0)
-        r["win_prob"], r["projection"] = project_fighter(f, fights[r["fight_id"]]["itd_odds"], scoring)
+    def fighter_of(r: dict) -> Fighter:
+        return Fighter(id=r["id"], name=r["name"], salary=r["salary"], win_odds=r.get("win_odds"), itd_odds=r.get("itd_odds"),
+                       r1_win_odds=r.get("r1_win_odds"), sig_strikes=r.get("sig_strikes") or 0.0, takedowns=r.get("takedowns") or 0.0)
+
+    fight_params: dict[str, dict] = {}
+    for fid, f in fights.items():
+        a, b = f["fighters"]
+        fa, fb = fighter_of(a), fighter_of(b)
+        model = build_fight(fid, fa, fb, f["rounds"], u60_odds=f["u60_odds"], r1_odds=f["r1_odds"], itd_odds=f["itd_odds"],
+                            scoring=scoring, fight_cfg=fight_cfg)
+        for r, fo, side in ((a, fa, True), (b, fb, False)):
+            r["win_prob"], r["projection"] = project_fighter(fo, f["itd_odds"], scoring)
+            if isinstance(model, HazardFight):
+                r["projection"] = model.expected_points(side)        # the hazard model's own expectation
+        if isinstance(model, HazardFight):
+            d = model.describe()
+            d["f1_name"], d["f2_name"] = a["name"], b["name"]
+            fight_params[fid] = d
 
     # 3. write: clear what we replace, insert, commit once
     session.query(MMAPlayer).delete(synchronize_session=False)
@@ -350,13 +381,19 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
             log.warning("contest fetch failed: %s", e)
         contests = dkc.contests_for_slate(session, int(draft_group_id))
 
+    # what the chosen model still lacks: the hazard model wants one finish market per fight (the fight's ITD, or both
+    # fighters' ITD), Win, and the two volume lines; the tree model wants every column
     missing_cols = {"fight": {}, "player": {}}
+    fight_keys = ("itd_odds",) if hazard else ("u60_odds", "r1_odds", "itd_odds")
+    player_keys = ("win_odds", "itd_odds", "sig_strikes", "takedowns") if hazard else ("win_odds", "itd_odds", "r1_win_odds", "sig_strikes", "takedowns")
     for fid, f in fights.items():
-        m = [k for k in ("u60_odds", "r1_odds", "itd_odds") if f[k] is None]
+        m = [k for k in fight_keys if f[k] is None]
+        if hazard and m and all(x.get("itd_odds") is not None for x in f["fighters"]):
+            m = []                                            # both fighters' ITD prices stand in for the fight's
         if m:
             missing_cols["fight"][fid] = m
     for r in rows:
-        m = [k for k in ("win_odds", "itd_odds", "r1_win_odds", "sig_strikes", "takedowns") if r.get(k) is None]
+        m = [k for k in player_keys if r.get(k) is None]
         if m:
             missing_cols["player"][r["name"]] = m
 
@@ -365,6 +402,7 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
             "players_in_csv": players_in_csv, "fights_with_odds": fights_with_odds, "five_round": sorted(five),
             "unmatched": unmatched, "templates_written": not matched_any, "fight_odds_csv": str(fight_path),
             "player_odds_csv": str(player_path), "missing": missing_cols, "quota": quota,
+            "fight_model": "hazard" if hazard else "tree", "fight_params": fight_params,
             "contests": contests, "contest_counts": contest_counts,
             "no_player_odds": sorted(r["name"] for r in rows if r.get("win_odds") is None),
             "no_fight_odds": sorted(fid for fid, f in fights.items() if f["itd_odds"] is None)}
@@ -393,6 +431,16 @@ def format_summary(s: dict) -> str:
     if npl:
         cols = sorted({c for m in npl.values() for c in m})
         lines.append(f"fighters with blank columns: {len(npl)} of {s['players']} (missing: {', '.join(cols)})")
+    if s.get("fight_params"):
+        lines.append("hazard model (one risk of finish per fight; P(finish) from the ITD prices, the fighters' ITD prices split it):")
+        lines.append(f"  {'fight':<44} {'P(fin)':>6} {'E[min]':>6} {'u60':>5} {'R1':>5} {'dec':>5}  favourite's finish share / decision share")
+        for d in s["fight_params"].values():
+            seg = d["segments"]
+            fav_first = d["f1_finish_share"] >= 0.5
+            share, dec = (d["f1_finish_share"], d["f1_decision_share"]) if fav_first else (1 - d["f1_finish_share"], 1 - d["f1_decision_share"])
+            name = f"{d['f1_name']} vs {d['f2_name']}"[:44]
+            lines.append(f"  {name:<44} {d['p_finish']:>6.2f} {d['expected_minutes']:>6.1f} {seg.get('u60', 0):>5.2f} "
+                         f"{seg.get('u60', 0) + seg.get('r1', 0):>5.2f} {d['p_decision']:>5.2f}  {share:.2f} / {dec:.2f}")
     if s["unmatched"]:
         lines.append("odds rows that matched nobody in the pool: " + "; ".join(s["unmatched"]))
     if s.get("contest_counts"):
@@ -409,9 +457,10 @@ def format_summary(s: dict) -> str:
 
 
 # ------------------------------------------------------------------ read the slate back
-def load_fights(session: Session, scoring: Optional[dict] = None) -> list[Fight]:
-    """Fight objects for the simulator and the generator, from the slate tables."""
+def load_fights(session: Session, scoring: Optional[dict] = None, fight_cfg: Optional[dict] = None) -> list:
+    """Fight objects (HazardFight, or the tree Fight when config fight.model = tree) for the simulator, from the slate tables."""
     scoring = {**DEFAULT_SCORING, **(scoring or {})}
+    fight_cfg = {**FIGHT_DEFAULTS, **(fight_cfg or {})}
     players = {p.id: p for p in session.query(MMAPlayer).all()}
 
     def fighter(pid: int) -> Fighter:
@@ -424,6 +473,6 @@ def load_fights(session: Session, scoring: Optional[dict] = None) -> list[Fight]
     for f in session.query(MMAFight).order_by(MMAFight.gametime, MMAFight.id).all():
         if f.fighter1_id not in players or f.fighter2_id not in players:
             continue
-        out.append(Fight(id=f.id, f1=fighter(f.fighter1_id), f2=fighter(f.fighter2_id), rounds=f.rounds,
-                         u60_odds=f.u60_odds, r1_odds=f.r1_odds, itd_odds=f.itd_odds, scoring=scoring))
+        out.append(build_fight(f.id, fighter(f.fighter1_id), fighter(f.fighter2_id), f.rounds,
+                               u60_odds=f.u60_odds, r1_odds=f.r1_odds, itd_odds=f.itd_odds, scoring=scoring, fight_cfg=fight_cfg))
     return out
