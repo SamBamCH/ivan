@@ -159,7 +159,8 @@ to **pub**.
 ## Late news and overrides (`live.py`, `scenarios.py`)
 
 Under the day's directory (`data/nba/days/<day>/`, reached through the slate's `day` in `slate.json`,
-`ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, starter calls;
+`ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, pub, starter calls, and a
+total per stat: points, rebounds, assists, fg3m, steals, blocks, turnovers, each making that stat's rate total / minutes;
 0 minutes is a scratch); `edits/rotations/<TEAM>.json` the painted grid with its locked rows. A game is mapped once:
 the slates of one evening share these files and the next day starts clean. Both are read by every projection of a
 slate of that day, by any entry point (the slate is the current one in context: a script's `--slate`, the web's

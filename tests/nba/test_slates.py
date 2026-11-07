@@ -153,3 +153,21 @@ def test_a_published_layer_counts_only_on_a_consumer(root, monkeypatch):
         assert not S.is_consumer() and S.published_pins() is None and S.published_grid("ATL") is None
         monkeypatch.setenv("IVAN_FEED_SSH", "me@laptop")
         assert S.is_consumer() and S.published_pins() == sp.published_overrides_csv and S.published_grid("ATL") == sp.published_rotations / "ATL.json"
+
+
+def test_overrides_file_carries_stat_totals_and_reads_older_files(root):
+    """A stat pin (points, rebounds, ...) is a column of minutes_overrides.csv like the minutes pin; a file written before the
+    stat columns reads with them blank; the roster hands the engine the totals as stat_overrides."""
+    from ivan.sports.nba.projection.live import OVERRIDE_KEYS, STAT_KEYS, read_overrides_full, write_overrides
+    assert set(STAT_KEYS) <= set(OVERRIDE_KEYS) and STAT_KEYS == ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")
+    S.create(400, lock=datetime(2026, 11, 7, 19, 0), games=4)
+    with S.using(400):
+        write_overrides({"a": {"minutes": 34.0, "rebounds": 9.0}, "b": {"points": 30.0}})
+        got = read_overrides_full()
+        assert got["a"]["minutes"] == 34.0 and got["a"]["rebounds"] == 9.0 and got["a"]["points"] is None and got["b"]["points"] == 30.0
+        header = S.overrides_csv().read_text().splitlines()[0]
+        assert header == "player," + ",".join(OVERRIDE_KEYS)
+        S.overrides_csv().write_text("player,minutes,fppm\nc,28,1.1\n")                # the file as it was before the stat columns
+        got = read_overrides_full()
+        assert got["c"]["minutes"] == 28.0 and got["c"]["fppm"] == 1.1 and all(got["c"][k] is None for k in STAT_KEYS)
+

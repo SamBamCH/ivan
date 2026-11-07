@@ -21,7 +21,8 @@ from ivan.sports.nba import slates as S
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 
 
-OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter", "fpts", "pub")
+STAT_KEYS = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # a stat pin: his total for the game
+OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter", "fpts", "pub", *STAT_KEYS)
 # starter: 1 / 0 overrides the Rotowire lineup for the player; fpts: the fantasy points the sim and the lineups use for him
 # (the model's number is kept beside it); pub: the public projection the field and ownership are built on
 
@@ -185,6 +186,7 @@ class LiveSlate:
                                        market_rates=self.market.get(name), market_means=self.market_means.get(name), position=p.position,
                                        rate_mult=(rate_mults or {}).get(name, 1.0), status=status or None,
                                        fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high"),
+                                       stat_overrides={k: float(ov[k]) for k in STAT_KEYS if ov.get(k) is not None} or None,
                                        new_team=bool(st is not None and str(st["team"]) != str(p.team)),
                                        games_on_team=int(self.games_team.get((name, p.team), 0)), games_this_season=int(self.games_season.get(name, 0))))
         return roster

@@ -7,9 +7,12 @@ minutes_proj on nba_player.
 Availability  DK status OUT -> not playing. Everyone else on the team plays.
 Starters      starting_lineups rows (Rotowire, fetched by ingest.py) mark the
               confirmed five; a team with no rows gets starters=unknown.
-Late news     data/nba/input/minutes_overrides.csv (columns player,minutes;
-              0 = scratch) pins minutes; the rest of the team is re-allocated
-              around the pins. scripts/nba/news.py builds that file for you.
+Late news     the day's edits/minutes_overrides.csv (columns player, minutes
+              (0 = scratch), fppm, min_low, min_high, starter, fpts, pub and a
+              total per stat: points, rebounds, assists, fg3m, steals, blocks,
+              turnovers; the desk's pin boxes write the same file) pins minutes
+              and stats; the rest of the team is re-allocated around the pins.
+              scripts/nba/news.py builds a scratch for you.
 
   python scripts/nba/project.py                 # project and write
   python scripts/nba/project.py --dry-run       # print only

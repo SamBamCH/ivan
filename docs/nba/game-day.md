@@ -85,7 +85,7 @@ Start each team at its **special considerations** box (rest, starters out, a new
 spread): the things the history-built rotation does not know. `scripts/nba/considerations.py` prints the same.
 Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 
-- **pin** a player's minutes (0 scratches him), his fppm, his 10-90 band, or his projection; blank unpins.
+- **pin** a player's minutes (0 scratches him), any of his seven stat totals, his 10-90 band, or his projection; blank unpins.
   Written at once to the day's `data/nba/days/<day>/edits/minutes_overrides.csv` (the slates of one day share their edits;
   the next day starts clean); the team re-projects around the pins.
 - **call a starter** (toggle) when Rotowire has not confirmed yet.

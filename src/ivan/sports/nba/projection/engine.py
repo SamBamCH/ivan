@@ -33,6 +33,7 @@ class RosterPlayer:
     rate_mult: float = 1.0                         # e.g. conditional "without X" usage
     status: str | None = None                      # DK status (Q, GTD, ...): the team model's scratch probability
     fpm_override: float | None = None              # hand-set fantasy points per minute (every stat rate scaled to match)
+    stat_overrides: dict[str, float] | None = None  # hand-set totals for the game, stat -> total: that stat's rate becomes total / minutes
     new_team: bool = False                         # his history is on another team
     games_on_team: int = 0                         # games for this team this season
     games_this_season: int = 0
@@ -301,10 +302,15 @@ def project_team(
         fpm_override = by_name[name].fpm_override
         if fpm_override is not None and fpm > 0:
             rates = {s: v * float(fpm_override) / fpm for s, v in rates.items()}; fpm = float(fpm_override)
+        stat_pins = {s: float(v) for s, v in (by_name[name].stat_overrides or {}).items() if s in rates and v is not None}
+        if stat_pins and mins > 0:
+            # a typed total is his for the game whatever his minutes: that stat's rate is total / minutes, the others stay
+            rates = {**rates, **{s: v / mins for s, v in stat_pins.items()}}; fpm = fpts_per_minute(rates)
         rec = {"player_name": name, "minutes": mins, "baseline": r["baseline"],
                "pinned": bool(alloc.loc[name, "pinned"]), "usage_mult": float(bump[name]),
                "games": r["games"], "fpm": fpm, "priced": r["priced"], "fpm_pinned": fpm_override is not None,
                "band_pinned": tau_from_band(by_name[name].minutes_low, by_name[name].minutes_high) is not None,
+               "stat_pinned": sorted(stat_pins),
                "role": roles[name], "p_out": p_out[name], "rates": rates}
         for s in STATS:
             rec[f"proj_{s}"] = mins * rates[s]

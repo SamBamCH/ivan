@@ -313,6 +313,39 @@ class DeskBase:
         self._consensus_cache = (key, out)
         return out
 
+    def prop_rows(self) -> dict:
+        """(player, stat) -> every (book, line) the books hold for his game tonight: [{date, book, line, over, under, alt}], the
+        main lines first then the alternates, by book and line; `date` is when the book last posted it (local). Cached until the
+        odds table changes (fresh_odds over 150k rows is the cost)."""
+        from sqlalchemy import text as _t
+        key = tuple(self.session.execute(_t("select count(*), max(last_update) from odds")).one()) + (self.pool_stamp,)
+        cache = getattr(self, "_prop_rows_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        out = self._prop_rows()
+        self._prop_rows_cache = (key, out)
+        return out
+
+    def _prop_rows(self) -> dict:
+        from ivan.sports.nba.projection.market import MARKET_TO_STAT, _to_local, fresh_odds
+        odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players})
+        if odds.empty:
+            return {}
+        odds = odds[odds.market.isin(MARKET_TO_STAT)].copy()
+        odds["stat"] = odds.market.map(MARKET_TO_STAT); odds["alt"] = odds.market.str.endswith("alternate")
+        odds["posted"] = _to_local(odds["last_update"]) if odds["last_update"].notna().any() else pd.NaT
+        odds["_side"] = odds.side.astype(str).str.lower()
+        amer = lambda prices: "" if prices.empty else f"{int(round(float(prices.iloc[0]))):+d}"   # noqa: E731
+        out: dict = {}
+        for (name, stat, book, point, alt), g in odds.groupby(["player", "stat", "sportsbook", "point", "alt"], sort=False):
+            posted = g.posted.max()
+            out.setdefault((name, stat), []).append(dict(date=None if pd.isna(posted) else posted.strftime("%m-%d %H:%M"), book=str(book),
+                                                         line=float(point), over=amer(g[g._side == "over"].price), under=amer(g[g._side == "under"].price),
+                                                         alt=bool(alt)))
+        for v in out.values():
+            v.sort(key=lambda b: (b["alt"], b["book"], b["line"]))
+        return out
+
     def _consensus_odds(self) -> dict:
         from ivan.sports.nba.projection.market import MARKET_TO_STAT, american_to_prob, fresh_odds
         odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players})   # this slate's games only

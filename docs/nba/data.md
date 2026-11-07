@@ -85,7 +85,7 @@ data/nba/
 ├── days/<YYYY-MM-DD>/              the day's edits, shared by its slates (a game is mapped once; the 6:00 and 6:30 slates read the
 │   │                               same files, the next day starts clean); a slate reaches them through the `day` in its slate.json
 │   ├── edits/
-│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
+│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, pub, starter calls, a total per stat
 │   │   ├── rotations/<TEAM>.json   the painted grid per team with its locked rows
 │   │   └── scenarios/<TEAM>/*.json named copies of a team's two files + assumptions, saved on this day; _active.json
 │   └── published/                  consumer only: the laptop's edits of the day as the base layer (minutes_overrides.csv, rotations/)

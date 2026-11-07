@@ -30,8 +30,10 @@ def team(request: Request, team: str):
 
 @slate.post("/team/{team}/pin", response_class=HTMLResponse)
 def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form(""),
-        fpts: str = Form(""), pub: str = Form("")):
-    """One row's hand values: blank clears that field. Minutes 0 scratches."""
+        fpts: str = Form(""), pub: str = Form(""), points: str = Form(""), rebounds: str = Form(""), assists: str = Form(""), fg3m: str = Form(""),
+        steals: str = Form(""), blocks: str = Form(""), turnovers: str = Form("")):
+    """One row's hand values: blank clears that field. Minutes 0 scratches. A stat total (points, rebounds, assists, fg3m, steals,
+    blocks, turnovers) pins that stat for the game: its per-minute rate becomes total / minutes, the other stats keep the model's."""
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
@@ -52,13 +54,14 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         if desk.priced_total(team, key) and new_fppm is not None and new_fppm != old.get("fppm"):
             desk.flash.append(f"{key}: fppm overridden on a priced player; the books' total no longer holds for him")
         new_fpts, new_pub = _num(fpts, "fpts"), _num(pub, "pub")
+        stat_vals = {k: _num(v, k) for k, v in dict(points=points, rebounds=rebounds, assists=assists, fg3m=fg3m, steals=steals, blocks=blocks, turnovers=turnovers).items()}
         if new_min is not None and new_min != old.get("minutes"):
             # typed minutes repaint the row: the lock (if any) is lifted so the skeleton re-fills him to the number, and the
             # other free rows move around him; a row you still want held exactly, paint it again
             g = ROT.load_drawn(team)
             if g is not None and key in set(g.attrs.get("locked", [])):
                 ROT.save_drawn(team, g, locked=[n for n in g.attrs.get("locked", []) if n != key], fingerprint=g.attrs.get("fingerprint"))
-        desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub)
+        desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub, **stat_vals)
         desk.reproject(team)                                  # the solve re-balances the team around the edit; the grid is rebuilt to the pins
         if new_pub != old.get("pub"):
             # the public number moved: the stored public projection follows at once; the field built on it waits for the next
@@ -75,7 +78,7 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
 @slate.post("/team/{team}/refigure", response_class=HTMLResponse)
 async def refigure(request: Request, team: str):
     """
-    Body: JSON {rows: [{player, minutes, fppm, fpts, pub}, ...]}: every typed value of the team's grid, applied in one go (blank
+    Body: JSON {rows: [{player, minutes, fppm, fpts, pub, points, rebounds, ...}, ...]}: every typed value of the team's grid, applied in one go (blank
     clears that pin), then the team re-projected once: the skeleton re-fills the grid to the typed minutes (a row whose minutes
     changed loses its lock so it can move), the other free rows move around them. The public numbers that changed rebuild the field.
     """

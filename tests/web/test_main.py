@@ -408,3 +408,39 @@ def test_nba_starter_toggle_posts_the_rows_player(open_site):
     assert r.status_code == 200 and override_of(d.overrides, key).get("starter") is not None               # a hand call now
     r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
     assert r.status_code == 200 and override_of(d.overrides, key).get("starter") == before                  # cleared back
+
+
+def test_nba_grid_stat_columns_pin_a_total(open_site):
+    """The grid's right side is min, the seven stats, fpts, sim, val, pub, val, own: every stat cell a pin box with the books' lines
+    in its hover. A total typed into a stat box (`/team/<TEAM>/pin` with points=...) is the player's for the game: his projected
+    points become the total, his other stats keep the model's; blank clears it back."""
+    from ivan.web import nba as D
+    from ivan.sports.nba.projection.live import override_of
+    from ivan.sports.nba.desk.rows import STAT_ORDER
+    dg, day = _held(open_site)
+    d = D.desk_for(dg)
+    team = next((t for t in d.slate.teams() if len(d.proj.get(t, [])) >= 5), None)
+    if team is None:
+        pytest.skip("no projected team on the held slate")
+    r = open_site.get(f"/nba/{day}/{dg}/team/{team}")
+    assert r.status_code == 200 and "hist fppm" not in r.text and ">fpts</th>" in r.text
+    for st in STAT_ORDER:
+        assert f'name="{st}"' in r.text and f'data-pin="{st}"' in r.text
+    assert r.text.count('class="px n hover statcell') >= 7 * 5                               # a cell per stat per row
+    assert "not priced for this game: history" in r.text or "<th>book</th>" in r.text         # the hover: the books' lines, or why not
+    key = d.proj[team].index[0]
+    old = override_of(d.overrides, key)
+    before_pts, before_reb = float(d.proj[team].loc[key, "proj_points"]), float(d.proj[team].loc[key, "proj_rebounds"])
+    try:
+        r = open_site.post(f"/nba/{day}/{dg}/team/{team}/pin", data={"player": key, "points": "31"})
+        assert r.status_code == 200 and override_of(d.overrides, key).get("points") == 31.0
+        row = d.proj[team].loc[key]
+        assert abs(float(row["proj_points"]) - 31.0) < 0.05 and list(row["stat_pinned"]) == ["points"]      # his points are the total
+        assert abs(float(row["proj_rebounds"]) - before_reb) < 0.05                                          # his rebounds are the model's
+        assert 'name="points"' in r.text and 'pinned' in r.text
+        r = open_site.post(f"/nba/{day}/{dg}/team/{team}/pin", data={"player": key, "points": ""})
+        assert r.status_code == 200 and override_of(d.overrides, key).get("points") is None
+        assert abs(float(d.proj[team].loc[key, "proj_points"]) - before_pts) < 0.5
+    finally:
+        d.set_override(key, points=old.get("points")); d.reproject(team)
+
