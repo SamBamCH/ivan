@@ -221,6 +221,7 @@ venv/bin/python scripts/nba/gamesim.py exits [--team BOS]                       
 venv/bin/python scripts/nba/gamesim.py fit-script [--no-write]                     # layer A: the game script's parameters from the lined games
 venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                      # layer A: PIT coverage of totals and margins, pace, overtime, garbage time
 venv/bin/python scripts/nba/gamesim.py check-usage [--start --end]                 # layer C: shares over the real fives vs per-minute rates, true minutes plugged in
+venv/bin/python scripts/nba/gamesim.py check-rotation [--start --end] [-n 300]     # layer B: the rotation draw vs the current sampler, the real margin path plugged in
 ```
 
 `events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
@@ -258,6 +259,16 @@ of the window possession by possession with the real fives and scores the shares
 ones, next to the current model's way (the trailing stat per minute times the true minutes). Result 2026-11-07 in the
 same note: level on attempts when the minutes are known (7 of 9 stats a hair better), and the pie removes the bias on
 nights a 25-minute teammate sat.
+
+`check-rotation` is layer B (`gamesim.rotation`): the skeleton grid's substitutions jittered once per world and rasterised
+to each player's coverage of every minute (five on the floor in every minute of every world, by construction), then the
+game happening to the plan: scratches and foul-outs handed to heirs by the measured flow matrix and the room inside a
+group, fouls as a process along each player's floor time at his own trailing rate with the coach's measured reaction
+after the fourth and fifth, garbage time off the margin path (closers out only while the lead holds, the end of the
+bench in), overtime for the five at the buzzer. The check proposes each team-game's grid from the stints before that
+date, plugs in the real margin path and overtime, and scores the draw against the box score next to the current sampler
+on the same grid: minutes MAE, bias and 10-90 coverage by role, by final margin and for the players who really reached
+five fouls. Result 2026-11-07 in the same note.
 
 ## What does not exist yet
 

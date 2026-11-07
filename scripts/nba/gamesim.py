@@ -16,6 +16,10 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
         coupling and the endgame tie bump from the lined games -> data/nba/models/gamesim/script.json
     scripts/nba/gamesim.py check-script [-n 2000]
         layer A against the lined games: PIT coverage of the final total and margin, pace error, overtime and garbage-time rates
+    scripts/nba/gamesim.py check-rotation [--start 2026-01-10 --end 2026-01-31] [-n 300] [--jitter 1.6]
+        layer B with the real margin path plugged in: the new draw (fouls, heirs by flow, the path's garbage time) against the
+        current sampler on the same proposed grids: minutes MAE, bias and 10-90 coverage by role, by final margin, for the
+        players who really reached five fouls
     scripts/nba/gamesim.py check-usage [--start 2026-01-10 --end 2026-02-28]
         layer C with the truth plugged in: the shares over the real fives and possessions against the per-minute rate x true
         minutes, per stat (attempts, threes, trips, turnovers, assists, rebounds, steals, blocks), overall / starters / bench /
@@ -32,6 +36,7 @@ from sqlalchemy import text
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.gamesim import fouls as F
 from ivan.sports.nba.gamesim import possessions as X
+from ivan.sports.nba.gamesim import rotation as R
 from ivan.sports.nba.gamesim import script as S
 from ivan.sports.nba.gamesim import usage as U
 from ivan.sports.nba.paths import DIAG_DIR
@@ -119,6 +124,18 @@ def cmd_check_usage(args) -> None:
     print(r["table"].round(3).to_string(index=False))
 
 
+def cmd_check_rotation(args) -> None:
+    from datetime import date
+    from ivan.sports.nba.projection.groups import group_of, position_map
+    s = get_session(init_db("nba"))
+    groups = {n: group_of(p) for n, p in position_map(s).items()}
+    r = R.check(s, date.fromisoformat(args.start), date.fromisoformat(args.end), n=args.n, groups=groups, jitter_scale=args.jitter, log=print)
+    print(_fmt(r["summary"]))
+    pd.set_option("display.width", 220)
+    for key in ("by_role", "by_margin", "five_fouls"):
+        print(); print(r[key].round(3).to_string(index=False))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -128,6 +145,8 @@ def main() -> None:
     f = sub.add_parser("fit-script"); f.add_argument("--no-write", action="store_true"); f.set_defaults(fn=cmd_fit_script)
     k = sub.add_parser("check-script"); k.add_argument("-n", type=int, default=2000); k.set_defaults(fn=cmd_check_script)
     u = sub.add_parser("check-usage"); u.add_argument("--start", default="2026-01-10"); u.add_argument("--end", default="2026-02-28"); u.set_defaults(fn=cmd_check_usage)
+    b = sub.add_parser("check-rotation"); b.add_argument("--start", default="2026-01-10"); b.add_argument("--end", default="2026-01-31"); b.add_argument("-n", type=int, default=300)
+    b.add_argument("--jitter", type=float, default=None); b.set_defaults(fn=cmd_check_rotation)
     args = ap.parse_args()
     args.fn(args)
 

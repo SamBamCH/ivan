@@ -81,3 +81,40 @@ predicted attempts (compounding two errors cost 0.1 of MAE).
 
 The live projection's props-as-shares idea (plan, layer C) sits on top of this: a priced player's shares are his props
 over his expected possessions; history supplies the unpriced players' shares and the team's pie.
+
+## Layer B: the rotation under game events
+
+Measured first (`nba_foul` + `nba_stint`, 16,784 player-games):
+
+- fouls per 36 minutes 3.08 overall, 2.6 for 30+ minute players, 4.1 under 10 minutes; a player's rate is his own
+  (split-half correlation 0.66 across 280 players, spread 0.9 per 36);
+- the hazard is flat in the foul count: 2.9 / 3.2 / 3.2 / 3.3 / 3.3 / 2.9 per 36 holding 0..5 fouls. What makes real
+  foul-outs rare (1.1% of player-games, 1.6% of 25+ minute players against a Poisson 3.7%) is exposure: the coach sits a
+  player in trouble, so the sixth has less floor time to land in;
+- the coach's reaction, as the share of the remaining regulation time kept after the k-th foul against the ~0.57 a player
+  on the floor at that minute normally plays: after the 4th 0.40-0.43 with 12+ minutes left, 0.53 at 8-12, 0.62 at 4-8,
+  0.83 under 4; after the 5th 0.22-0.26 with 12+, 0.35 at 8-12, 0.49 at 4-8, 0.78 under 4 (`rotation.SIT`).
+
+`scripts/nba/gamesim.py check-rotation --start 2026-01-10 --end 2026-01-31`: 90 team-games, 971 player-games, the grid
+proposed from the stints before each game, the **real margin path and overtime plugged in**, 300 worlds, against the
+current sampler (`projection.rotation.sample_worlds`) on the same grid with the same final margin:
+
+| | new draw | current sampler |
+|---|---|---|
+| minutes MAE | 4.73 | 4.87 |
+| bias star / starter / rotation / deep | -0.2 / +0.9 / -0.6 / 0.0 | -0.1 / +1.0 / -0.8 / -0.4 |
+| 10-90 coverage (target 80%) | 73% (star 86, starter 81, rotation 69, deep 35) | 76% (86 / 82 / 69 / 45) |
+| fouls per player-game, drawn vs real | 1.83 vs 1.69 | — |
+| foul-outs, drawn vs real | 1.3% vs 0.3% in the window (1.1% over the season) | — |
+
+Three things the check forced before the numbers held: (1) **conservation**: with a nine-man grid a garbage-time pull of
+five closers leaves four bodies, so the pull is capped by the bench's room and the per-minute fill is water-filling that
+brings players in from zero by their planned minutes when fewer than five hold any coverage (before: 226 of 240 minutes a
+world); (2) **reversible garbage time**: a real path crosses the pull threshold and comes back (up 25 at minute 42, final
+by 12), and the closers come back with it, so the pull holds only while the lead stays beyond 60% of the threshold to the
+buzzer (before: stars -1.0 a night in close finals); (3) **sequential fouls**: drawn as exponential gaps along the floor
+time with each sit shrinking the next foul's exposure (a Poisson count over the planned minutes gave 2.8% foul-outs).
+
+The jitter scale stays at 1.6: 2.0 lifts coverage to 75.5% but costs the MAE (4.86), and the shortfall is in the rotation
+and deep roles (69% / 35%) where the question is whether the grid has the player at all, not when his stints move. Both
+samplers share that; it is the skeleton's, not the draw's.
