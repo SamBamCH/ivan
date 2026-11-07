@@ -19,7 +19,7 @@ The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-0
 
 | Table | Where | What | Written by | Feed |
 |---|---|---|---|---|
-| `nba_player` | slate | **the pool**: one row per DK player of the slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`; the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), `project_slate`, `project.py`, `news.py` | slate bundle |
+| `nba_player` | slate | **the pool**: one row per DK player of the slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`; `status_changed_at` (when his DK status or starter flag last moved: props posted before it do not count, `changes.mark_status_changes`); the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), `project_slate`, `project.py`, `news.py` | slate bundle |
 | `starting_lineups` | slate | Rotowire's expected and confirmed starters, with `fetched_at` | the pool refresh | slate bundle |
 | `odds` | history | player props as (book, market, line, prices), each row with its game (`game_id`, `commence_time`, `home_abbr`, `away_abbr` from the odds API event): the day's slates share them | `ingest.store_props` (a props fetch replaces the games it priced and drops games older than 3 days; the restore of a capture) | live; a slate's projection reads only the rows of its own games (`market.fresh_odds`); `scripts/nba/odds_games.py` shows them by game, `--backfill` gives pre-2026-11-07 rows their game |
 | `nba_market_rate` | slate | per player and stat: market mean ÷ basis minutes, books, line | `live.store_market_rates` after a props fetch | slate bundle |
@@ -85,7 +85,7 @@ data/nba/
 ├── days/<YYYY-MM-DD>/              the day's edits, shared by its slates (a game is mapped once; the 6:00 and 6:30 slates read the
 │   │                               same files, the next day starts clean); a slate reaches them through the `day` in its slate.json
 │   ├── edits/
-│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, starter calls
+│   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, pub, starter calls, a total per stat
 │   │   ├── rotations/<TEAM>.json   the painted grid per team with its locked rows
 │   │   └── scenarios/<TEAM>/*.json named copies of a team's two files + assumptions, saved on this day; _active.json
 │   └── published/                  consumer only: the laptop's edits of the day as the base layer (minutes_overrides.csv, rotations/)

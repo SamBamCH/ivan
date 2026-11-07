@@ -21,7 +21,8 @@ from ivan.sports.nba import slates as S
 OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 
 
-OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter", "fpts", "pub")
+STAT_KEYS = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # a stat pin: his total for the game
+OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter", "fpts", "pub", *STAT_KEYS)
 # starter: 1 / 0 overrides the Rotowire lineup for the player; fpts: the fantasy points the sim and the lineups use for him
 # (the model's number is kept beside it); pub: the public projection the field and ownership are built on
 
@@ -148,9 +149,7 @@ class LiveSlate:
         self.market: dict[str, dict[str, float]] = {}
         self.market_means: dict[str, dict[str, float]] = {}
         if use_market:
-            for r in session.query(NBAMarketRate).all():
-                self.market.setdefault(r.player_name, {})[r.stat] = float(r.rate)
-                self.market_means.setdefault(r.player_name, {})[r.stat] = float(r.market_mean)
+            self.reload_market()
         self.players = session.query(NBAPlayer).all()
         # games this season per player and per (player, team): the salary blend fades as they arrive
         season_start = date(horizon.year if horizon.month >= 10 else horizon.year - 1, 10, 1)
@@ -160,6 +159,14 @@ class LiveSlate:
 
     def teams(self) -> list[str]:
         return sorted({p.team for p in self.players})
+
+    def reload_market(self) -> None:
+        """(Re-)read the market rates (nba_market_rate): per player, stat -> rate and stat -> the books' mean. The desk calls it
+        after a hand starter call rebuilt the rates (ingest.refresh_market_rates)."""
+        self.market, self.market_means = {}, {}
+        for r in self.session.query(NBAMarketRate).all():
+            self.market.setdefault(r.player_name, {})[r.stat] = float(r.rate)
+            self.market_means.setdefault(r.player_name, {})[r.stat] = float(r.market_mean)
 
     def roster(self, team: str, overrides: dict[str, float], forced_out: set[str],
                rate_mults: dict[str, float] | None = None) -> list[RosterPlayer]:
@@ -185,6 +192,7 @@ class LiveSlate:
                                        market_rates=self.market.get(name), market_means=self.market_means.get(name), position=p.position,
                                        rate_mult=(rate_mults or {}).get(name, 1.0), status=status or None,
                                        fpm_override=ov.get("fppm"), minutes_low=ov.get("min_low"), minutes_high=ov.get("min_high"),
+                                       stat_overrides={k: float(ov[k]) for k in STAT_KEYS if ov.get(k) is not None} or None,
                                        new_team=bool(st is not None and str(st["team"]) != str(p.team)),
                                        games_on_team=int(self.games_team.get((name, p.team), 0)), games_this_season=int(self.games_season.get(name, 0))))
         return roster

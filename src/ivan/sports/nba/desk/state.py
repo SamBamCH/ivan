@@ -270,13 +270,7 @@ class DeskBase:
                 self.fouls = {}
             self.recent = self.recent_games(self.slate.box, fouls=self.fouls)
             self._season_key = hist_key
-        self.market_rows = {}
-        for r in self.session.query(NBAMarketRate).all():
-            self.market_rows.setdefault(r.player_name, {})[r.stat] = dict(mean=float(r.market_mean), line=r.line, books=r.books, rate=float(r.rate), basis=float(r.basis_minutes),
-                                                                           odds=None)
-        for (name, stat), txt in self.consensus_odds().items():
-            if name in self.market_rows and stat in self.market_rows[name]:
-                self.market_rows[name][stat]["odds"] = txt
+        self.load_market_rows()
         self.load_frames()
 
         if getattr(self, "_auto_pending", False):
@@ -313,9 +307,58 @@ class DeskBase:
         self._consensus_cache = (key, out)
         return out
 
+    def load_market_rows(self) -> None:
+        """player -> stat -> the stored market rate row (mean, line, books, rate, the minutes it was priced over) with the consensus
+        prices; re-read after a refresh and after a hand starter call rebuilt the rates."""
+        from ivan.sports.nba.models import NBAMarketRate
+        self.market_rows = {}
+        for r in self.session.query(NBAMarketRate).all():
+            self.market_rows.setdefault(r.player_name, {})[r.stat] = dict(mean=float(r.market_mean), line=r.line, books=r.books, rate=float(r.rate), basis=float(r.basis_minutes),
+                                                                           odds=None)
+        for (name, stat), txt in self.consensus_odds().items():
+            if name in self.market_rows and stat in self.market_rows[name]:
+                self.market_rows[name][stat]["odds"] = txt
+
+    def prop_rows(self) -> dict:
+        """(player, stat) -> every (book, line) the books hold for his game tonight: [{date, book, line, over, under, alt}], the
+        main lines first then the alternates, by book and line; `date` is when the book last posted it (local). Cached until the
+        odds table changes (fresh_odds over 150k rows is the cost)."""
+        from sqlalchemy import text as _t
+        key = tuple(self.session.execute(_t("select count(*), max(last_update) from odds")).one()) + (self.pool_stamp,)
+        cache = getattr(self, "_prop_rows_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        out = self._prop_rows()
+        self._prop_rows_cache = (key, out)
+        return out
+
+    def _prop_rows(self) -> dict:
+        from ivan.sports.nba import changes as CH
+        from ivan.sports.nba.projection.market import MARKET_TO_STAT, _to_local, fresh_odds
+        odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players}, cutoffs=CH.status_cutoffs(self.session), mark=True)
+        if odds.empty:
+            return {}
+        odds = odds[odds.market.isin(MARKET_TO_STAT)].copy()
+        if "stale" not in odds.columns:
+            odds["stale"] = False
+        odds["stat"] = odds.market.map(MARKET_TO_STAT); odds["alt"] = odds.market.str.endswith("alternate")
+        odds["posted"] = _to_local(odds["last_update"]) if odds["last_update"].notna().any() else pd.NaT
+        odds["_side"] = odds.side.astype(str).str.lower()
+        amer = lambda prices: "" if prices.empty else f"{int(round(float(prices.iloc[0]))):+d}"   # noqa: E731
+        out: dict = {}
+        for (name, stat, book, point, alt), g in odds.groupby(["player", "stat", "sportsbook", "point", "alt"], sort=False):
+            posted = g.posted.max()
+            out.setdefault((name, stat), []).append(dict(date=None if pd.isna(posted) else posted.strftime("%m-%d %H:%M"), book=str(book),
+                                                         line=float(point), over=amer(g[g._side == "over"].price), under=amer(g[g._side == "under"].price),
+                                                         alt=bool(alt), stale=bool(g.stale.any())))
+        for v in out.values():
+            v.sort(key=lambda b: (b["alt"], b["book"], b["line"]))
+        return out
+
     def _consensus_odds(self) -> dict:
+        from ivan.sports.nba import changes as CH
         from ivan.sports.nba.projection.market import MARKET_TO_STAT, american_to_prob, fresh_odds
-        odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players})   # this slate's games only
+        odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players}, cutoffs=CH.status_cutoffs(self.session))   # this slate's games, past the status cutoffs
         if odds.empty:
             return {}
         odds = odds[odds.market.isin(MARKET_TO_STAT) & ~odds.market.str.endswith("alternate")].copy()

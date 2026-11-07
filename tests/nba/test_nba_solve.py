@@ -71,3 +71,15 @@ def test_engine_solve_allocation_holds_pins_and_sums(monkeypatch):
     assert set(alloc.columns) >= {"baseline", "minutes", "pinned"} and book == {}
 
 
+def test_a_stat_total_pins_that_rate_alone():
+    """RosterPlayer.stat_overrides: 9 rebounds over 30 minutes is a rate of 0.3 whatever the model said; points keep the model's."""
+    from ivan.sports.nba.projection.engine import RosterPlayer
+    from ivan.sports.nba.projection.rates import fpts_per_minute
+    rates = {"points": 0.6, "rebounds": 0.2, "assists": 0.1, "steals": 0.03, "blocks": 0.02, "turnovers": 0.05, "fg3m": 0.06}
+    p = RosterPlayer("x", True, stat_overrides={"rebounds": 9.0})
+    mins = 30.0
+    pinned = {s: float(v) for s, v in (p.stat_overrides or {}).items() if s in rates}
+    new = {**rates, **{s: v / mins for s, v in pinned.items()}}
+    assert abs(new["rebounds"] - 0.3) < 1e-9 and new["points"] == rates["points"]
+    assert abs(fpts_per_minute(new) - fpts_per_minute(rates) - 1.25 * 0.1) < 1e-9        # 0.1 more rebounds a minute at DK's 1.25
+

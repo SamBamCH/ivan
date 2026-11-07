@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from ivan.core.utils import normalize_name
-from ivan.sports.nba.projection.live import override_of
+from ivan.sports.nba.projection.live import STAT_KEYS, override_of
 from ivan.sports.nba.projection import rotation as ROT
 from .core import desk
 
@@ -23,7 +23,8 @@ def _num(raw: str, label: str) -> Optional[float]:
 
 
 def _apply_pin_rows(team: str, rows: list) -> tuple[list, int, int]:
-    """Apply typed grid values for one team ([{player, minutes, fppm, fpts, pub}], blank clears that pin) to this machine's own
+    """Apply typed grid values for one team ([{player, minutes, fppm, fpts, pub, points, rebounds, assists, fg3m, steals, blocks,
+    turnovers}], blank clears that pin) to this machine's own
     layer. A row whose minutes changed loses its lock so the skeleton can move it. Returns (players whose minutes changed, public
     numbers changed, values set). The caller re-projects."""
     changed_min, changed_pub, n_set = [], 0, 0
@@ -33,7 +34,7 @@ def _apply_pin_rows(team: str, rows: list) -> tuple[list, int, int]:
             continue
         old = override_of(desk.overrides, key)
         vals = {}
-        for k in ("minutes", "fppm", "fpts", "pub"):
+        for k in ("minutes", "fppm", "fpts", "pub", *STAT_KEYS):
             if k in r:
                 try:
                     vals[k] = _num(r.get(k), k)

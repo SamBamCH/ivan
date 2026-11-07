@@ -85,10 +85,11 @@ Start each team at its **special considerations** box (rest, starters out, a new
 spread): the things the history-built rotation does not know. `scripts/nba/considerations.py` prints the same.
 Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 
-- **pin** a player's minutes (0 scratches him), his fppm, his 10-90 band, or his projection; blank unpins.
+- **pin** a player's minutes (0 scratches him), any of his seven stat totals, his 10-90 band, or his projection; blank unpins.
   Written at once to the day's `data/nba/days/<day>/edits/minutes_overrides.csv` (the slates of one day share their edits;
   the next day starts clean); the team re-projects around the pins.
-- **call a starter** (toggle) when Rotowire has not confirmed yet.
+- **call a starter** (toggle) when Rotowire has not confirmed yet; his props posted before the call are set aside until the
+  books post him again (so are any player's at a refresh that moves his status or his place in the five).
 - **a player ruled out voids the team's mapping** (`ivan.sports.nba.mapping`, inside every refresh and before every
   re-projection on the desk; `scripts/nba/mapping.py --slate DG` from a terminal). The mapping was made against a pool the
   grid's fingerprint recorded; when one of those players is OUT (DK's status or a scratch call here), the grid and the

@@ -153,3 +153,59 @@ def test_a_published_layer_counts_only_on_a_consumer(root, monkeypatch):
         assert not S.is_consumer() and S.published_pins() is None and S.published_grid("ATL") is None
         monkeypatch.setenv("IVAN_FEED_SSH", "me@laptop")
         assert S.is_consumer() and S.published_pins() == sp.published_overrides_csv and S.published_grid("ATL") == sp.published_rotations / "ATL.json"
+
+
+def test_overrides_file_carries_stat_totals_and_reads_older_files(root):
+    """A stat pin (points, rebounds, ...) is a column of minutes_overrides.csv like the minutes pin; a file written before the
+    stat columns reads with them blank; the roster hands the engine the totals as stat_overrides."""
+    from ivan.sports.nba.projection.live import OVERRIDE_KEYS, STAT_KEYS, read_overrides_full, write_overrides
+    assert set(STAT_KEYS) <= set(OVERRIDE_KEYS) and STAT_KEYS == ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")
+    S.create(400, lock=datetime(2026, 11, 7, 19, 0), games=4)
+    with S.using(400):
+        write_overrides({"a": {"minutes": 34.0, "rebounds": 9.0}, "b": {"points": 30.0}})
+        got = read_overrides_full()
+        assert got["a"]["minutes"] == 34.0 and got["a"]["rebounds"] == 9.0 and got["a"]["points"] is None and got["b"]["points"] == 30.0
+        header = S.overrides_csv().read_text().splitlines()[0]
+        assert header == "player," + ",".join(OVERRIDE_KEYS)
+        S.overrides_csv().write_text("player,minutes,fppm\nc,28,1.1\n")                # the file as it was before the stat columns
+        got = read_overrides_full()
+        assert got["c"]["minutes"] == 28.0 and got["c"]["fppm"] == 1.1 and all(got["c"][k] is None for k in STAT_KEYS)
+
+
+def test_status_marks_carry_across_the_pool_replace_and_move_on_a_change(root):
+    """changes.mark_status_changes: after the pool is replaced, a player whose DK status or starter flag moved is stamped now, the
+    rest carry their earlier stamp, a newcomer carries none; touch_status stamps one player; status_cutoffs lists the stamped."""
+    from ivan.sports.nba import changes as CH
+    from ivan.sports.nba.models import NBAPlayer, StartingLineups
+    S.create(500, lock=datetime(2026, 11, 7, 19, 0), games=2)
+    sess = S.session(500)
+    tip = datetime(2026, 11, 7, 19, 0)
+    def pool(status_a, names=("a one", "b two", "c three")):
+        sess.query(NBAPlayer).delete(synchronize_session=False)
+        for i, n in enumerate(names):
+            sess.add(NBAPlayer(name=n, team="AAA", opponent="BBB", position="PG", roster_slot_id=1, gametime=tip, salary=5000, draft_group_id=500,
+                               status=status_a if n == "a one" else None))
+        sess.flush()
+    def five(names):
+        sess.query(StartingLineups).delete(synchronize_session=False)
+        for n in names:
+            sess.add(StartingLineups(player_name=n, team="AAA", position="PG", confirmed=False))
+        sess.flush()
+    with S.using(500):
+        pool(None); five(["a one", "b two"])
+        t0 = datetime(2026, 11, 7, 15, 0)
+        assert CH.mark_status_changes(sess, CH.status_state(sess), now=t0) == []             # nothing moved: nothing stamped
+        before = CH.status_state(sess)
+        assert before["a one"] == dict(status="", starter=True, at=None)
+        pool("Q"); five(["b two", "c three"])                                                # a one: Q and out of the five; c three: into the five
+        t1 = datetime(2026, 11, 7, 17, 30)
+        assert CH.mark_status_changes(sess, before, now=t1) == ["a one", "c three"]
+        assert CH.status_cutoffs(sess) == {"a one": t1, "c three": t1}
+        before = CH.status_state(sess)
+        pool("Q", names=("a one", "b two", "c three", "d four")); five(["b two", "c three"])   # the next refresh: nothing moved, d four is new
+        t2 = datetime(2026, 11, 7, 18, 0)
+        assert CH.mark_status_changes(sess, before, now=t2) == [] and CH.status_cutoffs(sess) == {"a one": t1, "c three": t1}
+        assert CH.touch_status(sess, "b two", now=t2) and CH.status_cutoffs(sess)["b two"] == t2
+        assert not CH.touch_status(sess, "nobody", now=t2)
+    sess.close()
+

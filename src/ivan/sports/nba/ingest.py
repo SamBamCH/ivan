@@ -40,6 +40,7 @@ from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
+from ivan.sports.nba import changes as CH
 from ivan.sports.nba.projection.market import NBA_MARKETS, fresh_odds, market_means
 
 Log = Callable[[str], None]
@@ -224,6 +225,7 @@ class StoreInfo:
     market_rates: int = 0
     game_lines: int = 0
     capture_id: Optional[int] = None
+    status_changes: list = field(default_factory=list)     # players whose status or starter flag moved in this refresh (their older props set aside)
 
 
 @contextmanager
@@ -326,8 +328,31 @@ def store_props(session: Session, odds: pd.DataFrame) -> int:
     return int(len(odds))
 
 
+def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=None) -> int:
+    """This pool's market rates (nba_market_rate) from the props of its own games only (market.fresh_odds: the row's game is the
+    player's game on this slate; a player the books did not price tonight gets no market rate rather than his last game's), the
+    rows a book posted before the player's status or starter flag last moved left out (changes.status_cutoffs: they priced his old
+    role; he projects from history until the books post again). Called by the store and by the desk's starter call. Returns the
+    rates stored; with no usable row at all the table is left as it was. `history`: (box, HistoryState) already built (the desk's),
+    to skip the box-score load."""
+    odds_df = fresh_odds(session, gametimes, cutoffs=CH.status_cutoffs(session))
+    if not len(odds_df):
+        return 0
+    odds_df = odds_df[odds_df.player.isin(set(pool))]
+    if not len(odds_df):
+        return 0
+    means = market_means(odds_df)
+    slate = LiveSlate(session, use_market=False, history=history)
+    basis = basis_minutes_for_market(slate, read_overrides_full(), set())
+    return store_market_rates(session, means, basis)
+
+
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
     info = StoreInfo()
+    try:
+        before_status = CH.status_state(session)            # the statuses and the five as they stood: what the props on file priced
+    except Exception:   # noqa: BLE001 - a pool from before the column
+        before_status = {}
     # the pool: replace in full (one slate at a time in nba_player)
     session.query(NBAPlayer).delete(synchronize_session=False)
     for row in fetched.players:
@@ -336,21 +361,17 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
     info.players = len(fetched.players)
     if fetched.starters is not None:
         info.starters = store_starting_lineups(session, fetched.starters, fetched_at=fetched.fetched_at)
+    try:
+        info.status_changes = CH.mark_status_changes(session, before_status)
+        if info.status_changes:
+            log(f"status moved for {', '.join(info.status_changes)}: their props posted before now are set aside until the books post again")
+    except Exception as e:   # noqa: BLE001 - the marks are a refinement of the market rates, never the refresh
+        log(f"status marks not written: {type(e).__name__}: {e}")
     if fetched.odds is not None:
         info.odds = store_props(session, fetched.odds)
     if fetched.game_lines is not None and len(fetched.game_lines):
         info.game_lines = store_game_lines(session, fetched.game_lines, fetched_at=fetched.fetched_at)
-    # market rates for this pool from the props of its own games only (market.fresh_odds: the row's game is the player's game on
-    # this slate; a player the books did not price tonight gets no market rate rather than his last game's)
-    odds_df = fresh_odds(session, {r["name"]: r.get("gametime") for r in fetched.players})
-    if len(odds_df):
-        pool = {r["name"] for r in fetched.players}
-        odds_df = odds_df[odds_df.player.isin(pool)]
-        if len(odds_df):
-            means = market_means(odds_df)
-            slate = LiveSlate(session, use_market=False)
-            basis = basis_minutes_for_market(slate, read_overrides_full(), set())
-            info.market_rates = store_market_rates(session, means, basis)
+    info.market_rates = refresh_market_rates(session, {r["name"]: r.get("gametime") for r in fetched.players}, {r["name"] for r in fetched.players})
     refresh_public_projection(session, log=log)             # the public projection: the pool or props changed (the field follows the commit)
     # archive capture: players carry their starter flag so a replay can restore it
     starters = {}

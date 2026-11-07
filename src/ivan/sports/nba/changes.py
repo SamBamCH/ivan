@@ -9,6 +9,16 @@ prints it.
 
     snapshot(session)                 the pool's statuses, starters and projections now
     diff(before, after, news=None)    {team: [{kind, player, text}]}
+
+The props' freshness after news (2026-11-07): a book's line priced the role the player had when it was posted, so once his
+DK status or his starter flag moves (Rotowire's five, or the desk's hand call over it) the lines posted before that are set
+aside until the books post again (the next props fetch replaces the game's rows):
+
+    status_state(session)                       player -> {status, starter, at}
+    mark_status_changes(session, before, now)   after the pool was replaced: nba_player.status_changed_at = now where the
+                                                state moved since `before`, the earlier stamp carried for the rest
+    touch_status(session, name, now)            a hand call on the desk moves one player now
+    status_cutoffs(session)                     player -> status_changed_at, what market.fresh_rows drops rows before
 """
 from __future__ import annotations
 
@@ -34,6 +44,67 @@ def snapshot(session: Session) -> dict:
         confirmed[r.team] = bool(r.confirmed)
     return dict(at=datetime.now(), players=players, starters=starters, confirmed=confirmed,
                 draft_group=next((p.draft_group_id for p in session.query(NBAPlayer).limit(1)), None))
+
+
+def _status(raw) -> str:
+    return (raw or "").upper().replace("NONE", "")
+
+
+def status_state(session: Session) -> dict:
+    """player -> {status: the DK status (blank = active), starter: in the five (Rotowire's lineup, the desk's hand call over it),
+    at: when either last moved (nba_player.status_changed_at)}. The overrides need the slate in context; without one the
+    hand calls are not read."""
+    from ivan.sports.nba.models import NBAPlayer, StartingLineups
+    five = {normalize_name(r.player_name) for r in session.query(StartingLineups).all()}
+    try:
+        from ivan.sports.nba.projection.live import read_overrides_full
+        ov = read_overrides_full()
+    except Exception:   # noqa: BLE001 - no slate in context, no file
+        ov = {}
+    out = {}
+    for p in session.query(NBAPlayer).all():
+        n = normalize_name(p.name)
+        call = (ov.get(n) or {}).get("starter")
+        out[n] = dict(status=_status(p.status), starter=(float(call) > 0) if call is not None else (n in five), at=p.status_changed_at)
+    return out
+
+
+def mark_status_changes(session: Session, before: Optional[dict], now: Optional[datetime] = None) -> List[str]:
+    """After the pool was replaced (the rows are new, their stamps blank): every player whose status or starter flag differs from
+    `before` (status_state taken before the store) is stamped `now`; the rest carry the stamp they had. A player new to the pool
+    carries none. Returns the players stamped, flushed (the caller's transaction commits)."""
+    from ivan.sports.nba.models import NBAPlayer
+    now = now or datetime.now()
+    after = status_state(session)
+    marked: List[str] = []
+    for p in session.query(NBAPlayer).all():
+        n = normalize_name(p.name)
+        b = (before or {}).get(n); a = after.get(n)
+        if b is None or a is None:
+            continue
+        if a["status"] != b["status"] or bool(a["starter"]) != bool(b["starter"]):
+            p.status_changed_at = now; marked.append(n)
+        else:
+            p.status_changed_at = b.get("at")
+    session.flush()
+    return marked
+
+
+def touch_status(session: Session, name: str, now: Optional[datetime] = None) -> bool:
+    """A hand call on the desk (a starter toggled) moves the player's state now: his props posted before this are set aside."""
+    from ivan.sports.nba.models import NBAPlayer
+    key = normalize_name(name); hit = False
+    for p in session.query(NBAPlayer).all():
+        if normalize_name(p.name) == key:
+            p.status_changed_at = now or datetime.now(); hit = True
+    session.flush()
+    return hit
+
+
+def status_cutoffs(session: Session) -> Dict[str, datetime]:
+    """player -> when his status or starter flag last moved, for the players it did (market.fresh_rows' cutoffs)."""
+    from ivan.sports.nba.models import NBAPlayer
+    return {normalize_name(p.name): p.status_changed_at for p in session.query(NBAPlayer).all() if p.status_changed_at is not None}
 
 
 def diff(before: dict, after: dict, news: Optional[Iterable] = None) -> Dict[str, List[dict]]:

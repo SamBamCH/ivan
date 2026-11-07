@@ -159,7 +159,8 @@ to **pub**.
 ## Late news and overrides (`live.py`, `scenarios.py`)
 
 Under the day's directory (`data/nba/days/<day>/`, reached through the slate's `day` in `slate.json`,
-`ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, starter calls;
+`ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, pub, starter calls, and a
+total per stat: points, rebounds, assists, fg3m, steals, blocks, turnovers, each making that stat's rate total / minutes;
 0 minutes is a scratch); `edits/rotations/<TEAM>.json` the painted grid with its locked rows. A game is mapped once:
 the slates of one evening share these files and the next day starts clean. Both are read by every projection of a
 slate of that day, by any entry point (the slate is the current one in context: a script's `--slate`, the web's
@@ -209,3 +210,16 @@ history alone (2026-11-04: IND's Toppin, Huff and Nance carried Nov 2 and Oct 30
 on prices for another game; 2026-10-28: O'Neale on week-old props). `scripts/nba/odds_games.py` shows a slate's props by
 game and, with `--player`, why each of a player's rows is kept or ignored; `--backfill --apply` gives the rows stored
 before the game columns their game from the raw payloads.
+
+**A line priced the role the player had when the book posted it.** Once his DK status or his starter flag moves (Rotowire's
+five at a refresh, or the desk's hand call over it), the lines posted before that moment are set aside: `ivan.sports.nba.changes`
+stamps `nba_player.status_changed_at` at the store (`mark_status_changes`: the state before the pool was replaced against the
+state after, the earlier stamp carried when nothing moved; `touch_status` for a hand call) and `fresh_rows` takes the stamps
+as `cutoffs` (`status_cutoffs`), dropping a row the book posted before the player's stamp. The market rates are rebuilt past
+the cutoffs at every refresh and after every hand starter call (`ingest.refresh_market_rates`), so a player demoted at 17:30
+projects from his history over the solve's minutes until the books post him again, when the next props fetch replaces his
+game's rows (`store_props` replaces every row of the games a fetch priced, so a market the books withdrew is gone at that
+fetch too). The desk's hover keeps the set-aside lines in sight, struck through, with when his status moved. The minutes
+side needs no rule: a priced player's rate is the books' mean over the minutes he was priced at, so a smaller role lowers
+his total through the grid at once; the rule is for the rate itself. A lineup that flips back and forth before confirmation
+sets the team's early lines aside each time, for one fetch cycle at most.

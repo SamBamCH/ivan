@@ -66,3 +66,20 @@ def test_parse_odds_keeps_each_rows_game_once_per_event():
     assert df[df.game_id == "e1"].iloc[0][["commence_time", "home_abbr", "away_abbr"]].tolist() == ["2026-11-07T00:00:00Z", "IND", "BOS"]
     plain = parse_odds(by_team)
     assert len(plain) == 6 and "game_id" not in plain.columns                                         # the NFL's and MMA's parse is unchanged
+
+
+def test_a_cutoff_drops_the_lines_posted_before_the_status_moved():
+    """A player's cutoff (when his status or starter flag last moved) sets aside the rows a book posted before it; mark=True keeps
+    them flagged for the desk's hover; a player without a cutoff, and a row without a posting time, are untouched."""
+    tip = datetime(2026, 11, 7, 19, 0); moved = tip - timedelta(hours=2)
+    rows = [_row("a one", "dk", _utc(tip - timedelta(hours=3)), game=tip),            # posted before he moved to the bench
+            _row("a one", "fd", _utc(tip - timedelta(hours=1)), game=tip),            # re-priced after
+            _row("a one", "mg", None, game=tip),                                       # no posting time: kept
+            _row("b two", "dk", _utc(tip - timedelta(hours=3)), game=tip)]            # nothing moved for him
+    df = pd.DataFrame(rows)
+    kept = M.fresh_rows(df, {"a one": tip, "b two": tip}, cutoffs={"a one": moved})
+    assert [(r.player, r.sportsbook) for r in kept.itertuples()] == [("a one", "fd"), ("a one", "mg"), ("b two", "dk")]
+    marked = M.fresh_rows(df, {"a one": tip, "b two": tip}, cutoffs={"a one": moved}, mark=True)
+    assert list(marked.stale) == [True, False, False, False] and len(marked) == 4
+    assert "stale" in M.fresh_rows(df, {"a one": tip, "b two": tip}, mark=True).columns and len(M.fresh_rows(df, {"a one": tip, "b two": tip})) == 4
+

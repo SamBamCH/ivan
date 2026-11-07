@@ -11,7 +11,8 @@ import pandas as pd
 from fastapi import Form, Request
 from fastapi.responses import HTMLResponse
 from ivan.core.utils import normalize_name
-from ivan.sports.nba.ingest import refresh_public_projection
+from ivan.sports.nba import changes as CH
+from ivan.sports.nba.ingest import refresh_market_rates, refresh_public_projection
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
 from .core import _active, _busy, _render, desk, LOCK, slate
@@ -30,8 +31,10 @@ def team(request: Request, team: str):
 
 @slate.post("/team/{team}/pin", response_class=HTMLResponse)
 def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form(""),
-        fpts: str = Form(""), pub: str = Form("")):
-    """One row's hand values: blank clears that field. Minutes 0 scratches."""
+        fpts: str = Form(""), pub: str = Form(""), points: str = Form(""), rebounds: str = Form(""), assists: str = Form(""), fg3m: str = Form(""),
+        steals: str = Form(""), blocks: str = Form(""), turnovers: str = Form("")):
+    """One row's hand values: blank clears that field. Minutes 0 scratches. A stat total (points, rebounds, assists, fg3m, steals,
+    blocks, turnovers) pins that stat for the game: its per-minute rate becomes total / minutes, the other stats keep the model's."""
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
@@ -52,13 +55,14 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
         if desk.priced_total(team, key) and new_fppm is not None and new_fppm != old.get("fppm"):
             desk.flash.append(f"{key}: fppm overridden on a priced player; the books' total no longer holds for him")
         new_fpts, new_pub = _num(fpts, "fpts"), _num(pub, "pub")
+        stat_vals = {k: _num(v, k) for k, v in dict(points=points, rebounds=rebounds, assists=assists, fg3m=fg3m, steals=steals, blocks=blocks, turnovers=turnovers).items()}
         if new_min is not None and new_min != old.get("minutes"):
             # typed minutes repaint the row: the lock (if any) is lifted so the skeleton re-fills him to the number, and the
             # other free rows move around him; a row you still want held exactly, paint it again
             g = ROT.load_drawn(team)
             if g is not None and key in set(g.attrs.get("locked", [])):
                 ROT.save_drawn(team, g, locked=[n for n in g.attrs.get("locked", []) if n != key], fingerprint=g.attrs.get("fingerprint"))
-        desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub)
+        desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub, **stat_vals)
         desk.reproject(team)                                  # the solve re-balances the team around the edit; the grid is rebuilt to the pins
         if new_pub != old.get("pub"):
             # the public number moved: the stored public projection follows at once; the field built on it waits for the next
@@ -75,7 +79,7 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
 @slate.post("/team/{team}/refigure", response_class=HTMLResponse)
 async def refigure(request: Request, team: str):
     """
-    Body: JSON {rows: [{player, minutes, fppm, fpts, pub}, ...]}: every typed value of the team's grid, applied in one go (blank
+    Body: JSON {rows: [{player, minutes, fppm, fpts, pub, points, rebounds, ...}, ...]}: every typed value of the team's grid, applied in one go (blank
     clears that pin), then the team re-projected once: the skeleton re-fills the grid to the typed minutes (a row whose minutes
     changed loses its lock so it can move), the other free rows move around them. The public numbers that changed rebuild the field.
     """
@@ -131,6 +135,15 @@ def starter_toggle(request: Request, team: str, player: str = Form(...)):
         else:
             new = 0.0 if rw else 1.0
         desk.set_override(key, starter=new)
+        # his props priced the role he had: the lines posted before this call are set aside and the market rates rebuilt without
+        # them (he projects from history until the books post again), then the team re-projects on the new rates
+        CH.touch_status(desk.session, key)
+        try:
+            refresh_market_rates(desk.session, {normalize_name(p.name): p.gametime for p in desk.slate.players}, {normalize_name(p.name) for p in desk.slate.players},
+                                 history=desk.history())
+            desk.session.commit(); desk.slate.reload_market(); desk.load_market_rows()
+        except Exception as e:   # noqa: BLE001 - the call stands; the rates follow on the next refresh
+            desk.session.rollback(); desk.flash.append(f"{key}: starter call saved; market rates not rebuilt ({type(e).__name__}: {e})")
         desk.reproject(team)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 

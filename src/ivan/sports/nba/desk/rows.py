@@ -11,6 +11,30 @@ from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team
+
+STAT_ORDER = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # the grid's stat columns, left to right
+STAT_LABELS = {"points": "pts", "rebounds": "reb", "assists": "ast", "fg3m": "3pm", "steals": "stl", "blocks": "blk", "turnovers": "tov"}
+ALT_SPAN = 3.0                                                                               # alternates shown in the hover: within this many of the line, per book
+STAT_GAP = 0.15                                                                              # a stat cell is amber when our projection sits this far (share) from the books' mean, at least 1
+
+
+def _split_props(rows: list, line) -> tuple[list, list, int]:
+    """The hover's two parts from every (book, line) on file: the main lines as they are (one row each: posted, book, line, over,
+    under; a row posted before the player's status moved is kept and flagged `stale`) and the alternates condensed to one row per
+    book, the lines within ALT_SPAN of the consensus line (the median main line when there is none) with their over price, and how
+    many more the book posts; stale alternates are left out. An alternate market prices overs only. Third: the stale count."""
+    main = [b for b in rows if not b["alt"]]
+    alts = [b for b in rows if b["alt"] and not b.get("stale")]
+    n_stale = sum(1 for b in rows if b.get("stale"))
+    if not alts:
+        return main, [], n_stale
+    centre = float(line) if line is not None and not pd.isna(line) else (float(np.median([b["line"] for b in main])) if main else float(np.median([b["line"] for b in alts])))
+    out = []
+    for book in sorted({b["book"] for b in alts}):
+        mine = sorted((b for b in alts if b["book"] == book), key=lambda b: b["line"])
+        near = [b for b in mine if abs(b["line"] - centre) <= ALT_SPAN]
+        out.append(dict(book=book, text=" · ".join(f"{b['line']:g} {b['over']}" for b in near), more=len(mine) - len(near), date=max((b["date"] or "") for b in mine)))
+    return main, out, n_stale
 from ivan.sports.nba.projection import rotation as ROT
 from ivan.sports.nba.projection.book_minutes import book_minutes
 from .state import MARKET_GAP, MINUTES_DEV, NEAR_TIP_MIN, ROTATION_MIN
@@ -66,6 +90,7 @@ class RowsMixin:
         starters = self.starters_of(team)
         confirmed = self.slate.starters_confirmed.get(team, False)
         mk = self.market_means()
+        prop_rows = self.prop_rows()
         rows = []
         for p in self.players(team):
             name = normalize_name(p.name)
@@ -125,8 +150,15 @@ class RowsMixin:
             fpts = None if r is None else float(r["fpts_mean"])
             ov = override_of(self.overrides, name)
             mk = self.market_rows.get(name, {})
-            stats = [] if r is None else [dict(stat=st, proj=float(r[f"proj_{st}"]), line=mk.get(st, {}).get("line"), mean=mk.get(st, {}).get("mean"),
-                                              books=mk.get(st, {}).get("books"), odds=mk.get(st, {}).get("odds"), priced=st in mk) for st in STATS]
+            stats = []
+            for st in STAT_ORDER:                                   # one entry per stat column, out or not (the cells must line up)
+                m = mk.get(st, {}); pv = None if r is None else float(r[f"proj_{st}"]); mean = m.get("mean")
+                main, alts, n_stale = _split_props(prop_rows.get((name, st), []), m.get("line"))
+                stats.append(dict(stat=st, label=STAT_LABELS[st], proj=pv, line=m.get("line"), mean=mean, books=m.get("books"), odds=m.get("odds"),
+                                  priced=st in mk, basis=m.get("basis"), rows=main, alts=alts, stale=n_stale,
+                                  status_at=None if p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"),
+                                  pinned=st in (list(r.get("stat_pinned") or []) if r is not None else []),
+                                  gap=bool(r is not None and st in mk and mean and pv is not None and abs(pv - float(mean)) >= max(STAT_GAP * float(mean), 1.0))))
             bm = book_minutes({st: v.get("mean") for st, v in self.market_rows.get(name, {}).items()}, s, self.slate.hist.league_rates) if not out else None
             rows.append(dict(id=p.id, name=p.name, key=name, salary=p.salary, pos=p.position, status=status if status != "NONE" else "", nomin=nomin,
                              book_min=None if bm is None else round(bm["minutes"], 1), book_src=None if bm is None else bm["source"],
@@ -210,4 +242,5 @@ class RowsMixin:
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
                     team_fpts=team_fpts, trailing=self.slate.team_fpts.get(team), rows=rows, info={r["key"]: r for r in rows},
+                    stat_totals={st: sum((s["proj"] or 0.0) for x in rows if not x["out"] for s in x["stats"] if s["stat"] == st) for st in STAT_ORDER},
                     n_book=sum(1 for r in rows if r.get("book_min") is not None))

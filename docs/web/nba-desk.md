@@ -173,13 +173,35 @@ game the "last game" is the one before it (and that night's pre-game headlines s
 
 Rows: starters first, then the players who are out, then the bench, minutes descending. Per player:
 status, Rotowire starter mark, history minutes (and the last games), the model's minutes with its
-10-90 band, fppm, **proj** (ours) and **pub** (the public projection the field plays to), DK FPPG,
+10-90 band, the seven stats, **fpts** (ours) and **pub** (the public projection the field plays to), DK FPPG,
 salary, value, the rate source (market or history), the ownership, the market-implied minutes for
-priced players, the flags. Inputs on the row:
+priced players, the flags.
 
-- **minutes** pins (0 scratches); **fppm**, **low/high** band, **fpts** pin; blank unpins. Saved to
-  `minutes_overrides.csv` at once; the team re-projects and is written to the pool (`/team/<TEAM>/pin`).
-- **starter** toggle (`/starter`).
+The grid's columns, right of the 48 minute cells: **min** (the row's minutes, a pin box; hover for this season's games
+with a DNP row in red), then one column per stat, **pts reb ast 3pm stl blk tov** (the projection for the game: the
+row's minutes × his per-minute rate; green when the rate is the books', amber when ours sits 15%+ from the books' mean),
+then **fpts** (the model's mean ± sd, the stats scored at DK weights; hover for the summary), **sim** (the number the
+sim uses; type to pin), **val**, **pub** and its **val**, **own**. The foot row adds each column up for the team.
+
+Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line
+(when the book posted it, the line, the over and under prices) and the alternates condensed to one row per book (the
+lines within 3 of the consensus line with the over price; alternates price overs only), headed by ours, the books' mean
+and the minutes it was priced over. A line the book posted before the player's status or starter flag last moved is struck
+through and the header says how many are set aside and when he moved: those lines priced his old role and the projection does
+not read them (`changes.mark_status_changes` at the refresh, `touch_status` on a hand starter call; [../nba/projections.md](../nba/projections.md),
+Market rates). **Type a total** (9 rebounds) and that stat is his for the game: its per-minute rate
+becomes total / minutes and the other stats keep the model's, so a pin says "the books are wrong on his boards" without
+touching his points. Blank restores the model's. Turnovers are never priced: that column is history alone.
+
+Inputs on the row:
+
+- **minutes** pins (0 scratches); a **stat** total per column; **fpts** (sim) pin; **pub** pin; blank unpins. Saved to
+  `minutes_overrides.csv` at once (columns `minutes, fppm, min_low, min_high, starter, fpts, pub, points, rebounds,
+  assists, fg3m, steals, blocks, turnovers`); the team re-projects and is written to the pool (`/team/<TEAM>/pin`;
+  **Refigure** and the pipeline buttons send every typed box the same way). The older **fppm** pin (every rate scaled
+  together) is still read from the file and noted in the fpts hover; the stat boxes override it stat by stat.
+- **starter** toggle (`/starter`): the hand call, and his props posted before the click are set aside (the market rates are
+  rebuilt without them before the team re-projects; `ingest.refresh_market_rates`).
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
 - **Clear** (`/clear`): drop the team's pins and grid.
 
