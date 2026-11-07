@@ -8,16 +8,22 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
         parse every game with stints and a stored feed into data/nba/derived/gamesim/events.parquet (incremental)
     scripts/nba/gamesim.py check [--game-ids 0022500001 ...]
         the parse against the box score: per-stat exact share and gap, counted vs estimated possessions, both teams' counts
+    scripts/nba/gamesim.py exits [--since 2025-10-01] [--team BOS] [--csv data/nba/diagnostics/gamesim/exits.csv]
+        who inherits a mid-game exit: the heir rules scored (held-out half), the flow matrix, a team's own exits
+        (docs/nba/notes/midgame_exits_2026-11-07.md)
 """
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import text
 
 from ivan.database.session import get_session, init_db
+from ivan.sports.nba.gamesim import fouls as F
 from ivan.sports.nba.gamesim import possessions as X
+from ivan.sports.nba.paths import DIAG_DIR
 
 
 def cmd_events(args) -> None:
@@ -42,11 +48,34 @@ def cmd_check(args) -> None:
     print(f"team-games with the two teams' possessions more than 3 apart: {int((tg.poss - tg.poss_opp).abs().gt(3).sum())} of {len(tg)}")
 
 
+def cmd_exits(args) -> None:
+    s = get_session(init_db("nba"))
+    r = F.run(s, since=args.since)
+    pd.set_option("display.width", 200)
+    print(f"{r['summary']['exits']} exits ({r['summary']['foul_outs']} foul-outs), {r['summary']['owed_mean']:.1f} minutes owed on average, by group {r['summary']['by_group']}")
+    print("\nflow fitted on the first half (out group -> share of owed to each heir group):")
+    for og, d in r["flow_fitted"].items():
+        print(f"  {og:>6}: " + ", ".join(f"{hg} {v:.2f}" for hg, v in d.items()))
+    print("\nrules scored on the second half:")
+    print(r["scores_heldout"].round(3).to_string(index=False))
+    print("\nwhere the owed minutes went (all exits):")
+    fl = r["flow"]; print(fl[fl.kind == "all"].round(3).to_string(index=False))
+    if args.team:
+        ex = r["exits"]; ex = ex[ex.team == args.team]
+        print(f"\n{args.team}: {len(ex)} exits"); print(ex[["game_date", "player", "group", "minute", "kind", "owed", "margin"]].to_string(index=False))
+        print(F.midgame_shares(r["exits"], r["heirs"], team=args.team).round(2).head(30).to_string(index=False))
+    if args.csv:
+        p = Path(args.csv); p.parent.mkdir(parents=True, exist_ok=True)
+        r["exits"].to_csv(p, index=False); r["heirs"].to_csv(p.with_name(p.stem + "_heirs.csv"), index=False)
+        print(f"\nwritten {p} and {p.with_name(p.stem + '_heirs.csv')}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("events"); e.add_argument("--since"); e.add_argument("--rebuild", action="store_true"); e.add_argument("--max-games", type=int); e.set_defaults(fn=cmd_events)
     c = sub.add_parser("check"); c.add_argument("--game-ids", nargs="*"); c.set_defaults(fn=cmd_check)
+    x = sub.add_parser("exits"); x.add_argument("--since"); x.add_argument("--team"); x.add_argument("--csv", default=str(DIAG_DIR / "gamesim" / "exits.csv")); x.set_defaults(fn=cmd_exits)
     args = ap.parse_args()
     args.fn(args)
 

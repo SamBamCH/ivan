@@ -217,6 +217,7 @@ venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-r
 ```bash
 venv/bin/python scripts/nba/gamesim.py events [--since 2026-10-01] [--rebuild]     # the events store from the stored feeds (incremental)
 venv/bin/python scripts/nba/gamesim.py check [--game-ids 0022500001]              # the parse against the box score
+venv/bin/python scripts/nba/gamesim.py exits [--team BOS]                         # who inherits a mid-game exit: the heir rules scored
 ```
 
 `events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
@@ -226,6 +227,14 @@ shots, makes and free throws match exactly, points and rebounds on 99.6-99.8% of
 counted possessions sit 0.3 per game below the classic estimate FGA - OREB + TOV + 0.44 FTA and the two teams' counts
 differ by 0.9 on average (2026-11-07, 763 games). The layers of the game sim fit on this store
 ([notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md)).
+
+`exits` measures who inherits the minutes of a player who leaves for good mid-game (`gamesim.fouls`): every exit with
+four or more minutes left outside garbage time and blowouts, each teammate's gain over his own trailing curve, and six
+heir rules scored on a held-out half (pairs, group, the sampler's best-substitute slot, proportional, the fitted flow
+matrix, nobody). Finding 2026-11-07: single exits are noise, the aggregate flow is by position group (a big's minutes
+40% to bigs, the backup big 22% himself, a fifth lost), and the sampler's slot rule is the worst
+([notes/midgame_exits_2026-11-07.md](notes/midgame_exits_2026-11-07.md)). `--team` adds the team's own exits and who
+gained; `--csv` writes `data/nba/diagnostics/gamesim/exits.csv` (+ `_heirs.csv`).
 
 ## What does not exist yet
 

@@ -84,11 +84,13 @@ each driven by the layer A path or by a fitted hazard:
   takes most or all of what is left. The pre-game measurement (2026-10-23, [minutes_model_plan.md](minutes_model_plan.md))
   found substitution *pairs* diffuse (a regular's top replacement covers 24% of his exits) and position *groups* carrying
   the bias (a big's minutes go to bigs, guards ~4:1, wings proportionally), which is what `skeleton.inherit` does. A
-  mid-game exit for good is a different question from a pre-game absence and has not been measured: the first task of
-  this plan measures it directly from the stints (every player who left for good before the buzzer with 8+ minutes left:
-  a foul-out from `nba_foul`, otherwise an unexplained exit; who covered the minutes he would have played by his usual
-  curve, by position group and by habit). If pairs carry it mid-game, the heir rule for in-game exits uses pairs; if
-  groups do, it uses groups. The answer, and the numbers behind it, go on the team page either way (see below).
+  mid-game exit for good is a different question from a pre-game absence, so it was measured first
+  ([midgame_exits_2026-11-07.md](midgame_exits_2026-11-07.md), 1,468 exits): single exits are noise (no rule beats
+  predicting zero gain), the aggregate flow is clear (a big's owed minutes: 40% to bigs, 30% to guards, 8% to wings, a
+  fifth lost; guards and wings diffuse to guards and wings), the backup big takes 22% himself (half the group's share, not
+  "most or all"), and `sample_worlds`' best-substitute-by-curve rule is the worst of all because the player whose curve is
+  highest in those minutes has no room. The heir rule is therefore the **flow matrix across groups, room inside a group**,
+  pair habit as a tie-breaker (`fouls.DEFAULT_FLOW`, `flow_split`), for scratches and mid-game exits alike.
 - **The path decides the closers.** Garbage time and the closing five already read a margin; they read layer A's
   segment path instead of the bridge, so a world where the bench gets garbage minutes is also the world where the
   favourite's starters scored early and the total ran high.
@@ -107,6 +109,14 @@ whoever is on the floor, so when a star sits the other four absorb his share of 
 fitted elasticity says how much of the pie really moves (the 2026-10-23 measurement that only ~30% of freed minutes
 reach the regular rotation has a usage twin to measure here). This is the mechanism the usage bump approximates.
 
+**The props are the shares for priced players.** A points, rebounds, assists or threes prop is tonight's expected
+total for that stat, and divided by the player's expected possessions on the floor (his grid minutes x the game's pace
+from layer A) it *is* his per-possession share: no fitted prop-to-usage step, the way the live projection already takes
+the book's total over the solved minutes. History fills the shares of unpriced players only, and the team's shares are
+then reconciled so the pie adds up to what the lines say the team scores (the NFL found priced lines over-cover the
+team by ~5%; the NBA number is measured here). An edit to a player's minutes on the desk moves his possessions, not his
+share, which is the right lever.
+
 Check (C given the real minutes and the real possessions): project every player-game in the 763 with his true
 minutes and his team's true possessions plugged in; per-stat MAE and bias against the current minutes x rate model
 given the same true minutes. This isolates the usage layer completely. Then the same with teammates absent: the
@@ -123,12 +133,46 @@ it is drawn at the **segment level as counts** (binomial and multinomial over th
 event, so a slate's draw is vectorised numpy at the current sim's speed; the event-by-event engine that the live sim
 would want later is a drop-in behind the same `World` interface, not part of this plan.
 
+**The draw takes a game state.** `World.draw(slate, state=None)`: with a state (the clock, the score, each player's
+minutes, stats and fouls so far, who is on the floor, from the nba_api live box score the late swap already stores
+under `raw/nba_live/boxscore`) only the remaining segments are simulated and a player's total is what he has plus the
+remainder, with the in-play total and spread from the odds API anchoring the rest of the script. That is the late
+swap's sim: a game in the third quarter is conditioned on its third quarter instead of rescaled.
+
 Check (D, the whole thing, walk-forward): fantasy-point MAE, bias and 10-90 coverage per player against the live
 sampler and against the Stokastic replica (the live model is at parity, MAE 7.44 vs 7.41; the game sim may not be
 worse); the **joint** checks the live sampler cannot pass by construction: the team fantasy total's spread, the
 pairwise teammate and opponent correlation by role pair (the sim must *produce* the measured table, ~0.00 / -0.05 /
 -0.03, from the mechanism, with no correlation imposed), and the correlation between a team's fantasy total and its
 score.
+
+## The backtest is one scorecard with a row per layer
+
+The checks above are not separate reports: `gamesim/backtest.py` scores every layer on the same games and prints one
+table, the truth plugged in above each row, so a miss shows at the layer that caused it:
+
+| row | truth plugged in | what is scored |
+|---|---|---|
+| possessions | the lines | pace per team-game and per segment |
+| points and margin | the lines, the possessions | points per possession, the final, overtime, garbage onset |
+| minutes and rotation | the pre-game pool and the margin path | minutes by role, 10-90 coverage, who was on with whom |
+| attempts and usage | true minutes and possessions | shots, free-throw trips, turnovers, rebounds, assists per player |
+| makes and outcomes | true attempts | points, threes, free throws, steals, blocks |
+| fantasy points | nothing | the marginals and the joint checks (team totals, pair correlations) |
+| ownership and the field | the public projection | the field backtest's rows |
+
+A player who is modelled with the right attempts and simply missed his shots that night shows as a miss on the makes row
+and nowhere else, which is the point. This scorecard replaces the per-player performance checks of
+`backtest_projection.py` and `backtest_skeleton.py` once the layers it scores are the live ones (step 8 removes them).
+
+**On a past slate's backtest screen** the same table is per slate: what we published at the time (the projection
+store's `ours` record), what the current code says as of that slate's tips, and what happened. The second column needs
+an **as-of runner**: the pipeline fed from the slate's tip records (`tips.read_tip`: the pool with salaries, status and
+starters, the props, the game lines, the news and edits since 2026-11-05) with a history cutoff at the tip, written to
+the projection store under `rerun:<commit>`. The data exists for every slate since 2026-10-23 (twelve held slates); the
+backfilled tips of 10-23 to 11-04 carry no news, so the injury report as of tip is re-derived from the raw Rotowire
+captures; last season has eleven days of historical props and lines but no DK pool, so a rerun there scores minutes and
+stats, not salaries or ownership. The runner is step 7 below.
 
 ## The gate before anything goes live
 
@@ -164,9 +208,11 @@ tests/nba/test_nba_gamesim_*.py
 data/nba/models/gamesim/*.json   fitted parameters, with the fit window and the commit in each file
 ```
 
-The one touch on existing code before the gate: a dispatch of two lines in `pre_lock.player.generate_player_samples`
-reading `sim.engine`, default `players`. The field, the contest sim, the chooser and the desk's sim button do not
-change; `IVAN_SEED` seeds the game draw as it seeds everything else.
+`pre_lock.player.generate_player_samples` becomes a thin wrapper over `World.to_player_samples`, so the field, the
+contest sim, the chooser and the desk's sim button do not change; `IVAN_SEED` seeds the game draw as it seeds
+everything else. The old draws (the Gaussian copula on stored quantiles, the independent and the team minutes models,
+the negative-binomial stats at minutes x rate) and the checks the scorecard replaces are deleted on this branch (step
+8), not kept behind a switch: the branch is the gate, and it merges clean or not at all.
 
 ## The team page shows the sim's inputs
 
@@ -202,8 +248,12 @@ Each step is one branch merged to `nba-game-sim` (never to master until the gate
    if the shares given true minutes beat the rates, the usage bump has a mechanistic replacement and the backtest says
    by how much.
 5. **Layer B** additions (fouls, heirs, the path's closers) and the conditional minutes checks.
-6. **Layer D** and the World object; the marginal and joint checks; `to_player_samples` wired behind `sim.engine`.
-7. **The gate**: field checks, chooser A/B, speed. Flip or do not flip.
+6. **Layer D** and the World object; the marginal and joint checks; `to_player_samples` wired behind `sim.engine`;
+   the layered scorecard (`backtest.py`) complete.
+7. **The as-of runner** and the per-slate scorecard on the backtest screen (three columns per layer).
+8. **Removal** of the old draw path and the checks the scorecard replaces (the branch merges clean, not with two
+   samplers).
+9. **The gate**: field checks, chooser A/B, speed. Merge or do not merge.
 
-Steps 1-4 touch no live code at all. Steps 5-6 touch `pre_lock/player.py` by one dispatch. Step 7 is the only commit
-that changes what the desk does.
+Steps 1-4 touch no live code at all. From step 6 the branch's `generate_player_samples` draws from the World, and step
+8 removes the old draw; the branch merges to master only when step 9 passes, so master never carries two samplers.

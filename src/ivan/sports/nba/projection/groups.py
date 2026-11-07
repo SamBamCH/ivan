@@ -38,8 +38,11 @@ def position_map(session) -> Dict[str, str]:
     """normalized player name -> the DK position string seen most often for him."""
     from sqlalchemy import text
     seen: Dict[str, Counter] = {}
-    for name, pos in session.execute(text("select name, position from nba_player")).all():
-        seen.setdefault(normalize_name(name), Counter())[str(pos)] += 3           # the live pool outweighs old labels
+    try:
+        for name, pos in session.execute(text("select name, position from nba_player")).all():
+            seen.setdefault(normalize_name(name), Counter())[str(pos)] += 3       # the live pool outweighs old labels
+    except Exception:   # noqa: BLE001 - a history-only session (the backtests) has no pool table: the captures carry the positions
+        pass
     try:
         for name, pos in session.execute(text("select player_name, position from projection_snapshot where position is not null")).all():
             seen.setdefault(normalize_name(name), Counter())[str(pos)] += 1
