@@ -220,7 +220,8 @@ venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-r
 - Lineup and pool validation (did sim ROI rank lineups the way the real field did) from the sim
   artifacts, which `ivan.core.validation.lineup_report` / `pool_report` are built for; the NBA adapter is
   not written.
-- Foul-trouble and blowout sampler models beyond the team minutes draw (deferred 2026-10-24).
+- Foul-trouble and blowout sampler models beyond the team minutes draw (deferred 2026-10-24); the game simulation
+  that would carry them, with a check per layer, is planned in [notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md).
 
 The decision rule for paying for Stokastic (phase 5 of [notes/plan_2026-27.md](notes/plan_2026-27.md))
 waits on a season of `--compare` numbers: the market consensus and Stokastic correlate at 0.994, so

@@ -67,4 +67,6 @@ capture timer is installed but disabled since 2026-10-23). The consumer desk is 
 `https://ivan.prattflix.com/nba` behind a password. Not yet built: a replay adapter for NBA (the NFL
 one exists), settle as a table of slate status, a decision rule for buying Stokastic, and the
 field model's calibration on more than a handful of real contests. Plans and findings are in
-[notes/plan_2026-27.md](notes/plan_2026-27.md) and [notes/minutes_model_plan.md](notes/minutes_model_plan.md).
+[notes/plan_2026-27.md](notes/plan_2026-27.md), [notes/minutes_model_plan.md](notes/minutes_model_plan.md) and
+[notes/game_sim_plan_2026-11-07.md](notes/game_sim_plan_2026-11-07.md) (the game simulation: possessions, fouls,
+usage shares and outcomes as layers, each validated on the stored play-by-play before the live draw changes).
