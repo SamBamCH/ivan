@@ -101,7 +101,8 @@ data/nba/
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)
 │   ├── field_ownership.json        the ownership model fitted on real contests (field_model.py fit)
 │   ├── field_distribution_model.pkl, marginals_*.pkl   last season's bin sampler (field.sampler = projection_model)
-│   ├── gamesim/script.json         the game script's parameters (gamesim.py fit-script), with the fit window and the commit
+│   ├── gamesim/script.json         the game script's parameters (gamesim.py fit-script) and the World's calibrated knobs (world_*, calibrate-world), with the fit window and the commit
+│   ├── gamesim/teams.json          every team's trailing pace and the league coupling constants the World falls back on (fit-script)
 │   └── salary_minutes.json         (when fitted) the salary → minutes prior curve
 ├── raw/                            every payload as received, gzip, plus index.jsonl (ivan.core.raw)
 │   ├── dk/{lobby,draftables,payouts,standings}/

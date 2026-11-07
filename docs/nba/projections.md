@@ -20,7 +20,8 @@ desk pins / locked rows ──► held exactly                                  
                                                                                                           ▼
                               per-world minutes draw (team_minutes.py) × per-minute rates (rates.py) ──► fantasy points by Monte Carlo (fpts.py)
                                                                                                           ▼
-                              fpts_mean, fpts_std, 101 quantiles on nba_player; a Gaussian copula per game for the sampler (correlation.py)
+                              fpts_mean, fpts_std, 101 quantiles on nba_player (the desk's marginal); the per-minute rates, the grid row,
+                              the spread and p_out are what the game simulation reads (gamesim.world, field-and-simulation.md)
 ```
 
 `engine.project_team()` is the one call from roster + availability + history to a table; `live.py`
@@ -132,17 +133,18 @@ Per world: that world's minutes × rate gives each stat's mean; each stat is dra
 with its dispersion (`projection_calibration.json`, refit by `backtest_projection.py --calibrate`);
 double-double and triple-double bonuses are counted on the joint draw. The projection is the mean
 over worlds (`n_sims` 4000 from the CLI, 2000 from the desk's Publish), the sd the sd over worlds, and
-the marginal is kept as 101 quantiles on `nba_player.fpts_quantiles` for the sampler.
+the marginal is kept as 101 quantiles on `nba_player.fpts_quantiles` for the desk's display.
 
-### 11. Same-game correlation (`correlation.py`, used by `pre_lock/player.py`)
+### 11. Same-game correlation (`correlation.py`: the measurement; the sampler is the game simulation)
 
 Measured on 2025-26 walk-forward residuals the structure is small: two starters 0.00, starter with
 bench −0.05, bench with bench −0.03, opponents 0.00, and a pair's own history predicts its future at
-r 0.08, so pair history is shrunk toward the league table by 200 pseudo-games. The sampler draws one
-shared margin per game, each team's minutes jointly from its grid under that margin, then fantasy
-points through a Gaussian copula mapped back to each player's own quantiles so skew and bonus bumps
-survive. The correlation that matters (a star out raises teammates' minutes) is in the means via the
-allocation, not in the matrix.
+r 0.08. The sampler no longer imposes these: the game simulation
+([field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)) produces them from the mechanism
+(the same possessions, the same five, the same misses on both sides) and the table is what it is checked against
+(2026-11-07 on a four-game slate: starters +0.02, starter with bench −0.10, bench with bench −0.03, opponents +0.01).
+The correlation that matters (a star out raises teammates' minutes) is in the means via the allocation and, inside a
+world, in the pie the five on the floor share.
 
 ## The public side (`public_projection.py`, `public_field.py`)
 

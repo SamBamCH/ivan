@@ -222,6 +222,8 @@ venv/bin/python scripts/nba/gamesim.py fit-script [--no-write]                  
 venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                      # layer A: PIT coverage of totals and margins, pace, overtime, garbage time
 venv/bin/python scripts/nba/gamesim.py check-usage [--start --end]                 # layer C: shares over the real fives vs per-minute rates, true minutes plugged in
 venv/bin/python scripts/nba/gamesim.py check-rotation [--start --end] [-n 300]     # layer B: the rotation draw vs the current sampler, the real margin path plugged in
+venv/bin/python scripts/nba/gamesim.py draw-world --slate DG [-n 1000]             # the World on a slate: moments vs the lines, every player's line vs the pool
+venv/bin/python scripts/nba/gamesim.py calibrate-world --slate DG [-n 400]         # the World's four game-level knobs against the real spread of totals, margins, team points, overtime
 ```
 
 `events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
@@ -269,6 +271,14 @@ bench in), overtime for the five at the buzzer. The check proposes each team-gam
 date, plugs in the real margin path and overtime, and scores the draw against the box score next to the current sampler
 on the same grid: minutes MAE, bias and 10-90 coverage by role, by final margin and for the players who really reached
 five fouls. Result 2026-11-07 in the same note.
+
+`draw-world` / `calibrate-world` are the World itself (`gamesim.world`, the sampler the field, the sim and the chooser
+read; [field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)). `calibrate-world` sets its four
+game-level knobs on a slate's games so the drawn totals, margins, team points and overtime rate have the real spread
+(the script's fit holds the real numbers); `draw-world` prints a slate's moments, the per-team reconciliation factor
+(how far the pool's points sit from the lines) and every player's simulated line next to the pool's mean. What the World
+cannot be checked against yet is the actuals of past slates (every player's real line inside his simulated
+distribution, the field's real scores inside the simulated field): that is the as-of runner, step 7 of the plan.
 
 ## What does not exist yet
 

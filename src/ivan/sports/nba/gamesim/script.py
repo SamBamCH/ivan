@@ -311,6 +311,51 @@ def _match(f, target: float, lo: float, hi: float, steps: int = 12) -> float:
     return 0.5 * (lo + hi)
 
 
+TEAMS_JSON = MODELS_DIR / "gamesim" / "teams.json"
+
+
+def team_paces(seg: pd.DataFrame, params: Optional[dict] = None) -> Dict[str, float]:
+    """Every team's trailing pace as of the newest game on file (the World's input for tonight)."""
+    params = params or DEFAULTS
+    gp = game_pace(seg)
+    if gp.empty:
+        return {}
+    league = float(gp.poss.mean())
+    rows = []
+    for team, d in gp.groupby("team"):
+        d = d.sort_values(["game_date", "game_id"])
+        vals = d.poss.to_numpy(dtype=float)[-PACE_GAMES:]
+        w = 0.5 ** ((len(vals) - 1 - np.arange(len(vals))) / PACE_HALFLIFE)
+        m = float((w * vals).sum() / w.sum()); n_eff = float(w.sum())
+        rows.append((team, (n_eff * m + PACE_PRIOR_GAMES * league) / (n_eff + PACE_PRIOR_GAMES)))
+    return {t: float(v) for t, v in rows}
+
+
+def write_teams(seg: pd.DataFrame, events: pd.DataFrame, params: Optional[dict] = None, path: Path = TEAMS_JSON) -> dict:
+    """
+    data/nba/models/gamesim/teams.json: the paces, the league pace and the league coupling constants the World falls back on
+    (the share of misses rebounded by the offence, the share of makes assisted, steals per opponent turnover, blocks per
+    opponent missed field goal, the share of missed free throws that are live), from the events store.
+    """
+    from ivan.sports.nba.gamesim.possessions import player_games
+    pg = player_games(events)
+    tg = seg.groupby(["game_id", "team"], as_index=False)[["fga", "fgm", "fta", "ftm", "tov", "oreb", "dreb"]].sum()
+    own = pg.groupby(["game_id", "team"], as_index=False)[["ast", "stl", "blk", "oreb", "dreb", "tov"]].sum().rename(columns={"oreb": "p_oreb", "dreb": "p_dreb", "tov": "p_tov"})
+    tg = tg.merge(own, on=["game_id", "team"], how="left").fillna(0.0)
+    miss = float((tg.fga - tg.fgm).sum())
+    reb_total = float((tg.p_oreb + tg.p_dreb).sum())
+    out = dict(league_pace=float(game_pace(seg).poss.mean()) if len(seg) else DEFAULTS["league_pace"],
+               oreb_share=float(tg.p_oreb.sum() / max(reb_total, 1.0)) if reb_total else 0.26,
+               ast_share=float(tg.ast.sum() / max(tg.fgm.sum(), 1.0)),
+               p_stl=float(tg.stl.sum() / max(tg.tov.sum(), 1.0)),
+               p_blk=float(tg.blk.sum() / max(miss, 1.0)),
+               ft_miss_live=0.5,          # the share of missed free throws that are live (the last of a trip): about half of all misses
+               paces=team_paces(seg, params), written_at=str(date.today()), commit=_git_commit())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1))
+    return out
+
+
 def load_params(path: Path = MODEL_JSON) -> dict:
     p = dict(DEFAULTS)
     if Path(path).exists():

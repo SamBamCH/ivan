@@ -118,3 +118,39 @@ time with each sit shrinking the next foul's exposure (a Poisson count over the 
 The jitter scale stays at 1.6: 2.0 lifts coverage to 75.5% but costs the MAE (4.86), and the shortfall is in the rotation
 and deep roles (69% / 35%) where the question is whether the grid has the player at all, not when his stints move. Both
 samplers share that; it is the skeleton's, not the draw's.
+
+## Layer D and the World
+
+The World (`gamesim.world`) on the 11-06 slate 156190 (UTA@DAL, OKC@MEM, MIN@NOP, TOR@MIL; 83 players), 1,000 worlds in
+6.4 s:
+
+**Construction findings.** (1) Independent Poisson draws of each minute's attempts doubled the per-possession variance
+(team points sd 14.6 against a real 10.8, totals sd 26 against 16.8, 65% of worlds in garbage time against 47%, stars a
+minute low and the bench high): a possession ends once, so the minute's endings are a fixed count carried as a running
+fraction (error diffusion) and split by kind. (2) With everything else off the construction's team sd is 12.2 against the
+real 10.8: real team points vary less than independent possessions, so the World carries a pull of each team toward its
+own expected scoring. (3) The script's standalone κ, λ and tie bump do not transfer (the World's total rides on both
+teams' makes), so the four game-level knobs are calibrated on the World itself against four real moments:
+
+| knob | fitted | moment matched | real |
+|---|---|---|---|
+| team pull γ | 0.50 | team points sd 10.9 | 10.8 (from the real total and margin sds) |
+| lead pull-back κ | 0 | margin sd 13.6 | 13.6 (the team pull already narrows it) |
+| pace coupling λ | 1.67 | total sd 17.0 | 16.8 |
+| tie bump | 0.30 | overtime 7-8% | 7.7% |
+
+**The World against the pool** (the projection's means the desk shows): fantasy means correlate at 0.984, MAE 2.3, the
+World +1.25 higher on average; sd 10.3 against the pool's 11.3; minutes 23.3 against 23.1. Two things sit inside that
+bias: the **pool projects more points than the lines allow** (this slate: 120 + 119 against a 226.5 total, 118 + 119
+against 224; the World's reconciliation factors run 0.92-1.01 and pull every scorer down), and the bench gains what the
+closers lose to garbage time (46% of worlds, as real). Which side is right is the as-of runner's question.
+
+**The joint checks.** Pairwise fantasy-point correlations by role pair, two starters +0.02, starter with bench −0.10,
+bench with bench −0.03, opponents +0.01, against the measured residual table 0.00 / −0.05 / −0.03 / 0.00: produced by
+the mechanism, nothing imposed. Garbage time 46%, overtime 8%, drawn totals within two points of the lines, margins on
+the spreads.
+
+**Wired in.** `pre_lock.player.generate_player_samples` now returns the World's fantasy points (up to 2,000 worlds per
+call, resampled beyond), so the field, the contest sim, the late swap and the chooser draw from the game. The Gaussian
+copula on stored quantiles, the independent and team minutes draws and the negative-binomial stats at minutes x rate are
+no longer called by anything on this branch (step 8 removes them).

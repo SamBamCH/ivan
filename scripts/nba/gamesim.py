@@ -92,12 +92,17 @@ def _fmt(d: dict) -> str:
 
 def cmd_fit_script(args) -> None:
     s = get_session(init_db("nba"))
-    seg = X.team_segments(X.load_events()); lines = S.load_lines(s, seg)
+    ev = X.load_events(); seg = X.team_segments(ev); lines = S.load_lines(s, seg)
     p = S.fit(seg, lines, write=not args.no_write)
     print(f"{p['fit']['games']} lined games {p['fit']['lined_from']}..{p['fit']['lined_to']}")
     print(_fmt({k: v for k, v in p.items() if k not in ("segment_shape", "fit")}))
     print("segment shape: " + " ".join(f"{x:.3f}" for x in p["segment_shape"]))
-    print("written " + str(S.MODEL_JSON) if not args.no_write else "not written")
+    if not args.no_write:
+        t = S.write_teams(seg, ev, p)
+        print(f"written {S.MODEL_JSON} and {S.TEAMS_JSON} ({len(t['paces'])} team paces; league oreb share {t['oreb_share']:.3f}, assisted {t['ast_share']:.3f}, "
+              f"steals per turnover {t['p_stl']:.3f}, blocks per miss {t['p_blk']:.3f}, live FT misses {t['ft_miss_live']:.2f})")
+    else:
+        print("not written")
 
 
 def cmd_check_script(args) -> None:
@@ -136,6 +141,38 @@ def cmd_check_rotation(args) -> None:
         print(); print(r[key].round(3).to_string(index=False))
 
 
+def cmd_draw_world(args) -> None:
+    import time
+    from ivan.sports.nba import slates
+    from ivan.sports.nba.gamesim import world as W
+    slates.use(args.slate); s = slates.session(args.slate)
+    t = time.time()
+    w = W.World.draw(s, n=args.n, seed=args.seed, log=print)
+    print(f"{len(w.names)} players, {len(w.games)} games, {args.n} worlds in {time.time() - t:.1f} s")
+    print(_fmt(W.moments(w)))
+    f = w.frame()
+    pool = pd.read_sql(text("select id pid, fpts_mean pool_fpts, fpts_std pool_sd, minutes_proj from nba_player"), s.get_bind())
+    m = f.merge(pool, on="pid", how="left")
+    print(f"fantasy mean vs the pool: bias {(m.fpts_mean - m.pool_fpts).mean():+.2f}, MAE {(m.fpts_mean - m.pool_fpts).abs().mean():.2f}, corr {m[['fpts_mean', 'pool_fpts']].corr().iloc[0, 1]:.3f}; "
+          f"sd {m.fpts_std.mean():.2f} vs {m.pool_sd.mean():.2f}; minutes {m.minutes.mean():.2f} vs {m.minutes_proj.mean():.2f}")
+    pd.set_option("display.width", 220)
+    cols = ["player", "team", "minutes_proj", "minutes", "pool_fpts", "fpts_mean", "fpts_std", "pts", "reb", "ast", "stl", "blk", "tov", "fg3m", "fga", "fta", "fouls"]
+    print(m.sort_values("pool_fpts", ascending=False).head(args.top)[cols].round(2).to_string(index=False))
+
+
+def cmd_calibrate_world(args) -> None:
+    import json
+    from ivan.sports.nba import slates
+    from ivan.sports.nba.gamesim import world as W
+    slates.use(args.slate); s = slates.session(args.slate)
+    params = S.load_params()
+    real = dict(sd_total=params["real_sd_total"], sd_margin=params["real_sd_margin"], p_ot=params["p_ot"])
+    games = W.slate_inputs(s)
+    p = W.calibrate(s, games, params, real, n=args.n, rounds=args.rounds, log=print)
+    S.MODEL_JSON.write_text(json.dumps(p, indent=1))
+    print("written " + str(S.MODEL_JSON) + ": " + _fmt({k: v for k, v in p.items() if k.startswith("world_")}))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -147,6 +184,10 @@ def main() -> None:
     u = sub.add_parser("check-usage"); u.add_argument("--start", default="2026-01-10"); u.add_argument("--end", default="2026-02-28"); u.set_defaults(fn=cmd_check_usage)
     b = sub.add_parser("check-rotation"); b.add_argument("--start", default="2026-01-10"); b.add_argument("--end", default="2026-01-31"); b.add_argument("-n", type=int, default=300)
     b.add_argument("--jitter", type=float, default=None); b.set_defaults(fn=cmd_check_rotation)
+    d = sub.add_parser("draw-world"); d.add_argument("--slate", type=int, required=True); d.add_argument("-n", type=int, default=1000); d.add_argument("--seed", type=int, default=None)
+    d.add_argument("--top", type=int, default=15); d.set_defaults(fn=cmd_draw_world)
+    cw = sub.add_parser("calibrate-world"); cw.add_argument("--slate", type=int, required=True); cw.add_argument("-n", type=int, default=400); cw.add_argument("--rounds", type=int, default=2)
+    cw.set_defaults(fn=cmd_calibrate_world)
     args = ap.parse_args()
     args.fn(args)
 
