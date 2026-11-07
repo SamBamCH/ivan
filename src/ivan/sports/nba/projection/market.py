@@ -104,9 +104,13 @@ def _to_local(utc_strings: pd.Series) -> pd.Series:
     return parse_utc(utc_strings).dt.tz_convert(datetime.now().astimezone().tzinfo).dt.tz_localize(None)
 
 
-def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FALLBACK_HOURS) -> pd.DataFrame:
+def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FALLBACK_HOURS, cutoffs: dict | None = None, mark: bool = False) -> pd.DataFrame:
     """
     Only the odds rows priced for the player's game on this slate (`gametimes`: DK name -> naive local tip).
+
+    `cutoffs` (DK name -> naive local datetime, changes.status_cutoffs): a row the book posted (`last_update`) before the player's
+    cutoff priced the role he had before his status or starter flag moved and is dropped; a row without a posting time is kept.
+    `mark=True` keeps those rows and adds a boolean `stale` column instead (the desk's hover shows them set aside).
 
     A row that carries its game (`commence_time`, from the odds API event, since 2026-11-07) is kept exactly when that game tips
     within GAME_TOLERANCE_HOURS of the player's DK tip: the game is identified, so when it was posted does not matter. A row without
@@ -126,7 +130,18 @@ def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FALLBACK_HOUR
     keep_linked = linked & ((game - tip).abs() <= pd.Timedelta(hours=GAME_TOLERANCE_HOURS))
     keep_legacy = ~linked & posted.notna() & (posted >= tip - pd.Timedelta(hours=hours)) & (posted <= tip + pd.Timedelta(hours=1))
     keep = tip.notna() & (keep_linked | keep_legacy)
-    return odds[keep.values]
+    out = odds[keep.values]
+    if cutoffs:
+        cut = pd.to_datetime(out["player"].map(lambda n: cutoffs.get(n)), errors="coerce")
+        was = posted[keep.values]
+        stale = cut.notna().values & was.notna().values & (was.values < cut.values)
+        if mark:
+            out = out.copy(); out["stale"] = stale
+        else:
+            out = out[~stale]
+    elif mark:
+        out = out.copy(); out["stale"] = False
+    return out
 
 
 def load_odds(bind) -> pd.DataFrame:
@@ -146,9 +161,9 @@ def load_odds(bind) -> pd.DataFrame:
     return odds
 
 
-def fresh_odds(session, gametimes: dict, hours: float = FALLBACK_HOURS) -> pd.DataFrame:
+def fresh_odds(session, gametimes: dict, hours: float = FALLBACK_HOURS, cutoffs: dict | None = None, mark: bool = False) -> pd.DataFrame:
     """The odds table's rows the projection may use for this pool (fresh_rows over load_odds)."""
-    return fresh_rows(load_odds(session), gametimes, hours)
+    return fresh_rows(load_odds(session), gametimes, hours, cutoffs=cutoffs, mark=mark)
 
 
 def market_means(odds: pd.DataFrame, dispersion: dict[str, float] | None = None) -> pd.DataFrame:

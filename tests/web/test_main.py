@@ -404,10 +404,20 @@ def test_nba_starter_toggle_posts_the_rows_player(open_site):
     assert open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={}).status_code == 422                # what the old click sent
     key = next(k for k in (r.text.split('data-key="')[1:2] or ["x"]) ).split('"')[0]
     before = override_of(d.overrides, key).get("starter")
-    r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
-    assert r.status_code == 200 and override_of(d.overrides, key).get("starter") is not None               # a hand call now
-    r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
-    assert r.status_code == 200 and override_of(d.overrides, key).get("starter") == before                  # cleared back
+    from ivan.sports.nba import changes as CH
+    from ivan.sports.nba.names import normalize_name as _nn
+    stamp_before = CH.status_cutoffs(d.session).get(key)
+    try:
+        r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
+        assert r.status_code == 200 and override_of(d.overrides, key).get("starter") is not None               # a hand call now
+        assert CH.status_cutoffs(d.session).get(key) is not None and CH.status_cutoffs(d.session).get(key) != stamp_before   # his props posted before are set aside
+        r = open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={"player": key})
+        assert r.status_code == 200 and override_of(d.overrides, key).get("starter") == before                  # cleared back
+    finally:
+        for p in d.slate.players:                                                                              # the live slate: leave his stamp as it was
+            if _nn(p.name) == key:
+                p.status_changed_at = stamp_before
+        d.session.commit()
 
 
 def test_nba_grid_stat_columns_pin_a_total(open_site):
@@ -442,5 +452,7 @@ def test_nba_grid_stat_columns_pin_a_total(open_site):
         assert r.status_code == 200 and override_of(d.overrides, key).get("points") is None
         assert abs(float(d.proj[team].loc[key, "proj_points"]) - before_pts) < 0.5
     finally:
-        d.set_override(key, points=old.get("points")); d.reproject(team)
+        from ivan.sports.nba import slates as _S
+        with _S.using(dg):                                                                         # the cleanup outside a request: the slate in context by hand
+            d.set_override(key, points=old.get("points")); d.reproject(team)
 

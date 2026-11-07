@@ -11,7 +11,8 @@ import pandas as pd
 from fastapi import Form, Request
 from fastapi.responses import HTMLResponse
 from ivan.core.utils import normalize_name
-from ivan.sports.nba.ingest import refresh_public_projection
+from ivan.sports.nba import changes as CH
+from ivan.sports.nba.ingest import refresh_market_rates, refresh_public_projection
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
 from .core import _active, _busy, _render, desk, LOCK, slate
@@ -134,6 +135,15 @@ def starter_toggle(request: Request, team: str, player: str = Form(...)):
         else:
             new = 0.0 if rw else 1.0
         desk.set_override(key, starter=new)
+        # his props priced the role he had: the lines posted before this call are set aside and the market rates rebuilt without
+        # them (he projects from history until the books post again), then the team re-projects on the new rates
+        CH.touch_status(desk.session, key)
+        try:
+            refresh_market_rates(desk.session, {normalize_name(p.name): p.gametime for p in desk.slate.players}, {normalize_name(p.name) for p in desk.slate.players},
+                                 history=desk.history())
+            desk.session.commit(); desk.slate.reload_market(); desk.load_market_rows()
+        except Exception as e:   # noqa: BLE001 - the call stands; the rates follow on the next refresh
+            desk.session.rollback(); desk.flash.append(f"{key}: starter call saved; market rates not rebuilt ({type(e).__name__}: {e})")
         desk.reproject(team)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 

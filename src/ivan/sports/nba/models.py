@@ -104,6 +104,8 @@ class NBAPlayer(NBABase):
     minutes_p90     = Column(Float,     nullable=True)
     rotation_cells  = Column(JSON,      nullable=True)   # his row of the rotation grid (48 x 0/1), when the rotation model projected him
     boundary_sd     = Column(Float,     nullable=True)   # spread of his substitution times, minutes
+    status_changed_at = Column(DateTime, nullable=True)  # when his DK status or starter flag last moved (changes.mark_status_changes): a prop a book
+                                                        # posted before it priced his old role and does not count for him (market.fresh_rows cutoffs)
 
 
 class NBAProjectionCapture(NBABase):

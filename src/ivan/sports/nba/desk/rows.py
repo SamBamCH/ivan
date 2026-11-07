@@ -18,21 +18,23 @@ ALT_SPAN = 3.0                                                                  
 STAT_GAP = 0.15                                                                              # a stat cell is amber when our projection sits this far (share) from the books' mean, at least 1
 
 
-def _split_props(rows: list, line) -> tuple[list, list]:
+def _split_props(rows: list, line) -> tuple[list, list, int]:
     """The hover's two parts from every (book, line) on file: the main lines as they are (one row each: posted, book, line, over,
-    under) and the alternates condensed to one row per book, the lines within ALT_SPAN of the consensus line (the median main
-    line when there is none) with their over price, and how many more the book posts. An alternate market prices overs only."""
+    under; a row posted before the player's status moved is kept and flagged `stale`) and the alternates condensed to one row per
+    book, the lines within ALT_SPAN of the consensus line (the median main line when there is none) with their over price, and how
+    many more the book posts; stale alternates are left out. An alternate market prices overs only. Third: the stale count."""
     main = [b for b in rows if not b["alt"]]
-    alts = [b for b in rows if b["alt"]]
+    alts = [b for b in rows if b["alt"] and not b.get("stale")]
+    n_stale = sum(1 for b in rows if b.get("stale"))
     if not alts:
-        return main, []
+        return main, [], n_stale
     centre = float(line) if line is not None and not pd.isna(line) else (float(np.median([b["line"] for b in main])) if main else float(np.median([b["line"] for b in alts])))
     out = []
     for book in sorted({b["book"] for b in alts}):
         mine = sorted((b for b in alts if b["book"] == book), key=lambda b: b["line"])
         near = [b for b in mine if abs(b["line"] - centre) <= ALT_SPAN]
         out.append(dict(book=book, text=" · ".join(f"{b['line']:g} {b['over']}" for b in near), more=len(mine) - len(near), date=max((b["date"] or "") for b in mine)))
-    return main, out
+    return main, out, n_stale
 from ivan.sports.nba.projection import rotation as ROT
 from ivan.sports.nba.projection.book_minutes import book_minutes
 from .state import MARKET_GAP, MINUTES_DEV, NEAR_TIP_MIN, ROTATION_MIN
@@ -151,9 +153,10 @@ class RowsMixin:
             stats = []
             for st in STAT_ORDER:                                   # one entry per stat column, out or not (the cells must line up)
                 m = mk.get(st, {}); pv = None if r is None else float(r[f"proj_{st}"]); mean = m.get("mean")
-                main, alts = _split_props(prop_rows.get((name, st), []), m.get("line"))
+                main, alts, n_stale = _split_props(prop_rows.get((name, st), []), m.get("line"))
                 stats.append(dict(stat=st, label=STAT_LABELS[st], proj=pv, line=m.get("line"), mean=mean, books=m.get("books"), odds=m.get("odds"),
-                                  priced=st in mk, basis=m.get("basis"), rows=main, alts=alts,
+                                  priced=st in mk, basis=m.get("basis"), rows=main, alts=alts, stale=n_stale,
+                                  status_at=None if p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"),
                                   pinned=st in (list(r.get("stat_pinned") or []) if r is not None else []),
                                   gap=bool(r is not None and st in mk and mean and pv is not None and abs(pv - float(mean)) >= max(STAT_GAP * float(mean), 1.0))))
             bm = book_minutes({st: v.get("mean") for st, v in self.market_rows.get(name, {}).items()}, s, self.slate.hist.league_rates) if not out else None
