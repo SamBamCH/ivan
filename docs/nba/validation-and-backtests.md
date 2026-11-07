@@ -100,7 +100,7 @@ module's docstring and [data.md](data.md).
 ```bash
 venv/bin/python scripts/nba/backtest_projection.py [--start 2025-11-15 --end 2026-01-15] [--dnp-available]
     [--grid | --kgrid | --rgrid | --sgrid] [--calibrate] [--compare] [--fit-correlation]
-    [--market-day 2025-11-30] [--minutes-model independent|team|both]
+    [--market-day 2025-11-30]
 ```
 
 Every team-game from `--start` on is projected using only games before that date, with availability
@@ -109,7 +109,7 @@ model and not injury-news timing. `--dnp-available` is the live condition (dress
 play). `--grid` and friends search the model's knobs; `--calibrate` fits the per-stat dispersion and
 the minutes sd into `data/nba/models/projection_calibration.json`; `--compare` scores the same
 player-games against the Stokastic projections kept in `projection_snapshot`; `--fit-correlation`
-refits the role-pair correlation table (`correlation.json`); `--market-day` evaluates market rates
+measures the role-pair correlation table (`correlation.json`, the game simulation's check target); `--market-day` evaluates market rates
 from the stored props of the games that tipped that day (rows without a game: by the day the book posted
 them). Reports: `data/nba/diagnostics/backtest_projection_*.txt`.
 Result 2026-10-06 under live conditions: level with Stokastic (MAE 7.44 vs 7.41 on 3,410 player-games),
@@ -127,18 +127,6 @@ the mean, `rotation.propose`'s grid as the shape) on last season's box scores: m
 error and bias (players with 5+ games), 10-90 coverage, and what the skeleton drops (players it leaves
 off the floor who did play). `--pool` adds the last-game pool rule; run it before switching
 `projection.pool`. The depth cut's own numbers are in the `_depth_note` of `config/nba.json`.
-
-## The team minutes draw (`scripts/nba/fit_team_minutes.py`)
-
-```bash
-venv/bin/python scripts/nba/fit_team_minutes.py [--fit-end 2026-01-31] [--eval-start 2026-02-01 --eval-end 2026-03-15] [-n 300]
-    [--no-write] [--no-eval] [--lines data/nba/input/historical_lines.csv]
-```
-
-Fits τ (share noise) and β (minutes per point of final margin) per role on the box scores and
-checks the draw walk-forward against the independent sampler (minutes MAE of the allocation and of
-the draw's mean, 10-90 coverage and width). Writes `data/nba/models/team_minutes.json`. `--lines`
-lets the draw know each game's spread (from `fetch_historical_lines.py`).
 
 ## The field backtest (`ivan.sports.nba.field_backtest`, `scripts/nba/backtest_field.py`)
 

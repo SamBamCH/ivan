@@ -106,17 +106,17 @@ and bench minutes. Measured 2026-10-26 on 898 team-games: a team's opening span 
 repeat across its games (r 0.72 and 0.68); who closes does not (r −0.03), so the closers stay a league
 rule (the most-played five).
 
-### 8. Minutes as a distribution (`team_minutes.py`)
+### 8. The projection's minutes band (`rotation.sample_worlds`, `team_minutes.py`)
 
-In one world: the final margin is drawn N(spread, sd) with a 5.2% overtime chance (the spread comes
-from `game_odds` through `lines.py`: the team's game nearest its tip on the slate, within 12 hours, so a slate
-whose game lines were not fetched has no spread rather than another night's; without a priced game the model
-falls back to independent minutes); who plays is drawn from each player's availability; the team's minutes are split by a
-softmax of log μ + β[role]·|margin| + ε, with ε ~ N(0, τ[role]). The softmax keeps the team at 241
-so one player's extra minutes are someone else's; β < 0 for starters moves their minutes to the bench
-in blowouts; τ by role makes a star's draw tight and a bench player's wide. With the rotation model
-the grid supplies the shape (stints, closers) that the draw jitters. Parameters: `data/nba/models/team_minutes.json`
-(`scripts/nba/fit_team_minutes.py`).
+The projection's own `minutes_p10` / `minutes_p90` and its `fpts_mean` / `fpts_std` come from worlds drawn around the
+grid: the final margin N(spread, sd) with the overtime chance (the spread from `game_odds` through `lines.py`: the
+team's game nearest its tip on the slate, within 12 hours, so a slate whose lines were not fetched has no spread rather
+than another night's), who plays from each player's scratch probability, and the grid's substitutions jittered once per
+world with garbage time off the margin. `team_minutes.py` keeps the constants (`data/nba/models/team_minutes.json`: scratch
+probabilities by DK status and by salary for a bench player without one, the margin sd, the overtime rate) and the
+scratch rule. This band is the desk's display; the distribution the field, the sim and the chooser play against is the
+game simulation's ([field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)), which draws the same
+grid under fouls, heirs and the emergent score.
 
 ### 9. Rates and the usage bump (`rates.py`)
 

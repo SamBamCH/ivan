@@ -44,11 +44,9 @@ def main():
     ap.add_argument("--calibrate", action="store_true")
     ap.add_argument("--compare", action="store_true")
     ap.add_argument("--fit-correlation", action="store_true",
-                    help="fit the role-pair correlation table and write the residuals the pair layer uses")
+                    help="measure the role-pair correlation table (the game simulation's check target)")
     ap.add_argument("--market-day", default=None,
                     help="evaluate market rates from the odds table for this date (e.g. 2025-11-30)")
-    ap.add_argument("--minutes-model", choices=("independent", "team", "both"), default=None,
-                    help="simulate fantasy points (n_sims 500) under this minutes model; 'both' compares the two on fpts MAE and the 10-90 band")
     args = ap.parse_args()
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
 
@@ -100,18 +98,6 @@ def main():
             res = run(cases, h2, ProjectionParams(prior_minutes=pm))
             ms.append(metrics(res, f"rate_halflife={rh} prior_min={pm}"))
         out = fmt(ms); report.append("RATE GRID\n" + out); print(out)
-
-    if args.minutes_model:
-        ms = []
-        for mm in (("independent", "team") if args.minutes_model == "both" else (args.minutes_model,)):
-            r = run(cases, hist, ProjectionParams(minutes_model=mm, n_sims=500, quantiles=11), simulate=True)
-            r = r[(r.games >= 5) & r.quantiles.map(lambda q: isinstance(q, list) and len(q) == 11)]
-            q = np.vstack(r.quantiles.values)                      # 11 points: index 1 = p10, 9 = p90
-            inside = ((r.dk_fpts >= q[:, 1]) & (r.dk_fpts <= q[:, 9])).mean()
-            m = metrics(r, f"minutes_model={mm}"); m["cover_10_90"] = inside; m["band_width"] = float((q[:, 9] - q[:, 1]).mean())
-            m["sd_mean"] = float(r.fpts_std.mean()); m["abs_err_mean"] = float((r.fpts_mean - r.dk_fpts).abs().mean())
-            ms.append(m); print(fmt([m]).split("\n")[-1])
-        out = fmt(ms); report.append("MINUTES MODEL\n" + out); print(out)
 
     params = ProjectionParams()
     res = run(cases, hist, params)
@@ -182,8 +168,7 @@ def main():
         out = json.dumps(cal, indent=2); report.append("CALIBRATION\n" + out); print(out)
 
     if args.fit_correlation:
-        from ivan.sports.nba.projection.correlation import (fit_league, role, category, CORRELATION_JSON,
-                                                            RESIDUALS_CSV)
+        from ivan.sports.nba.projection.correlation import fit_league, role, category, CORRELATION_JSON
         r = res[res.fpts_mean >= 10].copy()
         r["sd"] = 3.0 + 0.3 * r.fpts_mean           # predictive sd line; scale-free for correlation
         r["z"] = (r.dk_fpts - r.fpts_mean) / r.sd
@@ -200,9 +185,8 @@ def main():
         fit["fit_window"] = [args.start, args.end]; fit["player_games"] = int(len(r))
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         CORRELATION_JSON.write_text(json.dumps(fit, indent=2))
-        r[["player_name", "game_id", "z"]].to_csv(RESIDUALS_CSV, index=False)
         out = json.dumps(fit, indent=2); report.append("CORRELATION\n" + out); print(out)
-        print(f"wrote {CORRELATION_JSON} and {RESIDUALS_CSV} ({len(r)} player-games)")
+        print(f"wrote {CORRELATION_JSON} ({len(r)} player-games)")
 
     if args.market_day:
         from ivan.sports.nba.projection.market import load_odds, market_means, market_rates, parse_utc

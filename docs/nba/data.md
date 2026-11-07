@@ -96,8 +96,8 @@ data/nba/
 │   └── stok.csv                    a Stokastic export to record as a yardstick (ingest.py --stok-csv)
 ├── models/
 │   ├── projection_calibration.json per-stat dispersion, minutes sd (backtest_projection.py --calibrate)
-│   ├── team_minutes.json           τ, β per role (fit_team_minutes.py)
-│   ├── correlation.json, correlation_residuals.csv   role-pair correlation table (backtest_projection.py --fit-correlation)
+│   ├── team_minutes.json           the projection's game constants: scratch probabilities by status and salary, margin sd, overtime rate (hand-kept; measured 2026-10)
+│   ├── correlation.json            the measured role-pair correlation table (backtest_projection.py --fit-correlation): the game sim's check target
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)
 │   ├── field_ownership.json        the ownership model fitted on real contests (field_model.py fit)
 │   ├── field_distribution_model.pkl, marginals_*.pkl   last season's bin sampler (field.sampler = projection_model)
