@@ -218,6 +218,8 @@ venv/bin/python scripts/nba/pbp.py rebuild [--since 2026-10-01]           # re-r
 venv/bin/python scripts/nba/gamesim.py events [--since 2026-10-01] [--rebuild]     # the events store from the stored feeds (incremental)
 venv/bin/python scripts/nba/gamesim.py check [--game-ids 0022500001]              # the parse against the box score
 venv/bin/python scripts/nba/gamesim.py exits [--team BOS]                         # who inherits a mid-game exit: the heir rules scored
+venv/bin/python scripts/nba/gamesim.py fit-script [--no-write]                     # layer A: the game script's parameters from the lined games
+venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                      # layer A: PIT coverage of totals and margins, pace, overtime, garbage time
 ```
 
 `events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
@@ -235,6 +237,17 @@ matrix, nobody). Finding 2026-11-07: single exits are noise, the aggregate flow 
 40% to bigs, the backup big 22% himself, a fifth lost), and the sampler's slot rule is the worst
 ([notes/midgame_exits_2026-11-07.md](notes/midgame_exits_2026-11-07.md)). `--team` adds the team's own exits and who
 gained; `--csv` writes `data/nba/diagnostics/gamesim/exits.csv` (+ `_heirs.csv`).
+
+`fit-script` / `check-script` are layer A, the game script (`gamesim.script`): each team's trailing pace and the books'
+total and spread give the game's expected possessions and each team's points per possession; a world draws the pace,
+the possessions per six-minute segment, the points per segment with the lead pulling the efficiencies back (the
+leader eases off), garbage time off the margin path and overtime from a tie (close games tie more than possession
+noise says). `fit-script` takes every parameter from a moment of the lined games (the historical lines CSV and this
+season's `game_odds`, matched to the stored feeds by date and teams; 221 games on 2026-11-07) and writes
+`data/nba/models/gamesim/script.json` with the window and the commit. `check-script` draws every lined game with its own
+line: the real total and margin should sit inside the drawn 10-90 band 80% of the time with flat PIT fifths, the drawn
+overtime and garbage-time rates should match the stints'. Result 2026-11-07 in
+[notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md).
 
 ## What does not exist yet
 
