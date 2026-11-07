@@ -131,13 +131,22 @@ def test_new_card_writes_templates_with_api_win_odds(session, cfg, ingest, tmp_p
     assert (tmp_path / "player_odds.prev.csv").exists()
     fights = pd.read_csv(fo)
     players = pd.read_csv(po)
-    assert list(fights.columns) == ["fight", "u60 sec", "1st round", "itd"] and len(fights) == 12
-    assert list(players.columns) == ["player", "1st round win", "ITD", "Win", "sig strikes", "takedowns"] and len(players) == 24
+    # the hazard model's templates carry only the columns it reads
+    assert list(fights.columns) == ["fight", "itd"] and len(fights) == 12
+    assert list(players.columns) == ["player", "ITD", "Win", "sig strikes", "takedowns"] and len(players) == 24
     assert players["Win"].isna().all()                       # no API key in the test
     assert s["players_with_odds"] == 0 and len(s["missing"]["player"]) == 24
+    assert s["fight_model"] == "hazard" and len(s["fight_params"]) == 12
     # a second run now reads the templates as (empty) overrides and leaves them alone
     s2 = ingest(session, cfg, fight_odds_csv=fo, player_odds_csv=po)
     assert not s2["templates_written"]
+    # the tree model asks for every column
+    tree_cfg = {**cfg, "fight": {"model": "tree"}}
+    fo2, po2 = tmp_path / "t_fight_odds.csv", tmp_path / "t_player_odds.csv"
+    s3 = ingest(session, tree_cfg, fight_odds_csv=fo2, player_odds_csv=po2)
+    assert s3["fight_model"] == "tree" and s3["templates_written"]
+    assert list(pd.read_csv(fo2).columns) == ["fight", "u60 sec", "1st round", "itd"]
+    assert list(pd.read_csv(po2).columns) == ["player", "1st round win", "ITD", "Win", "sig strikes", "takedowns"]
 
 
 def test_moneyline_events_match_fights_across_transliterations():

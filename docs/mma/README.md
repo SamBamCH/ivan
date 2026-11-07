@@ -10,8 +10,9 @@ per step in `scripts/mma/`, code in `src/ivan/sports/mma/`. Live.
 ```bash
 venv/bin/python scripts/mma/ingest.py                        # 1. the DK Classic MMA slate (most contests; --draft-group ID for another), the fighter pool,
                                                              #    Win odds from the-odds-api (DraftKings moneylines), contests + payouts; writes the two CSV templates
-#   fill data/mma/input/fight_odds.csv (fight, u60 sec, 1st round, itd) and player_odds.csv (player, 1st round win, ITD, Win, sig strikes, takedowns)
-#   from the sportsbook in American odds; a non-empty cell wins over the API
+#   fill data/mma/input/player_odds.csv (player, ITD, Win, sig strikes, takedowns) from the sportsbook in American odds, and
+#   fight_odds.csv (fight, itd) when the book posts a fight-level ITD price (optional: the two fighters' ITD prices stand in);
+#   a non-empty cell wins over the API. (fight.model = tree wants the u60 / 1st round / 1st round win columns too)
 venv/bin/python scripts/mma/ingest.py                        #    again: reads the overrides; the summary says what is still blank
 venv/bin/python scripts/mma/generate_lineups.py --universe   # 2. every valid lineup (six fighters, one per fight, under the cap; 50-110k on a 12-13 fight card);
                                                              #    the MIP mode `12000 4` (jittered win probability, main-event boost) is the fallback
@@ -31,7 +32,8 @@ Tests: `venv/bin/python -m pytest tests/mma` (end to end on the sample card unde
 | Piece | Module | What |
 |---|---|---|
 | the slate | `ingest.py`, `market.py`, `contests.py`, `entries.py` | DK pool (`sports.common.draftkings.ingest_players`), moneylines matched to fights by name similarity (exact normalised, last name, unique shared token, `name_aliases`), hand CSVs as overrides, win probability and projection per fighter; the latest `--main-events` fights are five rounds |
-| a fight | `fight.py` | Monte Carlo of one fight from its markets: finish type from the fight markets (u60, R1, ITD), winner from the fighter markets for that finish (R1 price; ITD − R1; ML − ITD for a decision), time uniform within the round, sig strikes and takedowns scaled by time fought with diminishing returns and noise, the round's finish bonus to the winner, the loser keeps half his production. `scoring.*` in the config (`sig_strike`, `time_exponent` fitted 2026-10-17 on real scores) |
+| a fight | `hazard.py` (`fight.model` hazard, the default) | one risk of finish per fighter: the fight's ITD price (or the two fighters' ITD prices summed) sets a constant hazard, each fighter's ITD price their share of the stoppages, the moneyline minus that share who wins a decision; finish time exponential, cut at the final bell, the round's bonus to the winner; strikes and takedowns are Gamma-Poisson counts at a rate that holds the posted line as the mean (the loser keeps `loser_production_share`). u60 and round-1 prices are not read: a flat hazard reproduces them ([notes/hazard_2026-11-07.md](notes/hazard_2026-11-07.md)). `ingest.py` prints the fitted parameters per fight (P(finish), expected minutes, round shares) |
+| a fight, tree model | `fight.py` (`fight.model` tree) | the original: finish type from the fight markets (u60, R1, ITD), winner from the fighter markets for that finish (R1 price; ITD − R1; ML − ITD for a decision), time uniform within the round, sig strikes and takedowns scaled by time fought with diminishing returns (`time_exponent`) and noise. `scoring.*` in the config (`sig_strike`, `time_exponent` fitted 2026-10-17 on real scores) is shared by both models |
 | the universe / candidates | `universe.py`, `lineup_generation.py` | every valid lineup, or MIP solves (GLPK if `glpsol` is present, else CBC) |
 | the field | `sample_field.py`, `standings.py`, `scripts/mma/build_dupe_model.py` | `field.size` entries sampled with replacement weighted by duplication. `field.model = fitted`: a Poisson log-linear model of copies on salary left, summed win probability and a same-fight flag (`data/mma/models/dupe_model.json`), fitted on real fields exported with `get_contest_data.py --contest-ids ... | --played` (Chrome profile; raw `data/mma/raw/dk/standings/`, derived `data/mma/derived/contests/<id>/`). `original` is the hand-set exponential the port started with. Retune 2026-10-17 on real 10-10 fields: 12,000 solves, boost 1.4, projection_share 0.35 |
 | the contest | `simulate_contest.py`, `payouts.py` | payouts scaled to the field (`sports.common.payouts`), `simulation.n_sims` worlds, every entry ranked, ties pooling prizes, one result row per unique lineup |
@@ -40,7 +42,8 @@ Tests: `venv/bin/python -m pytest tests/mma` (end to end on the sample card unde
 ## Config (`config/mma.json`)
 
 `paths` (entries, fight odds, player odds, payouts CSVs), `name_aliases`, `slate` (`game_type` Classic,
-`num_5_round_fights` 1), `odds_api.bookmakers` draftkings, `scoring` (sig strike 0.8, takedown 5, loser
+`num_5_round_fights` 1), `odds_api.bookmakers` draftkings, `fight` (`model` hazard | tree, `first_minute_mult` 1,
+`default_itd_prob` 0.5, `max_itd_prob` 0.97, `rate_cv` 0.25), `scoring` (sig strike 0.8, takedown 5, loser
 production share 0.5, finish bonuses u60 115 / r1 90 / r2 70 / r3 45 / r4 40 / r5 40 / decision 30,
 production noise cv 0.2, time exponent 0.5), `lineup_generation` (`n_candidates` 12000, `jitter_sd` .15,
 `min_salary` 48500, `salary_cap` 50000, `roster_size` 6, `main_event_boost` 1.4, `projection_share` .35),

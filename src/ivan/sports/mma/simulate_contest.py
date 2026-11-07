@@ -115,7 +115,7 @@ def simulate_contest(session: Session, cfg: dict, contest: dict, *, field_size: 
     cap = int(cfg.get("lineup_generation", {}).get("salary_cap", 50000))
 
     players = {p.id: p for p in session.query(MMAPlayer).all()}
-    fights = load_fights(session, cfg.get("scoring"))
+    fights = load_fights(session, cfg.get("scoring"), cfg.get("fight"))
     lineups = session.query(Lineup).order_by(Lineup.id).all()
     if not lineups:
         raise SystemExit("no candidate lineups; run scripts/mma/generate_lineups.py first")

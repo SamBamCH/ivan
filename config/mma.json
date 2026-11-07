@@ -17,6 +17,14 @@
   "odds_api": {
     "bookmakers": "draftkings"
   },
+  "fight": {
+    "model": "hazard",
+    "first_minute_mult": 1.0,
+    "default_itd_prob": 0.5,
+    "max_itd_prob": 0.97,
+    "rate_cv": 0.25
+  },
+  "_fight_note": "model hazard (hazard.py, 2026-11-07): one risk of finish per fighter. The fight's ITD price (or the two fighters' ITD prices summed) sets a constant hazard, each fighter's ITD price their share of the stoppages, the moneyline minus that share who wins a decision; finish time is exponential, cut at the final bell; strikes and takedowns are Gamma-Poisson counts at a rate that holds the posted line as the mean. Inputs: fighter ITD + Win + sig strikes + takedowns (u60 / round-1 prices are not read; on 2026-10-24 a flat hazard reproduced the R1 prices within 5%, see docs/mma/notes/hazard_2026-11-07.md). first_minute_mult > 1 front-loads the first 60 s; rate_cv is the between-simulation pace noise. model tree = the round-node model in fight.py (u60 / R1 / ITD per fight, R1 / ITD / Win per fighter).",
   "scoring": {
     "sig_strike": 0.8,
     "takedown": 5.0,
