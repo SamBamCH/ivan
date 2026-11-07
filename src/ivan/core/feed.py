@@ -48,7 +48,9 @@ TABLES = {
         # the history database's live part: facts about the day's games every slate shares (the props, the lines, the headlines
         # and which slate each headline was seen on)
         "live": ["odds", "game_odds", "nba_news", "nba_slate_news"],
-        "reference": ["nba_stats", "nba_stint", "nba_projection_capture", "archived_slate"],
+        # the game simulation reads the play-by-play tables too (fouls and substitutions: gamesim.rotation / fouls / possessions);
+        # without them the consumer's generate fails on "no such table: nba_foul" (2026-11-07)
+        "reference": ["nba_stats", "nba_stint", "nba_foul", "nba_sub", "nba_projection_capture", "archived_slate"],
         "files": ["data/nba/models", "data/nba/input/historical_lines.csv", "data/nba/derived", "data/nba/diagnostics/scorecard"],
         # one bundle per held slate (ivan.sports.nba.slates: data/nba/slates/<dg>/): the feed tables of its slate.sqlite (the pool,
         # starters, market rates, contests, payouts; the consumer's lineups and sims are its own), its edits as the consumer's

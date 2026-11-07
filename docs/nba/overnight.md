@@ -116,7 +116,7 @@ without fetching:
 |---|---|---|---|
 | `live` | the history's shared live tables: `odds`, `game_odds`, `nba_news`, `nba_slate_news` | | on every pull's request, every nightly |
 | `slates/<dg>/` (one per held slate) | from its `slate.sqlite`: `nba_player`, `starting_lineups`, `nba_market_rate`, `historical_contest_information`, `payouts`, `classic_contest_metadata` | its `edits/` (as the consumer's `published/` layer), its `projection/` store (mirrored), its `slate.json` | with the live part; `publish --slate DG` one slate (fetched first when not held) |
-| `reference` | `nba_stats`, `nba_stint`, `nba_projection_capture`, `archived_slate` | `data/nba/models/`, `data/nba/derived/`, `data/nba/diagnostics/scorecard/`, `data/nba/input/historical_lines.csv` | every nightly |
+| `reference` | `nba_stats`, `nba_stint`, `nba_foul`, `nba_sub` (the game simulation's foul rates and substitutions), `nba_projection_capture`, `archived_slate` | `data/nba/models/`, `data/nba/derived/`, `data/nba/diagnostics/scorecard/`, `data/nba/input/historical_lines.csv` | every nightly |
 
 Never published: a slate's lineups, sims and reports, the consumer's own edits. A bundle is a gzipped SQL dump plus a
 manifest with stamps and digests (per slate: the tables', the edits' and the store's); the consumer replaces exactly
