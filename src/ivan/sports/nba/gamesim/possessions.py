@@ -15,8 +15,9 @@ game_events(pbp, box, stints)   one row per event: period, elapsed, segment, tea
 team_segments(events)           per game, team and six-minute segment (overtime segments 8, 9, ...): possessions,
                                 points, FGA, 3PA, FTA, TOV, OREB, DREB.
 player_games(events)            per game and player: the box-score counts the feed implies plus the possessions he was
-                                on the floor for (his team's, off_poss, and the opponent's, def_poss): the usage fit's
-                                denominators.
+                                on the floor for (his team's, off_poss, and the opponent's, def_poss) and what happened
+                                around him while on (ON_FLOOR: teammates' attempts, makes and misses, the opponent's
+                                attempts and misses): the usage fit's denominators.
 reconcile(events, box)          the feed's counts against nba_stats, per player and per team: how far the parse is
                                 from the box score (the check of this layer).
 build(session, ...)             every game with stints and a stored feed -> data/nba/derived/gamesim/events.parquet,
@@ -256,11 +257,15 @@ def estimated_possessions(seg: pd.DataFrame) -> pd.Series:
 
 
 PLAYER_COUNTS = ["pts", "fga", "fgm", "fg3a", "fg3m", "fta", "ftm", "oreb", "dreb", "ast", "stl", "blk", "tov", "pf"]
+# what happened around a player while he was on the floor (the usage fit's denominators): his team's possessions and the
+# opponent's, his teammates' field-goal attempts, makes and misses (assist and offensive-rebound chances), the opponent's
+# attempts and misses (block and defensive-rebound chances); a missed final free throw counts as a miss on both sides
+ON_FLOOR = ["off_poss", "def_poss", "team_fga_on", "team_fgm_on", "team_miss_on", "opp_fga_on", "opp_miss_on"]
 
 
 def player_games(events: pd.DataFrame) -> pd.DataFrame:
-    """Per game, team, player: PLAYER_COUNTS from the feed plus off_poss / def_poss (possessions on the floor, from the events with whole fives)."""
-    cols = ["game_id", "game_date", "team", "player"] + PLAYER_COUNTS + ["off_poss", "def_poss"]
+    """Per game, team, player: PLAYER_COUNTS from the feed plus the ON_FLOOR counts (from the events with whole fives)."""
+    cols = ["game_id", "game_date", "team", "player"] + PLAYER_COUNTS + ON_FLOOR
     if events is None or events.empty:
         return pd.DataFrame(columns=cols)
     acc: Dict[Tuple[str, str, str], dict] = {}
@@ -268,10 +273,25 @@ def player_games(events: pd.DataFrame) -> pd.DataFrame:
     def row(gid, date, team, player):
         key = (gid, team, player)
         if key not in acc:
-            acc[key] = dict(game_id=gid, game_date=date, team=team, player=player, **{c: 0 for c in PLAYER_COUNTS}, off_poss=0, def_poss=0)
+            acc[key] = dict(game_id=gid, game_date=date, team=team, player=player, **{c: 0 for c in PLAYER_COUNTS}, **{c: 0 for c in ON_FLOOR})
         return acc[key]
 
+    def bump(gid, date, team, five: str, col: str, skip: Optional[str] = None):
+        for nm in five.split("|"):
+            if nm != skip:
+                row(gid, date, team, nm)[col] += 1
+
     for r in events.itertuples(index=False):
+        whole = bool(r.on_off) and bool(r.on_def)
+        if whole and r.kind == "fg":
+            bump(r.game_id, r.game_date, r.team, r.on_off, "team_fga_on", skip=r.player)
+            bump(r.game_id, r.game_date, r.team, r.on_off, "team_fgm_on" if r.made else "team_miss_on", skip=r.player)
+            bump(r.game_id, r.game_date, r.opp, r.on_def, "opp_fga_on")
+            if not r.made:
+                bump(r.game_id, r.game_date, r.opp, r.on_def, "opp_miss_on")
+        elif whole and r.kind == "ft" and r.trip_i == r.trip_n and not r.made:
+            bump(r.game_id, r.game_date, r.team, r.on_off, "team_miss_on", skip=r.player)
+            bump(r.game_id, r.game_date, r.opp, r.on_def, "opp_miss_on")
         if r.player:
             x = row(r.game_id, r.game_date, r.team, r.player)
             if r.kind == "fg":

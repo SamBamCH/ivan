@@ -16,6 +16,10 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
         coupling and the endgame tie bump from the lined games -> data/nba/models/gamesim/script.json
     scripts/nba/gamesim.py check-script [-n 2000]
         layer A against the lined games: PIT coverage of the final total and margin, pace error, overtime and garbage-time rates
+    scripts/nba/gamesim.py check-usage [--start 2026-01-10 --end 2026-02-28]
+        layer C with the truth plugged in: the shares over the real fives and possessions against the per-minute rate x true
+        minutes, per stat (attempts, threes, trips, turnovers, assists, rebounds, steals, blocks), overall / starters / bench /
+        nights a 25-minute teammate sat
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from ivan.database.session import get_session, init_db
 from ivan.sports.nba.gamesim import fouls as F
 from ivan.sports.nba.gamesim import possessions as X
 from ivan.sports.nba.gamesim import script as S
+from ivan.sports.nba.gamesim import usage as U
 from ivan.sports.nba.paths import DIAG_DIR
 
 
@@ -101,6 +106,19 @@ def cmd_check_script(args) -> None:
         print(f"{col:>11} PIT by fifth: {h.tolist()}   (flat = calibrated)")
 
 
+def cmd_check_usage(args) -> None:
+    from datetime import date
+    from ivan.sports.nba.projection.groups import group_of, position_map
+    s = get_session(init_db("nba"))
+    ev = X.load_events()
+    box = pd.read_sql(text("select game_id, player_name, team_abbreviation, position, minutes from nba_stats where substr(game_id,1,3) in ('002','004')"), s.get_bind())
+    groups = {n: group_of(p) for n, p in position_map(s).items()}
+    r = U.check(ev, box, groups, date.fromisoformat(args.start), date.fromisoformat(args.end), log=print)
+    print(_fmt(r["summary"]))
+    pd.set_option("display.width", 220)
+    print(r["table"].round(3).to_string(index=False))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -109,6 +127,7 @@ def main() -> None:
     x = sub.add_parser("exits"); x.add_argument("--since"); x.add_argument("--team"); x.add_argument("--csv", default=str(DIAG_DIR / "gamesim" / "exits.csv")); x.set_defaults(fn=cmd_exits)
     f = sub.add_parser("fit-script"); f.add_argument("--no-write", action="store_true"); f.set_defaults(fn=cmd_fit_script)
     k = sub.add_parser("check-script"); k.add_argument("-n", type=int, default=2000); k.set_defaults(fn=cmd_check_script)
+    u = sub.add_parser("check-usage"); u.add_argument("--start", default="2026-01-10"); u.add_argument("--end", default="2026-02-28"); u.set_defaults(fn=cmd_check_usage)
     args = ap.parse_args()
     args.fn(args)
 

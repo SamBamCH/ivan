@@ -220,6 +220,7 @@ venv/bin/python scripts/nba/gamesim.py check [--game-ids 0022500001]            
 venv/bin/python scripts/nba/gamesim.py exits [--team BOS]                         # who inherits a mid-game exit: the heir rules scored
 venv/bin/python scripts/nba/gamesim.py fit-script [--no-write]                     # layer A: the game script's parameters from the lined games
 venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                      # layer A: PIT coverage of totals and margins, pace, overtime, garbage time
+venv/bin/python scripts/nba/gamesim.py check-usage [--start --end]                 # layer C: shares over the real fives vs per-minute rates, true minutes plugged in
 ```
 
 `events` turns every game with stints into one row per event (shot, free throw, rebound, turnover, steal, block, foul,
@@ -248,6 +249,15 @@ season's `game_odds`, matched to the stored feeds by date and teams; 221 games o
 line: the real total and margin should sit inside the drawn 10-90 band 80% of the time with flat PIT fifths, the drawn
 overtime and garbage-time rates should match the stints'. Result 2026-11-07 in
 [notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md).
+
+`check-usage` is layer C (`gamesim.usage`): each player's share of the possessions he is on the floor for (attempts,
+threes, trips, turnovers per own possession; assists per teammate make; rebounds per miss; steals per opponent
+possession; blocks per opponent attempt), trailing and shrunk toward his position group, and the team's pie (its own
+endings per possession, its shares of misses and makes) that the five on the floor split. The check replays every game
+of the window possession by possession with the real fives and scores the shares' expected counts against the real
+ones, next to the current model's way (the trailing stat per minute times the true minutes). Result 2026-11-07 in the
+same note: level on attempts when the minutes are known (7 of 9 stats a hair better), and the pie removes the bias on
+nights a 25-minute teammate sat.
 
 ## What does not exist yet
 
