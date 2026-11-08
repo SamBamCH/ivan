@@ -81,12 +81,16 @@ one locked on or after 2026-10-11, the day the slate archive started. Of those 3
    contests are listed in `historical_contest_information` (about 13 draft groups per Sunday, 2,800
    unarchived contests in October) but there is no capture and no projection for them, so no
    pre-lock ownership to fit on. Adding them needs the DraftKings pool at lock, which nothing stores.
-2. **Nothing before 2026-10-11 is archived**, but 11 showdown slates from 2026-09-09 to 2026-10-08
-   have projection snapshots and listed contests: `backfill_archive.py --since 2026-09-09 --until
-   2026-10-10 --odds` rebuilds their captures from the snapshots and the odds-api history (about 230
-   credits a game, 2,500 in all) and `settle.py --since 2026-09-09 --until 2026-10-10 --public 5`
-   scrapes their public fields through the logged-in Chrome profile. That takes the season from 16
-   scored slates to about 27.
+2. **Nothing before 2026-10-11 was archived.** The 11 showdown slates from 2026-09-09 to 2026-10-08
+   with projection snapshots were backfilled on 2026-11-05 (`backfill_archive.py --since 2026-09-09
+   --until 2026-10-10 --odds --all-slates`, captures 65 to 75, about 210 credits a game). The scrape of
+   their fields (`settle.py ... --public 5`, 80 contests) returned a standings export for one contest
+   only, the 2026-09-10 contest the account had entered (126k entries); the 79 others, none entered,
+   came back empty. DraftKings' full-standings export is therefore not available weeks after lock for
+   contests the account did not enter (the November 2025 public fields were scraped within days), so
+   the September slates stay captured but unscored, and the lesson is operational: scrape every
+   week's public fields within the week, and raise `--public` on the nightly timer now rather than
+   later. The 11 captures still serve the projection and ownership backtests.
 3. **Per slate the settle job scrapes our contests plus three public ones** (`--public 3`): 6 to 11
    fields of 150 to 260 per draft group. More public contests per slate add fields of the same game
    (more single-entry and 5-max fields, which the by-cap table is short of: 11 and 2), not slates.
