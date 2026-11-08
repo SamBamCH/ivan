@@ -347,18 +347,22 @@ def basis_minutes_for_market(slate: LiveSlate, overrides: dict[str, float], forc
     return out
 
 
-def store_market_rates(session: Session, means: pd.DataFrame, basis: dict[str, float]) -> int:
+def store_market_rates(session: Session, means: pd.DataFrame, basis: dict[str, float], odds_stamp: tuple | None = None) -> int:
+    """Replace the slate's market rates. `odds_stamp`: (rows, max id) of the odds table the means came from, kept on every row so
+    ingest.market_rates_current can tell when a later props fetch replaced the rows (the books' own last_update cannot: a fetch
+    stores the books' timestamps, which predate our fetch)."""
     from .market import market_rates
     mr = market_rates(means, basis)
     session.query(NBAMarketRate).delete(synchronize_session=False)
     now = datetime.now(); n = 0
+    rows_, max_id = (int(odds_stamp[0]), None if odds_stamp[1] is None else int(odds_stamp[1])) if odds_stamp else (None, None)
     by_key = {(r.player, r.stat): r for r in means.itertuples(index=False)}
     for player, rates in mr.rates.items():
         for stat, rate in rates.items():
             m = by_key[(player, stat)]
             session.add(NBAMarketRate(player_name=player, stat=stat, market_mean=float(m.mean), rate=float(rate),
                                       basis_minutes=mr.basis_minutes[player], books=int(m.books),
-                                      line=None if pd.isna(m.line) else float(m.line), fetched_at=now))
+                                      line=None if pd.isna(m.line) else float(m.line), fetched_at=now, odds_rows=rows_, odds_max_id=max_id))
             n += 1
     session.commit()
     return n

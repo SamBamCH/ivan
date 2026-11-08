@@ -211,6 +211,14 @@ on prices for another game; 2026-10-28: O'Neale on week-old props). `scripts/nba
 game and, with `--player`, why each of a player's rows is kept or ignored; `--backfill --apply` gives the rows stored
 before the game columns their game from the raw payloads.
 
+**The rates follow the odds table.** `nba_market_rate` is built from the table at the slate's refresh, and the table is shared
+by the day's slates and moves with every props fetch, so `ingest.ensure_market_rates` rebuilds the rates whenever the table is
+not the one they were built from (`market_rates_current`: the rates carry the table's row count and max id at their build,
+`odds_rows` / `odds_max_id`; a fetch replaces rows, so the stamp moves; the books' own `last_update` cannot tell, a fetch stores
+the books' timestamps, which predate it): the desk checks on each request (`Desk.follow_odds`, every 20 s at most, then
+re-projects the teams whose means moved) and `project_slate` checks before a publish. Without it a slate's rates said Traore 12.2 points from an
+earlier fetch while the table, replaced by a later one, held his 18.5 lines (2026-11-07).
+
 **A line priced the role the player had when the book posted it.** Once he is downgraded (his DK status goes to an out
 status, or he leaves the starting five: Rotowire's at a refresh, or the desk's hand call over it), the lines posted before that
 moment are set aside: `ivan.sports.nba.changes` stamps `nba_player.status_changed_at` at the store (`mark_status_changes`: the

@@ -70,6 +70,8 @@ def short_name(name: str) -> str:
     return toks[-1] if toks else str(name or "")
 
 load_dotenv(PROJECT_ROOT / ".env")                          # IVAN_FEED_SSH (a consumer: the laptop it pulls from) / IVAN_FEED_URL (older)
+MEAN_MOVE = 0.05                                              # a market mean that moved by more than this re-projects the player's team (Desk.follow_odds)
+ODDS_CHECK_S = 20.0                                           # how often the desk looks whether the odds table moved (Desk.follow_odds)
 CONSUMER = feed.producer_source() is not None                 # a consumer pulls the laptop's pool on Refresh and never fetches DK, props or news itself
 engine = init_db("nba")                                    # the history database (IVAN_NBA_DB_URL or data/nba/nba_history.sqlite); a slate's own is slates.engine(dg)
 ensure_schema(engine)
@@ -319,41 +321,78 @@ class DeskBase:
             if name in self.market_rows and stat in self.market_rows[name]:
                 self.market_rows[name][stat]["odds"] = txt
 
-    def prop_rows(self) -> dict:
-        """(player, stat) -> every (book, line) the books hold for his game tonight: [{date, book, line, over, under, alt}], the
-        main lines first then the alternates, by book and line; `date` is when the book last posted it (local). Cached until the
-        odds table changes (fresh_odds over 150k rows is the cost)."""
-        from sqlalchemy import text as _t
-        key = tuple(self.session.execute(_t("select count(*), max(last_update) from odds")).one()) + (self.pool_stamp,)
-        cache = getattr(self, "_prop_rows_cache", None)
+    def fresh_props(self) -> pd.DataFrame:
+        """This slate's prop rows (market.fresh_odds over the pool's games) with stat, alt, posted (local) and stale (posted before the
+        player's last downgrade, changes.status_cutoffs), cached on the odds table's stamp and the status stamps: built on the first
+        hover after a change (about a second), then read per cell."""
+        from ivan.sports.nba import changes as CH
+        from ivan.sports.nba.ingest import odds_stamp
+        from ivan.sports.nba.projection.market import MARKET_TO_STAT, _to_local, fresh_odds
+        cutoffs = CH.status_cutoffs(self.session)
+        key = (odds_stamp(self.session), self.pool_stamp[2], tuple(sorted((k, str(v)) for k, v in cutoffs.items())))
+        cache = getattr(self, "_fresh_props_cache", None)
         if cache is not None and cache[0] == key:
             return cache[1]
-        out = self._prop_rows()
-        self._prop_rows_cache = (key, out)
+        odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players}, cutoffs=cutoffs, mark=True)
+        if not odds.empty:
+            odds = odds[odds.market.isin(MARKET_TO_STAT)].copy()
+            odds["stat"] = odds.market.map(MARKET_TO_STAT); odds["alt"] = odds.market.str.endswith("alternate")
+            odds["posted"] = _to_local(odds["last_update"]) if odds["last_update"].notna().any() else pd.NaT
+            odds["_side"] = odds.side.astype(str).str.lower()
+            if "stale" not in odds.columns:
+                odds["stale"] = False
+        self._fresh_props_cache = (key, odds)
+        return odds
+
+    def prop_rows_for(self, name: str, stat: str) -> list:
+        """Every (book, line) the books hold for the player's stat tonight: [{date, book, line, over, under, alt, stale}], the main
+        lines first then the alternates, by book and line; `date` is when the book last posted it (local)."""
+        odds = self.fresh_props()
+        if odds.empty:
+            return []
+        g0 = odds[(odds.player == name) & (odds.stat == stat)]
+        if g0.empty:
+            return []
+        amer = lambda prices: "" if prices.empty else f"{int(round(float(prices.iloc[0]))):+d}"   # noqa: E731
+        out = []
+        for (book, point, alt), g in g0.groupby(["sportsbook", "point", "alt"], sort=False):
+            posted = g.posted.max()
+            out.append(dict(date=None if pd.isna(posted) else posted.strftime("%m-%d %H:%M"), book=str(book), line=float(point),
+                            over=amer(g[g._side == "over"].price), under=amer(g[g._side == "under"].price), alt=bool(alt), stale=bool(g.stale.any())))
+        out.sort(key=lambda b: (b["alt"], b["book"], b["line"]))
         return out
 
-    def _prop_rows(self) -> dict:
-        from ivan.sports.nba import changes as CH
-        from ivan.sports.nba.projection.market import MARKET_TO_STAT, _to_local, fresh_odds
-        odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players}, cutoffs=CH.status_cutoffs(self.session), mark=True)
-        if odds.empty:
-            return {}
-        odds = odds[odds.market.isin(MARKET_TO_STAT)].copy()
-        if "stale" not in odds.columns:
-            odds["stale"] = False
-        odds["stat"] = odds.market.map(MARKET_TO_STAT); odds["alt"] = odds.market.str.endswith("alternate")
-        odds["posted"] = _to_local(odds["last_update"]) if odds["last_update"].notna().any() else pd.NaT
-        odds["_side"] = odds.side.astype(str).str.lower()
-        amer = lambda prices: "" if prices.empty else f"{int(round(float(prices.iloc[0]))):+d}"   # noqa: E731
-        out: dict = {}
-        for (name, stat, book, point, alt), g in odds.groupby(["player", "stat", "sportsbook", "point", "alt"], sort=False):
-            posted = g.posted.max()
-            out.setdefault((name, stat), []).append(dict(date=None if pd.isna(posted) else posted.strftime("%m-%d %H:%M"), book=str(book),
-                                                         line=float(point), over=amer(g[g._side == "over"].price), under=amer(g[g._side == "under"].price),
-                                                         alt=bool(alt), stale=bool(g.stale.any())))
-        for v in out.values():
-            v.sort(key=lambda b: (b["alt"], b["book"], b["line"]))
-        return out
+    def follow_odds(self) -> None:
+        """The odds table moved since this slate's market rates were built (a props fetch, for this slate or another of the day: the
+        table is shared): rebuild the rates past the status cutoffs and re-project every team, so the projection follows the books
+        rather than the snapshot the slate's last refresh took (ingest.ensure_market_rates). Checked at most every ODDS_CHECK_S
+        seconds and once per odds stamp; a consumer has no raw store and skips."""
+        if CONSUMER:
+            return
+        t = time.time()
+        if t - getattr(self, "_odds_checked", 0.0) < ODDS_CHECK_S:
+            return
+        self._odds_checked = t
+        from ivan.sports.nba.ingest import ensure_market_rates, odds_stamp
+        stamp = odds_stamp(self.session)
+        if stamp == getattr(self, "_odds_followed", None):
+            return
+        self._odds_followed = stamp
+        try:
+            old = {n: dict(v) for n, v in self.slate.market_means.items()}
+            if ensure_market_rates(self.session, history=self.history(), log=lambda m: None):
+                self.slate.reload_market(); self.load_market_rows()
+                new = self.slate.market_means
+                moved = {n for n in set(old) | set(new)
+                         if set(old.get(n, {})) != set(new.get(n, {})) or any(abs(old[n][k] - new[n][k]) > MEAN_MOVE for k in old.get(n, {}) if k in new.get(n, {}))}
+                teams = sorted({p.team for p in self.slate.players if normalize_name(p.name) in moved})
+                for team in teams:                                # only the teams whose books moved: a team re-projects in about a second
+                    self.reproject(team)
+                if teams:
+                    self.flash.append(f"the books moved for {len(moved)} player{'s' if len(moved) != 1 else ''}: market rates rebuilt, {', '.join(teams)} re-projected")
+        except Exception as e:   # noqa: BLE001 - the desk keeps serving on the rates it has
+            self.session.rollback()
+            self.flash.append(f"market rates not followed: {type(e).__name__}: {e}")
 
     def _consensus_odds(self) -> dict:
         from ivan.sports.nba import changes as CH
@@ -407,6 +446,7 @@ class DeskBase:
         rebuild reads the projection store, so this costs milliseconds; a different set of players (another slate, a roster
         change) says so, new numbers for the same players load quietly.
         """
+        self.follow_odds()
         now = self._stamp()
         if now == self.pool_stamp:
             return

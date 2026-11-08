@@ -90,7 +90,6 @@ class RowsMixin:
         starters = self.starters_of(team)
         confirmed = self.slate.starters_confirmed.get(team, False)
         mk = self.market_means()
-        prop_rows = self.prop_rows()
         rows = []
         for p in self.players(team):
             name = normalize_name(p.name)
@@ -153,10 +152,8 @@ class RowsMixin:
             stats = []
             for st in STAT_ORDER:                                   # one entry per stat column, out or not (the cells must line up)
                 m = mk.get(st, {}); pv = None if r is None else float(r[f"proj_{st}"]); mean = m.get("mean")
-                main, alts, n_stale = _split_props(prop_rows.get((name, st), []), m.get("line"))
                 stats.append(dict(stat=st, label=STAT_LABELS[st], proj=pv, line=m.get("line"), mean=mean, books=m.get("books"), odds=m.get("odds"),
-                                  priced=st in mk, basis=m.get("basis"), rows=main, alts=alts, stale=n_stale,
-                                  status_at=None if p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"),
+                                  priced=st in mk, basis=m.get("basis"),
                                   pinned=st in (list(r.get("stat_pinned") or []) if r is not None else []),
                                   gap=bool(r is not None and st in mk and mean and pv is not None and abs(pv - float(mean)) >= max(STAT_GAP * float(mean), 1.0))))
             bm = book_minutes({st: v.get("mean") for st, v in self.market_rows.get(name, {}).items()}, s, self.slate.hist.league_rates) if not out else None
@@ -187,6 +184,19 @@ class RowsMixin:
         # starters first, then the players who are out, then the rest of the bench; minutes descending within each group
         rows.sort(key=lambda x: (0 if (x["starter"] == "S" and not x["out"]) else (1 if x["out"] else 2), -(x["minutes"] or 0), -(x["salary"] or 0)))
         return rows
+
+    def stat_hover(self, team: str, name: str, stat: str) -> dict:
+        """The stat cell's hover (fetched when the cell is hovered): ours, the books' mean over the minutes it was priced at, the
+        consensus line and prices, every book's main line (posted, line, over, under; set-aside lines flagged stale) and the
+        alternates condensed per book, with how many lines are set aside and when the player was last downgraded."""
+        m = self.market_rows.get(name, {}).get(stat, {})
+        r = self.proj.get(team)
+        pv = None if r is None or name not in r.index else float(r.loc[name, f"proj_{stat}"])
+        p = next((x for x in self.players(team) if normalize_name(x.name) == name), None)
+        main, alts, n_stale = _split_props(self.prop_rows_for(name, stat), m.get("line"))
+        return dict(stat=stat, label=STAT_LABELS.get(stat, stat), proj=pv, mean=m.get("mean"), basis=m.get("basis"), line=m.get("line"), odds=m.get("odds"),
+                    rows=main, alts=alts, stale=n_stale,
+                    status_at=None if p is None or p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"))
 
     def team_card(self, team: str, now: datetime) -> dict:
         rows = self.team_rows(team)
