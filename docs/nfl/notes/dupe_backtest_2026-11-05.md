@@ -142,6 +142,12 @@ fields), 6-20 -0.19 (was -0.07), 21-150 -0.14 (was -0.30). On our own entries th
 +0.05 in 150-max contests (was +0.19 and -0.11); our copies against the field's average entry in the same
 contests stay 77 vs 34 and 110 vs 56.
 
+Refit 2026-11-07 on 233 fields (the 2026-11-05 Thursday slate's ten fields and the one September field):
+k 0.114, beta 0.29, gamma -0.97, projection gap -1.07, entry cap -0.15; the as-of 2026-10-11 version
+rebuilt too. Forward over 17 slates (`diagnostics/dupe_backtest/20261107-201216`): log MAE 0.80, bias
+-0.08 [-0.21, +0.08], slope 0.99, top-100 share 0.160 vs 0.195 real; without the cap term MAE 0.81 and
+slope 0.94, ownership only MAE 1.05.
+
 ## What to run, and when
 
 After the nightly settle has scraped a slate's fields (the Monday after a week, or any morning):
