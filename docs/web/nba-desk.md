@@ -132,6 +132,12 @@ slate page, the page's own chip outlined, so any other team is one click away. T
 (`GET /team/<TEAM>`, `_nba_side.html`) loads into it, as the board does on the slate page. Tonight's game heads the
 card: tip, countdown, the line ("DET -7.5 · O/U 228"; "no line" until Refresh lines or Refresh props fetches them).
 
+**The market rates follow the books.** On each request (at most every 20 s) the desk looks whether the odds table moved
+since this slate's market rates were built (a props fetch, for this slate or another of the day: the table is shared); when it
+has, the rates are rebuilt past the status cutoffs and the teams whose means moved re-projected (`Desk.follow_odds` =
+`ingest.ensure_market_rates`, about a second a team; the card says who). A publish does the same before it projects. Before 2026-11-07 the rates were a snapshot taken at the slate's own
+refresh, and a slate projected the night on means a later fetch had replaced in the table.
+
 **Every edit on the page writes the team into the slate's pool at once** (`Desk.reproject` = `ingest.project_team`: the
 team's `nba_player` rows and its projection store record, about 0.3 s): a pin, a starter call, a painted row, a scenario, a
 late-news call. Leaving the page loses nothing and there is nothing to publish afterwards. The page stays open while the
@@ -186,7 +192,9 @@ sim uses; type to pin), **val**, **pub** and its **val**, **own**. The foot row 
 Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line
 (when the book posted it, the line, the over and under prices) and the alternates condensed to one row per book (the
 lines within 3 of the consensus line with the over price; alternates price overs only), headed by ours, the books' mean
-and the minutes it was priced over. A line the book posted before the player was last downgraded (to an out status, or out
+and the minutes it was priced over. The lines are fetched the first time the cell is hovered (`GET
+/team/<TEAM>/props/<player>/<stat>`, `_nba_props.html`; about a second the first time after the odds moved, then at once),
+so the card itself and Refigure stay quick. A line the book posted before the player was last downgraded (to an out status, or out
 of the starting five) is struck through and the header says how many are set aside and when he moved: those lines priced his
 old role and the projection does not read them; an upgrade never sets lines aside and one back out of a downgrade counts them
 again (`changes.mark_status_changes` at the refresh, `touch_status` on a hand starter call; [../nba/projections.md](../nba/projections.md),

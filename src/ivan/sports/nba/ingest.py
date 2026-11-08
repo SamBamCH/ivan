@@ -24,6 +24,7 @@ from typing import Iterable, Callable, Optional
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ivan.core import raw
@@ -328,6 +329,48 @@ def store_props(session: Session, odds: pd.DataFrame) -> int:
     return int(len(odds))
 
 
+def odds_stamp(session: Session) -> tuple:
+    """(rows, max id) of the odds table: a props fetch replaces the rows of the games it priced, so the stamp moves with every fetch
+    (the books' own last_update does not: a fetch stores the books' timestamps, which predate it). (0, None) without the table."""
+    try:
+        n, m = session.execute(text("select count(*), max(id) from odds")).one()
+        return (int(n or 0), None if m is None else int(m))
+    except Exception:   # noqa: BLE001
+        return (0, None)
+
+
+def market_rates_current(session: Session) -> bool:
+    """False when the odds table is not the one this slate's market rates were built from (the stamp store_market_rates kept on the
+    rows against odds_stamp now). The rates are a snapshot taken when the slate stored them, and the table is shared by the day's
+    slates and moves with every props fetch, for this slate or another (2026-11-07: a slate's rates said Traore 12.2 points from an
+    earlier fetch while the table, replaced by a later one, held his 18.5 lines; the slate never knew). Without odds, or without a
+    pool, the rates are as current as they can be; rates from before the stamp count as moved once."""
+    n, max_id = odds_stamp(session)
+    if not n:
+        return True
+    row = session.execute(text("select odds_rows, odds_max_id from nba_market_rate limit 1")).first()
+    if row is None:
+        return False
+    return row[0] == n and row[1] == max_id
+
+
+def ensure_market_rates(session: Session, history=None, log: Log = print) -> bool:
+    """Rebuild this pool's market rates when the odds table moved since they were built (market_rates_current), past the status
+    cutoffs (refresh_market_rates). The desk checks on each request (Desk.follow_odds, throttled) and project_slate before it
+    projects, so a publish or an edit reads the books as they stand, not as they stood at the slate's refresh. Returns True when
+    the rates were rebuilt (the caller re-reads them)."""
+    if market_rates_current(session):
+        return False
+    players = session.query(NBAPlayer).all()
+    if not players:
+        return False
+    names = {normalize_name(p.name): p for p in players}
+    n = refresh_market_rates(session, {k: p.gametime for k, p in names.items()}, set(names), history=history)
+    session.commit()
+    log(f"the books moved since this slate's market rates were built: {n} rates rebuilt")
+    return True
+
+
 def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=None) -> int:
     """This pool's market rates (nba_market_rate) from the props of its own games only (market.fresh_odds: the row's game is the
     player's game on this slate; a player the books did not price tonight gets no market rate rather than his last game's), the
@@ -335,6 +378,7 @@ def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=N
     role; he projects from history until the books post again). Called by the store and by the desk's starter call. Returns the
     rates stored; with no usable row at all the table is left as it was. `history`: (box, HistoryState) already built (the desk's),
     to skip the box-score load."""
+    stamp = odds_stamp(session)                               # the table the means come from, kept on the rates (market_rates_current)
     odds_df = fresh_odds(session, gametimes, cutoffs=CH.status_cutoffs(session))
     if not len(odds_df):
         return 0
@@ -344,7 +388,7 @@ def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=N
     means = market_means(odds_df)
     slate = LiveSlate(session, use_market=False, history=history)
     basis = basis_minutes_for_market(slate, read_overrides_full(), set())
-    return store_market_rates(session, means, basis)
+    return store_market_rates(session, means, basis, odds_stamp=stamp)
 
 
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
@@ -491,6 +535,7 @@ def project_slate(session: Session, *, n_sims: Optional[int] = None, write_captu
     """Project the slate (or `teams` of it) through project_team, commit, then the capture rows and the projections CSV.
     n_sims defaults to config/nba.json projection.n_sims: the one number every path projects at."""
     info = ProjectInfo()
+    ensure_market_rates(session, log=log)                   # the books as they stand, not as they stood at the slate's refresh
     slate = LiveSlate(session)
     if not slate.players:
         raise IngestError("no players in nba_player")

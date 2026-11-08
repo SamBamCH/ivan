@@ -218,3 +218,26 @@ def test_status_marks_carry_across_the_pool_replace_and_move_on_a_downgrade(root
         assert not CH.touch_status(sess, "nobody", now=t2)
     sess.close()
 
+
+def test_market_rates_are_current_only_for_the_odds_table_they_were_built_from(root, monkeypatch):
+    """ingest.market_rates_current: the rates carry the odds table's (rows, max id) at their build; a props fetch replaces rows, so a
+    different stamp means the books moved. No odds at all: current. Rates without a stamp (from before it): moved, once."""
+    import pandas as pd
+    from ivan.sports.nba import ingest as I
+    from ivan.sports.nba.projection.live import store_market_rates
+    S.create(600, lock=datetime(2026, 11, 7, 19, 0), games=2)
+    sess = S.session(600)
+    with S.using(600):
+        monkeypatch.setattr(I, "odds_stamp", lambda session: (0, None))
+        assert I.market_rates_current(sess)                                                     # no odds: nothing to follow
+        monkeypatch.setattr(I, "odds_stamp", lambda session: (500, 9000))
+        assert not I.market_rates_current(sess)                                                 # odds, no rates yet: build them
+        means = pd.DataFrame([dict(player="a one", stat="points", mean=20.0, pairs=4, books=3, line=19.5)])
+        store_market_rates(sess, means, {"a one": 30.0}, odds_stamp=(500, 9000)); sess.commit()
+        assert I.market_rates_current(sess)
+        monkeypatch.setattr(I, "odds_stamp", lambda session: (520, 9400))                      # a fetch replaced rows
+        assert not I.market_rates_current(sess)
+        store_market_rates(sess, means, {"a one": 30.0}); sess.commit()                       # rates from before the stamp
+        assert not I.market_rates_current(sess)
+    sess.close()
+

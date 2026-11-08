@@ -528,6 +528,7 @@
     popPend = td; popTimer = setTimeout(() => { popPend = null; popShow(td); }, 180);
   });
   document.documentElement.addEventListener("mouseleave", () => { popPend = null; popHide(); });
+  document.body.addEventListener("htmx:afterSwap", e => { const td = e.detail.target && e.detail.target.closest ? e.detail.target.closest("td.hover") : null; if (td && td === popCell) popShow(td); });   // the hover's lines arrived: size it again
   window.addEventListener("scroll", popHide, true);
   // the exposures table's filters: text (player / team / pos), team, status, a minimum exposure
   window.expFilter = function () {

@@ -442,8 +442,11 @@ def test_nba_grid_stat_columns_pin_a_total(open_site):
     for st in STAT_ORDER:
         assert f'name="{st}"' in r.text and f'data-pin="{st}"' in r.text
     assert r.text.count('class="px n hover statcell') >= 7 * 5                               # a cell per stat per row
-    assert "not priced for this game: history" in r.text or "<th>book</th>" in r.text         # the hover: the books' lines, or why not
+    assert 'hx-trigger="mouseenter once"' in r.text and "loading the books' lines" in r.text  # the hover is fetched when hovered
     key = d.proj[team].index[0]
+    h = open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/points")
+    assert h.status_code == 200 and ("<th>book</th>" in h.text or "not priced for this game: history" in h.text)   # the books' lines, or why not
+    assert open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/nope").status_code == 404
     old = override_of(d.overrides, key)
     before_pts, before_reb = float(d.proj[team].loc[key, "proj_points"]), float(d.proj[team].loc[key, "proj_rebounds"])
     try:

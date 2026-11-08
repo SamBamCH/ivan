@@ -8,7 +8,7 @@ from ivan.sports.nba import scenarios as SC
 from typing import Optional
 import numpy as np
 import pandas as pd
-from fastapi import Form, Request
+from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from ivan.core.utils import normalize_name
 from ivan.sports.nba import changes as CH
@@ -152,6 +152,19 @@ def starter_toggle(request: Request, team: str, player: str = Form(...)):
             desk.session.rollback(); desk.flash.append(f"{key}: starter call saved; market rates not rebuilt ({type(e).__name__}: {e})")
         desk.reproject(team)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
+@slate.get("/team/{team}/props/{player}/{stat}", response_class=HTMLResponse)
+def props_hover(request: Request, team: str, player: str, stat: str):
+    """The stat cell's hover, fetched the first time the cell is hovered (htmx, mouseenter once): every book's line and price for the
+    player's stat tonight (Desk.stat_hover; `_nba_props.html`). Built on request so the card itself stays quick (2026-11-07: building
+    every player's lines into the card made Refigure slow)."""
+    from ivan.sports.nba.desk.rows import STAT_ORDER
+    if stat not in STAT_ORDER:
+        raise HTTPException(status_code=404, detail=f"no stat {stat}")
+    with LOCK:
+        desk.maybe_reload()
+        return _render(request, "_nba_props.html", s=desk.stat_hover(team, normalize_name(player), stat))
 
 
 @slate.get("/team/{team}/rotation", response_class=HTMLResponse)

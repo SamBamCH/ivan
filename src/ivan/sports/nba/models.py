@@ -186,6 +186,8 @@ class NBAMarketRate(NBABase):
     books           = Column(Integer, nullable=True)
     line            = Column(Float,   nullable=True)
     fetched_at      = Column(DateTime, nullable=True)
+    odds_rows       = Column(Integer, nullable=True)   # the odds table as it stood when the rates were built (rows, max id): a props fetch
+    odds_max_id     = Column(Integer, nullable=True)   # replaces rows, so a different stamp means the books moved (ingest.market_rates_current)
 
 
 class LineupPool(NBABase):
