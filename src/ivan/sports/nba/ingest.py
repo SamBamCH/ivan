@@ -35,13 +35,13 @@ from ivan.database.session import add_missing_columns
 from ivan.sports.common.draftkings import (get_players_for_slate, _derive_opponent_for_player,
                                            _parse_gametime_to_local, list_slates)
 from ivan.sports.common.odds import get_game_odds, get_odds, parse_game_odds, parse_odds
-from ivan.sports.nba.historical.data_fetch import fetch_rotowire_html, parse_rotowire, store_starting_lineups
+from ivan.sports.nba.data_fetch.boxscores import fetch_rotowire_html, parse_rotowire, store_starting_lineups
 from ivan.sports.nba.models import (NBABase, NBAGameOdds, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
-from ivan.sports.nba import changes as CH
+from ivan.sports.nba.slate import changes as CH
 from ivan.sports.nba.projection.market import NBA_MARKETS, fresh_odds, market_means
 
 Log = Callable[[str], None]
@@ -478,7 +478,7 @@ def market_fpts_by_player(session: Session) -> dict[str, float]:
 def refresh_public_projection(session: Session, log: Log = print) -> dict:
     """The public projection alone (public_field.refresh_public_projection), a second or two; the field is not touched."""
     try:
-        from ivan.sports.nba.public_field import refresh_public_projection as _refresh
+        from ivan.sports.nba.field.public_field import refresh_public_projection as _refresh
         slate = LiveSlate(session, use_starters=False, use_market=False)
         return _refresh(session, slate.hist, log=log)
     except Exception as e:   # noqa: BLE001 - the public side is a by-product; the pool and the projection stand
@@ -489,7 +489,7 @@ def refresh_field(session: Session, log: Log = print) -> dict:
     """The public field and ownership on the stored public projection (public_field.refresh_field_ownership): about a
     minute when a public number moved since the cached field, at once otherwise. Run after the pool is committed."""
     try:
-        from ivan.sports.nba.public_field import refresh_field_ownership
+        from ivan.sports.nba.field.public_field import refresh_field_ownership
         return refresh_field_ownership(session, log=log)
     except Exception as e:   # noqa: BLE001
         session.rollback(); log(f"field refresh failed: {type(e).__name__}: {e}"); return {}
@@ -499,7 +499,7 @@ def refresh_ownership(session: Session, log: Log = print) -> dict:
     """The public projection, the field and ownership from the pool and props as stored (public_field.refresh_public).
     Runs with every pool refresh (store_slate); Publish never touches it, so our edits cannot move ownership."""
     try:
-        from ivan.sports.nba.public_field import refresh_public
+        from ivan.sports.nba.field.public_field import refresh_public
         slate = LiveSlate(session, use_market=False)
         return refresh_public(session, slate.hist, log=log)
     except Exception as e:   # noqa: BLE001 - never fails a pool refresh
@@ -687,11 +687,11 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
     it) is stored as given instead of fetching again. news=True (the default) also reads Rotowire's news page after the commit
     (newsfeed.check, free, about a second; a failure is logged, never raised) and links the slate's headlines to the slate
     (nba_slate_news), so every refresh brings the headlines with the statuses and the slate's pre-lock news is on record.
-    out["changes"] is what the refresh moved per team (ivan.sports.nba.changes: statuses, the lineups, the pool, projections that
+    out["changes"] is what the refresh moved per team (ivan.sports.nba.slate.changes: statuses, the lineups, the pool, projections that
     moved, new headlines), also logged. The slate's record (slates/<dg>/slate.json) notes the lock, the games and who refreshed
     it when (`by`: desk | autopilot | script | feed).
     """
-    from ivan.sports.nba import changes as CH
+    from ivan.sports.nba.slate import changes as CH
     dg = int(draft_group_id)
     with S.using(dg):
         held = session.query(NBAPlayer.draft_group_id).first()
@@ -723,8 +723,8 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
 
 
 def void_stale_mappings(session: Session, log: Log = print) -> list:
-    """The mappings a player now out makes void (ivan.sports.nba.mapping.void_stale), with this machine's pins file rewritten."""
-    from ivan.sports.nba import mapping as MAP
+    """The mappings a player now out makes void (ivan.sports.nba.slate.mapping.void_stale), with this machine's pins file rewritten."""
+    from ivan.sports.nba.slate import mapping as MAP
     from ivan.sports.nba.projection.live import write_overrides
     local = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}
     voided = MAP.void_stale(session, local, log=log)
@@ -737,7 +737,7 @@ def check_news(session, log: Log = print, draft_group_id: Optional[int] = None) 
     """Rotowire's news page into nba_news (newsfeed.check) for a refresh: None and a log line when it fails. With a draft group,
     every headline of the slate's teams now on file is linked to the slate (nba_slate_news, once per headline and slate), so
     the slate's pre-lock news is nba_news joined through that table."""
-    from ivan.sports.nba import newsfeed
+    from ivan.sports.nba.data_fetch import newsfeed
     with S.WRITE_LOCK:                                      # the headlines table is shared: two slates refreshing together write it in turn
         try:
             out = newsfeed.check(session, log=log)

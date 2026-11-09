@@ -7,10 +7,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ivan.sports.nba import results as R
+from ivan.sports.nba.backtest import results as R
 from ivan.sports.nba import slates as SL
 from ivan.sports.nba.models import ContestPayout, HistoricalContest, NBABase
-from ivan.sports.nba.standings import parse_export
+from ivan.sports.nba.data_fetch.standings import parse_export
 
 HEAD = "Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS\n"
 LINEUP = "PG Ann One SG Bob Two SF Cal Three PF Dan Four C Ed Five G Fay Six F Gus Seven UTIL Hal Eight"

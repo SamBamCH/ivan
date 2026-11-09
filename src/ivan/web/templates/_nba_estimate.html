@@ -1,4 +1,4 @@
-{# the time estimate under a step's knobs (ivan.web.nba.pipeline.pipeline_estimate / ivan.sports.nba.job_time): how long, done when,
+{# the time estimate under a step's knobs (ivan.web.nba.pipeline.pipeline_estimate / ivan.sports.nba.slate.job_time): how long, done when,
    against the slate's lock (the late swap: the next tip); re-read as the knobs change. late = would end inside the margin. Advice
    only: the run starts whatever the verdict, with a "heads up" flash #}
 <span class="est {{ verdict }}" title="from this machine's last {{ est.n }} {{ step }} run(s){% if est.basis == 'default' %} (fewer than needed: a conservative default){% endif %}; the run should leave {{ margin|int }} min before {{ label }}">

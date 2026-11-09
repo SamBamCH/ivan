@@ -84,7 +84,7 @@ def games_of(cards: list[dict], now: datetime) -> list[dict]:
 
 def _blank_header(now: datetime) -> dict:
     """The header of a page outside a held slate (a slate being fetched, a past slate's backtest): the shared index, no pool."""
-    from ivan.sports.nba import autopilot
+    from ivan.sports.nba.slate import autopilot
     from ivan.core import feed
     return dict(draft_group=None, lock=None, mins_to_lock=None, n_lineups=0, pool_at=None, n_players=0, n_priced=0, starters_at=None, odds_at=None,
                 stale=False, fresh=[], slate_days=LOBBY.slate_days(now), meta={}, refreshed_at=None, refreshed_by=None, pulled_at=None, published_at=None,
@@ -105,7 +105,7 @@ def _shell(request: Request, view: Optional[str], team: Optional[str], page: Opt
     renders as usual with a banner (its edits wait); only a slate with no desk yet shows the spinner alone.
     `note` is why a load did not start (the load card says so).
     """
-    from ivan.sports.nba.slate_backtest import mode_for
+    from ivan.sports.nba.backtest.slate import mode_for
     d = bound()
     days = _days_of(header["slate_days"], now)
     if page is None and d is not None:
@@ -209,9 +209,9 @@ def team_page(request: Request, day: str, key: str, team: str):
 
 
 def _backtest_board(request: Request, dg: Optional[int]):
-    """A slate's backtest, read only (ivan.sports.nba.slate_backtest = scripts/nba/backtest_slate.py): nothing is loaded or deleted.
+    """A slate's backtest, read only (ivan.sports.nba.backtest.slate = scripts/nba/backtest_slate.py): nothing is loaded or deleted.
     A held slate is read through its own database (its contests, lineups and sims), another through the history (its captures)."""
-    from ivan.sports.nba import slate_backtest as SB
+    from ivan.sports.nba.backtest import slate as SB
     if dg is None:
         return _render(request, "_nba_board.html", busy=None, view="backtest", bt=None, bt_error="no slate picked", menu=[], games=[], players=[],
                        lateswap=None, exposures=None, card=None, game=None, open_team=None)

@@ -3,7 +3,7 @@
 scripts/nba/validate.py
 
 The minutes / per-minute model against what happened, and what to check before lock
-(ivan.sports.nba.validation).
+(ivan.sports.nba.backtest.validation).
 
     scripts/nba/validate.py scorecard                      every slate with box scores and no scorecard yet
     scripts/nba/validate.py scorecard --draft-group 154575 [--force]
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
-from ivan.sports.nba import validation as V
+from ivan.sports.nba.backtest import validation as V
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, read_overrides
 from ivan.sports.nba import slates as S

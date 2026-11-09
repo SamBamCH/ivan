@@ -4,22 +4,22 @@ Three stage modules with the same shapes as the NFL ones, each wrapped by one sc
 
 | Stage | Module | Script |
 |---|---|---|
-| Generate the candidate pool | `ivan.sports.nba.field_generation.generate_field` | `scripts/nba/generate_lineups.py N JOBS` |
-| The field (who else is in the contest) | `ivan.sports.nba.field_model`, `public_field` | (inside the sim) |
-| Simulate each contest | `ivan.sports.nba.simulate_contest.simulate_entries` | `scripts/nba/sim.py` |
-| Choose | `ivan.sports.nba.choose` + `lineup_export.run_choose` (numerics in `ivan.core.chooser`, `ivan.core.portfolio`, `ivan.core.slate_book`) | `scripts/nba/choose.py` |
+| Generate the candidate pool | `ivan.sports.nba.field.generate.generate_field` | `scripts/nba/generate_lineups.py N JOBS` |
+| The field (who else is in the contest) | `ivan.sports.nba.field.model`, `public_field` | (inside the sim) |
+| Simulate each contest | `ivan.sports.nba.contest.simulate.simulate_entries` | `scripts/nba/sim.py` |
+| Choose | `ivan.sports.nba.contest.choose` + `contest.export.run_choose` (numerics in `ivan.core.chooser`, `ivan.core.portfolio`, `ivan.core.slate_book`) | `scripts/nba/choose.py` |
 
-## Generate (`field_generation.py`, `pre_lock/`)
+## Generate (`field/generate.py`, `field/solver.py`)
 
 ```bash
 venv/bin/python scripts/nba/generate_lineups.py 10000 8 [--fresh] [--randomness 0.25] [--min-fpts 260] [--no-progress]
 ```
 
 The count is split over worker processes. Each worker opens its own session, draws the slate's games
-(`pre_lock.player.generate_player_samples`: the game simulation, `ivan.sports.nba.gamesim.world.World`, up to 2,000
+(`gamesim.draw.generate_player_samples`: the game simulation, `ivan.sports.nba.gamesim.world.World`, up to 2,000
 worlds per call and resampled beyond that, every player's points in a world coming from the same simulated game) and
 solves one classic lineup per jittered sample
-(`pre_lock.lineup_generation.generate_single_classic_lineup`, an ILP under DK's roster PG/SG/SF/PF/C/G/F/UTIL,
+(`field.solver.generate_single_classic_lineup`, an ILP under DK's roster PG/SG/SF/PF/C/G/F/UTIL,
 salary cap, min salary, max salary per team). Duplicate compositions are removed at the end. Draws are
 seeded from `IVAN_SEED` when set.
 
@@ -32,23 +32,23 @@ the worlds around the mean), `jitter` 0.05, `min_fpts` or `min_fpts_frac` 0.9 of
 without it a second run adds to the pool, which is how two scenarios' lineups sit side by side
 before lock. The generate step writes nothing else (no field, no ownership, since 2026-10-28).
 
-## The field (`field_model.py`, `public_field.py`)
+## The field (`field/model.py`, `field/public_field.py`)
 
 The field is **its own lineups** (since 2026-10-23), simulated from the fitted two-group model
 (`data/nba/models/field_two_group.json`) on the **public projection** (`pub_fpts`, the Stokastic replica),
 cached by a key made from the public projection alone so an edit to our numbers cannot move it. Every
-candidate in our pool is scored against it (`simulate_contest.simulate_vs_field`). `field.cap` 10000 is
+candidate in our pool is scored against it (`contest.simulate.simulate_vs_field`). `field.cap` 10000 is
 the largest field size simulated; bigger contests are sampled down and the payout table scaled.
 
 The two-group field is cached on disk by its key (`data/nba/derived/field_cache/<key>.json`) and any
 smaller size is served from a bigger cached field. Only two things build it: the sim, once per run at
-the largest size any contest needs (`simulate_contest.prebuild_field`, every contest slicing it; the
+the largest size any contest needs (`contest.simulate.prebuild_field`, every contest slicing it; the
 largest contest's field is written as `nba_player.ownership`), and the desk's **Field + ownership**
 button / `scripts/nba/field_ownership.py` (`ingest.refresh_field`, `field.ownership_entries` =
 3,000 by default), on demand. A refresh, a generate and a pub edit never build it (2026-10-28). A
 build is an ILP per lineup: about 45 seconds for 3,000 entries, 160 for 10,000, on eight workers.
 
-`field_model.py` is the ownership model fitted on real contests only (`scripts/nba/field_model.py
+`field/model.py` is the ownership model fitted on real contests only (`scripts/nba/field_model.py
 validate | fit | check`): a softmax inside each contest scaled to 800% (eight slots) over public
 features (salary, position, DK FPPG, status, Rotowire starters, the props-based public projection,
 the game lines, plain box-score history), with a temperature that depends on entries, fee and games.
@@ -56,9 +56,9 @@ It sees only what the public saw at lock (the archive capture the contest was ma
 projections. Fitting needs derived contests from the standings scrape ([overnight.md](overnight.md)).
 The DK lobby's %Drafted is **not** lineup ownership; the field's shape is per slate
 (finding 2026-10-23). How far the field and its ownership are from the real fields of the season, contest by contest,
-is `scripts/nba/backtest_field.py` ([validation-and-backtests.md](validation-and-backtests.md#the-field-backtest-ivansportsnbafield_backtest-scriptsnbabacktest_fieldpy)).
+is `scripts/nba/backtest_field.py` ([validation-and-backtests.md](validation-and-backtests.md#the-field-backtest-ivansportsnbabacktestfield-scriptsnbabacktest_fieldpy)).
 
-## Simulate (`simulate_contest.py`)
+## Simulate (`contest/simulate.py`)
 
 ```bash
 venv/bin/python scripts/nba/sim.py [--entries data/nba/input/entries.csv] [-n 1000] [-c 10000]
@@ -75,7 +75,7 @@ earlier rows are replaced). Each contest also leaves a sim artifact (`data/nba/o
 row + `data/nba/diagnostics/<contest name>_<id>/report.json`) with the field's shape, the payout scaling,
 the score distribution and the conservation checks (the field should collect the whole prize pool).
 
-**One draw per run.** The players' points are drawn once per sim run (`simulate_contest.slate_draw`, seed
+**One draw per run.** The players' points are drawn once per sim run (`contest.simulate.slate_draw`, seed
 `sim/slate` under `IVAN_SEED`) and every contest scores its field and candidates in those same worlds, so world
 *w* is the same games in every contest and the slate chooser can add the contests' results world by world. The
 report records it as `contest.draw = "slate"` (a contest simulated on its own would say `"contest"`, and the slate
@@ -101,7 +101,7 @@ calibrate-world --slate DG`, stored as `world_*` in `data/nba/models/gamesim/scr
 draw-world --slate DG` draws a slate and prints the moments, the reconciliation factors and every player's line against
 the pool. A thousand worlds of a four-game slate take about six seconds.
 
-## Choose (`choose.py`, `lineup_export.py`)
+## Choose (`contest/choose.py`, `contest/export.py`)
 
 ```bash
 venv/bin/python scripts/nba/choose.py                                   # prompts for weights per contest
@@ -154,7 +154,7 @@ Downloads list serves the CSVs; `/export/lineups.csv` streams the whole generate
 After lock the swap plays against the **real** field: the contest's standings export (fetched as a step of
 its own, reused until the next tip), its open slots completed by the optimiser; by default one export,
 the biggest contest's, completed once and sampled at every contest's size. See
-[game-day.md](game-day.md) step 7 and `src/ivan/sports/nba/post_lock/lateswap.py`.
+[game-day.md](game-day.md) step 7 and `src/ivan/sports/nba/lateswap/swap.py`.
 
 ## Reading a sim report
 

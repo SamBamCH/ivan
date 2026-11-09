@@ -1,8 +1,8 @@
-"""Stint reconstruction from the play-by-play (ivan.sports.nba.pbp) and the segment grid."""
+"""Stint reconstruction from the play-by-play (ivan.sports.nba.data_fetch.pbp) and the segment grid."""
 import numpy as np
 import pandas as pd
 
-from ivan.sports.nba import pbp as P
+from ivan.sports.nba.data_fetch import pbp as P
 
 
 def _pbp(rows):
@@ -117,7 +117,7 @@ def test_substitution_pairs_are_collected_with_the_stints():
 def test_score_by_minute():
     """The running score at the end of each minute; overtime folded into the last one; the home team from the first basket."""
     import pandas as pd
-    from ivan.sports.nba.pbp import score_by_minute
+    from ivan.sports.nba.data_fetch.pbp import score_by_minute
     rows = [
         dict(actionNumber=1, period=1, clock="PT11M30.00S", teamTricode="AWY", scoreHome="0", scoreAway="2"),   # 0:30: the away side scores
         dict(actionNumber=2, period=1, clock="PT10M10.00S", teamTricode="HOM", scoreHome="3", scoreAway="2"),   # 1:50

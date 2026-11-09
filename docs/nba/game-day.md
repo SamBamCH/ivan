@@ -91,7 +91,7 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 - **call a starter** (toggle) when Rotowire has not confirmed yet; a call that benches him sets his props posted before the
   call aside until the books post him again (so does a refresh that rules a player out or drops him from the five; an upgrade
   never does).
-- **a player ruled out voids the team's mapping** (`ivan.sports.nba.mapping`, inside every refresh and before every
+- **a player ruled out voids the team's mapping** (`ivan.sports.nba.slate.mapping`, inside every refresh and before every
   re-projection on the desk; `scripts/nba/mapping.py --slate DG` from a terminal). The mapping was made against a pool the
   grid's fingerprint recorded; when one of those players is OUT (DK's status or a scratch call here), the grid and the
   team's positive minutes pins go, the model initialises the new pool itself (the last game's rotation minus the outs,
@@ -111,7 +111,7 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 - **scenarios**: save the team's edits under a name ("Giannis out"); the scenario whose assumptions all
   hold activates itself when a refresh or a call changes the facts.
 - **News** comes with every Refresh: the pool refresh (`ingest.run_ingest`, so `ingest.py` and the autopilot tick
-  too) reads Rotowire's news page after the commit (`ivan.sports.nba.newsfeed`); the news auto box also reads it every
+  too) reads Rotowire's news page after the commit (`ivan.sports.nba.data_fetch.newsfeed`); the news auto box also reads it every
   5 minutes while the desk runs. The header counts the slate's open questions (Q/GTD/D/P players with no call).
 - **the news table** (on the slate page; `scripts/nba/newsfeed.py slate` in a terminal) is where to start:
   the slate's questionable players first, one row each with the model's minutes, your call and the last
@@ -146,7 +146,7 @@ When a refresh, a **Field + ownership** build or a sim finishes, the page reload
 ## 5. Generate, simulate, choose
 
 **How long will it take?** Before a job starts the desk estimates it from this machine's past runs
-(`ivan.sports.nba.job_time`, shown under the Generate and Sim knobs and in the job's status line) and checks the end against
+(`ivan.sports.nba.slate.job_time`, shown under the Generate and Sim knobs and in the job's status line) and checks the end against
 the slate's lock less 5 minutes: a run that would end inside that margin is flagged red and starts with a **heads up** in
 the flash; nothing is refused (2026-11-03: a sim too big for the time left missed lock; the refusal that followed was
 dropped on 2026-11-05 when it held a 56 s sim two minutes before lock). From a terminal:
@@ -223,8 +223,8 @@ and `.json` (the desk's late swap view, which names the export each field came f
 late swap tab runs the same script and has an upload box for standings CSVs exported by hand
 (`/lateswap/standings`), which the stored sources then read.
 
-`--live` uses NBA's public live feed (`post_lock/live.py`) and the in-game update
-(`post_lock/ingame.py`): banked points plus a draw of the rest of the game under the live score.
+`--live` uses NBA's public live feed (`data_fetch/live.py`) and the in-game update
+(`lateswap/ingame.py`): banked points plus a draw of the rest of the game under the live score.
 
 ## 8. The next morning
 

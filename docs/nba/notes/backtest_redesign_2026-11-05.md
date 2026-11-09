@@ -44,7 +44,7 @@ every tip gets its record, and a game's backtest reads the newest tip at or befo
 
 ```
 data/nba/slates/<dg>/
-  tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.tips; BUILT 2026-11-05, archive_at_lock writes it)
+  tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.backtest.tips; BUILT 2026-11-05, archive_at_lock writes it)
     meta.json                 the tip, when written, the teams tipping, the counts, where each part came from
     players.json              the pool as the desk showed it: salary, status, starter, minutes and points projected, p_out, ownership,
                               pub_fpts, the grid row (rotation_cells)
@@ -53,7 +53,7 @@ data/nba/slates/<dg>/
     game_lines.json           spreads and totals for the slate's games
     news.json                 the slate's news seen by then (nba_slate_news x nba_news)
     edits/                    a copy of the day's edits (minutes_overrides.csv, rotations/, scenarios/) as they stood
-  results/ledger.json         the money (ivan.sports.nba.results; BUILT 2026-11-05): per contest from the final exports, cached, complete
+  results/ledger.json         the money (ivan.sports.nba.backtest.results; BUILT 2026-11-05): per contest from the final exports, cached, complete
                               once every contest has one
   input/, output/, slate.sqlite, projection/   the live slate as today (the desk's working state; post-lock after the last refresh)
 ```

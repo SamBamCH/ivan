@@ -1,6 +1,6 @@
 """
 The backtest view's "current code" block: a past slate rerun from its tip record by the game simulation
-(ivan.sports.nba.gamesim.rerun = scripts/nba/rerun_slate.py), scored layer by layer against the actuals, every player's
+(ivan.sports.nba.backtest.rerun = scripts/nba/rerun_slate.py), scored layer by layer against the actuals, every player's
 drawn distribution of a stat with his actual inside it.
 
     GET  /<day>/<dg>/rerun?stat=fpts     the block (polls itself while a rerun job of this slate runs)
@@ -15,8 +15,8 @@ from typing import Optional
 from fastapi import Form, Request
 from fastapi.responses import HTMLResponse
 
-from ivan.sports.nba.gamesim import rerun as RR
-from ivan.sports.nba import tips as T
+from ivan.sports.nba.backtest import rerun as RR
+from ivan.sports.nba.backtest import tips as T
 from .core import _render, runner, slate, slate_jobs
 
 SCRIPTS = Path(__file__).resolve().parents[4] / "scripts" / "nba"

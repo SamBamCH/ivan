@@ -36,8 +36,10 @@ ingest ──► project ──► generate the field's candidate lineups ──
 | choose | the sim results | the DK upload CSV, exposures, lineups, choose json, simroi npz | `core.chooser` (greedy quality, empirical-Bayes shrinkage, cross-fit, the stats and viz every run writes), `core.portfolio` (log-utility book, the greedy and exchange pass of the slate book), `core.slate_book` (the slate as one book, NFL and NBA) |
 | validate / settle | artifacts + box scores + real standings | scorecards, validation reports, slate status | `core.validation`, `core.slates` |
 
-The sport modules mirror each other by name (`ingest.py`, `field_generation.py`, `simulate_contest.py`,
-`choose.py`, `lineup_export.py`, `validation.py`, `standings.py`, `contests.py`, `paths.py`), so a
+The NFL and MMA modules mirror each other by name (`ingest.py`, `field_generation.py`, `simulate_contest.py`,
+`choose.py`, `lineup_export.py`, `validation.py`, `standings.py`, `contests.py`, `paths.py`); the NBA package is laid
+out by stage instead (`data_fetch/`, `data_clean/`, `projection/`, `gamesim/`, `field/`, `contest/`, `lateswap/`,
+`backtest/`, `slate/`, `desk/`; the map is its `__init__.py` and [nba/README.md](nba/README.md)), so a
 question answered for one sport usually points at the same file in another.
 
 ## `ivan.core`

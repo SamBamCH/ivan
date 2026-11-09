@@ -1,4 +1,4 @@
-"""The choose step (ivan.sports.nba.lineup_export): entries parsing, weights, slot order, the files it writes; and the chooser (choose)."""
+"""The choose step (ivan.sports.nba.contest.export): entries parsing, weights, slot order, the files it writes; and the chooser (choose)."""
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ivan.sports.nba import choose as CH
-from ivan.sports.nba import lineup_export as LE
+from ivan.sports.nba.contest import choose as CH
+from ivan.sports.nba.contest import export as LE
 from ivan.sports.nba.models import HistoricalContest, Lineup, LineupSimulationResult, NBABase, NBAPlayer
 
 

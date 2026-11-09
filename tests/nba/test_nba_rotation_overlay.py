@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from ivan.core import archive
-from ivan.sports.nba import slate_backtest as SB
+from ivan.sports.nba.backtest import slate as SB
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.desk.rotation import RotationMixin
 

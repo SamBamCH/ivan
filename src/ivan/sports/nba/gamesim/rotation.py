@@ -42,7 +42,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ivan.sports.nba.gamesim.fouls import DEFAULT_FLOW
-from ivan.sports.nba.pbp import garbage_threshold
+from ivan.sports.nba.data_fetch.pbp import garbage_threshold
 from ivan.sports.nba.projection.rotation import JITTER_SCALE, default_spread, sub_events
 
 MINUTES = 48
@@ -304,7 +304,7 @@ def draw(grid: pd.DataFrame, spreads: Dict[str, float], n: int, rng: np.random.G
 # ----------------------------------------------------------------------------- the check
 def real_margin_path(session: Session, game_id: str, team: str) -> Optional[Tuple[np.ndarray, int]]:
     """(the team's lead at the end of each of the 48 minutes, overtime periods) from the stored feed; None without one."""
-    from ivan.sports.nba import pbp as P
+    from ivan.sports.nba.data_fetch import pbp as P
     sc = P.game_score(str(game_id))
     if not sc or team not in sc:
         return None

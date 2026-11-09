@@ -3,8 +3,23 @@
 DraftKings NBA classic slates: the laptop fetches the slate and the books, projects every player as
 minutes times per-minute rates, builds a field, simulates the contests you entered and picks the
 lineups to upload. A second machine (the server) runs the same desk for someone else on the
-projections the laptop publishes. Everything lives in `src/ivan/sports/nba/`, the commands in
-`scripts/nba/`, the desk in `src/ivan/web/nba/` (its model in `src/ivan/sports/nba/desk/`).
+projections the laptop publishes. The code is `src/ivan/sports/nba/`, one package per stage in the order the
+process runs; the commands are `scripts/nba/`, the desk's pages `src/ivan/web/nba/`.
+
+```
+src/ivan/sports/nba/
+  models.py  slates.py  ingest.py  names.py  scoring.py  paths.py  utils.py
+  data_fetch/   contests, newsfeed, boxscores, pbp, live, standings, experience    what talks to the outside world
+  data_clean/   boxscores                                                          fetched payloads into the tables
+  projection/   market, history, solve, skeleton, rotation, rates, fpts, engine, live, store   a player's projection
+  gamesim/      script, rotation, usage, profiles, world, draw                     the games simulated, n worlds at once
+  field/        public_projection, public_field, model, generate, solver            the public's field; our candidate pool
+  contest/      simulate, choose, export                                            each contest simulated, lineups chosen
+  lateswap/     swap, ingame, entry_parsing                                         after lock
+  backtest/     validation, slate, results, readiness, field, tips, rerun           how it went, how right the model was
+  slate/        autopilot, changes, mapping, scenarios, notes, considerations, job_time   the desk's working files
+  desk/         the Desk object the pages render
+```
 
 Read in this order:
 

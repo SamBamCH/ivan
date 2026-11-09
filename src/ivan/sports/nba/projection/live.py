@@ -219,7 +219,7 @@ class LiveSlate:
         the solve's minutes and comes back in this dict under "grid". None when nobody is available.
         """
         from .rotation import boundary_spreads, curves, load_locks
-        from ivan.sports.nba.pbp import sub_shares
+        from ivan.sports.nba.data_fetch.pbp import sub_shares
         roster = self.roster(team, overrides, forced_out)
         avail = [p.name for p in roster if p.available]
         if not avail:

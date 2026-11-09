@@ -1,4 +1,4 @@
-"""The field backtest (ivan.sports.nba.field_backtest): real fields against the model's, the metrics and the report."""
+"""The field backtest (ivan.sports.nba.backtest.field): real fields against the model's, the metrics and the report."""
 import json
 from datetime import datetime
 
@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ivan.sports.nba import field_backtest as FB
+from ivan.sports.nba.backtest import field as FB
 
 IDS = list(range(101, 113))                      # twelve players, eight per lineup
 

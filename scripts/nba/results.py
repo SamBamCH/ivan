@@ -2,7 +2,7 @@
 """
 scripts/nba/results.py
 
-The money, from DraftKings' final standings exports and the payout tables (ivan.sports.nba.results): what the picker's
+The money, from DraftKings' final standings exports and the payout tables (ivan.sports.nba.backtest.results): what the picker's
 season strip, the day headings and the home tile show, in the terminal.
 
     scripts/nba/results.py                       every held past slate summed per day and overall (the cached ledgers; incomplete slates re-checked)
@@ -12,7 +12,7 @@ season strip, the day headings and the home tile show, in the terminal.
 import argparse
 from datetime import datetime
 
-from ivan.sports.nba import results as R
+from ivan.sports.nba.backtest import results as R
 from ivan.sports.nba import slates as S
 
 

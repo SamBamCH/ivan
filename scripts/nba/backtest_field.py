@@ -2,7 +2,7 @@
 """
 scripts/nba/backtest_field.py
 
-The field backtest (ivan.sports.nba.field_backtest): this season's real contest fields (the final standings exports,
+The field backtest (ivan.sports.nba.backtest.field): this season's real contest fields (the final standings exports,
 derived by scripts/nba/standings.py) against the field model rebuilt on each slate's last capture before lock, the
 ownership the desk showed at lock, and the softmax ownership model. Ownership error per contest, the fields' shape
 side by side, calibration, bias by salary tier and starter, the largest misses.
@@ -18,7 +18,7 @@ the public projection, the parameters or the seed change). About 45 s per slate 
 """
 import argparse
 
-from ivan.sports.nba import field_backtest as FB
+from ivan.sports.nba.backtest import field as FB
 from ivan.sports.nba import slates as S
 
 

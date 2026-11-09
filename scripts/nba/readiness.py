@@ -2,7 +2,7 @@
 """
 scripts/nba/readiness.py
 
-Which past days are ready to backtest (ivan.sports.nba.readiness): what the calendar and the picker colour.
+Which past days are ready to backtest (ivan.sports.nba.backtest.readiness): what the calendar and the picker colour.
 
     scripts/nba/readiness.py                 every day with a held past slate: ready / pending / failed and why
     scripts/nba/readiness.py --slate 156176  one slate: the box scores, the money, the scrape record
@@ -17,7 +17,7 @@ import argparse
 import json
 from datetime import datetime
 
-from ivan.sports.nba import readiness as R
+from ivan.sports.nba.backtest import readiness as R
 from ivan.sports.nba import slates as S
 
 

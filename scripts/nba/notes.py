@@ -2,7 +2,7 @@
 """
 scripts/nba/notes.py
 
-Player notes on the loaded slate (ivan.sports.nba.notes; the desk's note button on tonight's grid does the same).
+Player notes on the loaded slate (ivan.sports.nba.slate.notes; the desk's note button on tonight's grid does the same).
 A note belongs to its slate and stands until cleared; the slate's scorecard lists the notes that stood at lock.
 
     scripts/nba/notes.py list                                  the loaded slate's notes
@@ -13,7 +13,7 @@ A note belongs to its slate and stands until cleared; the slate's scorecard list
 import argparse
 
 from ivan.sports.nba.names import normalize_name
-from ivan.sports.nba import notes as N
+from ivan.sports.nba.slate import notes as N
 from ivan.sports.nba.models import NBAPlayer
 from ivan.sports.nba import slates as S
 

@@ -2,7 +2,7 @@
 from datetime import datetime
 from types import SimpleNamespace
 
-from ivan.sports.nba import changes as CH
+from ivan.sports.nba.slate import changes as CH
 
 
 def _snap(players, starters, confirmed=None, dg=1):

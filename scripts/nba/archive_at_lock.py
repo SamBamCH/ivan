@@ -4,7 +4,7 @@ scripts/nba/archive_at_lock.py
 
 Keep the record at every lock without touching anything live. At each game's tip of every slate this machine holds
 (data/nba/slates/<dg>/; the first tip is the slate lock) this writes, as they stand at that moment:
-  - the tip's record on disk, data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/ (ivan.sports.nba.tips): the pool with its
+  - the tip's record on disk, data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/ (ivan.sports.nba.backtest.tips): the pool with its
     projections and grid rows, the props, the game lines, the slate's news seen so far and a copy of the day's edits.
     This is what a backtest of that game's models reads: nothing dated after the tip;
   - nba_projection_capture rows (source "at_tip", lock = that tip) from nba_player: the published projections,
@@ -83,7 +83,7 @@ def archive_tip(session, players, tip, now, dg) -> dict:
     cap = archive_slate(session, sport="nba", slate_key=str(dg), lock=tip, mode="classic", players=prow,
                         odds=odds.to_dict("records") if len(odds) else None, game_lines=lines.to_dict("records") if len(lines) else None,
                         source="at_tip", captured_at=now)
-    from ivan.sports.nba import tips
+    from ivan.sports.nba.backtest import tips
     d = tips.write_tip(dg, tip, now, prow, odds, lines, session=session)      # the record on disk: slates/<dg>/tips/<stamp>/ (players, props, lines, news, edits)
     return dict(capture_rows=n, archive_id=cap.id, odds=int(len(odds)), lines=int(len(lines)), tip_dir=str(d) if d else None)
 

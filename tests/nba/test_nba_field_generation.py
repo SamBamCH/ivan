@@ -1,11 +1,11 @@
-"""The generate step's helpers (ivan.sports.nba.field_generation)."""
+"""The generate step's helpers (ivan.sports.nba.field.generate)."""
 from datetime import datetime
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ivan.sports.nba import field_generation as FG
+from ivan.sports.nba.field import generate as FG
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBABase, NBAPlayer
 
 

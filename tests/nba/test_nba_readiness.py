@@ -1,4 +1,4 @@
-"""A past day's readiness for the backtest (ivan.sports.nba.readiness): box scores on file, the money scored from final exports,
+"""A past day's readiness for the backtest (ivan.sports.nba.backtest.readiness): box scores on file, the money scored from final exports,
 a failed scrape recorded; the day is the worst of its slates."""
 import json
 import sqlite3
@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from ivan.sports.nba import readiness as R
+from ivan.sports.nba.backtest import readiness as R
 from ivan.sports.nba import slates as S
 
 
@@ -33,7 +33,7 @@ def _slate(dg, lock, teams):
 
 
 def _ledger(monkeypatch, complete, played=True, unscored=0):
-    from ivan.sports.nba import results
+    from ivan.sports.nba.backtest import results
     monkeypatch.setattr(results, "slate_ledger", lambda dg, now=None, force=False, root=None, session=None:
                         dict(complete=complete, entries_file=played, contests=[1] if played else [], summary=dict(unscored=unscored)))
 
@@ -73,7 +73,7 @@ def test_unscored_contests_are_pending_until_a_scrape_fails(root, monkeypatch):
 
 
 def test_record_scrape_writes_the_held_slates_record(root):
-    from ivan.sports.nba import standings as ST
+    from ivan.sports.nba.data_fetch import standings as ST
     _slate(155, datetime(2026, 11, 4, 18, 0), ["AAA", "BBB"])
     plan = [dict(slate_key="155", to_scrape=[1, 2, 3]), dict(slate_key="999", to_scrape=[9])]        # 999 is not held: no record
     paths = ST.record_scrape(plan, dict(ok=[1], failed=[2, 3], login_needed=True), now=datetime(2026, 11, 5, 9, 0))

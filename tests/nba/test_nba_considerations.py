@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from ivan.sports.nba import considerations as CN
+from ivan.sports.nba.slate import considerations as CN
 
 
 def _p(name, status=None, team="AAA", opp="BBB"):

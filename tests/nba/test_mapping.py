@@ -1,11 +1,11 @@
-"""A team's mapping is void once a player it counted on is out (ivan.sports.nba.mapping)."""
+"""A team's mapping is void once a player it counted on is out (ivan.sports.nba.slate.mapping)."""
 import json
 
 import pandas as pd
 import pytest
 
-from ivan.sports.nba import mapping as MAP
-from ivan.sports.nba import scenarios as SC
+from ivan.sports.nba.slate import mapping as MAP
+from ivan.sports.nba.slate import scenarios as SC
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import rotation as ROT
 

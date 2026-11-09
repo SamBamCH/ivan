@@ -1,11 +1,11 @@
-"""Late swap (ivan.sports.nba.post_lock.lateswap): lock logic, candidates with locked slots, payout vs the field, slotting."""
+"""Late swap (ivan.sports.nba.lateswap.swap): lock logic, candidates with locked slots, payout vs the field, slotting."""
 from datetime import datetime, timedelta
 
 import numpy as np
 
-from ivan.sports.nba.post_lock import lateswap as LS
-from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
-from ivan.sports.nba.pre_lock.lineup_generation import SLOT_NAMES, FieldPlayer
+from ivan.sports.nba.lateswap import swap as LS
+from ivan.sports.nba.lateswap.entry_parsing import OriginalEntry
+from ivan.sports.nba.field.solver import SLOT_NAMES, FieldPlayer
 
 NOW = datetime(2026, 10, 22, 19, 0)
 

@@ -1,4 +1,4 @@
-{# a past slate, read only (ivan.web.nba.pages._backtest_board = ivan.sports.nba.slate_backtest; terminal: scripts/nba/backtest_slate.py).
+{# a past slate, read only (ivan.web.nba.pages._backtest_board = ivan.sports.nba.backtest.slate; terminal: scripts/nba/backtest_slate.py).
    Nothing here loads the slate into the desk; "Restore into the desk" does, for re-working it. #}
 {% macro money(x) %}{% if x is none %}—{% else %}{{ '-' if x < 0 else '' }}${{ '%.2f'|format(x|abs) }}{% endif %}{% endmacro %}
 {% macro pct(x) %}{% if x is none %}—{% else %}{{ '%+.0f%%'|format(100 * x) }}{% endif %}{% endmacro %}

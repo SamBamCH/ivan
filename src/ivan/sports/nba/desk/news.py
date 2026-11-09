@@ -4,7 +4,7 @@ The slate's news table and the team states (mapped / open question / changed) th
 from __future__ import annotations
 
 from datetime import datetime
-from ivan.sports.nba import newsfeed as NF
+from ivan.sports.nba.data_fetch import newsfeed as NF
 from typing import Optional
 
 

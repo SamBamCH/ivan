@@ -4,7 +4,7 @@
  },
  "backtest": {
   "dk_user": "SamBamCH",
-  "_note": "dk_user: the DraftKings user whose entries are ours in a standings export ('SamBamCH (3/10)'); the results ledger and the backtest view count them (ivan.sports.nba.results)"
+  "_note": "dk_user: the DraftKings user whose entries are ours in a standings export ('SamBamCH (3/10)'); the results ledger and the backtest view count them (ivan.sports.nba.backtest.results)"
  },
  "solver": {},
  "min_salary": 49000,
@@ -22,7 +22,7 @@
  },
  "field": {
   "cap": 10000,
-  "_note": "the field is its own lineups from the fitted two-group model (data/nba/models/field_two_group.json) on the public projection; every candidate is scored against it (public_field.py, simulate_contest.simulate_vs_field)"
+  "_note": "the field is its own lineups from the fitted two-group model (data/nba/models/field_two_group.json) on the public projection; every candidate is scored against it (field.public_field, contest.simulate.simulate_vs_field)"
  },
  "sim": {
   "n_sims": 1000

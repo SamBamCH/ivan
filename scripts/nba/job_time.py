@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/nba/job_time.py — how long a desk job will take (ivan.sports.nba.job_time), from this machine's completed jobs.
+scripts/nba/job_time.py — how long a desk job will take (ivan.sports.nba.slate.job_time), from this machine's completed jobs.
 
     scripts/nba/job_time.py fit                                              the model per step: seconds per unit, the fixed part, runs, p90
     scripts/nba/job_time.py estimate --step sim --sims 1000 --field-cap 10000 --contests 6 [--slate DG]
@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 
-from ivan.sports.nba import job_time as JT
+from ivan.sports.nba.slate import job_time as JT
 from ivan.sports.nba import slates as S
 
 

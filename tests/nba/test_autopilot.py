@@ -1,11 +1,11 @@
-"""The autopilot switch and guard (ivan.sports.nba.autopilot): the file switch, the desk's footprint, the running-job check,
+"""The autopilot switch and guard (ivan.sports.nba.slate.autopilot): the file switch, the desk's footprint, the running-job check,
 what travels in the feed manifest."""
 import json
 import time
 from datetime import datetime, timedelta
 
 from ivan.core import feed
-from ivan.sports.nba import autopilot as ap
+from ivan.sports.nba.slate import autopilot as ap
 
 
 def test_switch_defaults_off_and_round_trips(tmp_path):

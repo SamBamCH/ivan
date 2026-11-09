@@ -396,7 +396,7 @@ class StartingLineups(NBABase):
 
 class NBANews(NBABase):
     """
-    One news item per Rotowire headline (ivan.sports.nba.newsfeed): the player, team, injury, headline, the report's text
+    One news item per Rotowire headline (ivan.sports.nba.data_fetch.newsfeed): the player, team, injury, headline, the report's text
     and its source link (the tweet or article it cites: Underdog, Shams, the beat), Rotowire's date and when we first saw
     it. Rotowire gives a date only, so first_seen is the clock: poll every few minutes and it is the news time within
     the poll interval. Never updated; the id is Rotowire's headline id.
@@ -431,7 +431,7 @@ class NBASlateNews(NBABase):
 
 class NBAPlayerNote(NBABase):
     """
-    A note typed next to a player on the desk (ivan.sports.nba.notes): it belongs to one slate (draft group and day)
+    A note typed next to a player on the desk (ivan.sports.nba.slate.notes): it belongs to one slate (draft group and day)
     and shows only while that slate is loaded, until cleared. Cleared notes stay with cleared_at set, so the slate's
     scorecard can say which notes stood at lock.
     """

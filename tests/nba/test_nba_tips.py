@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 
 from ivan.sports.nba import slates as SL
-from ivan.sports.nba import tips as T
+from ivan.sports.nba.backtest import tips as T
 
 
 def test_write_and_read_a_tip(tmp_path, monkeypatch):

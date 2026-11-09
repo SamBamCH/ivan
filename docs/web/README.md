@@ -17,7 +17,7 @@ The bar on every page is the frame (`ivan.web.frame`, `templates/_frame.html`): 
 slate › view**, each going where it says, ‹ › through the slates in time order, the sport's
 tools on the right, sign out. The **day is a calendar**: the bar's day button opens one month at a time, a day with
 slates is a link (its number is how many), the open day is filled, today dashed, a day held on this machine ringed, and a
-**past day is coloured by its readiness for the backtest** (`Sport.day_status`, NBA: `ivan.sports.nba.readiness`,
+**past day is coloured by its readiness for the backtest** (`Sport.day_status`, NBA: `ivan.sports.nba.backtest.readiness`,
 `scripts/nba/readiness.py`): **green** when every input is on file (the box scores of every team of its slates and, where
 we played, a final standings export of every contest of ours), **red** when a fetch failed and the day cannot be
 backtested until it is fixed (a standings scrape recorded a failure or a needed login, `slates/<dg>/results/scrape.json`;
@@ -69,7 +69,7 @@ Each sport's `days(now)` lists what it knows, by the day the slate locks:
 A sport may give the frame a `ledger(now)` (`Sport.ledger`): `{"overall": agg, "days": {iso day: agg}}` with fees, won,
 net, ROI, entries, cashed, contests and how many slates are not final. The frame shows it on the **picker** (a strip
 under the sport's heading for the season; each day's row and the chosen day's heading for that day) and the sport's
-`summary` may carry `ledger` for the **home tile** (the season). NBA gives it on the laptop only (`ivan.sports.nba.results`,
+`summary` may carry `ledger` for the **home tile** (the season). NBA gives it on the laptop only (`ivan.sports.nba.backtest.results`,
 from DraftKings' final standings exports and the payout tables, our entries by our DraftKings user name; cached per slate,
 complete slates never recomputed); a consumer desk leaves it None, so the server shows no money anywhere. The slate's
 own backtest view shows the same slate's numbers ([nba-desk.md](nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml)).

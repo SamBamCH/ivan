@@ -1,5 +1,5 @@
 """experience: rookie = first NBA season this one, matched across DK's and nba_api's spellings."""
-from ivan.sports.nba import experience as X
+from ivan.sports.nba.data_fetch import experience as X
 
 
 EXP = dict(first_year={X.loose("Robert Williams III"): 2018, X.loose("David Jones Garcia"): 2025, X.loose("Elijah Harkless"): 2024,

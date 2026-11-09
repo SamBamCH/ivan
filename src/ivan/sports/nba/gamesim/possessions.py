@@ -41,7 +41,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.sports.nba import pbp as P
+from ivan.sports.nba.data_fetch import pbp as P
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.paths import NBA_DATA_DIR
 

@@ -1,7 +1,7 @@
-"""The contest simulation (ivan.sports.nba.simulate_contest): payouts scale, the entries file parses, the field pays ties and copies."""
+"""The contest simulation (ivan.sports.nba.contest.simulate): payouts scale, the entries file parses, the field pays ties and copies."""
 import numpy as np
 
-from ivan.sports.nba import simulate_contest as SC
+from ivan.sports.nba.contest import simulate as SC
 
 
 
@@ -25,7 +25,7 @@ def test_contests_in_entries_one_row_per_contest(tmp_path):
 
 
 def test_pay_against_the_field_with_copies():
-    from ivan.sports.nba.simulate_contest import pay_against
+    from ivan.sports.nba.contest.simulate import pay_against
     field = np.array([100.0, 200.0, 300.0])                 # 3 field entries; with us, 4 places
     pay = np.array([0.0, 10.0, 5.0, 0.0, 0.0]); csum = np.cumsum(pay)
     p, r = pay_against(field, np.array([350.0, 250.0, 50.0]), np.array([0, 0, 0]), csum)
@@ -36,6 +36,6 @@ def test_pay_against_the_field_with_copies():
 
 
 def test_field_sizes_cap_less_our_entry():
-    from ivan.sports.nba.simulate_contest import field_sizes
+    from ivan.sports.nba.contest.simulate import field_sizes
     assert field_sizes([14268, 71343, 2971, 1], 25000) == [14267, 24999, 2970, 1]
     assert field_sizes([500], 10000) == [499]

@@ -24,7 +24,7 @@ class RotationMixin:
         opponent's score at the end of every SCORE_STEP minutes, the margin, and the exact score per minute for the hover.
         None when the feed is not on disk.
         """
-        from ivan.sports.nba import pbp as PBP
+        from ivan.sports.nba.data_fetch import pbp as PBP
         try:
             sc = PBP.game_score(str(game_id))
         except Exception:   # noqa: BLE001 - a missing or odd feed: no strip
@@ -66,7 +66,7 @@ class RotationMixin:
           source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute, the
                            starters who had not started the game before flagged (new_starter)
         """
-        from ivan.sports.nba import pbp as PBP
+        from ivan.sports.nba.data_fetch import pbp as PBP
         from ivan.sports.nba.projection.live import OUT_STATUSES
         from ivan.sports.nba.projection import skeleton as SK
         players = self.players(team)
@@ -265,13 +265,13 @@ class RotationMixin:
 
     def overlay_ours(self, team: str, rot: dict) -> dict:
         """
-        Our grid for the game's day over the played grid (slate_backtest.grid_for_day: the grid drawn on the desk that day, else the
+        Our grid for the game's day over the played grid (backtest.slate.grid_for_day: the grid drawn on the desk that day, else the
         archive's grid rows at that day's lock): each row gets `ours` (our 48 cells) and `cmp` per minute ("both" on the floor in
         both, "act" played but not in ours, "ours" in ours but sat, ""), players we projected who did not play are added as
         DNP rows, and rot["overlay"] says where ours came from and the share of the 240 player-minutes on the floor in both
         (None when we have no grid for that day). What the backtest view draws under each team, on the team page.
         """
-        from ivan.sports.nba import slate_backtest as SB
+        from ivan.sports.nba.backtest import slate as SB
         day = rot.get("last_game")
         try:
             d = date.fromisoformat(str(day)[:10])

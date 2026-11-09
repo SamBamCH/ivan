@@ -1,9 +1,9 @@
-"""A job's time before it starts (ivan.sports.nba.job_time): the work units per step, the fit from past job records, the estimate and
+"""A job's time before it starts (ivan.sports.nba.slate.job_time): the work units per step, the fit from past job records, the estimate and
 the lock guard."""
 import json
 from datetime import datetime, timedelta
 
-from ivan.sports.nba import job_time as JT
+from ivan.sports.nba.slate import job_time as JT
 
 
 def _job(d, name, secs, cmd, meta=None, i=0):

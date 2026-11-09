@@ -115,7 +115,7 @@ than another night's), who plays from each player's scratch probability, and the
 world with garbage time off the margin. `team_minutes.py` keeps the constants (`data/nba/models/team_minutes.json`: scratch
 probabilities by DK status and by salary for a bench player without one, the margin sd, the overtime rate) and the
 scratch rule. This band is the desk's display; the distribution the field, the sim and the chooser play against is the
-game simulation's ([field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)), which draws the same
+game simulation's ([field-and-simulation.md](field-and-simulation.md#simulate-contestsimulatepy)), which draws the same
 grid under fouls, heirs and the emergent score.
 
 ### 9. Rates and the usage bump (`rates.py`)
@@ -141,13 +141,13 @@ the marginal is kept as 101 quantiles on `nba_player.fpts_quantiles` for the des
 Measured 2026-10 on 2025-26 walk-forward residuals (`data/nba/models/correlation.json`) the structure is small: two starters 0.00, starter with
 bench −0.05, bench with bench −0.03, opponents 0.00, and a pair's own history predicts its future at
 r 0.08. The sampler no longer imposes these: the game simulation
-([field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)) produces them from the mechanism
+([field-and-simulation.md](field-and-simulation.md#simulate-contestsimulatepy)) produces them from the mechanism
 (the same possessions, the same five, the same misses on both sides) and the table is what it is checked against
 (2026-11-07 on a four-game slate: starters +0.02, starter with bench −0.10, bench with bench −0.03, opponents +0.01).
 The correlation that matters (a star out raises teammates' minutes) is in the means via the allocation and, inside a
 world, in the pie the five on the floor share.
 
-## The public side (`public_projection.py`, `public_field.py`)
+## The public side (`field/public_projection.py`, `field/public_field.py`)
 
 Kept apart from ours and never moved by our edits. `pub_fpts` on `nba_player` is a replica of the
 projection the field plays to (Stokastic, the provider the field model was fitted on): for priced
@@ -220,7 +220,7 @@ earlier fetch while the table, replaced by a later one, held his 18.5 lines (202
 
 **A line priced the role the player had when the book posted it.** Once he is downgraded (his DK status goes to an out
 status, or he leaves the starting five: Rotowire's at a refresh, or the desk's hand call over it), the lines posted before that
-moment are set aside: `ivan.sports.nba.changes` stamps `nba_player.status_changed_at` at the store (`mark_status_changes`: the
+moment are set aside: `ivan.sports.nba.slate.changes` stamps `nba_player.status_changed_at` at the store (`mark_status_changes`: the
 state before the pool was replaced against the state after, the earlier stamp carried when nothing moved; `touch_status` for a
 hand call that benches him) and `fresh_rows` takes the stamps as `cutoffs` (`status_cutoffs`), dropping a row the book posted
 before the player's stamp. An upgrade is never a reason to drop his lines (questionable to active, into the five: the books priced

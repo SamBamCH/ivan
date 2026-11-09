@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/nba/mapping.py — the team mappings a player now out makes void (ivan.sports.nba.mapping): what every refresh and every
+scripts/nba/mapping.py — the team mappings a player now out makes void (ivan.sports.nba.slate.mapping): what every refresh and every
 re-projection on the desk does on their own; from a terminal to see or force it.
 
     venv/bin/python scripts/nba/mapping.py --slate DG            # list the stale mappings (team: who is out) and void them
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 
-from ivan.sports.nba import mapping as MAP
+from ivan.sports.nba.slate import mapping as MAP
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.ingest import void_stale_mappings
 from ivan.sports.nba.models import NBAPlayer

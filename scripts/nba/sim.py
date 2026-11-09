@@ -3,7 +3,7 @@
 scripts/nba/sim.py
 
 Simulate every contest in the entries CSV for every candidate lineup
-(ivan.sports.nba.simulate_contest.simulate_entries): the field is sampled
+(ivan.sports.nba.contest.simulate.simulate_entries): the field is sampled
 from the generated pool, scored with correlated player draws, ranked and paid.
 
     scripts/nba/sim.py [--entries file.csv] [-n 1000] [-c 10000]
@@ -20,7 +20,7 @@ from ivan.core.config import config_path, load_config
 from ivan.sports.nba import slates as S
 from ivan.core.artifacts import clean_old_diagnostics
 from ivan.sports.nba.paths import DIAG_DIR
-from ivan.sports.nba.simulate_contest import simulate_entries
+from ivan.sports.nba.contest.simulate import simulate_entries
 from ivan.core.config import cfg
 
 

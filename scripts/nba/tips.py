@@ -2,7 +2,7 @@
 """
 scripts/nba/tips.py
 
-The record at each game's tip (ivan.sports.nba.tips): data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/, written by the archive
+The record at each game's tip (ivan.sports.nba.backtest.tips): data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/, written by the archive
 timer (scripts/nba/archive_at_lock.py) and read by every backtest of that game's models.
 
     scripts/nba/tips.py list --slate 156078            the tips on file, with what each holds
@@ -15,7 +15,7 @@ import json
 from datetime import datetime
 
 from ivan.sports.nba import slates as S
-from ivan.sports.nba import tips as T
+from ivan.sports.nba.backtest import tips as T
 
 
 def main() -> int:

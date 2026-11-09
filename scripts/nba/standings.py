@@ -2,7 +2,7 @@
 """
 scripts/nba/standings.py
 
-Real contest fields from DraftKings (ivan.sports.nba.standings).
+Real contest fields from DraftKings (ivan.sports.nba.data_fetch.standings).
 
     scripts/nba/standings.py status [--days 3]                 played slates and which contests are exported / derived
     scripts/nba/standings.py scrape [--days 3] [--public 3] [--contest-ids 1,2] [--headless]
@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ivan.core import raw
-from ivan.sports.nba import standings as S
+from ivan.sports.nba.data_fetch import standings as S
 from ivan.sports.nba import slates as SL
 
 

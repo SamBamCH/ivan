@@ -31,9 +31,9 @@ MODULES = [
     "ivan.web.main", "fastapi", "uvicorn", "jinja2", "multipart", "rich.progress", "pandas", "dotenv",
     "matplotlib.pyplot",   # imported lazily by the backtest report the web UI can launch
     # the NBA side: the desk (mounted at /nba), the capture loop, the nightly job, the feed and the pipeline
-    "ivan.web.nba", "ivan.sports.nba.ingest", "ivan.sports.nba.contests", "ivan.sports.nba.historical.data_fetch",
-    "ivan.sports.nba.validation", "ivan.sports.nba.pbp", "ivan.sports.nba.standings", "ivan.sports.nba.field_generation",
-    "ivan.sports.nba.simulate_contest", "ivan.sports.nba.choose", "ivan.sports.nba.lineup_export", "ivan.core.feed",
+    "ivan.web.nba", "ivan.sports.nba.ingest", "ivan.sports.nba.data_fetch.contests", "ivan.sports.nba.data_fetch.boxscores",
+    "ivan.sports.nba.backtest.validation", "ivan.sports.nba.data_fetch.pbp", "ivan.sports.nba.data_fetch.standings", "ivan.sports.nba.field.generate",
+    "ivan.sports.nba.contest.simulate", "ivan.sports.nba.contest.choose", "ivan.sports.nba.contest.export", "ivan.core.feed",
 ]
 # uvicorn[standard] extras; plain uvicorn is enough for a LAN UI
 EXCLUDE = {"uvloop", "httptools", "watchfiles", "websockets", "ujson", "ivan"}

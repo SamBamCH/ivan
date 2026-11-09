@@ -7,7 +7,7 @@ complete the field's open slots, re-optimise our entries' open slots in sampled 
 keep the candidate with the best expected payout. Prints each player's exposure (entries
 holding him) before and after the swap. Writes data/nba/output/lateswap.<stamp>.csv (the
 entries export with the swapped lineups, ready to upload) and lateswap.<stamp>.json (the
-desk's report). Logic: ivan.sports.nba.post_lock.lateswap.
+desk's report). Logic: ivan.sports.nba.lateswap.swap.
 
 The standings are a step of their own: scripts/nba/fetch_standings.py (or the desk's Fetch
 standings) downloads every contest's export and keeps it. With --source auto (the default)
@@ -29,7 +29,7 @@ from datetime import datetime
 from multiprocessing import freeze_support
 
 from ivan.sports.nba.paths import CHROME_PROFILE_DIR
-from ivan.sports.nba.post_lock import lateswap as LS
+from ivan.sports.nba.lateswap import swap as LS
 from ivan.sports.nba import slates as S
 
 

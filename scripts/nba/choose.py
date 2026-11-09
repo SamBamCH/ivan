@@ -4,7 +4,7 @@ scripts/nba/choose.py
 
 Choose lineups for each contest in the entries file and write the DraftKings
 upload CSV, the exposures and per-lineup detail, the chooser diagnostics and
-the per-entry simulated ROI traces. The work is ivan.sports.nba.lineup_export;
+the per-entry simulated ROI traces. The work is ivan.sports.nba.contest.export;
 this is the command line around it.
 
     scripts/nba/choose.py                                   prompts for weights per contest
@@ -18,8 +18,8 @@ from __future__ import annotations
 import argparse
 
 from ivan.core.config import config_path, load_config
-from ivan.sports.nba import lineup_export as LE
-from ivan.sports.nba.choose import DEFAULT_WEIGHTS
+from ivan.sports.nba.contest import export as LE
+from ivan.sports.nba.contest.choose import DEFAULT_WEIGHTS
 from ivan.sports.nba import slates as S
 
 

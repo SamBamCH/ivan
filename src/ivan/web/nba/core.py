@@ -24,8 +24,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ivan.core import feed
-from ivan.sports.nba import autopilot
-from ivan.sports.nba import results
+from ivan.sports.nba.slate import autopilot
+from ivan.sports.nba.backtest import results
 from ivan.sports.nba import slates as S
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nba.paths import NBA_DATA_DIR
@@ -136,7 +136,7 @@ SLATE_PATH = re.compile(r"^/(\d{4}-\d{2}-\d{2})/(\d+)(?:/|$)")
 @app.middleware("http")
 async def _bind_slate(request: Request, call_next):
     """A request under /nba/<day>/<draft group>/ works that slate: its desk (made on first use, off the event loop) and its paths
-    are bound for the request. Also the producer's footprint for the autopilot tick (ivan.sports.nba.autopilot): every POST
+    are bound for the request. Also the producer's footprint for the autopilot tick (ivan.sports.nba.slate.autopilot): every POST
     that works a slate is an edit; the tick stands down for a while after one. A consumer leaves no footprint."""
     path = request.url.path[len(auth.root_of(request)):] or "/"
     m = SLATE_PATH.match(path)
@@ -186,7 +186,7 @@ def _active(dg: Optional[int] = None) -> list:
 
 def _submit(name: str, cmd: list, step: str, extra: Optional[dict] = None) -> object:
     """Submit a job for the bound slate: `--slate <dg>` on the script, the slate in the job's record (with the work units and the
-    time estimate the desk made, ivan.sports.nba.job_time, so the status line counts down and later fits learn from the run)."""
+    time estimate the desk made, ivan.sports.nba.slate.job_time, so the status line counts down and later fits learn from the run)."""
     d = bound()
     return runner.submit(name, [str(c) for c in cmd] + ["--slate", str(d.dg)], meta=dict(step=step, slate=d.dg, **(extra or {})))
 
@@ -307,7 +307,7 @@ def nba_summary(now: datetime) -> dict:
     ahead = [d for d in days if d.day >= now.date()]
     nxt = min(ahead, key=lambda d: d.day) if ahead else None
     ledger = None
-    if not CONSUMER:                                              # the money, this machine only (ivan.sports.nba.results)
+    if not CONSUMER:                                              # the money, this machine only (ivan.sports.nba.backtest.results)
         try:
             ledger = results.ledger_days(now)["overall"]
         except Exception:   # noqa: BLE001 - the home page opens without it
@@ -334,8 +334,8 @@ ACTIONS = [dict(label="Fetch upcoming slates", path="/fetch-upcoming",
 def sport() -> Sport:
     """The description ivan.web.main mounts: the desk with the frame's picker at its root."""
     global SPORT
-    from ivan.sports.nba.slate_backtest import mode_for
-    from ivan.sports.nba import readiness
+    from ivan.sports.nba.backtest.slate import mode_for
+    from ivan.sports.nba.backtest import readiness
     SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nba_days, summary=nba_summary, tools=[], app=app,
                   ledger=None if CONSUMER else results.ledger_days,       # the picker's money per day; never on the consumer (the server)
                   day_status=None if CONSUMER else readiness.day_status,  # a past day's readiness for the backtest: the calendar's colours

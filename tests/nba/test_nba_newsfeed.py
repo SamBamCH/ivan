@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from ivan.sports.nba import newsfeed as NF
+from ivan.sports.nba.data_fetch import newsfeed as NF
 
 
 def _player(name, team, status, salary=5000, gametime=None, opp="OPP"):

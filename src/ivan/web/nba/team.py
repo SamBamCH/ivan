@@ -4,14 +4,14 @@ The team page's routes: pins, starter calls, the rotation grid, scenarios, notes
 from __future__ import annotations
 
 from datetime import datetime
-from ivan.sports.nba import scenarios as SC
+from ivan.sports.nba.slate import scenarios as SC
 from typing import Optional
 import numpy as np
 import pandas as pd
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from ivan.core.utils import normalize_name
-from ivan.sports.nba import changes as CH
+from ivan.sports.nba.slate import changes as CH
 from ivan.sports.nba.ingest import refresh_market_rates, refresh_public_projection
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
@@ -103,9 +103,9 @@ async def refigure(request: Request, team: str):
 
 @slate.post("/team/{team}/note", response_class=HTMLResponse)
 def player_note(request: Request, team: str, player: str = Form(...), text: Optional[str] = Form(None)):
-    """A note next to a player on this slate (ivan.sports.nba.notes = scripts/nba/notes.py): the text comes from the form or
+    """A note next to a player on this slate (ivan.sports.nba.slate.notes = scripts/nba/notes.py): the text comes from the form or
     the prompt (HX-Prompt); a blank text clears it. It shows while this slate is loaded and goes into its scorecard."""
-    from ivan.sports.nba import notes as NOTES
+    from ivan.sports.nba.slate import notes as NOTES
     text = text if text is not None else request.headers.get("HX-Prompt", "")
     with LOCK:
         key = normalize_name(player)

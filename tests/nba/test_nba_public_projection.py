@@ -1,6 +1,6 @@
 """The public (Stokastic-like) projection replica: priced from the props, unpriced from history and salary."""
 
-from ivan.sports.nba import public_projection as PP
+from ivan.sports.nba.field import public_projection as PP
 
 
 def test_prop_sum_needs_the_core_markets_and_scales():

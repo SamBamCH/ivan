@@ -1,4 +1,4 @@
-"""The projection scorecard (ivan.sports.nba.validation): the join, the error decomposition, the classes and the findings."""
+"""The projection scorecard (ivan.sports.nba.backtest.validation): the join, the error decomposition, the classes and the findings."""
 from datetime import date, datetime
 
 import pandas as pd
@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ivan.sports.nba import validation as V
+from ivan.sports.nba.backtest import validation as V
 from ivan.sports.nba.models import NBABase, NBAProjectionCapture, NBAStat
 
 

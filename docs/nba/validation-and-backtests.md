@@ -4,7 +4,7 @@ Projected against actual is the bread and butter: every claim the model made bef
 up with the box score after it. This page lists what exists, what each one measures and how to
 run it. Findings with dates are in [notes/](notes/).
 
-## The scorecard (`ivan.sports.nba.validation`, `scripts/nba/validate.py`)
+## The scorecard (`ivan.sports.nba.backtest.validation`, `scripts/nba/validate.py`)
 
 ```bash
 venv/bin/python scripts/nba/validate.py scorecard                          # every slate with box scores and no scorecard yet (what nightly runs)
@@ -28,12 +28,12 @@ Players are classed by where their minutes came from (same team as history, new 
 pin); summaries by starter label, priced or not, salary tier and history class; DK's own average and
 the books' implied points stand beside as yardsticks; plain-language findings. One CSV + JSON per slate
 under `data/nba/diagnostics/scorecard/`, read back by `history`. The desk's player notes that stood at lock
-(`ivan.sports.nba.notes.at`: written before it, not cleared by then) are in the JSON as `notes`, in the CSV as a `note`
+(`ivan.sports.nba.slate.notes.at`: written before it, not cleared by then) are in the JSON as `notes`, in the CSV as a `note`
 column, and in the printed report with each player's minutes and points projected against actual; a scorecard
 built before a note existed gets it with `--force`. The desk's cards carry the same flags
 as `review`.
 
-## Is a day ready to backtest? (`ivan.sports.nba.readiness`, `scripts/nba/readiness.py`)
+## Is a day ready to backtest? (`ivan.sports.nba.backtest.readiness`, `scripts/nba/readiness.py`)
 
 ```bash
 venv/bin/python scripts/nba/readiness.py                 # every day with a held past slate: ready / pending / failed, why
@@ -47,7 +47,7 @@ a fetch failed and nothing can be backtested until it is fixed (a standings scra
 **pending** otherwise. A day is failed when any of its slates is, ready when all are. The calendar in the bar and the
 picker's day list colour the day by it (green, red, none); the status is cached two minutes per process.
 
-## One slate's results (`ivan.sports.nba.slate_backtest`, `scripts/nba/backtest_slate.py`, the desk's backtest view)
+## One slate's results (`ivan.sports.nba.backtest.slate`, `scripts/nba/backtest_slate.py`, the desk's backtest view)
 
 Per past slate: our entries' results from DraftKings' **final** standings exports (a contest with only a mid-slate
 export or none is listed unscored, never given a number) against the chooser's claim, each contest, our lineups
@@ -57,7 +57,7 @@ made is on [../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-dgdraf
 snapshot per slate, each date's data on its own, the pre-lock models re-run on it against the actuals) is
 [notes/backtest_redesign_2026-11-05.md](notes/backtest_redesign_2026-11-05.md).
 
-## The money (`ivan.sports.nba.results`, `scripts/nba/results.py`)
+## The money (`ivan.sports.nba.backtest.results`, `scripts/nba/results.py`)
 
 ```bash
 venv/bin/python scripts/nba/results.py                       # every held past slate summed per day and overall
@@ -79,7 +79,7 @@ the backtest view keeps only the model's columns): the Ivan home tile (the seaso
 heading (the season) and each day's row and heading (that day), and the slate's backtest view (that slate). The model's
 checks below are separate from this: the money is the actual, they are the claims.
 
-## The record at each game's tip (`ivan.sports.nba.tips`, `scripts/nba/tips.py`)
+## The record at each game's tip (`ivan.sports.nba.backtest.tips`, `scripts/nba/tips.py`)
 
 ```bash
 venv/bin/python scripts/nba/tips.py list --slate 156078
@@ -95,7 +95,7 @@ entries: nothing dated after the tip. Tips backfilled from the archive captures 
 edits or news were kept then) and say so in `meta.json`. The layout and what is deliberately not stored are in the
 module's docstring and [data.md](data.md).
 
-## The field backtest (`ivan.sports.nba.field_backtest`, `scripts/nba/backtest_field.py`)
+## The field backtest (`ivan.sports.nba.backtest.field`, `scripts/nba/backtest_field.py`)
 
 ```bash
 venv/bin/python scripts/nba/backtest_field.py                                   # every final derived contest, model field of 3,000 entries
@@ -107,10 +107,10 @@ The real fields of the season (every derived contest from a **final** standings 
 against what the field model says they should have been, rebuilt from the slate's last archive capture before lock
 exactly as the live path builds it: the public projection (`public_projection.project` on the capture's pool, the
 props posted for that night, the box scores before that day), then the two-group field
-(`field_model.simulate_field` with `data/nba/models/field_two_group.json`) at `--field-size` entries, one per slate,
+(`field.model.simulate_field` with `data/nba/models/field_two_group.json`) at `--field-size` entries, one per slate,
 every contest of the slate compared to it the way the sim slices one field per run. Two more columns stand beside
 it: **lock**, the ownership the desk showed when the slate locked (the `at_tip` capture's ownership column, archived
-since 2026-10-23), and **softmax**, the ownership model fitted on real contests (`field_model.predict`).
+since 2026-10-23), and **softmax**, the ownership model fitted on real contests (`field.model.predict`).
 
 Per contest: ownership MAE over the players the public could roster, MAE over the real top 20, Spearman, how many
 of the real top 10 the model also ranks there, and the chalk's concentration (the eight most-owned players' summed
@@ -223,12 +223,12 @@ on the same grid: minutes MAE, bias and 10-90 coverage by role, by final margin 
 five fouls. Result 2026-11-07 in the same note.
 
 `draw-world` / `calibrate-world` are the World itself (`gamesim.world`, the sampler the field, the sim and the chooser
-read; [field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)). `calibrate-world` sets its four
+read; [field-and-simulation.md](field-and-simulation.md#simulate-contestsimulatepy)). `calibrate-world` sets its four
 game-level knobs on a slate's games so the drawn totals, margins, team points and overtime rate have the real spread
 (the script's fit holds the real numbers); `draw-world` prints a slate's moments, the per-team reconciliation factor
 (how far the pool's points sit from the lines) and every player's simulated line next to the pool's mean.
 
-## The as-of rerun of a past slate (`ivan.sports.nba.gamesim.rerun`, `scripts/nba/rerun_slate.py`, the backtest view)
+## The as-of rerun of a past slate (`ivan.sports.nba.backtest.rerun`, `scripts/nba/rerun_slate.py`, the backtest view)
 
 ```bash
 venv/bin/python scripts/nba/rerun_slate.py --slate 156184 [-n 1000] [--seed 0] [--tip 1800]      # the first tip record unless --tip

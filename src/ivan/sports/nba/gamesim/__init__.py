@@ -10,4 +10,7 @@ rotation      layer B: each player's coverage of every minute under scratches, f
 usage         layer C: shares of the possessions on the floor, the team's pie, the true-minutes check
 profiles      each player's shooting profile (attempts and percentages) from the box scores
 world         layer D and the World: the minute loop, the outcomes on both sides, to_player_samples, the calibration
+draw          generate_player_samples: the one draw of every player's points the field, the sim and the chooser read
+
+The as-of rerun of a past slate is ivan.sports.nba.backtest.rerun.
 """

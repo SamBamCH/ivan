@@ -2,7 +2,7 @@
 """
 scripts/nba/field_model.py
 
-The field ownership model (ivan.sports.nba.field_model), fitted on real contests only.
+The field ownership model (ivan.sports.nba.field.model), fitted on real contests only.
 
     scripts/nba/field_model.py validate     leave-one-slate-out on every derived contest (frozen features vs baselines)
     scripts/nba/field_model.py fit          fit on every derived contest and save data/nba/models/field_ownership.json
@@ -13,7 +13,7 @@ import argparse
 import pandas as pd
 
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba import field_model as FM
+from ivan.sports.nba.field import model as FM
 
 COLS = ["mae", "mae_top20", "spearman", "top10_overlap", "max_own_err"]
 

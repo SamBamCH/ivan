@@ -143,7 +143,7 @@ def test_status_marks_carry_across_the_pool_replace_and_move_on_a_downgrade(root
     """changes.mark_status_changes: after the pool is replaced, a player downgraded (to an out status, out of the five) is stamped
     now, one upgraded (into the five, back from out) loses his stamp, questionable either way is nothing, the rest carry their
     earlier stamp, a newcomer carries none; touch_status stamps or clears one player; status_cutoffs lists the stamped."""
-    from ivan.sports.nba import changes as CH
+    from ivan.sports.nba.slate import changes as CH
     from ivan.sports.nba.models import NBAPlayer, StartingLineups
     S.create(500, lock=datetime(2026, 11, 7, 19, 0), games=2)
     sess = S.session(500)

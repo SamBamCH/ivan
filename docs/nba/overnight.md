@@ -26,7 +26,7 @@ venv/bin/python scripts/nba/nightly.py [--season 2026-27] [--max-games 60] [--no
 
 In order, each step guarded so a failure does not stop the next (except the box scores, which are the job):
 
-1. **Box scores** for the season (`historical.data_fetch.fetch_boxscores`, nba_api): capped at
+1. **Box scores** for the season (`data_fetch.boxscores.fetch_boxscores`, nba_api): capped at
    `--max-games` per run because of nba_api's rate limits; three runs a day catch up. Into `nba_stats`.
 2. **Scorecards** (`validation.run_pending_scorecards`): for every slate whose box scores have arrived
    and that has no scorecard yet, the last projection capture before lock against the box scores, written
@@ -52,7 +52,7 @@ next slot or `systemctl --user start ivan-nba-nightly.service` repeats it. The j
 
 At each game's tip of every slate this machine holds (the first tip is the slate lock), within 12 minutes
 after it, it writes as they stand: **the tip's record on disk**, `data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/`
-(`ivan.sports.nba.tips`: the pool with its projections, ownership and grid rows, the props as stored, the game lines,
+(`ivan.sports.nba.backtest.tips`: the pool with its projections, ownership and grid rows, the props as stored, the game lines,
 the slate's news seen so far, a copy of the day's edits; the source of truth a backtest of that game's models reads,
 [validation-and-backtests.md](validation-and-backtests.md#the-record-at-each-games-tip-ivansportsnbatips-scriptsnbatipspy)),
 `nba_projection_capture` rows (source `at_tip`, lock = that tip) from the slate's `nba_player`, and an `archived_slate`
@@ -97,7 +97,7 @@ not (`slates.open_any`: the newest held slate's session when none is open today)
 
 `scrape` notes its outcome on every held slate it touched (`standings.record_scrape` → `slates/<dg>/results/scrape.json`:
 the contests, which exported, which failed, whether a login was needed); a failure there turns the day **red** on the
-calendar and the picker until a later scrape succeeds (`ivan.sports.nba.readiness`, [../web/README.md](../web/README.md)).
+calendar and the picker until a later scrape succeeds (`ivan.sports.nba.backtest.readiness`, [../web/README.md](../web/README.md)).
 
 **Only a final export is a field.** The late swap's standings fetch (a minute after each tip) stores an export
 too, taken while games were on: the slots of players not yet tipped read `LOCKED`. `standings.export_is_final`

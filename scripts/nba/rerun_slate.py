@@ -2,7 +2,7 @@
 """
 scripts/nba/rerun_slate.py
 
-What the current code says about a past slate (ivan.sports.nba.gamesim.rerun): the World drawn from the slate's tip record
+What the current code says about a past slate (ivan.sports.nba.backtest.rerun): the World drawn from the slate's tip record
 with the history cut at that day, scored against the actuals layer by layer, and written under
 data/nba/slates/<dg>/rerun/<stamp>-<commit>/ for the backtest screen's "current code" block.
 
@@ -16,8 +16,8 @@ import argparse
 import pandas as pd
 
 from ivan.sports.nba import slates as S
-from ivan.sports.nba import tips as T
-from ivan.sports.nba.gamesim import rerun as R
+from ivan.sports.nba.backtest import tips as T
+from ivan.sports.nba.backtest import rerun as R
 
 
 def main() -> int:

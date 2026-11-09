@@ -16,8 +16,8 @@ from .pipeline import _pipeline_ctx, _submit
 
 def _lateswap_ctx(now: datetime) -> dict:
     """The late swap tab: our entries with each slot's lock state and projection, the lock clock, the newest report."""
-    from ivan.sports.nba.lineup_export import POSITION_ORDER, read_entries
-    from ivan.sports.nba.post_lock import lateswap as LS
+    from ivan.sports.nba.contest.export import POSITION_ORDER, read_entries
+    from ivan.sports.nba.lateswap import swap as LS
     byid = {int(p.id): p for p in desk.slate.players}
     proj = {}
     for t, df in desk.proj.items():
@@ -115,7 +115,7 @@ async def standings_upload(request: Request, files: list[UploadFile] = File(...)
     """
     import re
     from ivan.core import raw
-    from ivan.sports.nba.standings import parse_export
+    from ivan.sports.nba.data_fetch.standings import parse_export
     saved, errors = [], []
     for f in files:
         data = await f.read(MAX_STANDINGS + 1)

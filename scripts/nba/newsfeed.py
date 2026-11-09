@@ -2,7 +2,7 @@
 """
 scripts/nba/newsfeed.py
 
-Player news from Rotowire (ivan.sports.nba.newsfeed): fetch on demand, store what is new, read what is on file.
+Player news from Rotowire (ivan.sports.nba.data_fetch.newsfeed): fetch on demand, store what is new, read what is on file.
 
     scripts/nba/newsfeed.py check                 fetch the page, print the new headlines
     scripts/nba/newsfeed.py show [--hours 24]     the headlines on file for the players of the loaded slate
@@ -12,7 +12,7 @@ Player news from Rotowire (ivan.sports.nba.newsfeed): fetch on demand, store wha
 """
 import argparse
 
-from ivan.sports.nba import newsfeed as NF
+from ivan.sports.nba.data_fetch import newsfeed as NF
 from ivan.sports.nba.models import NBAPlayer
 from ivan.sports.nba import slates as S
 

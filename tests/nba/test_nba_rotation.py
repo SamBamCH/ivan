@@ -117,7 +117,7 @@ def test_dropdown_facts_final_score_and_new_starters(tmp_path):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from ivan.sports.nba.models import NBABase, NBAStat
-    from ivan.sports.nba.pbp import NBAStint
+    from ivan.sports.nba.data_fetch.pbp import NBAStint
     from datetime import date
     engine = create_engine(f"sqlite:///{tmp_path / 't.sqlite'}", future=True)
     NBABase.metadata.create_all(engine)

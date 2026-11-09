@@ -13,7 +13,7 @@ so a second run after no change is instant; about 45 seconds for 3,000 entries, 
 """
 import argparse
 
-from ivan.sports.nba.public_field import refresh_field_ownership
+from ivan.sports.nba.field.public_field import refresh_field_ownership
 from ivan.sports.nba import slates as S
 
 

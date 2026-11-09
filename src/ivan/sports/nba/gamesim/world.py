@@ -457,7 +457,7 @@ class World:
         return cls(n=n, seed=seed, names=names, pids=pids, team_of=team_of, stats=stats, fpts=fpts, games=out_games, drawn_at=datetime.now())
 
     def to_player_samples(self) -> Dict[int, np.ndarray]:
-        """{player id: fantasy points (n,)}: the shape pre_lock.player.generate_player_samples returns."""
+        """{player id: fantasy points (n,)}: the shape gamesim.draw.generate_player_samples returns."""
         return {int(pid): self.fpts[:, j].astype(float) for j, pid in enumerate(self.pids)}
 
     def frame(self) -> pd.DataFrame:

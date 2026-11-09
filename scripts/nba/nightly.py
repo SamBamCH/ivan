@@ -3,17 +3,17 @@
 Nightly NBA data job: box scores for the current season (nba_api), capped per run
 because of nba_api rate limits; the timer runs it three times a day so it catches up.
 Then the projection scorecard for every slate whose box scores have arrived
-(ivan.sports.nba.validation.run_pending_scorecards) -> data/nba/diagnostics/scorecard/.
-Then every player's first NBA season (ivan.sports.nba.experience) for the desk's rookie marks.
+(ivan.sports.nba.backtest.validation.run_pending_scorecards) -> data/nba/diagnostics/scorecard/.
+Then every player's first NBA season (ivan.sports.nba.data_fetch.experience) for the desk's rookie marks.
 """
 import argparse
 import logging
 import sys
 
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba.historical.data_fetch import current_season, fetch_boxscores
+from ivan.sports.nba.data_fetch.boxscores import current_season, fetch_boxscores
 from ivan.sports.nba.ingest import ensure_schema
-from ivan.sports.nba.validation import run_pending_scorecards
+from ivan.sports.nba.backtest.validation import run_pending_scorecards
 
 
 def season_year(season: str) -> int:
@@ -39,7 +39,7 @@ def main() -> int:
         except Exception as e:   # noqa: BLE001 - the box scores are the job; the scorecard must not fail it
             logging.warning(f"scorecard failed: {type(e).__name__}: {e}")
         try:
-            from ivan.sports.nba import pbp as P
+            from ivan.sports.nba.data_fetch import pbp as P
             P.ensure_tables(engine)
             ids = P.games_without_stints(session, since=__import__("datetime").date(season_year(season), 10, 1))[:40]
             for gid in ids:
@@ -58,25 +58,25 @@ def main() -> int:
         except Exception as e:   # noqa: BLE001
             logging.warning(f"play-by-play failed: {type(e).__name__}: {e}")
         try:
-            from ivan.sports.nba.standings import derive_pending
+            from ivan.sports.nba.data_fetch.standings import derive_pending
             derived = derive_pending(session, log=logging.info)
             logging.info(f"standings derived: {len(derived)}")
         except Exception as e:   # noqa: BLE001
             logging.warning(f"standings derive failed: {type(e).__name__}: {e}")
         try:                                                                      # the money per slate (results.ledger_days), so the first page
-            from ivan.sports.nba import results                                   # after a scrape does not pay the parse; complete slates are not touched
+            from ivan.sports.nba.backtest import results                                   # after a scrape does not pay the parse; complete slates are not touched
             led = results.ledger_days()
             logging.info(f"results ledger: {led['overall']['slates']} slates, {led['overall']['incomplete']} incomplete, net {led['overall']['net']:+.2f}")
         except Exception as e:   # noqa: BLE001
             logging.warning(f"results ledger failed: {type(e).__name__}: {e}")
     try:
-        from ivan.sports.nba import experience
+        from ivan.sports.nba.data_fetch import experience
         experience.fetch(log=logging.info)                                       # the rookie marks on the desk
     except Exception as e:   # noqa: BLE001
         logging.warning(f"experience fetch failed: {type(e).__name__}: {e}")
     try:
         from ivan.core import feed
-        from ivan.sports.nba import autopilot
+        from ivan.sports.nba.slate import autopilot
         feed.publish("nba", which="both", log=logging.info, producer=autopilot.producer_info("nightly"))
     except Exception as e:   # noqa: BLE001
         logging.warning(f"feed publish failed: {type(e).__name__}: {e}")

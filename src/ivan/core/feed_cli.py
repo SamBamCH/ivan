@@ -80,7 +80,7 @@ def main(sport: str, before_pull: Optional[Callable[[], object]] = None, after_p
             before_publish(a)
         producer = None
         if sport == "nba":
-            from ivan.sports.nba import autopilot
+            from ivan.sports.nba.slate import autopilot
             producer = autopilot.producer_info("desk")
         m = feed.publish(sport, which=a.which, log=(lambda s: None) if a.quiet else print, producer=producer, slate=a.slate)
         stamps = " ".join(f"{part} {m.get(part, {}).get('stamp')}" for part in feed.parts_of(sport))

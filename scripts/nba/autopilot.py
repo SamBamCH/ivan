@@ -2,7 +2,7 @@
 """
 scripts/nba/autopilot.py
 
-The autopilot switch (ivan.sports.nba.autopilot): with it on, the capture tick (scripts/nba/capture.py, a user
+The autopilot switch (ivan.sports.nba.slate.autopilot): with it on, the capture tick (scripts/nba/capture.py, a user
 timer every 15 minutes) refreshes the loaded slate, fetches props at the offsets before lock and publishes +
 pushes the feed to the other desk while nobody is editing here. Same switch as the desk header's "autopilot" box.
 
@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ivan.core.utils import PROJECT_ROOT
-from ivan.sports.nba import autopilot
+from ivan.sports.nba.slate import autopilot
 
 
 def show_status() -> None:

@@ -125,7 +125,7 @@ HIST_COLORS = {"field": "#2a78d6", "pool": "#eb6834", "entries": "#1baf7a"}   # 
 
 def _field_sample() -> Optional[list]:
     """The sampled public field for the loaded pool, from its cache (written by the sim or the Field + ownership button); None when absent."""
-    from ivan.sports.nba import public_field as PF
+    from ivan.sports.nba.field import public_field as PF
     try:
         path = PF.FIELD_CACHE_DIR / f"{PF.field_key(desk.session)}.json"
         if not path.exists():
@@ -247,7 +247,7 @@ def _field_target(metric: str) -> Optional[dict]:
     """
     if metric in _FIELD_TARGET:
         return _FIELD_TARGET[metric]
-    from ivan.sports.nba.standings import DERIVED_DIR
+    from ivan.sports.nba.data_fetch.standings import DERIVED_DIR
     vals, wts, n_contests, dates = [], [], 0, []
     for d in sorted(DERIVED_DIR.glob("*")) if DERIVED_DIR.is_dir() else []:
         lp, pc = d / "lineups.parquet", d / "players.csv"

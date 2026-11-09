@@ -10,13 +10,13 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 from ivan.sports.nba.ingest import restore_from_archive
-from ivan.sports.nba import newsfeed as NF
+from ivan.sports.nba.data_fetch import newsfeed as NF
 from typing import Optional
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from ivan.core import feed
-from ivan.sports.nba import autopilot
-from ivan.sports.nba import job_time as JT
+from ivan.sports.nba.slate import autopilot
+from ivan.sports.nba.slate import job_time as JT
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.ingest import after_pull, capture_pool, refresh_pool, IngestError
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAPlayer
@@ -114,7 +114,7 @@ def _start_pull(what: str, draft_group: int, ask: bool = False) -> None:
     dg = int(draft_group)
 
     def run():
-        from ivan.sports.nba import changes as CH
+        from ivan.sports.nba.slate import changes as CH
         msgs = []; changes = None
         with S.using(dg):
             try:
@@ -200,7 +200,7 @@ def news_auto(request: Request, on: str = Form("")):
 
 @app.post("/autopilot")
 def autopilot_toggle(request: Request, on: str = Form("")):
-    """The autopilot switch (ivan.sports.nba.autopilot; scripts/nba/autopilot.py on|off from a terminal): with it on, the
+    """The autopilot switch (ivan.sports.nba.slate.autopilot; scripts/nba/autopilot.py on|off from a terminal): with it on, the
     capture tick refreshes every held slate that has not locked every 15 minutes and fetches props at the offsets,
     standing down while a desk is being worked. Nothing on a consumer."""
     if not CONSUMER:
@@ -273,7 +273,7 @@ def _pipeline_ctx() -> dict:
     except Exception:   # noqa: BLE001 - a desk without the lineup tables yet
         slates = []
     current = next((p.draft_group_id for p in (desk.slate.players if desk.slate else []) if p.draft_group_id), None)
-    from ivan.sports.nba.field_generation import slate_lineups
+    from ivan.sports.nba.field.generate import slate_lineups
     n_lineups = slate_lineups(desk.session).count()                    # the loaded slate's (other recent slates' are kept beside them)
     n_sims = desk.session.query(LineupSimulationResult).filter(LineupSimulationResult.lineup_id.in_(slate_lineups(desk.session, Lineup.id))).count()
     projected = desk.session.query(NBAPlayer).filter(NBAPlayer.fpts_mean.isnot(None)).count() > 0
@@ -350,7 +350,7 @@ def _contests_ctx() -> dict:
     rows = []
     if ent.get("exists") and not ent.get("error"):
         try:
-            from ivan.sports.nba.lineup_export import read_entries
+            from ivan.sports.nba.contest.export import read_entries
             from ivan.sports.nba.models import HistoricalContest
             e = read_entries(_entries_path())
             for (cid, name), g in e.groupby(["Contest ID", "Contest Name"]):
@@ -362,7 +362,7 @@ def _contests_ctx() -> dict:
         except Exception as ex:   # noqa: BLE001
             ent = dict(ent, error=f"{type(ex).__name__}: {ex}")
     rows.sort(key=lambda r: (r["match"] != "other", -(r["fee"] or 0) * r["entries"]))
-    from ivan.sports.nba.lineup_export import contest_weights
+    from ivan.sports.nba.contest.export import contest_weights
     cw = contest_weights()
     for r in rows:
         r["weights"] = cw.get(str(r["contest_id"]), {})
@@ -373,7 +373,7 @@ def _contests_ctx() -> dict:
 @slate.post("/contest/{contest_id}/weights", response_class=HTMLResponse)
 async def contest_weights_set(contest_id: int, request: Request):
     """One contest's chooser knobs from the contests section (= scripts/nba/contest_weights.py set); blank = the panel's value."""
-    from ivan.sports.nba.lineup_export import CONTEST_KNOBS, set_contest_weights
+    from ivan.sports.nba.contest.export import CONTEST_KNOBS, set_contest_weights
     form = await request.form()
     try:
         cur = set_contest_weights(contest_id, {k: form.get(k) for k in CONTEST_KNOBS if k in form})
@@ -392,7 +392,7 @@ def _deadline(step: str, now: datetime) -> tuple[Optional[datetime], str]:
 
 
 def _estimate(step: str, form: dict, now: Optional[datetime] = None) -> dict:
-    """The job's time estimate for these knobs (ivan.sports.nba.job_time) checked against the slate's deadline: {est, verdict, message,
+    """The job's time estimate for these knobs (ivan.sports.nba.slate.job_time) checked against the slate's deadline: {est, verdict, message,
     n_contests, deadline, label}. The contests count comes from the slate's entries file."""
     now = now or datetime.now()
     ent = _entries_info()
@@ -448,7 +448,7 @@ def _submit(step: str, form: dict) -> list:
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
                "--cash-pct", "%g" % ch["cash_pct"], "--avg-roi-win", "%g" % ch["avg_roi_win"], "--diversity-lambda", "%g" % ch["diversity_lambda"],
                "--bankroll", "%g" % ch["bankroll"], "--bankroll-dollars", "%g" % ch.get("bankroll_dollars", 1000.0)]
-        from ivan.sports.nba.lineup_export import contest_weights, contest_weights_json
+        from ivan.sports.nba.contest.export import contest_weights, contest_weights_json
         if contest_weights():                                     # the contests section's knobs win over the panel's for their contest
             cmd += ["--weights-json", str(contest_weights_json())]
         jobs.append(_submit_job("choose", cmd, "choose", meta("choose")))

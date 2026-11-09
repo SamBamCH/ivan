@@ -87,7 +87,7 @@ restart the process to see code changes.
 
 `data/nba/slates/<dg>/input/entries.csv` is the slate's DraftKings entries export (`Entry ID, Contest Name, Contest ID,
 Entry Fee, ...`). The sim and the chooser read it (`--slate DG`); the slate page has an upload box for it (`/entries`).
-Contests it names that the database lacks are fetched by `sim.py` (`ivan.sports.nba.contests.ensure_contest`).
+Contests it names that the database lacks are fetched by `sim.py` (`ivan.sports.nba.data_fetch.contests.ensure_contest`).
 
 ## Chrome profile (producer only)
 

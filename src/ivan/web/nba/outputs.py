@@ -22,7 +22,7 @@ def _entries_info() -> dict:
     if not p.exists():
         return dict(path=str(p.relative_to(PROJECT_ROOT)) if p.is_relative_to(PROJECT_ROOT) else str(p), exists=False)
     try:
-        from ivan.sports.nba.lineup_export import read_entries
+        from ivan.sports.nba.contest.export import read_entries
         e = read_entries(p)
         contests = e.groupby("Contest Name").size().to_dict()
         return dict(path=str(p.relative_to(PROJECT_ROOT)), exists=True, entries=int(len(e)), contests=contests,

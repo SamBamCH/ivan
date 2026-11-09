@@ -6,14 +6,14 @@ from __future__ import annotations
 import threading
 import time
 from datetime import date, datetime, timedelta
-from ivan.sports.nba import newsfeed as NF
+from ivan.sports.nba.data_fetch import newsfeed as NF
 from typing import Optional
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
 from ivan.core import feed
-from ivan.sports.nba import autopilot
+from ivan.sports.nba.slate import autopilot
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.utils import utc_to_local
@@ -259,7 +259,7 @@ class DeskBase:
         hist_key = getattr(self, "_hist_key", None)
         if getattr(self, "_season_key", None) != hist_key:     # per-player season and recent-game tables: only when the box scores grew
             self.season = self.season_averages(self.slate.box)
-            from ivan.sports.nba import pbp as PBP
+            from ivan.sports.nba.data_fetch import pbp as PBP
             try:
                 self.fouls = PBP.fouls_per_game(self.session)
             except Exception:   # noqa: BLE001 - no foul table yet
@@ -319,7 +319,7 @@ class DeskBase:
         """This slate's prop rows (market.fresh_odds over the pool's games) with stat, alt, posted (local) and stale (posted before the
         player's last downgrade, changes.status_cutoffs), cached on the odds table's stamp and the status stamps: built on the first
         hover after a change (about a second), then read per cell."""
-        from ivan.sports.nba import changes as CH
+        from ivan.sports.nba.slate import changes as CH
         from ivan.sports.nba.ingest import odds_stamp
         from ivan.sports.nba.projection.market import MARKET_TO_STAT, fresh_odds
         cutoffs = CH.status_cutoffs(self.session)
@@ -389,7 +389,7 @@ class DeskBase:
             self.flash.append(f"market rates not followed: {type(e).__name__}: {e}")
 
     def _consensus_odds(self) -> dict:
-        from ivan.sports.nba import changes as CH
+        from ivan.sports.nba.slate import changes as CH
         from ivan.sports.nba.projection.market import MARKET_TO_STAT, american_to_prob, fresh_odds
         odds = fresh_odds(self.session, {normalize_name(p.name): p.gametime for p in self.slate.players}, cutoffs=CH.status_cutoffs(self.session))   # this slate's games, past the status cutoffs
         if odds.empty:
@@ -489,9 +489,9 @@ class DeskBase:
         return sorted([p for p in self.slate.players if p.team == team], key=lambda p: -(p.salary or 0))
 
     def void_if_stale(self, team: str) -> Optional[dict]:
-        """A player the team's mapping had available is out now (a status, a scratch call): the mapping is void (ivan.sports.nba.mapping):
+        """A player the team's mapping had available is out now (a status, a scratch call): the mapping is void (ivan.sports.nba.slate.mapping):
         grid cleared, positive minutes pins lifted, the old mapping kept as a scenario assuming him in; the card says so."""
-        from ivan.sports.nba import mapping as MAP
+        from ivan.sports.nba.slate import mapping as MAP
         statuses = {normalize_name(p.name): (p.status or "") for p in self.players(team)}
         outs = MAP.stale_outs(team, statuses, self.overrides)
         if not outs:
@@ -516,10 +516,10 @@ class DeskBase:
 
     def rookie_of(self, name: str) -> Optional[dict]:
         """
-        A rookie: his first NBA season is this one (ivan.sports.nba.experience, nba_api's list, fetched nightly); a name the
+        A rookie: his first NBA season is this one (ivan.sports.nba.data_fetch.experience, nba_api's list, fetched nightly); a name the
         list lacks is a rookie when no NBA game is on file before this season. {games: this season's games played} or None.
         """
-        from ivan.sports.nba import experience as X
+        from ivan.sports.nba.data_fetch import experience as X
         if getattr(self, "_exp_stamp", None) != self.pool_stamp:
             self._first_years, self._exp_stamp = X.load(), self.pool_stamp
         sa = (getattr(self, "season", None) or {}).get(name) or {}
@@ -532,8 +532,8 @@ class DeskBase:
         return self.dg
 
     def notes(self) -> dict:
-        """The loaded slate's player notes, not cleared (ivan.sports.nba.notes): {player: row}."""
-        from ivan.sports.nba import notes as NOTES
+        """The loaded slate's player notes, not cleared (ivan.sports.nba.slate.notes): {player: row}."""
+        from ivan.sports.nba.slate import notes as NOTES
         try:
             return NOTES.active(self.session, self.draft_group())
         except Exception:   # noqa: BLE001 - no table yet on an old database: no notes

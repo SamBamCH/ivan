@@ -25,7 +25,7 @@ The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-0
 | `nba_market_rate` | slate | per player and stat: market mean ÷ basis minutes, books, line | `live.store_market_rates` after a props fetch | slate bundle |
 | `game_odds` | history | moneyline, spread, total per book per game | `ingest.store_game_lines` | live |
 | `historical_contest_information`, `payouts`, `classic_contest_metadata` | slate | the slate's DK contests and payout tables | `contests.upsert_contests` / `fetch_payouts` / `ensure_contest` (the sim) | slate bundle |
-| `nba_stats` | history | box scores, one row per player-game, both seasons | `nightly.py` (`historical.data_fetch.fetch_boxscores`) | reference |
+| `nba_stats` | history | box scores, one row per player-game, both seasons | `nightly.py` (`data_fetch.boxscores.fetch_boxscores`) | reference |
 | `nba_stint`, `nba_sub`, `nba_foul` | history | when each player was on the floor, substitution pairs, personal fouls, from the play-by-play | `nightly.py`, `pbp.py` | stints only |
 | `nba_projection_capture` | history | our projection per player at a moment, keyed by slate and lock: sources `ours` (every refresh and the snapshot Generate, Sim and the late swap take first), `at_tip` (the archive timer), `dk_avg`, a Stokastic CSV; carries the history context the scorecard needs | `project_slate`, `archive_at_lock.py` | reference |
 | `archived_slate`, `archived_blob` | history | the slate archive: a capture per refresh and per tip with the pool, the props and the game lines as JSON (`ivan.core.archive`), by slate key | `ingest.store_slate`, `archive_at_lock.py` | reference (`archived_slate`) |
@@ -75,11 +75,11 @@ data/nba/
 │   │   ├── sim/<stamp>/contest_<id>.npz + .json      what the sim assumed per contest
 │   │   ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
 │   │   └── lateswap.<stamp>.csv + .json
-│   ├── tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.tips, written once by archive_at_lock.py): meta.json,
+│   ├── tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.backtest.tips, written once by archive_at_lock.py): meta.json,
 │   │                               players.json (the pool with projections, ownership, grid rows), odds.parquet (the props as stored:
 │   │                               the odds table is replaced per player at every refresh), game_lines.json, news.json (the slate's
 │   │                               news seen by then), edits/ (a copy of the day's edits). What a backtest of that game's models may read
-│   └── results/ledger.json         the money (ivan.sports.nba.results): our entries' result per contest from DraftKings' final exports,
+│   └── results/ledger.json         the money (ivan.sports.nba.backtest.results): our entries' result per contest from DraftKings' final exports,
 │                                   cached; complete once every contest has a final export, re-checked every 10 minutes until then
 ├── days/<YYYY-MM-DD>/              the day's edits, shared by its slates (a game is mapped once; the 6:00 and 6:30 slates read the
 │   │                               same files, the next day starts clean); a slate reaches them through the `day` in its slate.json
@@ -98,7 +98,7 @@ data/nba/
 │   ├── team_minutes.json           the projection's game constants: scratch probabilities by status and salary, margin sd, overtime rate (hand-kept; measured 2026-10)
 │   ├── correlation.json            the role-pair correlation table measured 2026-10 on walk-forward residuals: the game sim's check target
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)
-│   ├── field_ownership.json        the ownership model fitted on real contests (field_model.py fit)
+│   ├── field_ownership.json        the ownership model fitted on real contests (scripts/nba/field_model.py fit)
 │   ├── gamesim/script.json         the game script's parameters (gamesim.py fit-script) and the World's calibrated knobs (world_*, calibrate-world), with the fit window and the commit
 │   ├── gamesim/teams.json          every team's trailing pace and the league coupling constants the World falls back on (fit-script)
 │   └── salary_minutes.json         (when fitted) the salary → minutes prior curve

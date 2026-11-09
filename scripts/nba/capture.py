@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 The autopilot tick. Runs every 15 minutes from a user timer (deploy/install_nba_timers.sh, ivan-nba-capture.timer)
-and does nothing unless the autopilot switch is on (ivan.sports.nba.autopilot: scripts/nba/autopilot.py on|off|status,
+and does nothing unless the autopilot switch is on (ivan.sports.nba.slate.autopilot: scripts/nba/autopilot.py on|off|status,
 or the desk's header). With the switch on, each tick:
 
   * stands down while a desk job is running (an edit counts as published the moment it is written, so edits never hold it)
@@ -29,8 +29,8 @@ from datetime import datetime, timedelta
 
 from ivan.database.session import init_db
 from ivan.sports.common.draftkings import fetch_all_contests, summarize_slates
-from ivan.sports.nba import autopilot
-from ivan.sports.nba import contests as C
+from ivan.sports.nba.slate import autopilot
+from ivan.sports.nba.data_fetch import contests as C
 from ivan.sports.nba.ingest import IngestError, ensure_schema, fetch_game_lines, fetch_slate, run_ingest
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.paths import NBA_DATA_DIR, LOGS_DIR

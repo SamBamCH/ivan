@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from ivan.sports.nba import lineup_export as LE
+from ivan.sports.nba.contest import export as LE
 
 
 def main() -> int:

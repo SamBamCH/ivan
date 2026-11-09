@@ -2,7 +2,7 @@
 """
 scripts/nba/considerations.py
 
-What is unusual about each team's game on the loaded slate (ivan.sports.nba.considerations): rest, regular starters
+What is unusual about each team's game on the loaded slate (ivan.sports.nba.slate.considerations): rest, regular starters
 out, a new starting five, players back from a missed game, new team, a big spread, the opponent's starters out. The
 team card's "special considerations" box shows the same list with the desk's hand starter calls in it; this script
 uses Rotowire's starters only.
@@ -12,8 +12,8 @@ uses Rotowire's starters only.
 """
 import argparse
 
-from ivan.sports.nba import considerations as CN
-from ivan.sports.nba import experience as X
+from ivan.sports.nba.slate import considerations as CN
+from ivan.sports.nba.data_fetch import experience as X
 from ivan.sports.nba.projection.live import LiveSlate
 from ivan.sports.nba import slates as S
 

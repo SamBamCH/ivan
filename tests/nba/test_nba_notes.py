@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ivan.sports.nba import notes as N
+from ivan.sports.nba.slate import notes as N
 from ivan.sports.nba.models import NBAPlayerNote
 
 

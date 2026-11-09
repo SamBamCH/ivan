@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.live import override_of
-from ivan.sports.nba.validation import market_points, recent_minutes, review_team
+from ivan.sports.nba.backtest.validation import market_points, recent_minutes, review_team
 
 STAT_ORDER = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # the grid's stat columns, left to right
 STAT_LABELS = {"points": "pts", "rebounds": "reb", "assists": "ast", "fg3m": "3pm", "steals": "stl", "blocks": "blk", "turnovers": "tov"}
@@ -42,8 +42,8 @@ from ivan.sports.nba import slates as S
 
 class RowsMixin:
     def considerations(self, team: str) -> list:
-        """What is unusual about the team's game tonight (ivan.sports.nba.considerations; scripts/nba/considerations.py)."""
-        from ivan.sports.nba import considerations as CN
+        """What is unusual about the team's game tonight (ivan.sports.nba.slate.considerations; scripts/nba/considerations.py)."""
+        from ivan.sports.nba.slate import considerations as CN
         ps = self.players(team)
         opp = next((p.opponent for p in ps if p.opponent), None)
         try:
@@ -77,7 +77,7 @@ class RowsMixin:
         return float(r.loc[name, "fpts_mean"])
 
     def review(self, team: str) -> dict:
-        """The rotation review (ivan.sports.nba.validation.review_team): provenance of every player's minutes and the flags."""
+        """The rotation review (ivan.sports.nba.backtest.validation.review_team): provenance of every player's minutes and the flags."""
         if getattr(self, "_recent", None) is None or self._recent_stamp != self.pool_stamp:
             self._recent = recent_minutes(self.slate.box); self._recent_stamp = self.pool_stamp
         return review_team(self.slate, team, self.proj[team], self._recent, market_points(self.session), self.pins())

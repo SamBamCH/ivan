@@ -38,7 +38,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ivan.sports.nba.paths import INPUT_DIR, MODELS_DIR
-from ivan.sports.nba.pbp import garbage_threshold
+from ivan.sports.nba.data_fetch.pbp import garbage_threshold
 
 MODEL_JSON = MODELS_DIR / "gamesim" / "script.json"
 HIST_LINES_CSV = INPUT_DIR / "historical_lines.csv"

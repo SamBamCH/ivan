@@ -2,7 +2,7 @@
 """
 scripts/nba/experience.py
 
-Each player's first NBA season (ivan.sports.nba.experience): what the desk's rookie mark (R on the rotation grids) reads.
+Each player's first NBA season (ivan.sports.nba.data_fetch.experience): what the desk's rookie mark (R on the rotation grids) reads.
 The nightly runs `fetch`; run it by hand when a new player shows up mid-day.
 
     scripts/nba/experience.py fetch      request nba_api's all-players list, write data/nba/derived/players/experience.json
@@ -10,7 +10,7 @@ The nightly runs `fetch`; run it by hand when a new player shows up mid-day.
 """
 import argparse
 
-from ivan.sports.nba import experience as X
+from ivan.sports.nba.data_fetch import experience as X
 
 
 def main() -> int:

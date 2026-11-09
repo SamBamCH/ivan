@@ -26,7 +26,7 @@ tomorrow's slates load. Re-working a past slate stays possible through an explic
 
 - `mode_for` and the default view on opening the desk; the picker loads at once on a pick, ‹ › step through slates,
   past days open `/?view=backtest&dg=N`, a confirm before a load clears the loaded slate's lineups.
-- `ivan.sports.nba.slate_backtest` + the backtest view + `scripts/nba/backtest_slate.py`: P&L per contest from our
+- `ivan.sports.nba.backtest.slate` + the backtest view + `scripts/nba/backtest_slate.py`: P&L per contest from our
   upload files' Entry IDs and the newest standings export, rescored from the box scores (exports taken during the
   games carry live points); the chooser's claim beside it; players by team (projection at lock vs box score,
   exposure, field ownership, notes at lock); our lineups with field copies.

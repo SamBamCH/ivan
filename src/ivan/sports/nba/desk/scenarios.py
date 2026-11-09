@@ -4,7 +4,7 @@ A team's scenarios: its edits saved under an assumption, matched against the fac
 from __future__ import annotations
 
 import json
-from ivan.sports.nba import scenarios as SC
+from ivan.sports.nba.slate import scenarios as SC
 from typing import Optional
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection import rotation as ROT

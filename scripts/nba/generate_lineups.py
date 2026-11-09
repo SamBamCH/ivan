@@ -3,7 +3,7 @@
 scripts/nba/generate_lineups.py
 
 Generate the pool of candidate classic lineups: `<lineups> <parallel workers>`.
-The worker processes and the dedupe are ivan.sports.nba.field_generation.generate_field;
+The worker processes and the dedupe are ivan.sports.nba.field.generate.generate_field;
 this is the command line.
 
     scripts/nba/generate_lineups.py 25000 8
@@ -14,7 +14,7 @@ import argparse
 from multiprocessing import freeze_support
 
 from ivan.core.config import config_path
-from ivan.sports.nba.field_generation import clear_lineups, generate_field
+from ivan.sports.nba.field.generate import clear_lineups, generate_field
 from ivan.sports.nba import slates as S
 
 

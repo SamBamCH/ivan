@@ -1,8 +1,8 @@
-"""The as-of rerun's pieces (ivan.sports.nba.gamesim.rerun): the histogram, the scorecard, the lines from a tip record, the player view."""
+"""The as-of rerun's pieces (ivan.sports.nba.backtest.rerun): the histogram, the scorecard, the lines from a tip record, the player view."""
 import numpy as np
 import pandas as pd
 
-from ivan.sports.nba.gamesim import rerun as RR
+from ivan.sports.nba.backtest import rerun as RR
 from ivan.sports.nba.gamesim import world as W
 
 

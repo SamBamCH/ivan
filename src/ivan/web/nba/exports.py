@@ -85,7 +85,7 @@ def export_lineups(ids: int = 0, draft_group: Optional[int] = None):
     from the pool snapshot written at generation, so the laptop moving the live pool to another slate cannot empty this.
     """
     from types import SimpleNamespace
-    from ivan.sports.nba.lineup_export import assign_player_order_classic
+    from ivan.sports.nba.contest.export import assign_player_order_classic
     from ivan.core.utils import coerce_player_ids
     with LOCK:
         desk.maybe_reload()

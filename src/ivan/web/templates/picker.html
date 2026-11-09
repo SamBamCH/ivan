@@ -22,7 +22,7 @@
   {% if job and job.status in ('running', 'queued') %}<meta http-equiv="refresh" content="5">{% endif %}
   {% endif %}
   {% if ledger %}{% set ov = ledger.overall %}
-  <div class="ledger" title="what our entries made, from DraftKings' final standings exports and the payout tables (ivan.sports.nba.results); this machine only">
+  <div class="ledger" title="what our entries made, from DraftKings' final standings exports and the payout tables (ivan.sports.nba.backtest.results); this machine only">
     {% if ledger.error %}<span class="muted small">results unavailable: {{ ledger.error }}</span>
     {% elif ov and ov.contests %}
     <span class="big {{ 'lo' if ov.net < 0 else 'hi' }}">{{ money(ov.net) }}</span>

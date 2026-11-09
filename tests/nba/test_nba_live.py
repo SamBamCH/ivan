@@ -1,5 +1,5 @@
-"""Live box score parsing (ivan.sports.nba.post_lock.live) on a hand-written payload in NBA's live-data shape."""
-from ivan.sports.nba.post_lock import live as L
+"""Live box score parsing (ivan.sports.nba.data_fetch.live) on a hand-written payload in NBA's live-data shape."""
+from ivan.sports.nba.data_fetch import live as L
 
 
 def test_clock_elapsed_and_dk_points():

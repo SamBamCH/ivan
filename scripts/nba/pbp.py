@@ -2,7 +2,7 @@
 """
 scripts/nba/pbp.py
 
-Play-by-play stints (ivan.sports.nba.pbp): when each player was on the floor.
+Play-by-play stints (ivan.sports.nba.data_fetch.pbp): when each player was on the floor.
 
     scripts/nba/pbp.py fetch [--since 2026-10-01] [--max-games 60]    games in nba_stats without stints (the nightly job's call)
     scripts/nba/pbp.py fetch --game-ids 0022600002
@@ -25,7 +25,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from ivan.database.session import get_session, init_db
-from ivan.sports.nba import pbp as P
+from ivan.sports.nba.data_fetch import pbp as P
 
 
 def main() -> int:

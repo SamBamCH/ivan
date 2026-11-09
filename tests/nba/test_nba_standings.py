@@ -1,4 +1,4 @@
-"""The DraftKings standings export parser and the derived field (ivan.sports.nba.standings)."""
+"""The DraftKings standings export parser and the derived field (ivan.sports.nba.data_fetch.standings)."""
 from datetime import datetime
 
 import pytest
@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from ivan.core import archive
-from ivan.sports.nba import standings as S
+from ivan.sports.nba.data_fetch import standings as S
 from ivan.sports.nba.models import HistoricalContest, NBABase, NBAProjectionCapture
 
 EXPORT = ("Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS\n"

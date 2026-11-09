@@ -17,7 +17,7 @@ import os
 from datetime import datetime
 
 from ivan.sports.nba.paths import CHROME_PROFILE_DIR
-from ivan.sports.nba.post_lock import lateswap as LS
+from ivan.sports.nba.lateswap import swap as LS
 from ivan.sports.nba import slates as S
 
 

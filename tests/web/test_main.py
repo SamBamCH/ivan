@@ -335,7 +335,7 @@ def test_nba_run_estimate_warns_but_never_refuses(open_site, monkeypatch):
     anyway with a "heads up" flash (no run-anyway box, nothing refused); the job's record carries the estimate."""
     from ivan.web import nba as D
     from ivan.web.nba import pipeline as P
-    from ivan.sports.nba import job_time as JT
+    from ivan.sports.nba.slate import job_time as JT
     dg, day = _held(open_site)
     slow = {s: dict(per_unit=0.0, fixed=360000.0, n=9, p90_ratio=1.2, basis="fitted") for s in JT.STEPS}     # every run "takes a hundred hours"
     monkeypatch.setattr(JT, "fit", lambda *a, **k: slow)
@@ -404,7 +404,7 @@ def test_nba_starter_toggle_posts_the_rows_player(open_site):
     assert open_site.post(f"/nba/{day}/{dg}/team/{team}/starter", data={}).status_code == 422                # what the old click sent
     key = next(k for k in (r.text.split('data-key="')[1:2] or ["x"]) ).split('"')[0]
     before = override_of(d.overrides, key).get("starter")
-    from ivan.sports.nba import changes as CH
+    from ivan.sports.nba.slate import changes as CH
     from ivan.sports.nba.names import normalize_name as _nn
     stamp_before = CH.status_cutoffs(d.session).get(key)
     rotowire_starter = key in (d.slate.starters.get(team) or set())

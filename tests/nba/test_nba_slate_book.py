@@ -1,4 +1,4 @@
-"""The NBA slate method: the sim's shared draw, the world-axis check, the choose run as one book (ivan.sports.nba.choose + lineup_export)."""
+"""The NBA slate method: the sim's shared draw, the world-axis check, the choose run as one book (ivan.sports.nba.contest.choose + lineup_export)."""
 from datetime import datetime
 
 import numpy as np
@@ -6,9 +6,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ivan.sports.nba import choose as CH
-from ivan.sports.nba import lineup_export as LE
-from ivan.sports.nba import simulate_contest as SC
+from ivan.sports.nba.contest import choose as CH
+from ivan.sports.nba.contest import export as LE
+from ivan.sports.nba.contest import simulate as SC
 from ivan.sports.nba.models import ContestSimReport, HistoricalContest, Lineup, LineupSimulationResult, NBABase, NBAPlayer
 
 

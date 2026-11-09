@@ -23,7 +23,7 @@ from datetime import datetime
 
 from ivan.database.session import init_db
 from ivan.sports.common.draftkings import fetch_all_contests
-from ivan.sports.nba import contests as C
+from ivan.sports.nba.data_fetch import contests as C
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.ingest import IngestError, classic_slates, ensure_schema, run_ingest
 

@@ -99,7 +99,7 @@ def curves(session: Session, team: Optional[str] = None, before: Optional[date] 
 def garbage_onsets(stints: pd.DataFrame) -> Dict[str, Tuple[Optional[int], set]]:
     """game_id -> (minute garbage time began or None, that game's closers for the stints' team): the earliest exit in the last
     fourteen minutes at a margin beyond the pull threshold for the time left."""
-    from ivan.sports.nba.pbp import garbage_threshold
+    from ivan.sports.nba.data_fetch.pbp import garbage_threshold
     out = {}
     for gid, g in stints.groupby("game_id"):
         tot = g.groupby("player_name").minutes.sum().sort_values(ascending=False)
@@ -708,7 +708,7 @@ def sub_events(grid: pd.DataFrame) -> List[dict]:
 
 
 def garbage_threshold_minutes(minutes_left: float) -> float:
-    from ivan.sports.nba.pbp import garbage_threshold
+    from ivan.sports.nba.data_fetch.pbp import garbage_threshold
     return garbage_threshold(minutes_left * 60.0)
 
 

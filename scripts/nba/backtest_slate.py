@@ -2,7 +2,7 @@
 """
 scripts/nba/backtest_slate.py
 
-A past slate, read only (ivan.sports.nba.slate_backtest): what the desk's backtest view shows. Our entries' results
+A past slate, read only (ivan.sports.nba.backtest.slate): what the desk's backtest view shows. Our entries' results
 from DraftKings' final standings exports (a contest whose export is mid-slate or missing is listed unscored), the
 chooser's claim beside them, each contest, and the players with the biggest misses against our projection at lock.
 Nothing is loaded into the desk or deleted.
@@ -14,7 +14,7 @@ Nothing is loaded into the desk or deleted.
 import argparse
 from datetime import date
 
-from ivan.sports.nba import slate_backtest as SB
+from ivan.sports.nba.backtest import slate as SB
 from ivan.sports.nba import slates as S
 
 

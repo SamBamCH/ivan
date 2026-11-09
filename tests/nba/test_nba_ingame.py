@@ -1,7 +1,7 @@
-"""In-game update (ivan.sports.nba.post_lock.ingame): banking, pace, blowouts."""
+"""In-game update (ivan.sports.nba.lateswap.ingame): banking, pace, blowouts."""
 import numpy as np
 
-from ivan.sports.nba.post_lock import ingame as G
+from ivan.sports.nba.lateswap import ingame as G
 
 
 def _draws(**kw):
