@@ -1,39 +1,8 @@
 import pandas as pd
 from ivan.sports.nba.names import normalize_name
-from pathlib import Path
-from datetime import timedelta
-import shutil
+from ivan.sports.nba.scoring import dk_points, from_nba_api
 import re
 from datetime import datetime, timezone
-from ivan.sports.nba.paths import DIAG_DIR
-
-def _calculate_dk_fpts(row):
-    """
-    Calculate DraftKings fantasy points for NBA.
-    Scoring: PTS=1, 3PM=0.5, REB=1.25, AST=1.5, STL=2, BLK=2, TO=-0.5
-    Double-double bonus: +1.5, Triple-double bonus: +3
-    """
-    pts = row.get('points', 0) or 0
-    fg3m = row.get('threePointersMade', 0) or 0
-    reb = row.get('reboundsTotal', 0) or 0
-    ast = row.get('assists', 0) or 0
-    stl = row.get('steals', 0) or 0
-    blk = row.get('blocks', 0) or 0
-    to = row.get('turnovers', 0) or 0
-
-    fpts = (pts * 1.0) + (fg3m * 0.5) + (reb * 1.25) + (ast * 1.5) + (stl * 2.0) + (blk * 2.0) + (to * -0.5)
-
-    # Double-double and triple-double bonuses
-    stats = [pts, reb, ast, stl, blk]
-    double_digit_stats = sum(1 for s in stats if s >= 10)
-
-    if double_digit_stats >= 2:
-        fpts += 1.5  # Double-double bonus
-    if double_digit_stats >= 3:
-        fpts += 1.5  # Triple-double bonus (additional 1.5, total 3.0)
-
-    return round(fpts, 2)
-
 
 def safe_int(value, default=0):
     """Safely convert value to int, handling None and NaN."""
@@ -94,7 +63,7 @@ def _transfer_boxscore_to_model(boxscore_df, game_date, season='2025-26'):
             'ft_pct': safe_float(row.get('freeThrowsPercentage')),
         }
 
-        stat_dict['dk_fpts'] = _calculate_dk_fpts(row)
+        stat_dict['dk_fpts'] = round(dk_points(from_nba_api(row)), 2)
 
         stats_list.append(stat_dict)
 
@@ -109,31 +78,3 @@ def parse_sd(sd_str: str) -> datetime:
         return None
     ts = int(m.group(1)) / 1000.0
     return datetime.fromtimestamp(ts, tz=timezone.utc)
-
-
-
-def clean_old_diagnostics(
-    diagnostics_root: str | Path = DIAG_DIR,
-    days_to_keep: int = 7
-):
-    """Remove diagnostic folders older than days_to_keep."""
-    diagnostics_root = Path(diagnostics_root)
-    if not diagnostics_root.exists():
-        return
-    
-    cutoff = datetime.now() - timedelta(days=days_to_keep)
-    removed = 0
-    
-    for folder in diagnostics_root.iterdir():
-        if not folder.is_dir():
-            continue
-        
-        folder_mtime = datetime.fromtimestamp(folder.stat().st_mtime)
-        
-        if folder_mtime < cutoff:
-            print(f"  Removing old diagnostics: {folder.name} (age: {(datetime.now() - folder_mtime).days} days)")
-            shutil.rmtree(folder)
-            removed += 1
-    
-    if removed:
-        print(f"  Cleaned up {removed} old diagnostic folder(s)")

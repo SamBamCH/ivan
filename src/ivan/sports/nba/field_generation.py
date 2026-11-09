@@ -35,7 +35,8 @@ from ivan.sports.nba import slates as S
 from ivan.sports.nba.models import Lineup, LineupPool, NBAPlayer
 from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.pre_lock.player import generate_player_samples
-from ivan.sports.nba.utils import _cfg, _coerce_positions
+from ivan.core.config import cfg
+from ivan.sports.nba.utils import _coerce_positions
 
 Log = Callable[[str], None]
 BATCH_COMMIT_SIZE = 100
@@ -57,9 +58,9 @@ def quotas(n_lineups: int, jobs: int) -> List[int]:
 
 
 def generate_settings(config: dict, min_fpts: Optional[float] = None, randomness: Optional[float] = None) -> dict:
-    s = {k: _cfg(config, f"generate.{k}", v) for k, v in DEFAULTS.items()}
+    s = {k: cfg(config, f"generate.{k}", v) for k, v in DEFAULTS.items()}
     if s["player_min_fpts"] is None:                      # the older top-level key, then the solver's old floor
-        s["player_min_fpts"] = _cfg(config, "player_min_fpts", 15.0)
+        s["player_min_fpts"] = cfg(config, "player_min_fpts", 15.0)
     if min_fpts is not None:
         s["min_fpts"] = float(min_fpts)
     if randomness is not None:
@@ -70,7 +71,7 @@ def generate_settings(config: dict, min_fpts: Optional[float] = None, randomness
 def optimal_total(players: List[FieldPlayer], config: dict) -> Optional[float]:
     """The mean-projection optimal lineup's total: the anchor the pool is measured against."""
     means = {p.id: float(p.fpts_mean or 0.0) for p in players}
-    ids = generate_single_classic_lineup(players=players, base_scores=means, config=config, max_salary_per_team=_cfg(config, "max_salary_per_team", 25000))
+    ids = generate_single_classic_lineup(players=players, base_scores=means, config=config, max_salary_per_team=cfg(config, "max_salary_per_team", 25000))
     return float(sum(means[i] for i in ids)) if ids else None
 
 
@@ -109,7 +110,7 @@ def worker(worker_id: int, num_lineups: int, config_path: str, min_fpts: Optiona
                 s["min_fpts"] = float(s["min_fpts_frac"]) * opt
         samples = generate_player_samples(session, n_samples=int(s["n_samples"]), randomness=float(s["randomness"]), seed=seed)
         n_samples = int(s["n_samples"]); jitter = float(s["jitter"])
-        max_team = _cfg(config, "max_salary_per_team", 25000)
+        max_team = cfg(config, "max_salary_per_team", 25000)
         generated: List[List[int]] = []; seen = set(); pending: List[List[int]] = []
         cursor = worker_id * 1000; attempts = 0; max_attempts = num_lineups * 10
         window: List[int] = []                                 # 1 per attempt that found a new lineup, 0 otherwise, last STALL_WINDOW

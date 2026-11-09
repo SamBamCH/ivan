@@ -21,9 +21,10 @@ from typing import Dict, Optional
 
 import pandas as pd
 
-from ivan.sports.nba.projection.history import STATS, HistoryState
+from ivan.sports.nba.projection.history import HistoryState
 from ivan.sports.nba.projection.market import market_means
-from ivan.sports.nba.projection.rates import DK_WEIGHTS, shrunk_rates
+from ivan.sports.nba.projection.rates import shrunk_rates
+from ivan.sports.nba.scoring import DK_WEIGHTS, STATS
 
 PRICED_SCALE, PRICED_SHIFT = 0.886, 3.57
 UNPRICED = {"hist_fpts": 0.765, "salary_k": 1.852, "start_ewm": 1.009, "hist_min": 0.025}

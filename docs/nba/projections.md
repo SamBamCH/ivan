@@ -131,7 +131,8 @@ with nothing changed since the fetch a priced player projects to exactly the mar
 
 Per world: that world's minutes × rate gives each stat's mean; each stat is drawn negative binomial
 with its dispersion (`projection_calibration.json`, hand-kept; fitted 2026-10);
-double-double and triple-double bonuses are counted on the joint draw. The projection is the mean
+double-double and triple-double bonuses are counted on the joint draw (DraftKings' weights and bonuses live in one
+place, `scoring.py`, which the game simulation, the live feed and the box-score fantasy points use too). The projection is the mean
 over worlds (`n_sims` 4000 from the CLI, 2000 from the desk's Publish), the sd the sd over worlds, and
 the marginal is kept as 101 quantiles on `nba_player.fpts_quantiles` for the desk's display.
 

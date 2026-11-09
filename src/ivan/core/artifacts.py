@@ -32,13 +32,51 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
 ENV = "IVAN_RUN_DIR"
 STAMP_FMT = "%Y%m%d-%H%M%S"
 REPLAY_MANIFEST = "replay.json"
+
+
+def jsonable(obj):
+    """numpy scalars and arrays, tuples, dates, paths and NaN -> plain JSON values (recursively)."""
+    import math
+    import numpy as np
+    if isinstance(obj, dict):
+        return {str(k): jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [jsonable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return jsonable(obj.tolist())
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        x = float(obj)
+        return x if math.isfinite(x) else None
+    if isinstance(obj, (datetime, date)) or hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    if isinstance(obj, Path):
+        return str(obj)
+    return obj
+
+
+def clean_old_diagnostics(diagnostics_root: Path, days_to_keep: int = 7) -> int:
+    """Remove the per-contest diagnostic folders under `diagnostics_root` older than days_to_keep. Returns how many."""
+    import shutil
+    root = Path(diagnostics_root)
+    if not root.exists():
+        return 0
+    cutoff = datetime.now() - timedelta(days=days_to_keep)
+    removed = 0
+    for d in root.iterdir():
+        if d.is_dir() and datetime.fromtimestamp(d.stat().st_mtime) < cutoff:
+            shutil.rmtree(d, ignore_errors=True); removed += 1
+    return removed
 
 
 def run_dir() -> Optional[Path]:

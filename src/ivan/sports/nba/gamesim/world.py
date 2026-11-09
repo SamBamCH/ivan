@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 from ivan.sports.nba.gamesim import profiles as PR
 from ivan.sports.nba.gamesim import rotation as RO
 from ivan.sports.nba.gamesim import script as SC
+from ivan.sports.nba import scoring
 from ivan.sports.nba.paths import MODELS_DIR
 
 TEAMS_JSON = MODELS_DIR / "gamesim" / "teams.json"
@@ -56,7 +57,7 @@ MINUTES = 48
 SEG_MIN = 6
 OT_MIN = 5
 STATS = ("pts", "fg3m", "reb", "ast", "stl", "blk", "tov")
-DK = {"pts": 1.0, "fg3m": 0.5, "reb": 1.25, "ast": 1.5, "stl": 2.0, "blk": 2.0, "tov": -0.5}
+SCORING_KEYS = {"pts": "points", "fg3m": "fg3m", "reb": "rebounds", "ast": "assists", "stl": "steals", "blk": "blocks", "tov": "turnovers"}
 LEAGUE_DEFAULTS = dict(league_pace=98.5, oreb_share=0.26, ast_share=0.60, p_stl=0.55, p_blk=0.11, ft_miss_live=0.5, paces={})
 FACTOR_LO, FACTOR_HI = 0.7, 1.4         # the team reconciliation factor on attempts
 
@@ -104,7 +105,7 @@ def _rates_of(p, league_rates: Dict[str, float]) -> Dict[str, float]:
     mins = float(p.minutes_proj or 0.0)
     if mins <= 0 or not p.fpts_mean:
         return dict(league_rates)
-    fpm_league = sum(DK[k if k != "points" else "pts"] * v for k, v in league_rates.items() if k in ("points",)) or 1.0
+    fpm_league = scoring.DK_WEIGHTS["points"] * float(league_rates.get("points", 0.0)) or 1.0     # the points rate alone sets the scale
     scale = float(p.fpts_mean) / mins / max(fpm_league, 1e-6)
     return {k: v * scale for k, v in league_rates.items()}
 
@@ -513,7 +514,5 @@ def calibrate(session: Session, games: List[GameIn], params: dict, real: dict, n
 
 
 def dk_points(stats: Dict[str, np.ndarray]) -> np.ndarray:
-    fp = sum(DK[s] * stats[s] for s in STATS).astype(float)
-    cats = np.stack([stats["pts"], stats["reb"], stats["ast"], stats["stl"], stats["blk"]]) >= 10
-    n10 = cats.sum(axis=0)
-    return fp + 1.5 * (n10 >= 2) + 3.0 * (n10 >= 3)
+    """DraftKings points of every player in every world from the World's stat arrays (scoring.dk_points on the short keys)."""
+    return scoring.dk_points({SCORING_KEYS[s]: stats[s] for s in STATS})

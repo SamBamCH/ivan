@@ -14,13 +14,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .history import STATS
+from ivan.sports.nba.scoring import DK_WEIGHTS, STATS
 
 PRIOR_MINUTES = 60.0
 USAGE_RECOVERY = 0.5   # backtest 2026-10-06: 0.25-0.5 flat, zero star-out bias at 0.25-0.5
 
-DK_WEIGHTS = {"points": 1.0, "fg3m": 0.5, "rebounds": 1.25, "assists": 1.5,
-              "steals": 2.0, "blocks": 2.0, "turnovers": -0.5}
 
 
 def shrunk_rates(state_row: pd.Series | None, league: dict[str, float],

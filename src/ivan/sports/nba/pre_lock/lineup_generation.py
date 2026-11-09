@@ -1,3 +1,4 @@
+from ivan.core.config import cfg
 """
 Core lineup generation logic for NBA Classic contests.
 
@@ -64,24 +65,13 @@ def _unique_problem_name(base: str = "nba_classic_lineup") -> str:
     return f"{base}_{os.getpid()}_{int(time.time()*1e6)}_{uuid4().hex[:6]}"
 
 
-def _cfg(config: dict, path: str, default):
-    """Quiet dotted lookup with default (no warnings)."""
-    cur = config or {}
-    for part in path.split("."):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        else:
-            return default
-    return cur
-
-
 def _make_glpk_solver(config: dict):
     """Prefer GLPK if available; fall back to CBC."""
     import shutil
-    keep_files = bool(_cfg(config, "solver.keep_files", False))
-    msg = bool(_cfg(config, "solver.msg", False))
+    keep_files = bool(cfg(config, "solver.keep_files", False))
+    msg = bool(cfg(config, "solver.msg", False))
 
-    path = (_cfg(config, "solver.glpk_path", None)
+    path = (cfg(config, "solver.glpk_path", None)
             or os.environ.get("GLPK_PATH")
             or shutil.which("glpsol"))
 

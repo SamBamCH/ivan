@@ -21,9 +21,8 @@ from __future__ import annotations
 import json
 import math
 import re
-import shutil
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -31,7 +30,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from ivan.core.artifacts import contest_artifact_paths
+from ivan.core.artifacts import contest_artifact_paths, jsonable
 from ivan.core.seed import seed_for
 from ivan.sports.common.payouts import scale_payouts_correctly
 from ivan.sports.nba import contests as C
@@ -52,43 +51,9 @@ def _f(x) -> Optional[float]:
     return x if math.isfinite(x) else None
 
 
-def jsonable(obj):
-    """numpy scalars/arrays, tuples, datetimes and NaN -> plain JSON values."""
-    if isinstance(obj, dict):
-        return {str(k): jsonable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [jsonable(v) for v in obj]
-    if isinstance(obj, np.ndarray):
-        return jsonable(obj.tolist())
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, (np.floating, float)):
-        return _f(obj)
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, datetime):
-        return obj.isoformat(timespec="seconds")
-    if isinstance(obj, Path):
-        return str(obj)
-    return obj
-
-
 def sanitize_contest_name(name: str) -> str:
     safe = re.sub(r'[<>:"/\\|?*]', "_", name)
     return re.sub(r"_+", "_", safe)[:80].strip("_")
-
-
-def clean_old_diagnostics(diagnostics_root: str | Path = DIAG_DIR, days_to_keep: int = 7) -> int:
-    """Remove per-contest diagnostic folders older than days_to_keep. Returns how many."""
-    root = Path(diagnostics_root)
-    if not root.exists():
-        return 0
-    cutoff = datetime.now() - timedelta(days=days_to_keep)
-    removed = 0
-    for d in root.iterdir():
-        if d.is_dir() and datetime.fromtimestamp(d.stat().st_mtime) < cutoff:
-            shutil.rmtree(d, ignore_errors=True); removed += 1
-    return removed
 
 
 def player_meta(session: Session, pids) -> Dict[int, dict]:

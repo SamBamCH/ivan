@@ -468,7 +468,7 @@ def history_context(slate: LiveSlate, name: str) -> dict:
 
 def market_fpts_by_player(session: Session) -> dict[str, float]:
     """The books' implied fantasy points per priced player: the market means at DK weights (turnovers, never priced, left out)."""
-    from ivan.sports.nba.projection.rates import DK_WEIGHTS
+    from ivan.sports.nba.scoring import DK_WEIGHTS
     out: dict[str, float] = {}
     for r in session.query(NBAMarketRate).all():
         out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)

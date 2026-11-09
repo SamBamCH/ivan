@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
-STATS = ["points", "rebounds", "assists", "steals", "blocks", "turnovers", "fg3m"]
+from ivan.sports.nba.scoring import STATS   # noqa: F401  (the seven stats every frame carries; re-exported for the projection modules)
 
 # Regular season (002) and playoffs (004). Preseason (001) and the all-star
 # game (006) are noise for rotation purposes.

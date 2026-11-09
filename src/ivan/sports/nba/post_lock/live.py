@@ -21,7 +21,7 @@ import requests
 
 from ivan.core import raw
 from ivan.sports.nba.names import normalize_name
-from ivan.sports.nba.projection.rates import DK_WEIGHTS
+from ivan.sports.nba.scoring import dk_points as _dk_points, from_nba_api
 
 Log = Callable[[str], None]
 SPORT = "nba"
@@ -67,12 +67,7 @@ def minutes_of(s: str) -> float:
 
 def dk_points(st: dict) -> float:
     """DraftKings classic points from a live statistics block, double- and triple-double bonuses included."""
-    pts, reb, ast = float(st.get("points", 0)), float(st.get("reboundsTotal", 0)), float(st.get("assists", 0))
-    stl, blk, tov, fg3 = float(st.get("steals", 0)), float(st.get("blocks", 0)), float(st.get("turnovers", 0)), float(st.get("threePointersMade", 0))
-    lin = (DK_WEIGHTS["points"] * pts + DK_WEIGHTS["fg3m"] * fg3 + DK_WEIGHTS["rebounds"] * reb + DK_WEIGHTS["assists"] * ast
-           + DK_WEIGHTS["steals"] * stl + DK_WEIGHTS["blocks"] * blk + DK_WEIGHTS["turnovers"] * tov)
-    tens = sum(1 for x in (pts, reb, ast, stl, blk) if x >= 10)
-    return lin + (3.0 if tens >= 3 else 0.0) + (1.5 if tens >= 2 else 0.0)
+    return _dk_points(from_nba_api(st))
 
 
 def scoreboard(log: Log = print) -> List[dict]:

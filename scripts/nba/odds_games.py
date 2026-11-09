@@ -30,7 +30,8 @@ from ivan.sports.common.odds import parse_odds
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.models import NBAOdds, NBAPlayer
 from ivan.sports.nba.names import normalize_name
-from ivan.sports.nba.projection.market import FALLBACK_HOURS, GAME_TOLERANCE_HOURS, fresh_rows, load_odds, parse_utc
+from ivan.sports.nba.projection.market import FALLBACK_HOURS, GAME_TOLERANCE_HOURS, fresh_rows, load_odds
+from ivan.sports.nba.utils import parse_utc
 
 
 def _utc1(ts) -> pd.Timestamp:

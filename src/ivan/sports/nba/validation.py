@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from ivan.core.artifacts import jsonable
 from ivan.sports.nba.models import NBAMarketRate, NBAProjectionCapture
 from ivan.sports.nba.paths import DIAG_DIR
 
@@ -287,24 +288,8 @@ def build_scorecard(session: Session, draft_group: int) -> Optional[Scorecard]:
 def save_scorecard(card: Scorecard, out_dir: Path = SCORECARD_DIR) -> Path:
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     card.rows.to_csv(out_dir / f"{card.key}.csv", index=False)
-    (out_dir / f"{card.key}.json").write_text(json.dumps(_jsonable(card.summary), indent=1))
+    (out_dir / f"{card.key}.json").write_text(json.dumps(jsonable(card.summary), indent=1))
     return out_dir / f"{card.key}.json"
-
-
-def _jsonable(o):
-    if isinstance(o, dict):
-        return {str(k): _jsonable(v) for k, v in o.items()}
-    if isinstance(o, (list, tuple)):
-        return [_jsonable(v) for v in o]
-    if isinstance(o, (np.integer,)):
-        return int(o)
-    if isinstance(o, (np.floating, float)):
-        return None if not np.isfinite(o) else float(o)
-    if isinstance(o, (np.bool_,)):
-        return bool(o)
-    if isinstance(o, (datetime, date, pd.Timestamp)):
-        return o.isoformat()
-    return o
 
 
 def format_scorecard(card: Scorecard, top: int = TOP_N) -> str:

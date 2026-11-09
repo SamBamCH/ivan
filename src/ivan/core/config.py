@@ -55,6 +55,17 @@ def load_config(sport: str = "nfl", path: str | os.PathLike | None = None) -> di
     return cfg
 
 
+def cfg(config: dict | None, path: str, default=None):
+    """A dotted lookup into a loaded config, quiet: cfg(c, "sim.n_sims", 1000)."""
+    cur = config or {}
+    for part in path.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return default
+    return cur
+
+
 def require_env(name: str) -> str:
     val = os.environ.get(name)
     if not val:

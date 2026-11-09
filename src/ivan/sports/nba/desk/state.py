@@ -16,6 +16,7 @@ from ivan.core import feed
 from ivan.sports.nba import autopilot
 from ivan.core.utils import PROJECT_ROOT
 from ivan.sports.nba.names import normalize_name
+from ivan.sports.nba.utils import utc_to_local
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.ingest import ensure_schema, project_team
 from ivan.sports.nba.projection import store as PSTORE
@@ -55,13 +56,6 @@ MINUTES_DEV = 8.0          # model minutes this far from history is a role chang
 
 
 MARKET_GAP = 0.20          # market mean vs history-only projection, relative
-
-
-def utc_to_local(stamp) -> datetime:
-    """An ISO time from the odds API ('2026-10-23T19:45:19Z') as naive local time, like every other desk time."""
-    t = pd.Timestamp(stamp)
-    t = t.tz_localize("UTC") if t.tzinfo is None else t
-    return t.tz_convert(datetime.now().astimezone().tzinfo).tz_localize(None).to_pydatetime()
 
 
 def short_name(name: str) -> str:
@@ -327,7 +321,7 @@ class DeskBase:
         hover after a change (about a second), then read per cell."""
         from ivan.sports.nba import changes as CH
         from ivan.sports.nba.ingest import odds_stamp
-        from ivan.sports.nba.projection.market import MARKET_TO_STAT, _to_local, fresh_odds
+        from ivan.sports.nba.projection.market import MARKET_TO_STAT, fresh_odds
         cutoffs = CH.status_cutoffs(self.session)
         key = (odds_stamp(self.session), self.pool_stamp[2], tuple(sorted((k, str(v)) for k, v in cutoffs.items())))
         cache = getattr(self, "_fresh_props_cache", None)
@@ -337,7 +331,7 @@ class DeskBase:
         if not odds.empty:
             odds = odds[odds.market.isin(MARKET_TO_STAT)].copy()
             odds["stat"] = odds.market.map(MARKET_TO_STAT); odds["alt"] = odds.market.str.endswith("alternate")
-            odds["posted"] = _to_local(odds["last_update"]) if odds["last_update"].notna().any() else pd.NaT
+            odds["posted"] = utc_to_local(odds["last_update"]) if odds["last_update"].notna().any() else pd.NaT
             odds["_side"] = odds.side.astype(str).str.lower()
             if "stale" not in odds.columns:
                 odds["stale"] = False
@@ -515,7 +509,7 @@ class DeskBase:
         """market fpts per priced player (sum of priced stats at DK weights; turnovers from history are small)"""
         out = {}
         rows = self.session.query(NBAMarketRate).all()
-        from ivan.sports.nba.projection.rates import DK_WEIGHTS
+        from ivan.sports.nba.scoring import DK_WEIGHTS
         for r in rows:
             out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
         return out

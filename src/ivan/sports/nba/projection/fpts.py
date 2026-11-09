@@ -13,8 +13,7 @@ import json
 import numpy as np
 
 from ivan.sports.nba.paths import MODELS_DIR
-from .history import STATS
-from .rates import DK_WEIGHTS
+from ivan.sports.nba.scoring import STATS, dk_points
 
 CALIBRATION_JSON = MODELS_DIR / "projection_calibration.json"
 
@@ -59,11 +58,7 @@ def fpts_from_minutes(mins: np.ndarray, rates: dict[str, float], dispersion: dic
     rng = rng or np.random.default_rng()
     k = dispersion or _CAL["dispersion"]
     mins = np.asarray(mins, dtype=float)
-    draws = {s: _nbinom(rng, mins * rates[s], k[s]) for s in STATS}
-    fp = sum(DK_WEIGHTS[s] * draws[s] for s in STATS).astype(float)
-    cats = np.stack([draws["points"], draws["rebounds"], draws["assists"], draws["steals"], draws["blocks"]]) >= 10
-    n10 = cats.sum(axis=0)
-    fp += 1.5 * (n10 >= 2) + 3.0 * (n10 >= 3)
+    fp = dk_points({s: _nbinom(rng, mins * rates[s], k[s]) for s in STATS})
     fp[mins <= 0] = 0.0
     return fp
 
@@ -84,13 +79,7 @@ def simulate_fpts(
     k = dispersion or _CAL["dispersion"]
     sd = minutes_sd(minutes_mu) if min_sd is None else min_sd
     mins = np.clip(rng.normal(minutes_mu, sd, n), 0.0, 48.0)
-    draws = {s: _nbinom(rng, mins * rates[s], k[s]) for s in STATS}
-    fp = sum(DK_WEIGHTS[s] * draws[s] for s in STATS).astype(float)
-    cats = np.stack([draws["points"], draws["rebounds"], draws["assists"],
-                     draws["steals"], draws["blocks"]]) >= 10
-    n10 = cats.sum(axis=0)
-    fp += 1.5 * (n10 >= 2) + 3.0 * (n10 >= 3)
-    return fp
+    return dk_points({s: _nbinom(rng, mins * rates[s], k[s]) for s in STATS})
 
 
 def summarize(samples: np.ndarray) -> tuple[float, float]:

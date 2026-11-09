@@ -16,12 +16,12 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
 from scipy.stats import nbinom
 
+from ivan.sports.nba.utils import utc_to_local
 from .fpts import load_calibration
 
 MARKET_TO_STAT = {
@@ -88,18 +88,6 @@ GAME_TOLERANCE_HOURS = 2.0   # a row's game is the player's game on this slate w
 FALLBACK_HOURS = 12.0        # a row without a game (stored before 2026-11-07): counts when the book posted it within this long before the tip
 
 
-def parse_utc(strings: pd.Series) -> pd.Series:
-    """UTC time strings -> tz-aware UTC. format="ISO8601" because the odds table mixes "2026-10-25T22:54:18Z" (the fetch) with
-    "2026-10-25 22:54:18" (captures restored before 2026-11-07); pandas infers one format from the first row and coerces the
-    other to NaT, which silently dropped every restored row."""
-    return pd.to_datetime(strings, errors="coerce", utc=True, format="ISO8601")
-
-
-def _to_local(utc_strings: pd.Series) -> pd.Series:
-    """ISO UTC strings -> naive local datetimes (the pool's gametime is naive local)."""
-    return parse_utc(utc_strings).dt.tz_convert(datetime.now().astimezone().tzinfo).dt.tz_localize(None)
-
-
 def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FALLBACK_HOURS, cutoffs: dict | None = None, mark: bool = False) -> pd.DataFrame:
     """
     Only the odds rows priced for the player's game on this slate (`gametimes`: DK name -> naive local tip).
@@ -120,8 +108,8 @@ def fresh_rows(odds: pd.DataFrame, gametimes: dict, hours: float = FALLBACK_HOUR
     if odds is None or odds.empty or "last_update" not in odds.columns:
         return odds.iloc[0:0] if odds is not None else pd.DataFrame()
     tip = pd.to_datetime(odds["player"].map(lambda n: gametimes.get(n)), errors="coerce")
-    posted = _to_local(odds["last_update"])
-    game = _to_local(odds["commence_time"]) if "commence_time" in odds.columns else pd.Series(pd.NaT, index=odds.index)
+    posted = utc_to_local(odds["last_update"])
+    game = utc_to_local(odds["commence_time"]) if "commence_time" in odds.columns else pd.Series(pd.NaT, index=odds.index)
     linked = game.notna()
     keep_linked = linked & ((game - tip).abs() <= pd.Timedelta(hours=GAME_TOLERANCE_HOURS))
     keep_legacy = ~linked & posted.notna() & (posted >= tip - pd.Timedelta(hours=hours)) & (posted <= tip + pd.Timedelta(hours=1))
