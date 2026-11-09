@@ -101,6 +101,21 @@ async def refigure(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
+@slate.post("/team/{team}/solve", response_class=HTMLResponse)
+def solve(request: Request, team: str):
+    """The optimal lineup in each of the World's worlds, over the whole slate (scripts/nba/optimal.py as a job = the pipeline's
+    Solve): the card's opt column fills when it is done (the page reloads on it)."""
+    if (b := _busy(request)) is not None:
+        return b
+    with LOCK:
+        if _active():
+            desk.flash.append("a job is already running on this slate; wait for it or cancel it")
+        else:
+            _submit("solve", pipeline_form)
+            desk.flash.append("solving the optimal lineup in each world (scripts/nba/optimal.py, a few seconds); the opt column fills when it is done")
+        return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
+
+
 @slate.post("/team/{team}/note", response_class=HTMLResponse)
 def player_note(request: Request, team: str, player: str = Form(...), text: Optional[str] = Form(None)):
     """A note next to a player on this slate (ivan.sports.nba.slate.notes = scripts/nba/notes.py): the text comes from the form or

@@ -1,7 +1,8 @@
 # NBA
 
-DraftKings NBA classic slates: the laptop fetches the slate and the books, projects every player as
-minutes times per-minute rates, builds a field, simulates the contests you entered and picks the
+DraftKings NBA classic slates: the laptop fetches the slate and the books, maps every team (minutes on a
+rotation grid, per-minute rates from the props), simulates each game on that map and reads every player's
+projection off the simulated worlds, builds a field, simulates the contests you entered and picks the
 lineups to upload. A second machine (the server) runs the same desk for someone else on the
 projections the laptop publishes. The code is `src/ivan/sports/nba/`, one package per stage in the order the
 process runs; the commands are `scripts/nba/`, the desk's pages `src/ivan/web/nba/`.
@@ -11,9 +12,9 @@ src/ivan/sports/nba/
   models.py  slates.py  ingest.py (fetch, store, project: the pipeline)  names.py  scoring.py  paths.py  utils.py
   data_fetch/   slate, contests, newsfeed, boxscores, pbp, live, standings, experience   what talks to the outside world
   data_clean/   boxscores, odds, pbp, standings                                    fetched payloads into the tables, read back
-  projection/   market, history, solve, skeleton, rotation, rates, fpts, engine, live, store, record   a player's projection
+  projection/   market, history, solve, skeleton, rotation, rates, engine, live, worlds, store, record   layer 1 the mapping, layer 2 the World
   gamesim/      script, rotation, usage, profiles, world, draw                     the games simulated, n worlds at once
-  field/        public_projection, public_field, model, generate, solver            the public's field; our candidate pool
+  field/        public_projection, public_field, model, generate, solver, optimal   the public's field; our candidate pool; the optimal per world
   contest/      simulate, choose, export                                            each contest simulated, lineups chosen
   lateswap/     swap, ingame, entry_parsing                                         after lock
   backtest/     validation, slate, results, readiness, field, tips, rerun           how it went, how right the model was
@@ -44,7 +45,8 @@ Read in this order:
  Rotowire ─┼─► desk Refresh / ingest.py ─► slates/<dg>/slate.sqlite (the slate's pool) ─┐
  odds-api ─┘      (store_slate)                               │
                                                               ▼
-                       projection (projection/live.py) ─► minutes_proj, fpts_mean/std, quantiles
+                       layer 1 the mapping (projection/engine, live) ─► minutes_proj, rates, the grid row
+                       layer 2 the World on it (projection/worlds)   ─► fpts_mean/std, quantiles, the minutes band
                        desk pins + painted grids ─────────► days/<day>/edits/{minutes_overrides.csv, rotations/*.json}
                                                               │
                        every edit / Refresh writes the pool ─┼─◄── ssh: publish + rrsync (feed.pull_ssh) ◄── brother's desk: Refresh from laptop

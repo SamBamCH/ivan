@@ -35,7 +35,7 @@ def main() -> int:
     ap.add_argument("--no-project", action="store_true", help="store only; do not project")
     ap.add_argument("--project-only", action="store_true", help="re-project the stored pool, no fetch")
     ap.add_argument("--stok-csv", default=None, help="record a Stokastic CSV as yardstick capture rows")
-    ap.add_argument("--sims", type=int, default=4000)
+    ap.add_argument("--worlds", type=int, default=None, help="worlds per game (default config projection.n_worlds)")
     ap.add_argument("--field", action="store_true", help="also build the public field and write ownership after the pool is stored (scripts/nba/field_ownership.py does it alone)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -49,12 +49,12 @@ def main() -> int:
             record_external_projections(session, args.stok_csv)
             return 0
         if args.project_only:
-            project_slate(session, n_sims=args.sims)
+            project_slate(session, n_worlds=args.worlds)
             return 0
         if args.draft_group is None:
             ap.error("--draft-group is required (see --list)")
         run_ingest(session, args.draft_group, update_odds=args.update_odds, project=not args.no_project,
-                   starters=not args.no_starters, n_sims=args.sims, field=args.field, lines=True if args.lines else None)
+                   starters=not args.no_starters, n_worlds=args.worlds, field=args.field, lines=True if args.lines else None)
         return 0
     except IngestError as e:
         print(f"ERROR: {e}")

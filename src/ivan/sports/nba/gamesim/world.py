@@ -12,7 +12,8 @@ For each game:
 
   A  the script (gamesim.script.draw): the pace of the night and the possessions of every six-minute segment;
   B  the rotation (gamesim.rotation.draw): each team's on-floor coverage per player per minute, with scratches, fouls and
-     the heirs; garbage time is applied here, minute by minute, off the emergent score;
+     the heirs; garbage time (off by default, config gamesim.garbage: garbage_setting) is applied here, minute by minute,
+     off the emergent score;
   C  the usage: each minute the team's possessions (the segment's, spread over its six minutes) become two-point attempts,
      three-point attempts, free throws and turnovers at the team's pie (Poisson), split among the five on the floor by
      their per-minute rates times their coverage (multinomial); the pie is the roster's own expected totals per
@@ -96,6 +97,57 @@ def load_teams(path: Path = TEAMS_JSON) -> dict:
         except Exception:   # noqa: BLE001
             pass
     return t
+
+
+def garbage_setting() -> bool:
+    """config/nba.json gamesim.garbage: whether the World pulls the closers in a blowout. Off by default: the grid's minutes are
+    the books' implied minutes, which already carry the blowout discount, so a pull on top of them double counts it (2026-11-09:
+    57% of worlds on a slate of 10 to 21 point spreads, every star 4 minutes short, the end of every bench 5 long;
+    docs/nba/notes/garbage_time_2026-11-09.md)."""
+    try:
+        from ivan.core.config import cfg, load_config
+        return bool(cfg(load_config("nba"), "gamesim.garbage", False))
+    except Exception:   # noqa: BLE001 - no config file: the default
+        return False
+
+
+@dataclass
+class WorldContext:
+    """
+    What every draw of a slate shares: the script's parameters, the league constants, the position groups, the shooting
+    profiles and the foul rates (cut at `as_of` for a rerun). Built once (about 2.5 s, the groups most of it) and handed to
+    World.draw and draw_game for every game, so the desk's per-game draw costs the draw alone (projection.worlds.context
+    keeps one per process).
+    """
+    params: dict
+    teams: dict
+    groups: Dict[str, str]
+    profiles: PR.ShootingProfiles
+    prof_state: pd.DataFrame
+    foul_rates: RO.FoulRates
+    foul_state: pd.DataFrame
+    as_of: Optional[date] = None
+
+    @classmethod
+    def build(cls, session: Session, as_of: Optional[date] = None, params: Optional[dict] = None, teams: Optional[dict] = None) -> "WorldContext":
+        from ivan.sports.nba.projection.groups import group_of, position_map
+        params = dict(params or SC.load_params()); teams = teams or load_teams()
+        if "garbage" not in params:
+            params["garbage"] = garbage_setting()
+        groups = {nm: group_of(p) for nm, p in position_map(session).items()}
+        box = PR.load_box(session, before=as_of)
+        profiles = PR.ShootingProfiles.build(box)
+        prof_state = profiles.before(as_of) if as_of else profiles.latest()
+        fr = RO.FoulRates.load(session)
+        foul_state = fr.before(as_of) if as_of else fr.rows.groupby("player").tail(1).set_index("player")
+        return cls(params=params, teams=teams, groups=groups, profiles=profiles, prof_state=prof_state, foul_rates=fr, foul_state=foul_state, as_of=as_of)
+
+    def with_params(self, params: dict) -> "WorldContext":
+        from dataclasses import replace
+        return replace(self, params=dict(params))
+
+    def draw_game(self, game: "GameIn", n: int, rng: np.random.Generator, state: Optional[dict] = None) -> dict:
+        return draw_game(game, n, rng, self.params, self.teams, self.prof_state, self.profiles, self.foul_state, self.foul_rates, self.groups, state)
 
 
 def _rates_of(p, league_rates: Dict[str, float]) -> Dict[str, float]:
@@ -419,26 +471,19 @@ class World:
 
     @classmethod
     def draw(cls, session: Session, n: int = 1000, seed: Optional[int] = None, as_of: Optional[date] = None, games: Optional[List[GameIn]] = None,
-             params: Optional[dict] = None, teams: Optional[dict] = None, log=None) -> "World":
+             params: Optional[dict] = None, teams: Optional[dict] = None, log=None, ctx: Optional[WorldContext] = None) -> "World":
         """
         Draw the slate. `games` (slate_inputs) may be given (the as-of runner builds them from a tip record); `as_of` cuts the
-        shooting profiles and foul rates at a date (default: everything on file).
+        shooting profiles and foul rates at a date (default: everything on file); `ctx` (WorldContext) skips building them.
         """
         rng = np.random.default_rng(seed)
-        params = params or SC.load_params(); teams = teams or load_teams()
-        games = games if games is not None else slate_inputs(session, teams)
-        from ivan.sports.nba.projection.groups import group_of, position_map
-        groups = {nm: group_of(p) for nm, p in position_map(session).items()}
-        box = PR.load_box(session, before=as_of)
-        profiles = PR.ShootingProfiles.build(box)
-        prof_state = profiles.before(as_of) if as_of else profiles.latest()
-        fr = RO.FoulRates.load(session)
-        foul_state = fr.before(as_of) if as_of else fr.rows.groupby("player").tail(1).set_index("player")
+        ctx = ctx or WorldContext.build(session, as_of=as_of, params=params, teams=teams)
+        games = games if games is not None else slate_inputs(session, ctx.teams)
         names: List[str] = []; pids: List[int] = []; team_of: List[str] = []
         cols = {s: [] for s in ("pts", "fg3m", "reb", "ast", "stl", "blk", "tov", "minutes", "fouls", "fga", "fta")}
         out_games = []
         for g in games:
-            d = draw_game(g, n, rng, params, teams, prof_state, profiles, foul_state, fr, groups)
+            d = ctx.draw_game(g, n, rng)
             for t in (g.home, g.away):
                 s, a = d["setups"][t], d["accs"][t]
                 names += s.names; pids += s.pids; team_of += [t] * len(s.names)
@@ -495,9 +540,11 @@ def calibrate(session: Session, games: List[GameIn], params: dict, real: dict, n
     targets = [("world_gamma", "sd_team", target_team, (0.0, 0.6)), ("world_kappa", "sd_margin", real["sd_margin"], (0.0, 0.012)),
                ("world_lambda", "sd_total", real["sd_total"], (0.0, 2.0)), ("world_q_tie", "p_ot", real["p_ot"], (0.0, 0.6))]
 
+    ctx = WorldContext.build(session, params=p)
+
     def moment(key, value, which):
         q = dict(p); q[key] = float(value)
-        return moments(World.draw(session, n=n, seed=11, games=games, params=q))[which]
+        return moments(World.draw(session, n=n, seed=11, games=games, ctx=ctx.with_params(q)))[which]
 
     for r in range(rounds):
         for key, which, target, (lo, hi) in targets:

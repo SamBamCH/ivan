@@ -29,7 +29,7 @@ MIN_RUNS = 4
 MARGIN_MIN = 5.0                 # the estimate must end this many minutes before the deadline to be "ok"
 # conservative defaults (seconds) when a step has too few runs: seconds per unit and a fixed part
 DEFAULTS = {"generate": (3.0, 20.0), "sim": (4.0, 30.0), "lateswap": (6.0, 60.0), "choose": (0.0, 40.0), "field": (0.0, 30.0),
-            "fetch_standings": (0.0, 40.0), "all": (0.0, 60.0)}
+            "fetch_standings": (0.0, 40.0), "solve": (0.0, 15.0), "all": (0.0, 60.0)}
 STEPS = tuple(DEFAULTS)
 
 

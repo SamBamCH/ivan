@@ -1,10 +1,15 @@
 # NBA: how a projection is built
 
-Code: `src/ivan/sports/nba/projection/`. A player is **minutes times per-minute rates**; minutes are
-the volume signal (a team hands out 241 minutes, so an absence moves minutes around the roster
-instead of being guessed per player), rates come from the books where a player is priced and from
-box-score history elsewhere. The desk's grid is the minutes projection: its row sums are the
-numbers. Every switch below is in `config/nba.json → projection` with a `_note` beside it.
+Code: `src/ivan/sports/nba/projection/`. The projection has **two layers**. Layer 1 is the **mapping**: each
+player's minutes (a team hands out 241, so an absence moves minutes around the roster instead of being guessed
+per player: the solve, then the rotation grid, whose row is his minutes) and his per-minute rates (the books'
+means over his minutes where he is priced, box-score history elsewhere), his scratch probability. Layer 2 is the
+**World**: the game simulation ([field-and-simulation.md](field-and-simulation.md#the-draw-is-the-game-simulation))
+drawn on that mapping, both teams of a game at once, `n_worlds` times; every player's fantasy points, minutes and
+stats on the pool are the means over those worlds, his sd and 101 quantiles their spread. The grid and the stat
+cells on the desk are layer 1, what you tell the simulation; the fpts, sd, drawn stats and the optimal share are
+layer 2, what came out. One projection: the number the desk shows is the number the field, the sim and the
+lineups are built on. Every switch below is in `config/nba.json → projection` with a `_note` beside it.
 
 ## The steps
 
@@ -18,15 +23,23 @@ desk pins / locked rows ──► held exactly                                  
                                                                                                           ▼
                               the rotation skeleton: a 48-minute grid, five on the floor (skeleton.py, rotation.py, team_profile.py)
                                                                                                           ▼
-                              per-world minutes draw (team_minutes.py) × per-minute rates (rates.py) ──► fantasy points by Monte Carlo (fpts.py)
+          LAYER 1 written     minutes_proj, rates (rates.py: the books' or history's, the pins), rotation_cells, boundary_sd, p_out on nba_player
                                                                                                           ▼
-                              fpts_mean, fpts_std, 101 quantiles on nba_player (the desk's marginal); the per-minute rates, the grid row,
-                              the spread and p_out are what the game simulation reads (gamesim.world, field-and-simulation.md)
+          LAYER 2             the World drawn on the mapping, one game at a time, n_worlds worlds (worlds.py -> gamesim.world: the script's
+                              possessions, the rotation under fouls and scratches, the pie shared by the five on the floor, the makes)
+                                                                                                          ▼
+                              fpts_mean, fpts_std, 101 quantiles, minutes_p10/p90 on nba_player; per team the store record's sim frame
+                              (drawn minutes, each stat's mean) and samples (the per-world draws the optimal share is solved on)
 ```
 
-`engine.project_team()` is the one call from roster + availability + history to a table; `live.py`
-(`LiveSlate`) feeds it the live pool, the starters, the market rates, the override files and the
-grids, and writes back. The backtest of a past slate re-runs the same code from the slate's tip record
+`engine.project_team()` is the one call from roster + availability + history to the mapping; `live.py`
+(`LiveSlate`) feeds it the live pool, the starters, the market rates, the override files and the grids, and
+writes layer 1 back (`write_plan`); `worlds.simulate_game` draws the game on what was written and `write_sim`
+lays the World's numbers over it. `ingest.project_team` runs the two in order for one team (the desk's edits:
+the team's mapping, then its game, so the opponent's rebounds, steals and blocks move too) and `project_slate`
+for the whole slate (every team mapped, then every game drawn once). The draw is seeded by the pair of teams,
+so a game's numbers depend only on the two mappings: an edit on the desk and a publish agree. The backtest of
+a past slate re-runs the same code from the slate's tip record
 ([validation-and-backtests.md](validation-and-backtests.md#the-as-of-rerun-of-a-past-slate-ivansportsnbagamesimrerun-scriptsnbarerun_slatepy-the-backtest-view)).
 
 ### 1. Props to market means (`market.py`)
@@ -106,17 +119,17 @@ and bench minutes. Measured 2026-10-26 on 898 team-games: a team's opening span 
 repeat across its games (r 0.72 and 0.68); who closes does not (r −0.03), so the closers stay a league
 rule (the most-played five).
 
-### 8. The projection's minutes band (`rotation.sample_worlds`, `team_minutes.py`)
+### 8. The minutes band (`worlds.py`: the World's drawn minutes)
 
-The projection's own `minutes_p10` / `minutes_p90` and its `fpts_mean` / `fpts_std` come from worlds drawn around the
-grid: the final margin N(spread, sd) with the overtime chance (the spread from `game_odds` through `lines.py`: the
-team's game nearest its tip on the slate, within 12 hours, so a slate whose lines were not fetched has no spread rather
-than another night's), who plays from each player's scratch probability, and the grid's substitutions jittered once per
-world with garbage time off the margin. `team_minutes.py` keeps the constants (`data/nba/models/team_minutes.json`: scratch
-probabilities by DK status and by salary for a bench player without one, the margin sd, the overtime rate) and the
-scratch rule. This band is the desk's display; the distribution the field, the sim and the chooser play against is the
-game simulation's ([field-and-simulation.md](field-and-simulation.md#simulate-contestsimulatepy)), which draws the same
-grid under fouls, heirs and the emergent score.
+`minutes_proj` is the plan: the grid row's minutes. The band around it (`minutes_p10` / `minutes_p90`, the drawn
+mean in the card's hover) is the World's: the grid drawn under each player's scratch probability, his foul rate and
+the coach's measured reaction to fouls, the substitution times jittered by his spread, overtime for the five at the
+buzzer. Garbage time is **off** (`config/nba.json → gamesim.garbage`): the grid's minutes are the books' implied
+minutes, which already discount the nights a favourite's starters sit the fourth quarter, so a pull on top of them
+would count those nights twice ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md): 57% of worlds
+on a slate of big spreads, every star four minutes short). `team_minutes.py` keeps the scratch probabilities by DK
+status and salary and the roles; `rotation.sample_worlds`, the old minutes sampler, stays for the game simulation's
+own check (`gamesim.py check-rotation`) and is not on the live path.
 
 ### 9. Rates and the usage bump (`rates.py`)
 
@@ -127,14 +140,22 @@ that half the gap between the team's trailing fantasy production and the present
 closes (clipped 0.7 to 1.4). Priced players are never scaled: the books already priced their role, so
 with nothing changed since the fetch a priced player projects to exactly the market mean.
 
-### 10. Fantasy points (`fpts.py`)
+### 10. Fantasy points (`worlds.py`: the World)
 
-Per world: that world's minutes × rate gives each stat's mean; each stat is drawn negative binomial
-with its dispersion (`projection_calibration.json`, hand-kept; fitted 2026-10);
-double-double and triple-double bonuses are counted on the joint draw (DraftKings' weights and bonuses live in one
-place, `scoring.py`, which the game simulation, the live feed and the box-score fantasy points use too). The projection is the mean
-over worlds (`n_sims` 4000 from the CLI, 2000 from the desk's Publish), the sd the sd over worlds, and
-the marginal is kept as 101 quantiles on `nba_player.fpts_quantiles` for the desk's display.
+Each game is drawn `n_worlds` times (config `projection.n_worlds`, 1000: about 0.7 s a game) on the mapping as
+written to the pool: the script's possessions around the two teams' paces and the books' total and spread, the five
+on the floor from the grid, each minute's possessions ending as attempts, trips and turnovers at the roster's pie and
+split among the five by their per-minute rates, the makes by each player's shooting profile with the attempts scaled
+by **one team factor** so the expected points are what the line says (the card's World line shows it: `attempts ×
+0.95` means the plan's rates added up to more points than the books allow and every scorer came down), the misses
+rebounded, the turnovers the other side's steals, the makes carrying assists. DraftKings' weights and bonuses are
+scored on the joint draw (`scoring.py`, the one copy the live feed and the box scores use too). `fpts_mean` is the
+mean over the worlds, `fpts_std` the sd, the 101 quantiles the marginal (`nba_player.fpts_quantiles`); the store
+record keeps each stat's drawn mean (`sim_<stat>`: the **drawn** column of the stat cell's hover against the **plan**)
+and the per-world samples (`field/optimal.py` solves the optimal lineup in each). A hand **fpts** pin moves the mean
+to the pin and scales the sd, the quantiles and the samples with it (`worlds.apply_fpts_pin`); the World's own number
+stays beside it. The mechanism and its calibration are in
+[field-and-simulation.md](field-and-simulation.md#the-draw-is-the-game-simulation).
 
 ### 11. Same-game correlation (the measurement; the sampler is the game simulation)
 
@@ -170,12 +191,22 @@ files on top (`override_layers`). Scenarios (`edits/scenarios/<TEAM>/`) are name
 the assumptions read off them; a scenario belongs to the day it was saved on and picks itself for that day's slates only
 (2026-11-04: scenarios were a global per-team library and a Nov 2 scenario re-applied its grid to Nov 4's game).
 
-Every projection runs through `ingest.project_team`: one team, the frame, the history-only comparison
-frame (`n_sims=0`, no market) and the rotation grid behind it, written to the team's `nba_player` rows
-and to the slate's projection store (`data/nba/slates/<dg>/projection/<TEAM>.pkl`, `projection.store`). The
-generator is seeded per team, so a team's numbers depend only on its inputs: an edit on the desk and a
-full `project_slate` give the same projection. The sims count is one number, `config/nba.json →
-projection.n_sims` (4000; the draws cost nothing next to the solve, 0.15 s a team either way).
+Every projection runs through `ingest.project_team`: one team's mapping (the frame), the history-only comparison
+frame (no market) and the rotation grid behind it, written to the team's `nba_player` rows and to the slate's
+projection store (`data/nba/slates/<dg>/projection/<TEAM>.pkl`, `projection.store`), then its game drawn again on
+the pool and the World's columns (the `sim` frame, the samples) written for both teams. The draw is seeded by the
+pair of teams, so a game's numbers depend only on the two mappings: an edit on the desk and a full `project_slate`
+give the same projection. The worlds count is one number, `config/nba.json → projection.n_worlds` (1000, about
+0.7 s a game; the mapping itself is 0.15 s a team).
+
+## The optimal share (`field/optimal.py`, `scripts/nba/optimal.py`, the desk's Solve)
+
+The store's samples are every player's fantasy points in every world; world *i* of every game together is one
+night. **Solve** solves the salary-capped optimal lineup in each of 100 of them (the generator's solver, four worker
+processes, about a second) and writes each player's share of those optimals to `slates/<dg>/projection/optimal.json`:
+the **opt** column on the card, the players view and the exposures, read beside the field's ownership. It is what the
+generator's exposures tend to before a generate runs, so the loop is map, look at opt against own, tweak the map. A
+team projected after the solve marks it stale (grey) until the next Solve.
 
 ## Where to look first when a projection is off
 
@@ -186,10 +217,14 @@ projection.n_sims` (4000; the draws cost nothing next to the solve, 0.15 s a tea
 2. The grid: a locked row from a previous slate that was not filed away, or a row the depth cut dropped.
 3. The props: a stale fetch (the market rate is forward-looking only from its basis minutes) or a
    player the books have not priced yet (he is on history plus the usage bump).
-4. Known gaps, in the order they matter: the team total is anchored to trailing production, not the
-   market's implied points (the game total is unused); a priced bench player promoted to 34 minutes
-   keeps the per-minute rate the books priced at 18; trailing production lags trades early in the
-   season. The 2026-10-22 explainer with the older allocator is in
+4. The card's World line: the factor on the team's attempts says how far the plan's rates added up from the
+   points the line allows (0.95 = every scorer came down 5%); a drawn total far from the line means the
+   pace or the lines on file are off. The stat hover's **drawn** column against **plan** says which stat
+   the simulation moved (2026-11-09: rebounds run high, the World hands every opponent miss to the five on
+   the floor; the rerun's makes-and-outcomes layer is where that is measured).
+5. Known gaps, in the order they matter: a priced bench player promoted to 34 minutes keeps the per-minute
+   rate the books priced at 18 (the usage bump touches unpriced players only); trailing production lags
+   trades early in the season. The 2026-10-22 explainer with the older allocator is in
    [notes/projection_explainer_2026-10-22.md](notes/projection_explainer_2026-10-22.md); the
    measurements behind the solve, the skeleton and the depth cut in
    [notes/minutes_model_plan.md](notes/minutes_model_plan.md).

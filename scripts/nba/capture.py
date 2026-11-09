@@ -82,7 +82,7 @@ def main() -> int:
     ap.add_argument("--max-props-per-day", type=int, default=20, help="safety cap on props fetches per day (each costs ~12 credits per game)")
     ap.add_argument("--no-props", action="store_true", help="never fetch props or game lines (free tick)")
     ap.add_argument("--no-contests", action="store_true", help="skip the contest + payout store")
-    ap.add_argument("--sims", type=int, default=2000)
+    ap.add_argument("--worlds", type=int, default=None, help="worlds per game (default config projection.n_worlds)")
     ap.add_argument("--grace", type=int, default=5, help="minutes after lock during which a slate is still refreshed")
     ap.add_argument("--only", type=int, default=None, help="draft group id: this held slate only")
     ap.add_argument("--force", action="store_true", help="run with the autopilot switch off and the desk guard ignored (a test)")
@@ -174,7 +174,7 @@ def tick_slate(session, s: dict, st: dict, now: datetime, args, offsets: list, l
                     st["lines_fetched"] = str(now)
             except Exception as e:   # noqa: BLE001
                 log.warning(f"game lines fetch failed: {type(e).__name__}: {e}")
-        out = run_ingest(session, dg, update_odds=False, starters=True, n_sims=args.sims, log=log.info, fetched=full, by="autopilot")
+        out = run_ingest(session, dg, update_odds=False, starters=True, n_worlds=args.worlds, log=log.info, fetched=full, by="autopilot")
         proj = out.get("projected")
         log.info(f"{dg} {s['name']}: lock {full.lock:%a %H:%M}, {len(full.players)} players, {getattr(proj, 'players', '?')} projected")
         if not args.no_contests and lobby is not None:   # the slate's contests and the payout table of any new one (free; one request per new contest)

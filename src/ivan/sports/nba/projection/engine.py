@@ -1,9 +1,14 @@
 """
-project_team(): roster + availability + history -> per-player projection.
+project_team(): roster + availability + history -> the mapping, per player (layer 1 of the projection).
 
-Inputs are plain records so the same code serves the live slate (NBAPlayer
-rows, Rotowire starters, a manual minutes CSV) and the walk-forward backtest
-(actual availability and starters from the box score).
+The mapping is what the game simulation reads: each player's minutes (the solve within position groups, then the
+rotation skeleton: his row of the 48-minute grid), his per-minute rates (the books' means over his minutes where priced,
+history elsewhere, the usage bump, the desk's pins), his scratch probability and role. The frame's fpts_mean is the
+plan's total (minutes x fantasy points per minute): a yardstick, not the projection. The projection, every player's
+fantasy points, minutes and stats as a distribution, is layer 2: the World drawn on this mapping (projection.worlds).
+
+Inputs are plain records so the same code serves the live slate (NBAPlayer rows, Rotowire starters, a manual minutes
+CSV) and the backtest's replay (actual availability and starters from the box score).
 """
 from __future__ import annotations
 
@@ -12,7 +17,6 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pandas as pd
 
-from .fpts import simulate_fpts, summarize, minutes_sd
 from .history import HistoryState, STATS
 from .minutes import MinutesInputs, allocate_team_minutes, baseline_minutes, salary_weight
 from .rates import shrunk_rates, fpts_per_minute, apply_usage_bump, USAGE_RECOVERY
@@ -51,10 +55,7 @@ class ProjectionParams:
     use_play_prob: bool = True
     recovery: float = USAGE_RECOVERY
     prior_minutes: float = 60.0
-    n_sims: int = 4000
-    dispersion: dict | None = None
     market_weight: float = 1.0
-    quantiles: int = 101          # points of the marginal kept for the correlated sampler
     minutes_model: str = "rotation"      # the rotation grid's worlds give the minutes band; a player the grid does not hold gets a clipped normal
     rebalance: bool = False              # True: a pin re-allocates the rest of the team to 241; False: the others keep the model's
                                          # minutes and the difference is left for a person to place (the desk shows it)
@@ -67,7 +68,7 @@ class ProjectionParams:
 
     @classmethod
     def from_config(cls, config: dict | None = None, **overrides) -> "ProjectionParams":
-        """projection.* from config/nba.json (minutes_model, n_sims), then keyword overrides."""
+        """projection.* from config/nba.json (minutes_model, market_weight, ...), then keyword overrides."""
         if config is None:
             from ivan.core.config import load_config
             try:
@@ -75,29 +76,9 @@ class ProjectionParams:
             except Exception:   # noqa: BLE001 - no config file is a plain default
                 config = {}
         block = (config or {}).get("projection") or {}
-        kw = {k: block[k] for k in ("minutes_model", "n_sims", "market_weight", "recovery", "rebalance", "salary_blend", "alloc") if k in block}
+        kw = {k: block[k] for k in ("minutes_model", "market_weight", "recovery", "rebalance", "salary_blend", "alloc") if k in block}
         kw.update(overrides)
         return cls(**kw)
-
-
-MAX_MINUTES = 48.0          # a world's minutes for one player (overtime is added by the game draw downstream)
-GRID_SHAPE_MIN = 0.5        # the grid's own mean must be at least this share of the allocation for its shape to be used
-
-
-def fit_draw_to_mean(draw: np.ndarray, a_min: float, sd: float, rng: np.random.Generator) -> np.ndarray:
-    """
-    World-level minutes for one player: the grid's draw rescaled to the allocated mean when the grid describes him
-    (its mean is at least GRID_SHAPE_MIN of the allocation); otherwise an independent draw around the allocation.
-    Rescaling a grid that barely holds him (2026-10-23: a player pinned at 15 minutes but absent from a drawn grid
-    came out 0 to 61 minutes, 65% of worlds at zero, and the sim loved the tail) is never allowed.
-    """
-    draw = np.asarray(draw, dtype=float); n = draw.shape[0]
-    if a_min <= 0:
-        return np.zeros(n)
-    mu = float(draw.mean())
-    if mu >= GRID_SHAPE_MIN * a_min:
-        return np.clip(draw * (a_min / mu), 0.0, MAX_MINUTES)
-    return np.clip(rng.normal(a_min, max(sd, 1.0), n), 0.0, MAX_MINUTES)
 
 
 def solve_allocation(avail, recs, state, history, params):
@@ -130,16 +111,15 @@ def project_team(
     team_fpts: float | None = None,   # trailing team production; league average when None
     params: ProjectionParams | None = None,
     rng: np.random.Generator | None = None,
-    simulate: bool = True,
 ) -> pd.DataFrame:
     """
-    Returns one row per *available* player: minutes, per-stat means, fpts_mean,
-    fpts_std, plus baseline minutes and the usage multiplier for inspection.
-    Absent players are listed only so the caller can see who was excluded;
-    the usage bump works from the team's trailing production, not from them.
+    Returns one row per *available* player: minutes (the grid row's), the per-minute rates after the pins and the
+    usage bump, proj_<stat> (minutes x rate: the plan's total per stat), fpts_mean (the plan's fantasy total), the
+    scratch probability and role, plus baseline minutes and the usage multiplier for inspection. Absent players are
+    listed only so the caller can see who was excluded; the usage bump works from the team's trailing production, not
+    from them. `rng` is unused since the draw moved to the World (kept for the callers' signature).
     """
     params = params or ProjectionParams()
-    rng = rng or np.random.default_rng(0)
 
     def srow(name):
         return state.loc[name] if name in state.index else None
@@ -250,7 +230,7 @@ def project_team(
     team_total = history.league_team_fpts if team_fpts is None else float(team_fpts)
     bump = apply_usage_bump(alloc, team_total, params.recovery)
 
-    # the team draw: every available player's minutes in every world, jointly (team model only)
+    # who plays: every projected player's role and scratch probability (the World reads p_out; a pin or a named starter plays)
     if params.minutes_model not in MINUTES_MODELS:
         raise ValueError(f"unknown minutes_model {params.minutes_model!r}; expected one of {MINUTES_MODELS}")
     by_name = {p.name: p for p in avail}
@@ -263,38 +243,9 @@ def project_team(
         roles[name] = role_of(float(recs[name]["baseline"]), p.starter)
         p_out[name] = 0.0 if (alloc.loc[name, "pinned"] or p.starter) else scratch_probability(p.status, st.play_prob if params.use_play_prob else None, mu, team_params or {"scratch": {}},
                                                                                                    salary=p.salary, starter=p.starter)
-    draw = None
-    if params.minutes_model == "rotation" and params.rotation is not None and simulate and params.n_sims > 0 and len(alloc):
-        from .rotation import SPREAD_MULT, default_spread, sample_worlds
-        rot = params.rotation; grid = rot["grid"]
-        names = list(alloc.index)
-        taus = {n: tau_from_band(by_name[n].minutes_low, by_name[n].minutes_high) for n in names}
-        spreads = dict(rot.get("spreads") or {})
-        for n in names:                                                   # wider where the history is weaker
-            cls = "no_history" if recs[n]["games"] == 0 else ("new_team" if by_name[n].new_team else "same_team")
-            lvl = "star" if float(alloc.loc[n, "minutes"]) >= 28 else "starter" if float(alloc.loc[n, "minutes"]) >= 18 else "rotation" if float(alloc.loc[n, "minutes"]) >= 9 else "deep"
-            spreads[n] = spreads.get(n, default_spread(float(alloc.loc[n, "minutes"]))) * SPREAD_MULT.get(cls, 1.0) * SPREAD_MULT.get(lvl, 1.0)
-        for n, t in taus.items():                                        # a hand band sets the player's own spread
-            if t is not None:
-                spreads[n] = float(t) * float(alloc.loc[n, "minutes"]) / 1.2816 / np.sqrt(2.0)
-        d = sample_worlds(grid, spreads, params.n_sims, rng, spread=params.spread, p_out={n: p_out[n] for n in names if n in grid.index},
-                          curve=rot.get("curve"), margin_sd=float((team_params or {}).get("margin_sd", 14.75)), p_ot=float((team_params or {}).get("p_ot", 0.052)))
-        M = np.zeros((params.n_sims, len(names)))
-        col = {nm: j for j, nm in enumerate(d["names"])}
-        for j, n in enumerate(names):
-            a_min = float(alloc.loc[n, "minutes"]) * (1.0 - float(p_out.get(n, 0.0)))   # the mean includes the scratch worlds
-            if n in col:
-                # the allocation is the mean (it already averages over blowouts); the grid gives the shape and the
-                # world-to-world redistribution. A drawn grid is its own mean (the pins hold it).
-                M[:, j] = fit_draw_to_mean(d["minutes"][:, col[n]], a_min, minutes_sd(a_min, recs[n]["hist_sd"]), rng)
-            else:
-                M[:, j] = np.clip(rng.normal(a_min, minutes_sd(a_min, recs[n]["hist_sd"]), params.n_sims), 0.0, MAX_MINUTES) if a_min > 0 else 0.0
-        class _D:  # the TeamDraw shape the loop below reads
-            minutes = M
-        draw = _D()
 
     rows = []
-    for j, name in enumerate(alloc.index):
+    for name in alloc.index:
         r = recs[name]
         mins = float(alloc.loc[name, "minutes"])
         rates = {s: r["rates"][s] * float(bump[name]) for s in STATS}
@@ -314,19 +265,6 @@ def project_team(
                "role": roles[name], "p_out": p_out[name], "rates": rates}
         for s in STATS:
             rec[f"proj_{s}"] = mins * rates[s]
-        if simulate and mins > 0 and params.n_sims > 0:
-            if draw is not None:
-                samples = simulate_fpts(mins, rates, n=params.n_sims, dispersion=params.dispersion, rng=rng, minutes=draw.minutes[:, j])
-                rec["minutes_p10"], rec["minutes_p90"] = (float(x) for x in np.percentile(draw.minutes[:, j], [10, 90]))
-            else:
-                samples = simulate_fpts(mins, rates, n=params.n_sims,
-                                        min_sd=minutes_sd(mins, r["hist_sd"]),
-                                        dispersion=params.dispersion, rng=rng)
-            rec["fpts_mean"], rec["fpts_std"] = summarize(samples)
-            rec["quantiles"] = np.quantile(samples, np.linspace(0, 1, params.quantiles)).round(2).tolist()
-        else:
-            rec["fpts_mean"] = mins * rec["fpm"]
-            rec["fpts_std"] = float("nan")
-            rec["quantiles"] = None
+        rec["fpts_mean"] = mins * fpm                 # the plan's total; the distribution is the World's (projection.worlds)
         rows.append(rec)
     return pd.DataFrame(rows).set_index("player_name")

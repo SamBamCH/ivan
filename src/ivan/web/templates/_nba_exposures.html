@@ -36,7 +36,7 @@
       <thead><tr>
         <th>player</th><th>tm</th><th>pos</th><th class="n">sal</th><th title="starter call">st</th>
         <th class="n" title="lineups in the set holding him (a field's copies counted)">in</th><th class="n" title="share of the set">exp</th>
-        <th class="n" title="the field's ownership">own</th><th class="n" title="exposure minus ownership, points">lev</th>
+        <th class="n" title="the field's ownership">own</th><th class="n" title="exposure minus ownership, points">lev</th><th class="n" title="share of the World's worlds whose optimal lineup holds him (Solve)">opt</th>
         <th class="n" title="projected minutes (pinned: bold)">min</th><th class="n" title="the books' implied minutes">book</th>
         <th class="n" title="this season's minutes per game; hover for the recent games">hist</th><th class="n" title="fantasy points per minute (green = from the props)">fppm</th>
         <th class="n" title="our projection ± sd; hover for the stat lines and the props behind it">proj</th><th class="n" title="the public projection: the field's number">pub</th>
@@ -50,6 +50,7 @@
           <td class="n" data-v="{{ r.n_in }}">{{ r.n_in }}</td><td class="n" data-v="{{ r.exposure }}"><b>{{ '%.1f%%'|format(100 * r.exposure) }}</b></td>
           <td class="n" data-v="{{ r.own or 0 }}">{{ '%.0f%%'|format(r.own) if r.own is not none else '—' }}</td>
           <td class="n {% if r.leverage is not none and r.leverage >= 15 %}hi{% elif r.leverage is not none and r.leverage <= -10 %}lo{% endif %}" data-v="{{ r.leverage or 0 }}">{{ '%+.0f'|format(r.leverage) if r.leverage is not none else '' }}</td>
+          <td class="n" data-v="{{ r.opt or 0 }}">{% if r.opt is not none %}{{ '%.0f%%'|format(r.opt) }}{% else %}—{% endif %}</td>
           <td class="n {{ r.loud.min }}" data-v="{{ r.minutes or 0 }}" title="{{ r.cells.min }}">{% if r.pinned %}<b>{{ '%g'|format(r.pin) }}</b>{% elif r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% endif %}</td>
           <td class="n" data-v="{{ r.book_min or 0 }}">{{ '%.1f'|format(r.book_min) if r.book_min is not none else '' }}</td>
           <td class="n hover {{ r.loud.hist }}" data-v="{{ r.season_min or r.last_min or 0 }}" title="{{ r.cells.hist }}">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}<span class="muted small"> ({{ r.season_games }}g)</span>{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% else %}—{% endif %}

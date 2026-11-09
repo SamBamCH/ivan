@@ -14,6 +14,8 @@ alternate lines). Turnovers are never priced and stay on history.
 """
 from __future__ import annotations
 
+import json
+
 from contextlib import nullcontext
 from dataclasses import dataclass
 
@@ -22,7 +24,23 @@ import pandas as pd
 from scipy.stats import nbinom
 
 from ivan.sports.nba.utils import utc_to_local
-from .fpts import load_calibration
+from ivan.sports.nba.paths import MODELS_DIR
+
+CALIBRATION_JSON = MODELS_DIR / "projection_calibration.json"
+# the negative-binomial dispersion k per stat that turns a prop line's over price into a mean (means_from_tails): method of
+# moments on 2025-26 rotation players, fitted 2026-10; the file is hand-kept. Larger = closer to Poisson.
+DEFAULT_DISPERSION = {"points": 12.0, "rebounds": 10.0, "assists": 8.0, "steals": 50.0, "blocks": 30.0, "turnovers": 20.0, "fg3m": 10.0}
+
+
+def load_calibration() -> dict:
+    """{"dispersion": {stat: k}} from data/nba/models/projection_calibration.json; the defaults when the file is missing."""
+    cal = {"dispersion": dict(DEFAULT_DISPERSION)}
+    if CALIBRATION_JSON.exists():
+        try:
+            cal.update(json.loads(CALIBRATION_JSON.read_text()))
+        except Exception:   # noqa: BLE001 - a broken file is the defaults
+            pass
+    return cal
 
 MARKET_TO_STAT = {
     "player_points": "points", "player_points_alternate": "points",

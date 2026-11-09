@@ -252,7 +252,7 @@ class DeskBase:
         self.overrides = read_overrides_full()            # what the projection reads: the published layer (a consumer) under this machine's own
         self.local_overrides = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}   # what this machine writes
         self.__dict__.pop("_layers_cache", None); self.__dict__.pop("_published_cache", None)
-        self.proj, self.hist_only, self.rot = {}, {}, {}
+        self.proj, self.hist_only, self.rot, self.world = {}, {}, {}, {}
         self._auto_pending = True                         # scenarios are matched once the rest of the rebuild is done (see end of rebuild)
         if getattr(self, "_calls_dg", None) != self.pool_stamp[2]:
             self._calls, self._calls_dg = {}, self.pool_stamp[2]   # typed calls belong to their slate
@@ -458,28 +458,40 @@ class DeskBase:
         now, through the same path an edit takes, so the pool and the store agree afterwards.
         """
         recs = PSTORE.load_all(self.pool_stamp[2])
-        self.proj, self.hist_only, self.rot = {}, {}, {}
+        self.proj, self.hist_only, self.rot, self.world = {}, {}, {}, {}
         missing = []
         for t in self.slate.teams():
             rec = recs.get(t)
             if rec is None:
                 missing.append(t); continue
-            self.proj[t], self.hist_only[t], self.rot[t] = rec["frame"], rec["hist"], dict(rec.get("rot") or {})
+            self._take(rec)
         for t in missing:
             self.reproject(t)
         if missing:
             self.flash.append(f"projected {len(missing)} team(s) with no stored projection ({', '.join(missing[:6])}{'…' if len(missing) > 6 else ''})")
 
+    def _take(self, rec: dict) -> None:
+        """A store record into the desk's frames: the mapping with the World's columns laid over it (store.merged), the history-only
+        comparison, the grid behind it, and the game's draw (the attempt factor, the drawn total and margin)."""
+        t = rec["team"]
+        self.proj[t], self.hist_only[t], self.rot[t] = PSTORE.merged(rec), rec["hist"], dict(rec.get("rot") or {})
+        self.world[t] = dict(rec.get("game") or {}, n_worlds=int(rec.get("n_worlds") or 0), at=rec.get("written_at"))
+
     def reproject(self, team: str):
         """
-        Re-project one team and write it through: its nba_player rows, committed, and its store record (ingest.project_team,
-        the same path a publish takes, seeded per team so the numbers are those a publish would give). The desk's frame is
-        the record just written; nothing downstream can see a projection the desk does not show.
+        Re-project one team and write it through: its mapping and its game drawn again (ingest.project_team, the same path a
+        publish takes, the draw seeded by the pair so the numbers are those a publish would give), both teams' nba_player rows
+        committed and both store records written. The desk's frames are the records just written (the opponent's too: its
+        rebounds, steals and blocks moved with this team's mapping); nothing downstream can see a projection the desk does not show.
         """
         self.void_if_stale(team)
         rec = project_team(self.session, self.slate, team, self.overrides, ProjectionParams.from_config())
         self.session.commit()
-        self.proj[team], self.hist_only[team], self.rot[team] = rec["frame"], rec["hist"], dict(rec.get("rot") or {})
+        self._take(rec)
+        opp = self.slate.opponent(team)
+        orec = PSTORE.load(opp) if opp else None
+        if orec is not None:
+            self._take(orec)
         self.pool_stamp = self._stamp()                        # our own write is not "new data"
         try:
             autopilot.touch("publish")                         # the edit is in the pool the moment it is made: nothing is "unpublished"
@@ -488,6 +500,27 @@ class DeskBase:
 
     def players(self, team: str) -> list[NBAPlayer]:
         return sorted([p for p in self.slate.players if p.team == team], key=lambda p: -(p.salary or 0))
+
+    def optimal_status(self) -> dict:
+        """The slate's optimal-lineup shares (field.optimal: slates/<dg>/projection/optimal.json, the Solve job): {exists, stale, at,
+        n_worlds, players: {pid: {share, in_mean}}, mean_total}. Read once per file version."""
+        from ivan.sports.nba.field import optimal as OPT
+        p = OPT.path()
+        try:
+            key = (p.stat().st_mtime_ns, PSTORE.stamp())
+        except OSError:
+            key = (None, PSTORE.stamp())
+        cache = getattr(self, "_optimal_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        r = OPT.read()
+        out = dict(exists=bool(r), stale=OPT.is_stale(r), at=(r.get("at") or "")[11:16] if r else None, n_worlds=int(r.get("n_worlds") or 0) if r else 0,
+                   players=(r or {}).get("players") or {}, mean_total=((r or {}).get("mean_optimal") or {}).get("total"))
+        self._optimal_cache = (key, out)
+        return out
+
+    def optimal_of(self, pid) -> dict:
+        return self.optimal_status()["players"].get(str(int(pid)), {}) if pid is not None else {}
 
     def void_if_stale(self, team: str) -> Optional[dict]:
         """A player the team's mapping had available is out now (a status, a scratch call): the mapping is void (ivan.sports.nba.slate.mapping):

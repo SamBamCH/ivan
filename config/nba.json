@@ -37,7 +37,8 @@
  },
  "projection": {
   "minutes_model": "rotation",
-  "n_sims": 4000,
+  "n_worlds": 1000,
+  "_n_worlds_note": "n_worlds (2026-11-09): worlds the game simulation draws per game when a team is projected (the desk's Refigure, a publish, project.py): every player's fantasy points, minutes and stats on the pool are the means over them, the sd and the 101 quantiles their spread. About 0.7 s a game at 1000. Replaced n_sims (the old minutes x rates Monte Carlo).",
   "rebalance": false,
   "salary_blend": true,
   "alloc": "solve",
@@ -49,5 +50,9 @@
   "_pool_note": "pool (2026-10-25): which players are tonight's rotation. depth_cut = the measured depth above. last_game = the rotation of the last ordinary game this group played together (5+ min that night), minus tonight's outs, plus the returners (available, usual 15+ min); the depth cut stands when the team has no such game.",
   "team_profile": true,
   "_team_profile_note": "team_profile (2026-10-26): the coach's pattern per team from its ordinary games this season, shrunk toward the league (projection/team_profile.py): how long the starters hold the tip and the Q3 tip, the lean to close the half with starters, and the starter / bench minutes the role prior pulls a named starter (or a benched regular) toward (minutes.STARTER_PRIOR_W = 0.6 of the way, scaled by how rarely he started). false = the fixed 3-minute spans and the old +6 start shift."
+ },
+ "gamesim": {
+  "garbage": false,
+  "_garbage_note": "garbage (2026-11-09): whether the World pulls the closers once the lead beats the threshold for the time left. Off: the grid's minutes are the books' implied minutes, which already carry the blowout discount, so a pull on top double counts it (57% of worlds on 2026-11-09's 156338, every star 4 minutes short, the end of every bench 5 long). docs/nba/notes/garbage_time_2026-11-09.md."
  }
 }

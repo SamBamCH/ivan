@@ -1,8 +1,8 @@
 """
-Project the current NBA player pool: minutes first, then per-minute rates
-(market rates where the props price a player, box score history elsewhere),
-then fantasy points by Monte Carlo. Writes fpts_mean, fpts_std and
-minutes_proj on nba_player.
+Project a slate's pool from the terminal, the desk's own path (ingest.project_team): the mapping first (minutes within
+position groups, the rotation grid, per-minute rates from the props where a player is priced and from history elsewhere),
+then the game simulation drawn on it (config projection.n_worlds worlds a game): fpts_mean, fpts_std, the quantiles and
+the minutes band on nba_player, both layers in the projection store the desk reads.
 
 Availability  DK status OUT -> not playing. Everyone else on the team plays.
 Starters      starting_lineups rows (Rotowire, fetched by ingest.py) mark the
@@ -16,8 +16,8 @@ Late news     the day's edits/minutes_overrides.csv (columns player, minutes
   python scripts/nba/project.py                 # project and write
   python scripts/nba/project.py --dry-run       # print only
   python scripts/nba/project.py --team MIL      # one team
-  python scripts/nba/project.py --out "Giannis Antetokounmpo"   # ad-hoc scratch
-  python scripts/nba/project.py --no-market     # history rates only
+  python scripts/nba/project.py --out "Giannis Antetokounmpo"   # a look with him out (the mapping only, nothing written)
+  python scripts/nba/project.py --no-market     # a look at history rates only (nothing written)
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def team_table(slate: LiveSlate, team: str, proj, console: Console, title_extra:
     team_starters = slate.starters.get(team)
     tbl = Table(title=f"{team}  (team fpts/game {slate.team_fpts.get(team, slate.hist.league_team_fpts):.0f}"
                       f"{'' if team_starters else ', starters unknown'}){title_extra}")
-    for col in ["player", "sal", "st", "hist", "min", "fpts", "sd", "val", "src", "note"]:
+    for col in ["player", "sal", "st", "hist", "min", "plan", "fpts", "sd", "val", "src", "note"]:
         tbl.add_column(col, justify="left" if col in ("player", "note", "src") else "right")
     for name, r in proj.sort_values("minutes", ascending=False).iterrows():
         p = tp[name]
@@ -49,8 +49,9 @@ def team_table(slate: LiveSlate, team: str, proj, console: Console, title_extra:
         elif r["games"] < 5: note.append(f"{int(r['games'])}g")
         if abs(r["usage_mult"] - 1) > 0.02: note.append(f"usage x{r['usage_mult']:.2f}")
         st = "" if team_starters is None else ("S" if name in team_starters else "")
-        tbl.add_row(p.name, str(p.salary), st, f"{r['baseline']:.1f}", f"{r['minutes']:.1f}",
-                    f"{r['fpts_mean']:.1f}", f"{r['fpts_std']:.1f}", f"{1000 * r['fpts_mean'] / max(p.salary, 1):.2f}",
+        sd = r.get("fpts_std"); plan = r["minutes"] * r["fpm"]
+        tbl.add_row(p.name, str(p.salary), st, f"{r['baseline']:.1f}", f"{r['minutes']:.1f}", f"{plan:.1f}",
+                    f"{r['fpts_mean']:.1f}", "" if sd is None or sd != sd else f"{sd:.1f}", f"{1000 * r['fpts_mean'] / max(p.salary, 1):.2f}",
                     "mkt" if r.get("priced") else "hist", ", ".join(note))
     outs = [p.name for n, p in tp.items() if n not in proj.index]
     if outs:
@@ -67,7 +68,7 @@ def main():
     ap.add_argument("--out", action="append", default=[], help="treat this player as OUT (repeatable)")
     ap.add_argument("--no-starters", action="store_true", help="ignore starting_lineups")
     ap.add_argument("--no-market", action="store_true", help="ignore stored market rates")
-    ap.add_argument("--sims", type=int, default=None, help="Monte Carlo draws (default config/nba.json projection.n_sims, the number every path projects at)")
+    ap.add_argument("--worlds", type=int, default=None, help="worlds per game (default config/nba.json projection.n_worlds, the number every path draws at)")
     args = ap.parse_args()
 
     console = Console()
@@ -76,32 +77,31 @@ def main():
     if not slate.players:
         raise SystemExit("no players in nba_player; run ingest.py -p first")
     from ivan.sports.nba.ingest import project_team
+    from ivan.sports.nba.projection import store as PSTORE
     from ivan.sports.nba.projection.live import read_overrides_full
     overrides = read_overrides(Path(args.overrides)) if args.overrides else read_overrides_full()
     forced_out = {normalize_name(n) for n in args.out}
-    params = ProjectionParams.from_config() if args.sims is None else ProjectionParams.from_config(n_sims=args.sims)
+    params = ProjectionParams.from_config()
     rng = np.random.default_rng(0)
-    adhoc = bool(forced_out or args.dry_run or args.overrides or args.no_starters or args.no_market)   # a look, not the projection
+    adhoc = bool(forced_out or args.dry_run or args.overrides or args.no_starters or args.no_market)   # a look at the mapping, not the projection
 
     written = 0
     teams = [args.team] if args.team else slate.teams()
     for team in teams:
         if adhoc:
             proj = slate.project(team, overrides, forced_out, params, rng=rng)
-            team_table(slate, team, proj, console)
-            if not args.dry_run:
-                written += slate.write(team, proj)
+            team_table(slate, team, proj, console, title_extra=" · the mapping only, nothing written")
         else:
-            # the desk's own path (ingest.project_team): the team's pool rows and its projection store record, so the desk shows it
-            rec = project_team(session, slate, team, overrides, params)
-            team_table(slate, team, rec["frame"], console)
+            # the desk's own path (ingest.project_team): the team mapped, its game drawn, both teams' pool rows and store records
+            rec = project_team(session, slate, team, overrides, params, n_worlds=args.worlds, log=lambda m: console.print(f"[dim]{m}[/dim]"))
+            team_table(slate, team, PSTORE.merged(rec), console)
             written += int(len(rec["frame"]))
     pool = {normalize_name(p.name) for p in slate.players}
     missing = sorted(set(overrides) - pool)
     if missing:
         console.print(f"[yellow]overrides not on the slate: {missing}[/yellow]")
-    if args.dry_run:
-        console.print("[dim]dry run, nothing written[/dim]")
+    if adhoc:
+        console.print("[dim]a look at the mapping: nothing written (the desk's late-news call and pins are how a scratch is projected)[/dim]")
     else:
         session.commit()
         console.print(f"[green]wrote projections for {written} players"

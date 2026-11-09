@@ -516,7 +516,7 @@ def replay_slate(session: Session, draft_group: int, params=None, log: Log = pri
     season_start = date(day.year if day.month >= 10 else day.year - 1, 10, 1)
     this = box[(box.game_date >= season_start) & (box.game_date < day) & box.played]
     games_season = this.groupby("player_name").size().to_dict(); games_team = this.groupby(["player_name", "team"]).size().to_dict()
-    params = params or ProjectionParams.from_config(n_sims=0)
+    params = params or ProjectionParams.from_config()
     tp = load_params()
     act = actuals_for(session, day).set_index("player_name")
     rows = []
@@ -531,7 +531,7 @@ def replay_slate(session: Session, draft_group: int, params=None, log: Log = pri
             roster.append(RosterPlayer(name, status not in OUT_STATUSES, starter, p.get("salary"), status=status or None,
                                        new_team=bool(st is not None and str(st["team"]) != str(team)),
                                        games_on_team=int(games_team.get((name, team), 0)), games_this_season=int(games_season.get(name, 0))))
-        proj = project_team(roster, state, hist, team_fpts.get(team), params, simulate=False)
+        proj = project_team(roster, state, hist, team_fpts.get(team), params)
         for p in roster:
             if p.name not in proj.index:
                 continue

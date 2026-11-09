@@ -242,7 +242,9 @@ projected minutes where priced; shooting profiles and foul rates before the day;
 the day), then scored against the actuals **one layer at a time**: possessions and the finals per game from the events
 store, every player's minutes, attempts, makes and outcomes and fantasy points from `nba_stats`, each as the drawn mean's
 MAE and bias, the share of actuals inside the drawn 10-90 band and the mean percentile of the actual, with the error of
-what was published at the tip (the projection, the line) beside it. The record (`slates/<dg>/rerun/<stamp>-<commit>/`)
+what was published at the tip (the projection, the line) beside it; since 2026-11-09 the published projection is itself the
+World's mean (the desk draws each game when it projects), so the two fantasy-point columns differ by the inputs' drift
+between the tip record's mapping and the rerun's history cut, not by model. The record (`slates/<dg>/rerun/<stamp>-<commit>/`)
 keeps every stat of every player in every world, so the backtest view draws each player's distribution with his actual
 inside it ([../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-viewbacktestdgdraft-group-_nba_backtesthtml)).
 A slate archived before 2026-10-23 has no tip record and cannot be rerun. First result (slate 156184, 2026-11-06, 500

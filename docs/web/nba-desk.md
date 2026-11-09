@@ -139,8 +139,9 @@ has, the rates are rebuilt past the status cutoffs and the teams whose means mov
 refresh, and a slate projected the night on means a later fetch had replaced in the table.
 
 **Every edit on the page writes the team into the slate's pool at once** (`Desk.reproject` = `ingest.project_team`: the
-team's `nba_player` rows and its projection store record, about 0.3 s): a pin, a starter call, a painted row, a scenario, a
-late-news call. Leaving the page loses nothing and there is nothing to publish afterwards. The page stays open while the
+team's mapping, then its game drawn again in the World, both teams' `nba_player` rows and store records, about a second
+and a half): a pin, a starter call, a painted row, a scenario, a late-news call. The opponent's card moves with it (its
+rebounds, steals and blocks come off this team's misses and turnovers). Leaving the page loses nothing and there is nothing to publish afterwards. The page stays open while the
 slate's jobs run and while the slate refreshes (edits wait for the refresh; a job never blocks a page). The card's alert score
 (bad 10, warn 3, info 1) colours its frame:
 
@@ -177,17 +178,27 @@ game the "last game" is the one before it (and that night's pre-game headlines s
 
 ### The card
 
+Under the heading, the **World line**: the game as the simulation drew it on this grid (how many worlds, the factor on
+this side's attempts against the line, the drawn total and margin against the books', the team's drawn fantasy points
+against the plan's), the state of the optimal solve (when, how many worlds, stale when a team was projected since) and
+the **Solve** button ([../nba/projections.md](../nba/projections.md), the optimal share).
+
 Rows: starters first, then the players who are out, then the bench, minutes descending. Per player:
-status, Rotowire starter mark, history minutes (and the last games), the model's minutes with its
-10-90 band, the seven stats, **fpts** (ours) and **pub** (the public projection the field plays to), DK FPPG,
-salary, value, the rate source (market or history), the ownership, the market-implied minutes for
+status, Rotowire starter mark, history minutes (and the last games), the plan's minutes with the World's drawn band,
+the seven stats as planned, **fpts** (the World's) and **pub** (the public projection the field plays to), DK FPPG,
+salary, value, the optimal share, the rate source (market or history), the ownership, the market-implied minutes for
 priced players, the flags.
 
-The grid's columns, right of the 48 minute cells: **min** (the row's minutes, a pin box; hover for this season's games
-with a DNP row in red), then one column per stat, **pts reb ast 3pm stl blk tov** (the projection for the game: the
-row's minutes × his per-minute rate; green when the rate is the books', amber when ours sits 15%+ from the books' mean),
-then **fpts** (the model's mean ± sd, the stats scored at DK weights; hover for the summary), **sim** (the number the
-sim uses; type to pin), **val**, **pub** and its **val**, **own**. The foot row adds each column up for the team.
+The grid's columns, right of the 48 minute cells, are the two layers side by side. Layer 1, what you tell the
+simulation: **min** (the row's minutes, a pin box; hover for this season's games with a DNP row in red, and the drawn
+minutes with their 10-90 band), then one column per stat, **pts reb ast 3pm stl blk tov** (the plan for the game: the
+row's minutes × his per-minute rate; green when the rate is the books', amber when the plan sits 15%+ from the books'
+mean). Layer 2, what came out: **fpts** (the World's mean ± sd over the worlds the game was drawn in; hover for each
+stat as planned and as drawn, the books' line and mean, the 10-50-90 of his night, the plan's total), **sim** (the
+number the field, the sim and the lineups use: the World's unless you type a number here), **val**, **opt** (the share of
+the solved worlds whose optimal lineup holds him, bold when the mean-projection optimal does; grey once a team was
+projected after the solve, a dash before the first Solve), **pub** and its **val**, **own**. The foot row adds each
+column up for the team (fpts: the World's, the plan's in the hover; opt: the worlds solved).
 
 Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line
 (when the book posted it, the line, the over and under prices) and the alternates condensed to one row per book (the
@@ -211,7 +222,9 @@ Inputs on the row:
   together) is still read from the file and noted in the fpts hover; the stat boxes override it stat by stat.
 - **starter** toggle (`/starter`): the hand call; a call that benches him sets his props posted before the click aside, one
   that starts him counts them again (the market rates are rebuilt before the team re-projects; `ingest.refresh_market_rates`).
-- **Refigure** (`/refigure`): re-run the team's projection now with the current pins.
+- **Refigure** (`/refigure`): re-run the team's projection now with the current pins (the mapping, then the game).
+- **Solve** (`/solve`, also the actions bar's Solve = `scripts/nba/optimal.py`): the optimal lineup in each of the
+  World's worlds over the whole slate, a few seconds as a job; the **opt** column fills when it is done.
 - **Clear** (`/clear`): drop the team's pins and grid.
 
 **Since the last refresh** (top of the card): what the last Refresh moved for the team (`ivan.sports.nba.slate.changes`,

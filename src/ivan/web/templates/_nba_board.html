@@ -31,7 +31,7 @@
 {% if view == 'players' %}
   <div class="players-head"><span class="muted small">{{ players|length }} players on the slate · sorted by ownership, click a header to sort · a name opens his team's page, where the rows are edited</span> {% include "_nba_minfpts.html" %}</div>
     <table class="players sortable">
-      <thead><tr><th>player</th><th>team</th><th>opp</th><th>pos</th><th class="n">sal</th><th>st</th><th class="n">min</th><th class="n">hist min</th><th class="n">fppm</th><th class="n">proj</th><th class="n">value</th><th class="n" title="projected ownership: the field sampler's exposure (the sim's largest contest, else the generate step's generic field)">own</th><th>flags</th></tr></thead>
+      <thead><tr><th>player</th><th>team</th><th>opp</th><th>pos</th><th class="n">sal</th><th>st</th><th class="n">min</th><th class="n">hist min</th><th class="n">fppm</th><th class="n">proj</th><th class="n">value</th><th class="n" title="projected ownership: the field sampler's exposure (the sim's largest contest, else the generate step's generic field)">own</th><th class="n" title="share of the World's worlds whose optimal lineup holds him (Solve); bold = in the mean-projection optimal">opt</th><th>flags</th></tr></thead>
       <tbody>
       {% for r in players %}
         <tr class="{% if r.out %}out{% elif r.priced %}priced{% else %}unpriced{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
@@ -43,6 +43,7 @@
           <td class="n"><b>{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</b>{% if r.sd is not none %}<span class="muted small"> ±{{ '%.0f'|format(r.sd) }}</span>{% endif %}</td>
           <td class="n">{{ '%.2f'|format(r.value) if r.value is not none else '' }}</td>
           <td class="n"><b>{{ '%.1f%%'|format(r.own) if r.own is not none else '—' }}</b></td>
+          <td class="n">{% if r.opt is not none %}{% if r.opt_mean %}<b>{{ '%.0f%%'|format(r.opt) }}</b>{% else %}{{ '%.0f%%'|format(r.opt) }}{% endif %}{% else %}—{% endif %}</td>
           <td class="flags">{{ r.flags|join(' · ') }}</td>
         </tr>
       {% endfor %}

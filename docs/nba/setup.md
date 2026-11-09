@@ -41,7 +41,7 @@ The models read history that is not fetched on a slate day:
 - **Box scores** (`nba_stats`) for this season and last: `scripts/nba/nightly.py --season 2025-26 --max-games 400`
   repeated until it reports nothing new (nba_api is rate limited, the run is capped). Last season's stints
   (`nba_stint`, `nba_foul`, `nba_sub`) come from `scripts/nba/pbp.py fetch --since 2025-10-01`.
-- **Model parameters** in `data/nba/models/`: `projection_calibration.json` (per-stat dispersion, minutes sd),
+- **Model parameters** in `data/nba/models/`: `projection_calibration.json` (the per-stat dispersion that turns a prop line into a mean),
   `team_minutes.json`, `correlation.json`, `field_two_group.json`, `field_ownership.json`,
   `gamesim/script.json` and `gamesim/teams.json`. They are tracked files; the refits are in
   [validation-and-backtests.md](validation-and-backtests.md).

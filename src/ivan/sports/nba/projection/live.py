@@ -1,6 +1,6 @@
 """
-The live slate: nba_player rows + starters + market rates + overrides in,
-projections written back. Shared by project.py and news.py.
+The live slate: nba_player rows + starters + market rates + overrides in, the projection written back in its two layers
+(write_plan: the mapping; write_sim: the World's draw). ingest.project_team is the caller; project.py and the desk go through it.
 """
 from __future__ import annotations
 
@@ -24,31 +24,7 @@ OUT_STATUSES = {"OUT", "O", "IR", "SUSP"}
 STAT_KEYS = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # a stat pin: his total for the game
 OVERRIDE_KEYS = ("minutes", "fppm", "min_low", "min_high", "starter", "fpts", "pub", *STAT_KEYS)
 # starter: 1 / 0 overrides the Rotowire lineup for the player; fpts: the fantasy points the sim and the lineups use for him
-# (the model's number is kept beside it); pub: the public projection the field and ownership are built on
-
-
-def apply_fpts_overrides(proj: pd.DataFrame, overrides: dict) -> pd.DataFrame:
-    """
-    A hand fpts override replaces the model's fantasy points for the sim and the lineups: fpts_mean becomes the override,
-    the sd and the quantiles scale with it, and the model's own number is kept in fpts_model (the desk shows both).
-    """
-    if "fpts_mean" not in proj or not len(proj):
-        return proj
-    proj = proj.copy()
-    proj["fpts_model"] = proj["fpts_mean"].astype(float)
-    for name, ov in (overrides or {}).items():
-        v = ov.get("fpts") if isinstance(ov, dict) else None
-        if v is None or name not in proj.index:
-            continue
-        old = float(proj.loc[name, "fpts_mean"]); ratio = (float(v) / old) if old > 0 else 1.0
-        proj.loc[name, "fpts_mean"] = float(v)
-        if "fpts_std" in proj and pd.notna(proj.loc[name, "fpts_std"]):
-            proj.loc[name, "fpts_std"] = float(proj.loc[name, "fpts_std"]) * ratio
-        if "quantiles" in proj and isinstance(proj.loc[name, "quantiles"], list):
-            proj.at[name, "quantiles"] = [round(float(q) * ratio, 2) for q in proj.loc[name, "quantiles"]]
-    return proj
-
-
+# (the World's own number is kept beside it: projection.worlds.apply_fpts_pin); pub: the public projection the field and ownership are built on
 
 
 def read_overrides_full(path: Path | None = None, layered: bool = True) -> dict[str, dict]:
@@ -309,25 +285,30 @@ class LiveSlate:
             self._last_rotation = {**getattr(self, "_last_rotation", {}), team: params.rotation}
         proj = project_team(self.roster(team, overrides, forced_out, rate_mults), self.state, self.hist,
                             self.team_fpts.get(team), params, rng=rng)
-        return apply_fpts_overrides(proj, overrides)
+        return proj
 
-    def write(self, team: str, proj: pd.DataFrame) -> int:
-        """Store a team's projection on nba_player; players not in proj (out) get None."""
+    def opponent(self, team: str) -> str | None:
+        return next((p.opponent for p in self.players if p.team == team and p.opponent), None)
+
+    def write_plan(self, team: str, proj: pd.DataFrame) -> int:
+        """
+        Layer 1 on the team's nba_player rows: minutes_proj, the role, the scratch probability, the per-minute rates, the grid
+        row and the substitution spread (what the World reads), fpts_mean provisionally the plan's total (write_sim lays the
+        World's over it) with no sd or band. Players not in proj (out, or off the floor tonight) get None.
+        """
         n = 0
+        rot = getattr(self, "_last_rotation", {}).get(team)
         for p in self.players:
             if p.team != team:
                 continue
             name = normalize_name(p.name)
             if name in proj.index:
                 r = proj.loc[name]
-                p.fpts_mean = float(r["fpts_mean"]); p.fpts_std = float(r["fpts_std"])
                 p.minutes_proj = float(r["minutes"]); p.fpts_updated_at = datetime.now(); n += 1
-                p.fpts_quantiles = r["quantiles"] if "quantiles" in r and isinstance(r["quantiles"], list) else None
+                p.fpts_mean = float(r["fpts_mean"]); p.fpts_std = None; p.fpts_quantiles = None
+                p.minutes_p10 = None; p.minutes_p90 = None
                 p.minutes_role = r.get("role"); p.p_out = None if r.get("p_out") is None else float(r["p_out"])
                 p.rates = {k: float(v) for k, v in r["rates"].items()} if isinstance(r.get("rates"), dict) else None
-                p.minutes_p10 = None if pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"])
-                p.minutes_p90 = None if pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"])
-                rot = getattr(self, "_last_rotation", {}).get(team)
                 p.rotation_cells = [int(x) for x in rot["grid"].loc[name].values] if rot and name in rot["grid"].index else None
                 p.boundary_sd = float(rot["spreads"][name]) if rot and name in (rot.get("spreads") or {}) else None
             else:
@@ -336,13 +317,29 @@ class LiveSlate:
                 p.rotation_cells = None; p.boundary_sd = None
         return n
 
+    def write_sim(self, team: str, sim: pd.DataFrame) -> int:
+        """Layer 2 on the team's rows: the World's fpts_mean and fpts_std, the 101 quantiles and the drawn minutes band, for every
+        player the draw held (projection.worlds.simulate_game's frame). A player it did not hold keeps the plan's number."""
+        n = 0
+        for p in self.players:
+            if p.team != team:
+                continue
+            name = normalize_name(p.name)
+            if name in sim.index and (p.minutes_proj or 0) > 0:
+                r = sim.loc[name]
+                p.fpts_mean = float(r["fpts_mean"]); p.fpts_std = float(r["fpts_std"])
+                p.fpts_quantiles = r["quantiles"] if isinstance(r.get("quantiles"), list) else None
+                p.minutes_p10 = float(r["minutes_p10"]); p.minutes_p90 = float(r["minutes_p90"])
+                p.fpts_updated_at = datetime.now(); n += 1
+        return n
+
 
 def basis_minutes_for_market(slate: LiveSlate, overrides: dict[str, float], forced_out: set[str]) -> dict[str, float]:
     """Projected minutes under today's availability: the denominator for market rates."""
     out = {}
     for team in slate.teams():
         proj = project_team(slate.roster(team, overrides, forced_out), slate.state, slate.hist,
-                            slate.team_fpts.get(team), ProjectionParams(market_weight=0.0), simulate=False)
+                            slate.team_fpts.get(team), ProjectionParams(market_weight=0.0))
         out.update(proj["minutes"].to_dict())
     return out
 

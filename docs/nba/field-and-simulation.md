@@ -94,12 +94,34 @@ two-point attempts, three-point attempts, free-throw trips and turnovers at the 
 the floor by the pool's per-minute rates times coverage (so a priced player's props drive his share), makes by each
 player's trailing shooting percentages (`gamesim.profiles`) with the attempts scaled by one team factor so the expected
 points are what the lines say; the misses are rebounded at the team's share and by the other five, the turnovers become
-the other team's steals, the missed shots its blocks, the makes carry assists. Four game-level knobs (a team's pull toward
+the other team's steals, the missed shots its blocks, the makes carry assists. Garbage time (the closers out while the
+lead holds) is **off** by default (`config/nba.json → gamesim.garbage`): the grid's minutes already discount the blowout
+nights ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md)). Four game-level knobs (a team's pull toward
 its own expected scoring, the lead's pull-back, the pace-efficiency coupling, the endgame tie bump) are calibrated on the
 World against the real spread of totals, margins, team points and the overtime rate (`scripts/nba/gamesim.py
 calibrate-world --slate DG`, stored as `world_*` in `data/nba/models/gamesim/script.json`). `scripts/nba/gamesim.py
 draw-world --slate DG` draws a slate and prints the moments, the reconciliation factors and every player's line against
 the pool. A thousand worlds of a four-game slate take about six seconds.
+
+**The World is also the projection.** The desk projects a team by writing its mapping (minutes, grid row, rates) to the
+pool and drawing its game again (`projection.worlds.simulate_game`, 1000 worlds, under a second a game); every player's
+`fpts_mean` / `fpts_std` on the pool are those worlds' means and sds, so the number on the card is the number the field,
+the sim and the chooser play against ([projections.md](projections.md)). The generator draws its own World on the same
+inputs (same distribution, another seed).
+
+## Solve (`field/optimal.py`, `scripts/nba/optimal.py`)
+
+```bash
+venv/bin/python scripts/nba/optimal.py --slate DG [-n 100] [-j 4]
+```
+
+The optimal lineup in each of the World's worlds: the per-world fantasy points every team's projection store record
+holds (written when the team was projected), world *i* of every game taken together as one night, the salary-capped
+optimal solved in each with the generator's solver in `-j` worker processes (100 worlds in about a second), written to
+`slates/<dg>/projection/optimal.json`: per player his share of the optimals and whether the mean-projection optimal
+holds him. The desk's **Solve** (the actions bar beside Field + ownership, and the card's World line) runs it as a job
+and the **opt** column fills when it is done; a team projected since marks it stale. It is the generator's exposure at
+randomness 1 and no jitter, read before the generate runs.
 
 ## Choose (`contest/choose.py`, `contest/export.py`)
 

@@ -38,7 +38,7 @@ def main() -> int:
     ap.add_argument("--no-load", action="store_true", help="do not load slates; contests and payouts only")
     ap.add_argument("--no-payouts", action="store_true", help="skip the payout tables")
     ap.add_argument("--refresh", action="store_true", help="also refresh the slates already held")
-    ap.add_argument("--sims", type=int, default=4000)
+    ap.add_argument("--worlds", type=int, default=None, help="worlds per game (default config projection.n_worlds)")
     a = ap.parse_args()
     ensure_schema(init_db("nba"))
     slates = classic_slates()
@@ -55,7 +55,7 @@ def main() -> int:
             sess = S.session(dg)
             try:
                 with S.using(dg):
-                    out = run_ingest(sess, dg, update_odds=False, starters=True, n_sims=a.sims, log=log, by="script")
+                    out = run_ingest(sess, dg, update_odds=False, starters=True, n_worlds=a.worlds, log=log, by="script")
                 if s.get("title"):
                     S.write_meta(dg, title=s["title"])
                 st = out.get("stored"); pr = out.get("projected")

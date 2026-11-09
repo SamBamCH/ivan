@@ -126,7 +126,7 @@ class RowsMixin:
                 flags.append("unpriced")
             if r is not None and r.get("minutes_p90") is not None and not pd.isna(r.get("minutes_p90")) and float(r["minutes_p90"]) > 48:
                 flags.append(f"impossible band: p90 {float(r['minutes_p90']):.0f} min")
-            if r is not None and float(r["fpts_mean"]) >= 8 and float(r["fpts_std"]) > 1.2 * float(r["fpts_mean"]):
+            if r is not None and not pd.isna(r.get("fpts_std", np.nan)) and float(r["fpts_mean"]) >= 8 and float(r["fpts_std"]) > 1.2 * float(r["fpts_mean"]):
                 flags.append(f"distribution suspect: sd {float(r['fpts_std']):.0f} on a mean of {float(r['fpts_mean']):.0f}")
             flags += [f for f in review_flags.get(name, []) if not f.startswith(("questionable", "pinned"))]
             # the flags as cell colours: which column each one belongs to, and how loud
@@ -145,13 +145,22 @@ class RowsMixin:
                         else "warn" if v and (rotation or k == "name") else "") for k, v in cells.items()}
             sa = self.season.get(name, {})
             cur, last_season = sa.get("season"), sa.get("last")
-            fpts = None if r is None else float(r["fpts_mean"])
+            fpts = None if r is None else float(r["fpts_mean"])                       # the World's mean (a hand fpts pin over it)
+            sd = None if r is None or pd.isna(r.get("fpts_std", np.nan)) else float(r["fpts_std"])
+            fm = None if r is None else r.get("fpts_model", np.nan)
+            fpts_model = None if r is None else (float(fm) if fm is not None and not pd.isna(fm) else fpts)
+            plan = None if r is None else float(r["minutes"]) * float(r["fpm"])         # the mapping's total: minutes x fantasy points per minute
+            q = None if r is None else r.get("quantiles")
+            q = q if isinstance(q, list) and len(q) == 101 else None
+            min_sim = None if r is None or pd.isna(r.get("minutes_sim", np.nan)) else float(r["minutes_sim"])
+            opt = self.optimal_of(p.id)
             ov = override_of(self.overrides, name)
             mk = self.market_rows.get(name, {})
             stats = []
             for st in STAT_ORDER:                                   # one entry per stat column, out or not (the cells must line up)
                 m = mk.get(st, {}); pv = None if r is None else float(r[f"proj_{st}"]); mean = m.get("mean")
-                stats.append(dict(stat=st, label=STAT_LABELS[st], proj=pv, line=m.get("line"), mean=mean, books=m.get("books"), odds=m.get("odds"),
+                sv = None if r is None or pd.isna(r.get(f"sim_{st}", np.nan)) else float(r[f"sim_{st}"])
+                stats.append(dict(stat=st, label=STAT_LABELS[st], proj=pv, sim=sv, line=m.get("line"), mean=mean, books=m.get("books"), odds=m.get("odds"),
                                   priced=st in mk, basis=m.get("basis"),
                                   pinned=st in (list(r.get("stat_pinned") or []) if r is not None else []),
                                   gap=bool(r is not None and st in mk and mean and pv is not None and abs(pv - float(mean)) >= max(STAT_GAP * float(mean), 1.0))))
@@ -166,9 +175,11 @@ class RowsMixin:
                              min_p90=None if r is None or pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"]),
                              pinned=ov.get("minutes") is not None, pin=ov.get("minutes"), starter_pin=ov.get("starter"),
                              fppm_pin=ov.get("fppm"), low_pin=ov.get("min_low"), high_pin=ov.get("min_high"), stats=stats,
-                             fpts_pin=ov.get("fpts"), pub_pin=ov.get("pub"), fpts_model=None if r is None else float(r.get("fpts_model", r["fpts_mean"])),
+                             fpts_pin=ov.get("fpts"), pub_pin=ov.get("pub"), fpts_model=fpts_model, fpts_plan=plan,
+                             p10=None if q is None else q[10], p50=None if q is None else q[50], p90=None if q is None else q[90], min_sim=min_sim,
+                             opt=opt.get("share"), opt_mean=bool(opt.get("in_mean")),
                              layer=self._layer_of(name), local=dict(self.local_overrides.get(name, {})), published_pins=self._published_of(name),
-                             fpts=fpts, sd=None if r is None else float(r["fpts_std"]),
+                             fpts=fpts, sd=sd,
                              fpm=None if r is None else float(r["fpm"]),
                              season_games=cur["games"] if cur else 0, season_min=cur["minutes"] if cur else None, season_fpm=cur["fpm"] if cur else None,
                              last_games=last_season["games"] if last_season else 0, last_min=last_season["minutes"] if last_season else None,
@@ -236,6 +247,7 @@ class RowsMixin:
             alerts.append(("info", f"{len(unpriced)} rotation players unpriced"))
         score = sum({"bad": 10, "warn": 3, "info": 1}[k] for k, _ in alerts)
         team_fpts = float(self.proj[team]["fpts_mean"].sum()) if len(self.proj[team]) else 0.0
+        plan_fpts = float((self.proj[team]["minutes"] * self.proj[team]["fpm"]).sum()) if len(self.proj[team]) else 0.0
         assigned = sum((r["minutes"] or 0) for r in avail)
         to_place = (241.0 - assigned) if any(r["pinned"] for r in rows) else 0.0
         if abs(to_place) < 1.5:
@@ -250,6 +262,7 @@ class RowsMixin:
                     locked=bool(mins_to_tip is not None and mins_to_tip < 0), alerts=alerts, score=score,
                     starters="confirmed" if confirmed else ("expected" if starters else "none"),
                     n_out=sum(1 for r in rows if r["out"]), n_pinned=sum(1 for r in rows if r["pinned"]),
-                    team_fpts=team_fpts, trailing=self.slate.team_fpts.get(team), rows=rows, info={r["key"]: r for r in rows},
+                    team_fpts=team_fpts, plan_fpts=plan_fpts, trailing=self.slate.team_fpts.get(team), rows=rows, info={r["key"]: r for r in rows},
+                    world=self.world.get(team) or {}, optimal=self.optimal_status(),
                     stat_totals={st: sum((s["proj"] or 0.0) for x in rows if not x["out"] for s in x["stats"] if s["stat"] == st) for st in STAT_ORDER},
                     n_book=sum(1 for r in rows if r.get("book_min") is not None))

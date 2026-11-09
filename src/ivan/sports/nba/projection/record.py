@@ -79,7 +79,7 @@ def record_projection(session: Session, slate: LiveSlate, frames: list, now: dat
             continue                                        # a stored frame from before a roster change: the player is gone
         rows.append(dict(player_id=p.id, player_name=name, team=p.team, opponent=p.opponent, gametime=p.gametime,
                          salary=p.salary, status=p.status, starter=starter_label(slate, name, p.team),
-                         minutes_proj=float(r["minutes"]), fpts_mean=float(r["fpts_mean"]), fpts_std=float(r["fpts_std"]),
+                         minutes_proj=float(r["minutes"]), fpts_mean=float(r["fpts_mean"]), fpts_std=None if pd.isna(r.get("fpts_std", np.nan)) else float(r["fpts_std"]),
                          priced=bool(r.get("priced", False)), pinned=bool(r.get("pinned", False)),
                          baseline_min=float(r["baseline"]), fpm=float(r["fpm"]), usage_mult=float(r["usage_mult"]),
                          market_fpts=market_fpts.get(name), minutes_model=minutes_model, minutes_role=r.get("role"),

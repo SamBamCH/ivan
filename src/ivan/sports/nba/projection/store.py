@@ -8,11 +8,16 @@ re-projects and a desk picking up a pool another process wrote (the capture tick
 milliseconds. The records travel with the live feed bundle (ivan.core.feed, live_mirror), so a consumer shows the
 producer's projection exactly, re-projecting only the teams it edited.
 
-A record (pickle, data/nba/derived/projection/<TEAM>.pkl):
-    team, draft_group, written_at, n_sims
-    frame   the team's projection (projection.engine.project_team's frame after the fpts overrides)
-    hist    the same roster projected from history alone (n_sims=0, market_weight=0): the "vs history" column and flags
-    rot     the rotation inputs and the grid behind the frame (LiveSlate.rotation_for + project_team's grid, targets, zero_minutes)
+A record (pickle, slates/<dg>/projection/<TEAM>.pkl):
+    team, draft_group, written_at, n_worlds
+    frame     layer 1, the mapping (projection.engine.project_team): minutes, rates, proj_<stat>, p_out, role, the plan's fpts_mean
+    hist      the same roster mapped from history alone (market_weight=0): the "vs history" column and flags
+    rot       the rotation inputs and the grid behind the frame (LiveSlate.rotation_for + project_team's grid, targets, zero_minutes)
+    sim       layer 2, the World's draw per player (projection.worlds.simulate_game): fpts_mean, fpts_std, quantiles, minutes_sim,
+              minutes_p10/p90, sim_<stat>; fpts_model beside fpts_mean where a hand fpts pin moved it. None until the game is drawn
+    samples   {names, pids, fpts (n, k), minutes (n, k)} float32: the per-world draws the optimal-lineup share is solved on
+    game      the game's draw: the attempt factor per side, the lines, the drawn total and margin, overtime and garbage shares
+`merged(rec)` is the frame with the sim's columns laid over it: what the capture rows, the CSV and the desk's rows read.
 """
 from __future__ import annotations
 
@@ -31,9 +36,42 @@ def path(team: str) -> Path:
     return S.store_dir() / f"{team}.pkl"
 
 
-def record(team: str, frame: pd.DataFrame, hist: pd.DataFrame, rot: dict, draft_group: Optional[int], n_sims: int) -> dict:
-    return dict(team=str(team), draft_group=None if draft_group is None else int(draft_group), written_at=datetime.now(), n_sims=int(n_sims),
-                frame=frame, hist=hist, rot=dict(rot or {}))
+SIM_COLS = ("fpts_mean", "fpts_std", "quantiles", "fpts_model", "minutes_sim", "minutes_p10", "minutes_p90", "p_zero",
+            "sim_points", "sim_rebounds", "sim_assists", "sim_fg3m", "sim_steals", "sim_blocks", "sim_turnovers")
+
+
+def record(team: str, frame: pd.DataFrame, hist: pd.DataFrame, rot: dict, draft_group: Optional[int], n_worlds: int = 0,
+           sim: Optional[pd.DataFrame] = None, samples: Optional[dict] = None, game: Optional[dict] = None) -> dict:
+    return dict(team=str(team), draft_group=None if draft_group is None else int(draft_group), written_at=datetime.now(), n_worlds=int(n_worlds),
+                frame=frame, hist=hist, rot=dict(rot or {}), sim=sim, samples=samples, game=dict(game or {}))
+
+
+def set_sim(rec: dict, sim: pd.DataFrame, samples: dict, game: dict, n_worlds: int) -> dict:
+    """The record with a fresh layer 2 (the game was drawn again); written_at moves."""
+    rec.update(sim=sim, samples=samples, game=dict(game or {}), n_worlds=int(n_worlds), written_at=datetime.now())
+    return rec
+
+
+def merged(rec: dict) -> pd.DataFrame:
+    """The frame with the World's columns laid over it (fpts_mean, fpts_std, the quantiles, the minutes band, the stat means);
+    a player the draw did not hold keeps the plan's fpts_mean and gets no sd. The frame alone when the game is not drawn yet."""
+    frame = rec["frame"].copy()
+    sim = rec.get("sim")
+    if sim is None or not len(sim):
+        for c in ("fpts_std", "minutes_p10", "minutes_p90"):
+            if c not in frame.columns:
+                frame[c] = float("nan")
+        if "quantiles" not in frame.columns:
+            frame["quantiles"] = None
+        return frame
+    for c in SIM_COLS:
+        if c in sim.columns:
+            col = sim[c].reindex(frame.index)
+            if c == "fpts_mean":
+                frame[c] = col.where(col.notna(), frame[c].astype(float))
+            else:
+                frame[c] = col if c != "quantiles" else col.where(col.notna(), None)
+    return frame
 
 
 def save(rec: dict) -> Path:

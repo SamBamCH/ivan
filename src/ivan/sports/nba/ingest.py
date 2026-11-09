@@ -6,9 +6,12 @@ The slate pipeline: fetch, store, project. The desk's Refresh, scripts/nba/inges
                       made stale, project_slate; then the slate's record, the public field when asked, Rotowire's news
     store_slate       the pool replaced (nba_player), the starters, the status marks, the props and game lines
                       (data_clean.odds), this pool's market rates, the public projection, the archive capture
-    project_slate     every team through project_team (THE way a team is projected: the frame, the grid, the history-only
-                      comparison, into nba_player and the projection store), then the capture rows and the projections
-                      CSV (projection.record)
+    project_slate     every team mapped (layer 1: projection.engine through live.LiveSlate: minutes, grid, rates, into
+                      nba_player and the projection store), then every game drawn once on the mapping (layer 2:
+                      projection.worlds: the World's fantasy points, minutes and stats per player, laid over the pool), then
+                      the capture rows and the projections CSV (projection.record)
+    project_team      THE way one team is projected (the desk's edits): its mapping, then its game drawn again, both teams'
+                      pool rows and store records written
     capture_pool      the snapshot: record the projection as it stands without projecting anything
     market rates      market_rates_current / ensure_market_rates / refresh_market_rates: this pool's rates from the odds
                       table's rows for its own games, rebuilt whenever a props fetch moved the table
@@ -35,6 +38,7 @@ from ivan.sports.nba.data_fetch.boxscores import store_starting_lineups
 from ivan.sports.nba.models import (NBABase, NBAPlayer, NBAOdds, StartingLineups)
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import store as PSTORE
+from ivan.sports.nba.projection import worlds as WS
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
 from ivan.sports.nba.slate import changes as CH
@@ -99,7 +103,7 @@ def locally_edited_teams(session: Session) -> set:
         teams |= {f.stem for f in S.rotations_dir().glob("*.json")}
     return teams
 
-def after_pull(session: Session, *, n_sims: Optional[int] = None, log: Log = print) -> dict:
+def after_pull(session: Session, *, n_worlds: Optional[int] = None, log: Log = print) -> dict:
     """
     A consumer, after the feed replaced a slate's pool (the current slate's session): only the teams this machine edited, among
     the slate's teams, are re-projected on top of the published projection; the rest stands as published. Slates no longer
@@ -111,11 +115,11 @@ def after_pull(session: Session, *, n_sims: Optional[int] = None, log: Log = pri
     mine = locally_edited_teams(session) & slate_teams
     players = 0
     if mine:
-        info = project_slate(session, n_sims=n_sims, write_capture=False, write_csv=False, log=log, teams=mine)
+        info = project_slate(session, n_worlds=n_worlds, write_capture=False, write_csv=False, log=log, teams=mine)
         players = info.players
     return dict(moved=False, teams=mine, players=players, draft_group=current)
 
-def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: Optional[int] = None,
+def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_worlds: Optional[int] = None,
                  log: Log = print, field: bool = False, news: bool = True, lines: Optional[bool] = None, by: str = "desk") -> tuple:
     """
     The desk's Refresh and slate switch: fetch DraftKings (and the props with update_odds), then replace the pool, project it
@@ -126,7 +130,7 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     (news=False skips it). Returns (StoreInfo, ProjectInfo, the news check's result or None, the changes per team).
     The command line (scripts/nba/ingest.py -> run_ingest) takes the same path.
     """
-    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news, lines=lines, by=by)
+    out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_worlds=n_worlds, log=log, field=field, news=news, lines=lines, by=by)
     return out["stored"], out["projected"], out["news"], out["changes"]
 
 def market_rates_current(session: Session) -> bool:
@@ -252,55 +256,106 @@ def refresh_ownership(session: Session, log: Log = print) -> dict:
     except Exception as e:   # noqa: BLE001 - never fails a pool refresh
         session.rollback(); log(f"public refresh failed: {type(e).__name__}: {e}"); return {}
 
-def project_team(session: Session, slate: LiveSlate, team: str, overrides: dict, params: Optional[ProjectionParams] = None,
-                 *, write: bool = True) -> dict:
-    """
-    THE way a team is projected: the frame, the grid behind it and the history-only comparison, written to the team's
-    nba_player rows (not committed: the caller's transaction) and to the projection store (projection.store), which the
-    desk reads. Every path that projects goes through here (project_slate for the whole slate, the desk's edits for one
-    team), so an edit on the desk and a publish give the same numbers: the generator is seeded per team, so a team's
-    projection depends only on its inputs. Returns the store record.
-    """
-    params = params or ProjectionParams.from_config()
+def _map_team(slate: LiveSlate, team: str, overrides: dict, params: ProjectionParams) -> dict:
+    """Layer 1 for one team: the mapping (projection.engine through the live slate) written to its nba_player rows, the
+    history-only comparison beside it, its store record returned (sim empty; not saved)."""
     rng = np.random.default_rng(0)
     proj = slate.project(team, overrides, set(), params, rng=rng)
     rot = dict(getattr(slate, "_last_rotation", {}).get(team) or {})      # the grid, targets and zero-minute players behind this frame
-    hist = slate.project(team, overrides, set(), replace(params, n_sims=0, market_weight=0.0), rng=rng)
-    if write:
-        slate.write(team, proj)
+    hist = slate.project(team, overrides, set(), replace(params, market_weight=0.0), rng=rng)
+    slate.write_plan(team, proj)
     dg = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
-    rec = PSTORE.record(team, proj, hist, rot, dg, params.n_sims)
-    if write:
-        PSTORE.save(rec)
-    return rec
+    return PSTORE.record(team, proj, hist, rot, dg, 0)
 
-def project_slate(session: Session, *, n_sims: Optional[int] = None, write_capture: bool = True, write_csv: bool = True,
+def _draw_games(session: Session, slate: LiveSlate, pairs: Iterable[tuple], recs: dict, overrides: dict, *, n_worlds: Optional[int] = None,
+                ctx=None, log: Log = print) -> list:
+    """
+    Layer 2 for the given games: each drawn once on the pool as the mapping left it (projection.worlds.simulate_game), the
+    hand fpts pins applied, the World's columns written to BOTH teams' nba_player rows and set on their store records (recs:
+    team -> record; a team's record not in recs is loaded from the store and added). Nothing is saved or committed here.
+    Returns the teams drawn.
+    """
+    ctx = ctx or WS.context(session)
+    n = int(n_worlds or WS.n_worlds())
+    inputs = WS.game_inputs(session, ctx)
+    done = []
+    for team, opp in pairs:
+        g = inputs.get(frozenset((str(team), str(opp))))
+        if g is None:
+            log(f"{team} vs {opp}: no projected players on either side, not drawn"); continue
+        sim = WS.simulate_game(session, ctx, g, n)
+        for t in (sim.home, sim.away):
+            frame, samples = sim.frames[t], sim.samples[t]
+            for name, ov in (overrides or {}).items():
+                v = ov.get("fpts") if isinstance(ov, dict) else None
+                if v is not None and name in frame.index:
+                    WS.apply_fpts_pin(frame, samples, name, float(v))
+            slate.write_sim(t, frame)
+            rec = recs.get(t) or PSTORE.load(t)
+            if rec is None:
+                continue                                        # a team never mapped here: its pool rows carry the draw, no record to hold it
+            recs[t] = PSTORE.set_sim(rec, frame, samples, sim.game, n)
+            done.append(t)
+        gi = sim.game
+        log(f"{sim.away} @ {sim.home}: {n} worlds, attempts x {gi['factor'][sim.home]:.2f} / {gi['factor'][sim.away]:.2f}, "
+            f"total {gi['mean_total']:.1f}" + (f" (line {gi['total']:g})" if gi.get("total") is not None else "") + f", margin {gi['mean_margin']:+.1f}")
+    return done
+
+def project_team(session: Session, slate: LiveSlate, team: str, overrides: dict, params: Optional[ProjectionParams] = None,
+                 *, n_worlds: Optional[int] = None, ctx=None, log: Log = lambda m: None) -> dict:
+    """
+    THE way a team is projected (the desk's edits, scripts/nba/project.py): its mapping (layer 1) written to its nba_player
+    rows and its store record, then its game drawn again on the pool (layer 2) and the World's numbers written to both
+    teams' rows and records (an edit on one side moves the other side's rebounds, steals and blocks). Not committed: the
+    caller's transaction. The draw is seeded by the pair, so a team's projection depends only on the two mappings: an
+    edit on the desk and a publish give the same numbers. The opponent is mapped first when it has no record yet.
+    Returns the team's store record (frame = layer 1, sim = layer 2; store.merged lays one over the other).
+    """
+    params = params or ProjectionParams.from_config()
+    recs = {team: _map_team(slate, team, overrides, params)}
+    opp = slate.opponent(team)
+    if opp and PSTORE.load(opp) is None and any(p.team == opp for p in slate.players):
+        recs[opp] = _map_team(slate, opp, overrides, params)
+    if opp:
+        _draw_games(session, slate, [(team, opp)], recs, overrides, n_worlds=n_worlds, ctx=ctx, log=log)
+    for rec in recs.values():
+        PSTORE.save(rec)
+    return recs[team]
+
+def project_slate(session: Session, *, n_worlds: Optional[int] = None, write_capture: bool = True, write_csv: bool = True,
                   log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = False,
                   teams: Optional[Iterable[str]] = None) -> ProjectInfo:
-    """Project the slate (or `teams` of it) through project_team, commit, then the capture rows and the projections CSV.
-    n_sims defaults to config/nba.json projection.n_sims: the one number every path projects at."""
+    """Project the slate (or `teams` of it): every team mapped, then every game one of them is in drawn once, commit, then the
+    capture rows and the projections CSV. n_worlds defaults to config/nba.json projection.n_worlds: the one number every path draws at."""
     info = ProjectInfo()
     ensure_market_rates(session, log=log)                   # the books as they stand, not as they stood at the slate's refresh
     slate = LiveSlate(session)
     if not slate.players:
         raise IngestError("no players in nba_player")
     overrides = read_overrides_full()
-    params = params or (ProjectionParams.from_config() if n_sims is None else ProjectionParams.from_config(n_sims=n_sims))
+    params = params or ProjectionParams.from_config()
     now = datetime.now()
-    frames = []
     only = None if teams is None else {str(t) for t in teams}
+    recs: dict = {}
     for team in slate.teams():
         if only is not None and team not in only:
             continue                                        # a consumer re-projects only the teams it edited: the rest stay as published
-        proj = project_team(session, slate, team, overrides, params)["frame"]
-        proj = proj.copy(); proj["team"] = team
-        frames.append(proj)
-    session.commit()
+        recs[team] = _map_team(slate, team, overrides, params)
+    mapped = set(recs)
     dg0 = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
-    PSTORE.prune(dg0, slate.teams())                        # records of another slate, or of a team no longer on this one, go
-    if not frames:                                          # the requested teams are not on this slate: nothing to project, nothing changed
+    if not mapped:                                          # the requested teams are not on this slate: nothing to project, nothing changed
         log(f"no team of the slate among {sorted(only) if only else 'none'}; the projection stands")
         return info
+    pairs = [(t, o) for t, o in WS.game_pairs(slate.players) if t in mapped or o in mapped]
+    _draw_games(session, slate, pairs, recs, overrides, n_worlds=n_worlds, log=log)
+    for rec in recs.values():
+        PSTORE.save(rec)
+    session.commit()
+    PSTORE.prune(dg0, slate.teams())                        # records of another slate, or of a team no longer on this one, go
+    frames = []
+    for team in sorted(mapped):
+        f = PSTORE.merged(recs[team]); f["team"] = team
+        frames.append(f)
     return record_projection(session, slate, frames, now, source=source, write_capture=write_capture, write_csv=write_csv,
                              write_ownership=write_ownership, minutes_model=params.minutes_model, log=log, info=info)
 
@@ -325,13 +380,13 @@ def capture_pool(session: Session, *, log: Log = print, source: str = "ours", wr
             overrides = overrides if overrides is not None else read_overrides_full()
             rec = project_team(session, slate, team, overrides, ProjectionParams.from_config()); session.commit()
             log(f"{team}: no stored projection, projected")
-        proj = rec["frame"].copy(); proj["team"] = team
+        proj = PSTORE.merged(rec); proj["team"] = team
         frames.append(proj)
     return record_projection(session, slate, frames, datetime.now(), source=source, write_capture=True, write_csv=write_csv,
                              minutes_model=ProjectionParams.from_config().minutes_model, log=log, info=info)
 
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
-               n_sims: Optional[int] = None, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
+               n_worlds: Optional[int] = None, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
                lines: Optional[bool] = None, by: str = "desk") -> dict:
     """
     Fetch, store and project one slate the way the desk does it: the fetch happens outside the database, then the slate's pool is
@@ -364,7 +419,7 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
         with one_transaction(session):
             stored = store_slate(session, fetched, log=log)
             voided = void_stale_mappings(session, log=log)
-            projected = project_slate(session, n_sims=n_sims, log=log) if project else None
+            projected = project_slate(session, n_worlds=n_worlds, log=log) if project else None
         S.create(dg, lock=fetched.lock, games=len(fetched.teams) // 2 if fetched.teams else None)
         S.touch(dg, "refreshed", by=by)
         ownership = refresh_field(session, log=log) if field else None
@@ -423,7 +478,7 @@ def link_slate_news(session, draft_group_id: int) -> int:
         session.commit()
     return n
 
-def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: Optional[int] = None, log: Log = print) -> dict:
+def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_worlds: Optional[int] = None, log: Log = print) -> dict:
     """
     Load a past slate into its own directory from its archive capture (the last one taken before lock, else the last one; or
     `capture_id`): the pool as it was (salaries, statuses, starters), its props and game lines, then the projection with
@@ -484,7 +539,7 @@ def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[i
                 basis = basis_minutes_for_market(slate, read_overrides_full(), set())
                 store_market_rates(session, means, basis)
             refresh_public_projection(session, log=log)        # the field and ownership: the sim or the Field + ownership button
-            info = project_slate(session, n_sims=n_sims, log=log, write_capture=False)
+            info = project_slate(session, n_worlds=n_worlds, log=log, write_capture=False)
         S.create(int(draft_group_id), lock=cap.lock, games=len({frozenset((r.get("team"), r.get("opponent"))) for r in players if r.get("team") and r.get("opponent")}) or None)
         S.touch(int(draft_group_id), "refreshed", by="archive")
     log(f"restored slate {draft_group_id} from capture {cap.id} ({cap.source}, {cap.captured_at:%m-%d %H:%M}): {len(players)} players, "

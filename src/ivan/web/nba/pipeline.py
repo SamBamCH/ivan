@@ -293,7 +293,7 @@ def _pipeline_ctx() -> dict:
 PUBLISH_RED_MIN = 10   # unpublished changes older than this turn the published label red
 
 
-CHAIN_STEPS = [("snapshot", "snapshot", ("snapshot",)), ("field", "field", ("field",)), ("generate", "lineups", ("generate", "all")),
+CHAIN_STEPS = [("optimal", "optimal", ("solve",)), ("snapshot", "snapshot", ("snapshot",)), ("field", "field", ("field",)), ("generate", "lineups", ("generate", "all")),
                ("sim", "sim", ("sim", "all")), ("choose", "picks", ("choose", "choose_slate", "all")), ("lateswap", "late swap", ("lateswap",))]
 
 
@@ -444,6 +444,10 @@ def _submit(step: str, form: dict) -> list:
         jobs.append(_submit_job("fetch_standings", [py, str(SCRIPTS / "fetch_standings.py")], "fetch_standings", meta("fetch_standings")))
     if step == "field":
         jobs.append(_submit_job("field", [py, str(SCRIPTS / "field_ownership.py")], "field", meta("field")))
+    if step == "solve":
+        # the optimal lineup in each of the World's worlds (field.optimal): the card's opt column
+        worlds = int(_field(form.get("solve_worlds"), "worlds", int) or 100)
+        jobs.append(_submit_job("solve", [py, str(SCRIPTS / "optimal.py"), "-n", str(worlds), "-j", str(n_jobs)], "solve", meta("solve")))
     if step in ("choose", "all"):
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
@@ -463,7 +467,7 @@ def _submit(step: str, form: dict) -> list:
     return jobs
 
 
-POOL_WRITERS = ("field", "sim")   # jobs that write the pool (every player's ownership): the page reloads on them when they are done
+POOL_WRITERS = ("field", "sim", "solve")   # jobs that write the pool (every player's ownership) or the optimal file: the page reloads on them when they are done
 
 
 @slate.get("/pipeline/status", response_class=HTMLResponse)
@@ -509,7 +513,7 @@ async def pipeline_run(request: Request, step: str):
             pipeline_form["fresh"] = "on" if form.get("fresh") else ""
         if step == "lateswap":
             pipeline_form["ls_live"] = "on" if form.get("ls_live") else ""
-        if step not in ("generate", "sim", "choose", "choose_slate", "all", "lateswap", "field"):
+        if step not in ("generate", "sim", "choose", "choose_slate", "all", "lateswap", "field", "solve"):
             desk.flash.append(f"unknown step {step}")
         elif _active():
             desk.flash.append("a job is already running on this slate; wait for it or cancel it")

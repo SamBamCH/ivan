@@ -65,7 +65,8 @@ data/nba/
 ├── slates/<draft group>/           one slate (ivan.sports.nba.slates; never deleted by the code)
 │   ├── slate.json                  draft_group, lock, day, label, games, created_at, refreshed_at + refreshed_by (desk | autopilot | script | feed | archive), published_at (producer) / pulled_at (consumer)
 │   ├── slate.sqlite                the slate's tables: the pool, starters, market rates, notes, lineups, sims, contests (the history attached as `hist`)
-│   ├── projection/<TEAM>.pkl       the projection store: the slate's projection per team (frame, history-only frame, the grid behind it),
+│   ├── projection/optimal.json     the optimal lineup per world and each player's share (field/optimal.py, the desk's Solve), with the store stamp it was solved on
+│   ├── projection/<TEAM>.pkl       the projection store: the slate's projection per team (frame = the mapping, sim = the World's draw per player, samples = the per-world fantasy points and minutes, game = the draw's factor and lines, hist = the history-only frame, rot = the grid behind it),
 │   │                               written by whatever projects (ingest.project_team), read by the desk; mirrored to the consumer
 │   ├── input/
 │   │   ├── entries.csv             the DraftKings entries export the sim and chooser read (the desk's upload box)
@@ -94,7 +95,7 @@ data/nba/
 │   ├── historical_lines.csv        closing-ish game lines for past days (fetch_historical_lines.py)
 │   └── stok.csv                    a Stokastic export to record as a yardstick (ingest.py --stok-csv)
 ├── models/
-│   ├── projection_calibration.json per-stat dispersion, minutes sd (hand-kept; fitted 2026-10)
+│   ├── projection_calibration.json per-stat negative-binomial dispersion: a prop line's over price to a mean (market.means_from_tails; hand-kept, fitted 2026-10)
 │   ├── team_minutes.json           the projection's game constants: scratch probabilities by status and salary, margin sd, overtime rate (hand-kept; measured 2026-10)
 │   ├── correlation.json            the role-pair correlation table measured 2026-10 on walk-forward residuals: the game sim's check target
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)

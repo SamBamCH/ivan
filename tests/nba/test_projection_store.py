@@ -24,7 +24,7 @@ def test_save_load_roundtrip_keeps_frames_grid_and_slate(store_dir):
     p = S.save(rec)
     assert p == store_dir / "BOS.pkl" and not (store_dir / "BOS.pkl.tmp").exists()      # written atomically
     back = S.load("BOS")
-    assert back["draft_group"] == 155 and back["n_sims"] == 4000
+    assert back["draft_group"] == 155 and back["n_worlds"] == 4000 and back["sim"] is None
     pd.testing.assert_frame_equal(back["frame"], rec["frame"]); pd.testing.assert_frame_equal(back["hist"], rec["hist"])
     assert back["rot"]["grid"].attrs["locked"] == ["a"] and back["rot"]["zero_minutes"] == ["c"]
     assert S.load("NYK") is None

@@ -69,7 +69,7 @@ def cmd_review(session, a) -> int:
     if not slate.players:
         print("no players in nba_player"); return 1
     overrides = read_overrides()
-    params = ProjectionParams(n_sims=0)
+    params = ProjectionParams()
     proj = {t: slate.project(t, overrides, set(), params, rng=np.random.default_rng(0)) for t in slate.teams()}
     cards = V.review_slate(session, slate, proj, overrides, teams=[a.team.upper()] if a.team else None)
     for c in cards:
@@ -86,7 +86,7 @@ def cmd_replay(session, a) -> int:
         for label, blend in (("with the salary blend", True), ("history only", False)):
             if a.no_compare and not blend:
                 continue
-            df = V.replay_slate(session, dg, params=ProjectionParams.from_config(n_sims=0, salary_blend=blend))
+            df = V.replay_slate(session, dg, params=ProjectionParams.from_config(salary_blend=blend))
             print(f"slate {dg} replayed {label}:")
             print(V.replay_summary(df))
     return 0

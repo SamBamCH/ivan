@@ -6,4 +6,5 @@ The public's side of the slate, kept apart from ours, and our own candidate pool
     model               the ownership model fitted on real contests (features, fit, predict, the two-group simulator)
     generate            the generate step: the pool of candidate lineups the simulator picks from (worker processes)
     solver              one classic lineup by ILP under DraftKings' roster and salary rules
+    optimal             the optimal lineup in each of the World's worlds and every player's share of them (the desk's Solve)
 """

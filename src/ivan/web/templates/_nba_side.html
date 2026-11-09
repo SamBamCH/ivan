@@ -8,6 +8,11 @@
   {% if c.rotation.locked %}<span class="pill lk">{{ c.rotation.locked|length }} locked</span>{% endif %}
   {% if c.n_pinned %}<span class="pill">{{ c.n_pinned }} pinned</span>{% endif %}
 </h2>
+{% if c.world and c.world.n_worlds %}<div class="world muted small" title="layer 2: the game simulated on the grid and rates above (ivan.sports.nba.gamesim.world), both teams at once; every fpts, sd and drawn stat on the card is the mean over these worlds">
+  <b>World</b> {{ c.world.n_worlds }} worlds{% if c.world.factor and c.team in c.world.factor %} · attempts × {{ '%.2f'|format(c.world.factor[c.team]) }}{% endif %}{% if c.world.mean_total is defined %} · drawn total {{ '%.1f'|format(c.world.mean_total) }}{% if c.world.total %} (line {{ '%g'|format(c.world.total) }}){% endif %} · margin {{ '%+.1f'|format(c.world.mean_margin) }} ({{ c.world.home }}){% endif %} · team {{ c.team_fpts|round(0)|int }} fpts (plan {{ c.plan_fpts|round(0)|int }}){% if c.world.garbage_on %} · garbage time on{% endif %}
+  · <b>optimal</b> {% if c.optimal.exists %}{{ c.optimal.n_worlds }} worlds at {{ c.optimal.at }}{% if c.optimal.stale %} <span class="warn">stale</span>{% endif %}{% else %}not solved{% endif %}
+  <form class="inline" hx-post="{{ root }}/team/{{ c.team }}/solve" hx-target="#card-{{ c.team }}" hx-swap="innerHTML"><button type="submit" title="solve the optimal lineup in each of the World's worlds over the whole slate (a few seconds, scripts/nba/optimal.py): the opt column">Solve</button></form>
+</div>{% endif %}
 <form class="news" hx-post="{{ root }}/team/{{ c.team }}/news" hx-target="#card-{{ c.team }}" hx-swap="innerHTML" title="late news in one move: the call, the team re-allocated and written to the pool, the next job queued">
   <b>late news</b>
   <select name="player">{% for r in (c.rows|selectattr('status', 'in', ['Q', 'GTD', 'D', 'P'])|list) + (c.rows|rejectattr('status', 'in', ['Q', 'GTD', 'D', 'P'])|list) %}<option value="{{ r.key }}">{{ r.name }}{% if r.status %} ({{ r.status }}){% endif %}</option>{% endfor %}</select>
