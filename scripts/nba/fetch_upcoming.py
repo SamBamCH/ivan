@@ -19,7 +19,6 @@ first time and seconds afterwards (only the contests without a table are fetched
 from __future__ import annotations
 
 import argparse
-import sys
 from datetime import datetime
 
 from ivan.database.session import init_db

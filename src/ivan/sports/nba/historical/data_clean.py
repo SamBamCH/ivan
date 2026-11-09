@@ -5,8 +5,6 @@ from datetime import timedelta
 import shutil
 import re
 from datetime import datetime, timezone
-from ivan.sports.nba.models import ContestPayout
-from ivan.sports.nba.models import NBAStat
 from ivan.sports.nba.paths import DIAG_DIR
 
 def _calculate_dk_fpts(row):
@@ -112,45 +110,7 @@ def parse_sd(sd_str: str) -> datetime:
     ts = int(m.group(1)) / 1000.0
     return datetime.fromtimestamp(ts, tz=timezone.utc)
 
-def upsert_payouts(session, cid, payload):
-    detail  = payload.get("contestDetail", {})
-    summary = detail.get("payoutSummary", []) or []
 
-    rows_to_insert = []
-    for tier in summary:
-        min_pos = tier.get("minPosition")
-        max_pos = tier.get("maxPosition")
-
-        pd_list = tier.get("payoutDescriptions", "")
-        if not pd_list:
-            continue
-        
-        first_pd    = pd_list[0]
-        val         = first_pd.get("value", 0.0)
-        text_form   = first_pd.get("payoutDescription", "")
-        currency    = "USD"
-
-        rows_to_insert.append(
-            ContestPayout(
-                contest_id      = cid,
-                min_position    = min_pos,
-                max_position    = max_pos,
-                payout_amount   = float(val),
-                payout_text     = text_form,
-                currency        = currency,
-            )
-        )
-    session.bulk_save_objects(rows_to_insert)
-    session.commit()
-
-def normalize_player_names(session):
-    """Normalize all player names in NBAStat table."""
-    
-    stats = session.query(NBAStat).all()
-    for stat in stats:
-        stat.player_name = normalize_name(stat.player_name)
-    
-    session.commit()
 
 def clean_old_diagnostics(
     diagnostics_root: str | Path = DIAG_DIR,

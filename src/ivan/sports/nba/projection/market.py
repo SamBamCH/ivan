@@ -50,10 +50,6 @@ def american_to_prob_array(price: np.ndarray) -> np.ndarray:
         return np.where(price > 0, 100.0 / (price + 100.0), -price / (-price + 100.0))
 
 
-def _mean_from_tail(point: float, p_over: float, k: float) -> float | None:
-    """NB mean mu with P(X > point) = p_over, dispersion k (one pair; the table path is means_from_tails)."""
-    out = means_from_tails(np.array([point]), np.array([p_over]), np.array([k]))
-    return None if np.isnan(out[0]) else float(out[0])
 
 
 def means_from_tails(points: np.ndarray, p_overs: np.ndarray, ks: np.ndarray, iterations: int = 60) -> np.ndarray:

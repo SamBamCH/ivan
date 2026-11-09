@@ -57,11 +57,6 @@ def tau_from_band(low: Optional[float], high: Optional[float]) -> Optional[float
     return float((np.log(high) - np.log(low)) / (2 * 1.2816))
 
 
-def expected_abs_margin(mean: float, sd: float) -> float:
-    """E|X| for X ~ N(mean, sd): the folded normal mean."""
-    from scipy.stats import norm
-    m, sd = float(mean), float(sd)
-    return sd * np.sqrt(2 / np.pi) * np.exp(-m ** 2 / (2 * sd ** 2)) + m * (1 - 2 * norm.cdf(-m / sd))
 
 
 def scratch_probability(status: Optional[str], play_ewm: Optional[float] = None, mu: float = 0.0, params: Optional[dict] = None,

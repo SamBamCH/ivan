@@ -54,9 +54,8 @@ first or reload the slate afterwards. A new alias goes into `names.ALIASES` and 
 The slate tables (`slates.SLATE_TABLES`) are created in the slate's file by `slates.ensure_slate_schema`, the rest in the
 history file by `ingest.ensure_schema`; a history table created in a slate file would shadow the real one, so the two
 lists are explicit. A slate's lineups, sims and reports are its own and nothing clears them for another slate;
-`scripts/nba/clear_all.py --slate DG [--yes|--dry-run]` empties one slate's by hand. The one-time move from the one pool
-is `scripts/nba/migrate_slates.py` (the old tables stay in the history file as `_migrated_*` until dropped);
-`scripts/nba/migrate_edits_by_day.py` then moved each slate's edits under its day (both run by the server bootstrap, idempotent).
+`scripts/nba/clear_all.py --slate DG [--yes|--dry-run]` empties one slate's by hand. A history file from before the
+slate directories (2026-11-03) may still hold the old one-pool tables renamed `_migrated_*`; nothing reads them.
 
 ## On disk (`data/nba/`)
 
@@ -95,12 +94,11 @@ data/nba/
 │   ├── historical_lines.csv        closing-ish game lines for past days (fetch_historical_lines.py)
 │   └── stok.csv                    a Stokastic export to record as a yardstick (ingest.py --stok-csv)
 ├── models/
-│   ├── projection_calibration.json per-stat dispersion, minutes sd (backtest_projection.py --calibrate)
+│   ├── projection_calibration.json per-stat dispersion, minutes sd (hand-kept; fitted 2026-10)
 │   ├── team_minutes.json           the projection's game constants: scratch probabilities by status and salary, margin sd, overtime rate (hand-kept; measured 2026-10)
-│   ├── correlation.json            the measured role-pair correlation table (backtest_projection.py --fit-correlation): the game sim's check target
+│   ├── correlation.json            the role-pair correlation table measured 2026-10 on walk-forward residuals: the game sim's check target
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)
 │   ├── field_ownership.json        the ownership model fitted on real contests (field_model.py fit)
-│   ├── field_distribution_model.pkl, marginals_*.pkl   last season's bin sampler (field.sampler = projection_model)
 │   ├── gamesim/script.json         the game script's parameters (gamesim.py fit-script) and the World's calibrated knobs (world_*, calibrate-world), with the fit window and the commit
 │   ├── gamesim/teams.json          every team's trailing pace and the league coupling constants the World falls back on (fit-script)
 │   └── salary_minutes.json         (when fitted) the salary → minutes prior curve
@@ -125,8 +123,7 @@ data/nba/
 ├── diagnostics/
 │   ├── <contest name>_<id>/report.json           the sim report per contest
 │   ├── scorecard/                                one CSV + JSON per scored slate
-│   ├── field_backtest/<stamp>/                   report.txt, contests.csv, players.csv, summary.json (backtest_field.py)
-│   └── backtest_projection_*.txt
+│   └── field_backtest/<stamp>/                   report.txt, contests.csv, players.csv, summary.json (backtest_field.py)
 ├── jobs/                           the desk's job logs and json
 └── logs/                           nightly.log, archive.log, capture.log
 ```

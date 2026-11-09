@@ -28,7 +28,6 @@ def test_lines_consensus_and_team_lookup():
 
 def test_a_pinned_player_the_grid_does_not_hold_gets_a_sane_draw():
     """2026-10-23: Steven Adams, pinned at 15 minutes but at 0 in a drawn grid, was stretched to a 0-61 band."""
-    import numpy as np
     from ivan.sports.nba.projection.engine import fit_draw_to_mean
     rng = np.random.default_rng(0)
     sparse = np.where(rng.random(4000) < 0.03, 6.0, 0.0)               # the grid gives him 6 minutes in 3% of worlds

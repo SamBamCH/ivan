@@ -1,6 +1,5 @@
 from datetime import datetime
 from sqlalchemy.ext.declarative import declarative_base
-from ivan.database.session import Base
 from sqlalchemy.orm import Session, relationship
 from sqlalchemy import (
     Column,
@@ -14,11 +13,9 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     MetaData,
-    Table,
-    PrimaryKeyConstraint,
     Date
 )
-from typing import Optional, List, Any, Tuple
+from typing import List
 
 
 nba_metadata = MetaData()

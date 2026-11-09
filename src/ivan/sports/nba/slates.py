@@ -203,7 +203,8 @@ def published_grid(team: str) -> Optional[Path]:
     """The day's published grid file for the team, on a consumer, when it exists; None otherwise."""
     p = paths().published_rotations / f"{team}.json"
     return p if is_consumer() and p.exists() else None
-def input_dir() -> Path: return paths().input                                      # the slate's input (entries, contest weights)
+
+
 def output_dir() -> Path: return paths().output                                    # OUTPUT_DIR
 def entries_csv() -> Path: return paths().entries_csv                              # DEFAULT_ENTRIES_CSV
 def contest_weights_json() -> Path: return paths().contest_weights_json

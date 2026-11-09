@@ -1,5 +1,4 @@
 """The team minutes solve (ivan.sports.nba.projection.solve): budget, anchors, edits, position groups."""
-import numpy as np
 
 from ivan.sports.nba.projection.solve import Anchor, group_of, solve
 

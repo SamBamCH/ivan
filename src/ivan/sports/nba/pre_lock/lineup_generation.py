@@ -7,7 +7,7 @@ This module provides:
 - generate_single_classic_lineup for ILP-based lineup optimization
 """
 
-from typing import Dict, List, Tuple, Optional, Union, Callable
+from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path

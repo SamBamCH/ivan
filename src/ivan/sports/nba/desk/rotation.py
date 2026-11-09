@@ -12,7 +12,7 @@ from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
 from ivan.sports.nba.projection.groups import group_of as SK_group
-from .state import ADD_BACK_MINUTES, FOUL_SHORT_PF, FOUL_SHORT_SHARE, ROTATION_MIN, short_name
+from .state import ADD_BACK_MINUTES, FOUL_SHORT_PF, FOUL_SHORT_SHARE, short_name
 
 
 class RotationMixin:

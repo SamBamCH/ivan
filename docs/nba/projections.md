@@ -26,8 +26,8 @@ desk pins / locked rows ──► held exactly                                  
 
 `engine.project_team()` is the one call from roster + availability + history to a table; `live.py`
 (`LiveSlate`) feeds it the live pool, the starters, the market rates, the override files and the
-grids, and writes back. The walk-forward backtest feeds it box-score rosters instead
-(`walkforward.py`), so the same code is measured.
+grids, and writes back. The backtest of a past slate re-runs the same code from the slate's tip record
+([validation-and-backtests.md](validation-and-backtests.md#the-as-of-rerun-of-a-past-slate-ivansportsnbagamesimrerun-scriptsnbarerun_slatepy-the-backtest-view)).
 
 ### 1. Props to market means (`market.py`)
 
@@ -84,7 +84,7 @@ history anchors.
 the last 10 games, recency weighted, 8 to 12) plus `depth_extra`; the rest get no minutes and leave the
 pool. `pool = last_game` instead takes the rotation of the last ordinary game this group played
 together, minus tonight's outs, plus the returners; the depth cut stands when there is no such game.
-Backtest before switching: `scripts/nba/backtest_skeleton.py --pool`. A player the cut dropped can be
+A player the cut dropped can be
 added back on the desk (Map), starting at his history or 6 minutes.
 
 ### 7. The rotation skeleton (`skeleton.py`, `rotation.py`, `team_profile.py`; config `minutes_model = rotation`)
@@ -130,14 +130,14 @@ with nothing changed since the fetch a priced player projects to exactly the mar
 ### 10. Fantasy points (`fpts.py`)
 
 Per world: that world's minutes × rate gives each stat's mean; each stat is drawn negative binomial
-with its dispersion (`projection_calibration.json`, refit by `backtest_projection.py --calibrate`);
+with its dispersion (`projection_calibration.json`, hand-kept; fitted 2026-10);
 double-double and triple-double bonuses are counted on the joint draw. The projection is the mean
 over worlds (`n_sims` 4000 from the CLI, 2000 from the desk's Publish), the sd the sd over worlds, and
 the marginal is kept as 101 quantiles on `nba_player.fpts_quantiles` for the desk's display.
 
-### 11. Same-game correlation (`correlation.py`: the measurement; the sampler is the game simulation)
+### 11. Same-game correlation (the measurement; the sampler is the game simulation)
 
-Measured on 2025-26 walk-forward residuals the structure is small: two starters 0.00, starter with
+Measured 2026-10 on 2025-26 walk-forward residuals (`data/nba/models/correlation.json`) the structure is small: two starters 0.00, starter with
 bench −0.05, bench with bench −0.03, opponents 0.00, and a pair's own history predicts its future at
 r 0.08. The sampler no longer imposes these: the game simulation
 ([field-and-simulation.md](field-and-simulation.md#simulate-simulate_contestpy)) produces them from the mechanism
@@ -167,9 +167,7 @@ slate of that day, by any entry point (the slate is the current one in context: 
 address). On a consumer the laptop's copies sit under the day's `published/` as the base layer and the consumer's own
 files on top (`override_layers`). Scenarios (`edits/scenarios/<TEAM>/`) are named copies of a team's two files plus
 the assumptions read off them; a scenario belongs to the day it was saved on and picks itself for that day's slates only
-(2026-11-04: scenarios were a global per-team library and a Nov 2 scenario re-applied its grid to Nov 4's game). `scripts/nba/news.py "Name"` builds the overrides for one
-scratch from the terminal; `--conditional` scales teammates toward their "without him" per-minute
-history (opt-in: those samples are small and confounded).
+(2026-11-04: scenarios were a global per-team library and a Nov 2 scenario re-applied its grid to Nov 4's game).
 
 Every projection runs through `ingest.project_team`: one team, the frame, the history-only comparison
 frame (`n_sims=0`, no market) and the rotation grid behind it, written to the team's `nba_player` rows

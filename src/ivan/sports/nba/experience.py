@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Optional
 
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.paths import NBA_DATA_DIR

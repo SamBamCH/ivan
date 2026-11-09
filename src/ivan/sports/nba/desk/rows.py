@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.projection.live import override_of
-from ivan.sports.nba.projection.history import STATS
 from ivan.sports.nba.validation import market_points, recent_minutes, review_team
 
 STAT_ORDER = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # the grid's stat columns, left to right

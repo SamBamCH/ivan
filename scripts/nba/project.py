@@ -12,7 +12,6 @@ Late news     the day's edits/minutes_overrides.csv (columns player, minutes
               total per stat: points, rebounds, assists, fg3m, steals, blocks,
               turnovers; the desk's pin boxes write the same file) pins minutes
               and stats; the rest of the team is re-allocated around the pins.
-              scripts/nba/news.py builds a scratch for you.
 
   python scripts/nba/project.py                 # project and write
   python scripts/nba/project.py --dry-run       # print only

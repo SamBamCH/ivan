@@ -18,7 +18,7 @@ Blended toward the league by n / (n + SHRINK_GAMES) so a team with four games is
 from __future__ import annotations
 
 from datetime import date
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -100,5 +100,3 @@ def profile(session: Session, team: str, before: Optional[date] = None, since: O
     return out
 
 
-def clear_cache() -> None:
-    _CACHE.clear()

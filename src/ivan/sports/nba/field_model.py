@@ -284,19 +284,12 @@ N_PROVIDERS = 3
 SIGMA_CASUAL = 0.45
 
 
-def chalk_concentration(own_pct: np.ndarray) -> float:
-    """How concentrated the public's chalk is: the top-8 share of predicted ownership (0.125 = flat .. 1 = one lineup)."""
-    o = np.sort(np.asarray(own_pct, dtype=float))[::-1]
-    return float(o[:8].sum() / max(o.sum(), 1e-9))
 
 
 def slate_features(games: int, chalk: float) -> dict:
     return dict(log_games=float(np.log(max(games, 1) / 4.0)), chalk=float(chalk - 0.35))
 
 
-def contest_features(entries: int, fee: float, max_entries: int) -> dict:
-    return dict(log_entries=float(np.log(max(entries, 100) / 10000.0)), log_fee=float(np.log(max(fee, 0.1))),
-                multi=float(max_entries >= 100))
 
 
 def knobs(params: dict, slate: dict, contest: dict) -> dict:

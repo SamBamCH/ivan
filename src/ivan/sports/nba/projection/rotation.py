@@ -30,7 +30,6 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import slates as S
 
 MINUTES = 48
@@ -650,13 +649,6 @@ def drawn_minutes(team: str) -> Dict[str, float]:
     return minutes_of(g) if g is not None else {}
 
 
-def format_grid(grid: pd.DataFrame, curve: Optional[pd.DataFrame] = None) -> str:
-    L = [f"  {'player':22s} {'min':>4s}  " + "".join("|" if m % 12 == 0 else ("." if m % 6 == 0 else " ") for m in range(MINUTES))]
-    for n in grid.index:
-        row = "".join("#" if v else " " for v in grid.loc[n].values)
-        L.append(f"  {n[:22]:22s} {grid.loc[n].sum():4.0f}  {row}" + (f"  hist {float(curve.loc[n, 'minutes']):.1f}" if curve is not None and n in curve.index else ""))
-    L.append(f"  {'on floor':22s}       " + "".join(str(c) if c != ON_COURT else "5" for c in column_counts(grid)))
-    return "\n".join(L)
 
 
 # ----------------------------------------------------------------------------- the stint-level sampler

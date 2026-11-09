@@ -19,8 +19,8 @@ the team card above tonight's grid (Desk.considerations); scripts/nba/considerat
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Callable, Dict, Iterable, List, Optional
+from datetime import date, datetime
+from typing import Callable, Iterable, List, Optional
 
 import pandas as pd
 

@@ -18,8 +18,8 @@ from .rates import DK_WEIGHTS
 
 CALIBRATION_JSON = MODELS_DIR / "projection_calibration.json"
 
-# Dispersion k per stat (method of moments on 2025-26 rotation players, see
-# scripts/nba/backtest_projection.py --calibrate). Larger = closer to Poisson.
+# Dispersion k per stat (method of moments on 2025-26 rotation players, fitted 2026-10 by the walk-forward backtest since
+# removed; the file data/nba/models/projection_calibration.json is hand-kept). Larger = closer to Poisson.
 DEFAULT_DISPERSION = {"points": 12.0, "rebounds": 10.0, "assists": 8.0,
                       "steals": 50.0, "blocks": 30.0, "turnovers": 20.0, "fg3m": 10.0}
 MIN_SD_FLOOR = 2.5

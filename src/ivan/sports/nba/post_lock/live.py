@@ -14,7 +14,7 @@ The in-game update (ingame.py) turns this into each player's remaining-game draw
 from __future__ import annotations
 
 import re
-from typing import Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 import pandas as pd
 import requests

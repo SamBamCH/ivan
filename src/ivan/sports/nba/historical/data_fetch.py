@@ -9,7 +9,6 @@ import requests
 import random
 from requests.exceptions import ReadTimeout, ConnectionError, RequestException
 import pandas as pd
-from ivan.database.session import init_db, get_session
 from ivan.sports.nba.models import StartingLineups, NBAStat
 from ivan.sports.nba.names import normalize_name
 
@@ -264,11 +263,3 @@ def store_starting_lineups(session: Session, df: pd.DataFrame, fetched_at=None) 
     return n
 
 
-def fetch_starting_lineups(session: Session, raw_sport: str | None = "nba") -> int:
-    """Fetch, keep the page as raw rotowire/lineups, parse and store."""
-    html = fetch_rotowire_html()
-    if raw_sport:
-        from ivan.core import raw
-        from datetime import date as _date
-        raw.store(raw_sport, "rotowire/lineups", _date.today().isoformat(), html, ext="html")
-    return store_starting_lineups(session, parse_rotowire(html))

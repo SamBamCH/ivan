@@ -36,8 +36,6 @@ scripts/nba/lateswap.py is the command line; the desk's late swap tab runs it as
 from __future__ import annotations
 
 import json
-import os
-import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -51,11 +49,11 @@ from ivan.core import raw
 from ivan.core.seed import seed_for
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import contests as C
-from ivan.sports.nba.lineup_export import BASE_COLS, POSITION_ORDER, assign_player_order_classic, read_entries
+from ivan.sports.nba.lineup_export import BASE_COLS, POSITION_ORDER, read_entries
 from ivan.sports.nba.models import HistoricalContest, NBAPlayer
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.post_lock.entry_parsing import OriginalEntry
-from ivan.sports.nba.pre_lock.lineup_generation import SLOT_NAMES, FieldPlayer, generate_single_classic_lineup
+from ivan.sports.nba.pre_lock.lineup_generation import FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.pre_lock.player import generate_player_samples
 from ivan.sports.nba.simulate_contest import contests_in_entries, payout_tiers, player_samples_matrix, scale_payouts
 from ivan.sports.nba.standings import parse_export

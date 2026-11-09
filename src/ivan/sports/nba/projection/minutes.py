@@ -24,7 +24,7 @@ Allocation  The team budget is TEAM_MINUTES (240 plus the expected overtime
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd

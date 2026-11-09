@@ -189,15 +189,6 @@ def played_slates(session: Session, since: datetime, until: datetime, now: Optio
     return [c for c in archive.slates(session, SPORT, since, until) if c.lock + timedelta(hours=grace_hours) <= now]
 
 
-def entries_contest_ids(entries_csv: Optional[Path]) -> set:
-    """The Contest IDs in a DraftKings entries file; empty when there is no file."""
-    if not entries_csv or not Path(entries_csv).exists():
-        return set()
-    try:
-        from ivan.sports.nba.lineup_export import read_entries
-        return {int(c) for c in read_entries(entries_csv)["Contest ID"].unique()}
-    except Exception:   # noqa: BLE001
-        return set()
 
 
 def entries_contest_counts(entries_csv: Optional[Path]) -> Dict[int, int]:

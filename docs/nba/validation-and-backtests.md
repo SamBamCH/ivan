@@ -95,39 +95,6 @@ entries: nothing dated after the tip. Tips backfilled from the archive captures 
 edits or news were kept then) and say so in `meta.json`. The layout and what is deliberately not stored are in the
 module's docstring and [data.md](data.md).
 
-## The walk-forward backtest of the projection (`scripts/nba/backtest_projection.py`)
-
-```bash
-venv/bin/python scripts/nba/backtest_projection.py [--start 2025-11-15 --end 2026-01-15] [--dnp-available]
-    [--grid | --kgrid | --rgrid | --sgrid] [--calibrate] [--compare] [--fit-correlation]
-    [--market-day 2025-11-30]
-```
-
-Every team-game from `--start` on is projected using only games before that date, with availability
-and starters from the box score (`projection/walkforward.py`), so it measures the minutes and rate
-model and not injury-news timing. `--dnp-available` is the live condition (dressed players may not
-play). `--grid` and friends search the model's knobs; `--calibrate` fits the per-stat dispersion and
-the minutes sd into `data/nba/models/projection_calibration.json`; `--compare` scores the same
-player-games against the Stokastic projections kept in `projection_snapshot`; `--fit-correlation`
-measures the role-pair correlation table (`correlation.json`, the game simulation's check target); `--market-day` evaluates market rates
-from the stored props of the games that tipped that day (rows without a game: by the day the book posted
-them). Reports: `data/nba/diagnostics/backtest_projection_*.txt`.
-Result 2026-10-06 under live conditions: level with Stokastic (MAE 7.44 vs 7.41 on 3,410 player-games),
-a 50/50 blend beats both, the parameters survive a held-out half and the playoffs.
-
-## The rotation grid as the projection (`scripts/nba/backtest_skeleton.py`)
-
-```bash
-venv/bin/python scripts/nba/backtest_skeleton.py --start 2025-12-01 --end 2025-12-21 [--sims 400] [--dnp-available]
-    [--no-depth] [--depth-extra 1] [--pool] [--no-profile] [--max-cases N]
-```
-
-A/B of the skeleton (`projection/skeleton.py`) against the previous live path (the solve's minutes as
-the mean, `rotation.propose`'s grid as the shape) on last season's box scores: minutes and fantasy
-error and bias (players with 5+ games), 10-90 coverage, and what the skeleton drops (players it leaves
-off the floor who did play). `--pool` adds the last-game pool rule; run it before switching
-`projection.pool`. The depth cut's own numbers are in the `_depth_note` of `config/nba.json`.
-
 ## The field backtest (`ivan.sports.nba.field_backtest`, `scripts/nba/backtest_field.py`)
 
 ```bash
@@ -157,24 +124,19 @@ and seed, so a second run costs seconds. Findings: [notes/field_backtest_2026-11
 the sampler's knobs against simpler variants by slate size (one noise knob scaled by the game count matches the real
 fields better than the five-knob two-group model; not applied): [notes/field_sampler_ablation_2026-11-05.md](notes/field_sampler_ablation_2026-11-05.md).
 
-## The field's parameters (`scripts/nba/calibrate_field.py`, `scripts/nba/field_model.py`)
+## The field's parameters (`scripts/nba/field_model.py`)
 
 ```bash
-venv/bin/python scripts/nba/calibrate_field.py --contest-id 196456057 [--randomness 0.15,0.25,0.35,0.5] [--floors 0.85,0.9] [-n 300]
 venv/bin/python scripts/nba/field_model.py validate | fit | check
 ```
 
-Both need derived real contests from the standings scrape ([overnight.md](overnight.md)).
-`calibrate_field` describes a real field by two curves measured with our projections at lock (the
-ownership of the most-used players and the distribution of the lineups' projected totals below the
-optimal), generates candidate pools in process from the slate's capture over a grid of randomness ×
-floor and scores each on how closely it reproduces the curves; it is how `generate.randomness` 0.25
-and the floor were set. `field_model.py validate` is leave-one-slate-out on every derived contest
-against baselines, `fit` writes `data/nba/models/field_ownership.json`, `check` scores the saved
-model on slates it was not fitted on (the honest test; run after every scrape). The two-group field's own
-parameters (`field_two_group.json`: optimizer share, provider and personal noise) were fitted 2026-10-24 on the first
-29 contests by a one-off that was not kept; the field backtest above is how they are checked, and a refit is a
-grid over those knobs scored by it.
+Needs derived real contests from the standings scrape ([overnight.md](overnight.md)). `validate` is
+leave-one-slate-out on every derived contest against baselines, `fit` writes
+`data/nba/models/field_ownership.json`, `check` scores the saved model on slates it was not fitted on (the honest
+test; run after every scrape). The two-group field's own parameters (`field_two_group.json`: optimizer share,
+provider and personal noise) were fitted 2026-10-24 on the first 29 contests by a one-off that was not kept; the
+field backtest above is how they are checked, and a refit is a grid over those knobs scored by it. The generator's
+`randomness` 0.25 and floor were set the same way against real fields in 2026-10.
 
 ## Historical market data (the-odds-api, billed)
 

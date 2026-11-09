@@ -170,6 +170,15 @@ def refresh_public_projection(session: Session, history, log: Log = print, on: O
     return dict(players=len(pub), projected=n_pub)
 
 
+def write_ownership(session: Session, own: Dict[int, float]) -> int:
+    """Store a field's exposure (player id -> percent) as every slate player's ownership, 0 for players it never holds. Returns players written."""
+    n = 0
+    for p in session.query(NBAPlayer).all():
+        p.ownership = float(own.get(int(p.id), 0.0)); n += 1
+    session.commit()
+    return n
+
+
 def refresh_field_ownership(session: Session, log: Log = print, size: Optional[int] = None) -> dict:
     """
     The two-group field on the stored public projection (cached by its key: a rebuild only when a public number moved,
@@ -182,9 +191,7 @@ def refresh_field_ownership(session: Session, log: Log = print, size: Optional[i
     except Exception as e:   # noqa: BLE001 - ownership is a by-product of the public projection
         session.rollback(); log(f"ownership not refreshed: {type(e).__name__}: {e}"); own = {}
     if own:
-        for p in session.query(NBAPlayer).all():
-            p.ownership = float(own.get(int(p.id), 0.0))
-        session.commit()
+        write_ownership(session, own)
     log(f"ownership for {len(own)} players")
     return dict(owned=len(own), seconds=round(time.time() - t0, 1))
 

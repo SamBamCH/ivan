@@ -28,8 +28,6 @@ if [[ ! -f .env ]]; then
 fi
 
 venv/bin/python scripts/nfl/create_db.py
-# NBA slates on this machine: a slate's edits are its day's (idempotent; scripts/nba/migrate_edits_by_day.py)
-[[ -d data/nba/slates ]] && venv/bin/python scripts/nba/migrate_edits_by_day.py | tail -2
 echo "database: $ROOT/data/nfl/nfl_history.sqlite"
 
 if [[ "${1:-}" == "--service" ]]; then

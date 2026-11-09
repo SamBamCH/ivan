@@ -53,7 +53,6 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.core import raw
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba import results as R
 from ivan.sports.nba import slates as S

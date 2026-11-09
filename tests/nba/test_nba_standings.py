@@ -1,7 +1,6 @@
 """The DraftKings standings export parser and the derived field (ivan.sports.nba.standings)."""
 from datetime import datetime
 
-import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

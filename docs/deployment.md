@@ -31,7 +31,7 @@ sudo loginctl enable-linger ivan           # user timers survive logout
 Then from the laptop, with an ssh alias `ivan-server` for the service user:
 
 ```bash
-ssh ivan-server /opt/ivan/app/deploy/setup_nba_server.sh   # NBA dirs, schema, the 30-minute pull timer, the one-time move to slate directories (migrate_slates.py), prints the server's ssh public key, tries the pull, restarts ivan-web
+ssh ivan-server /opt/ivan/app/deploy/setup_nba_server.sh   # NBA dirs, schema, the 30-minute pull timer, prints the server's ssh public key, tries the pull, restarts ivan-web
 deploy/install_feed_key.sh "<that public key line>"  # on the laptop: binds the key to deploy/feed_serve.sh (publish + read-only rsync of data/feed)
 sudo apt install openssh-server                      # on the laptop, once (installs and starts sshd): the server reaches it over the tailnet
 ssh ivan-server 'cd /opt/ivan/app && for s in nba nfl mma; do venv/bin/python scripts/$s/feed.py pull; done'   # the first pulls (what each sport's Refresh from laptop does)

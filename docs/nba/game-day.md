@@ -120,9 +120,7 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
   or the late news form, on the team's page) and every new out gets its team's rotation looked at. Columns and
   rules are in [../web/nba-desk.md](../web/nba-desk.md#the-news-table).
 
-Terminal equivalents: `scripts/nba/news.py "Player Name" [--accept] [--conditional]` for one scratch
-(shows the team with and without him, asks minutes player by player, writes the pool for that team);
-`scripts/nba/project.py [--team XXX] [--dry-run]` re-projects the pool (or one team) from the overrides file and
+Terminal equivalents: `scripts/nba/project.py [--team XXX] [--dry-run]` re-projects the pool (or one team) from the overrides file and
 the grids through the same `project_team` path, store record included, without a capture row;
 `scripts/nba/validate.py review --team XXX` prints the minutes provenance and flags for a team.
 
@@ -244,7 +242,7 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 | Generate / Sim / Late swap / All from the desk | no | no (a snapshot first, then the job reads the pool; the sim writes the ownership column) |
 | Choose from the desk | no | no |
 | Fetch standings | yes (DraftKings standings) | no |
-| `news.py`, `project.py`, `ingest.py --project-only` | no | yes |
+| `project.py`, `ingest.py --project-only` | no | yes |
 | archive at tip | no | no (records it) |
 
 The history of how this was learned is in [notes/late_news_flow_2026-10-25.md](notes/late_news_flow_2026-10-25.md).

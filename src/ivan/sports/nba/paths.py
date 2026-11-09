@@ -12,8 +12,6 @@ MODELS_DIR   = NBA_DATA_DIR / "models"
 DIAG_DIR     = NBA_DATA_DIR / "diagnostics"
 LOGS_DIR     = NBA_DATA_DIR / "logs"
 
-PROJECTIONS_CSV       = INPUT_DIR / "stok.csv"
-FIELD_MODEL_PKL       = MODELS_DIR / "field_distribution_model.pkl"
 # Everything that belongs to one slate (its pool database, edits, grids, projection store, entries, outputs) lives under
 # data/nba/slates/<draft group>/ and is reached through ivan.sports.nba.slates (paths of the current slate), not here.
 

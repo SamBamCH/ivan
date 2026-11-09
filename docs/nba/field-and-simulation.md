@@ -5,7 +5,7 @@ Three stage modules with the same shapes as the NFL ones, each wrapped by one sc
 | Stage | Module | Script |
 |---|---|---|
 | Generate the candidate pool | `ivan.sports.nba.field_generation.generate_field` | `scripts/nba/generate_lineups.py N JOBS` |
-| The field (who else is in the contest) | `ivan.sports.nba.field_model`, `public_field`, `sample_field` | (inside the sim) |
+| The field (who else is in the contest) | `ivan.sports.nba.field_model`, `public_field` | (inside the sim) |
 | Simulate each contest | `ivan.sports.nba.simulate_contest.simulate_entries` | `scripts/nba/sim.py` |
 | Choose | `ivan.sports.nba.choose` + `lineup_export.run_choose` (numerics in `ivan.core.chooser`, `ivan.core.portfolio`, `ivan.core.slate_book`) | `scripts/nba/choose.py` |
 
@@ -32,15 +32,13 @@ the worlds around the mean), `jitter` 0.05, `min_fpts` or `min_fpts_frac` 0.9 of
 without it a second run adds to the pool, which is how two scenarios' lineups sit side by side
 before lock. The generate step writes nothing else (no field, no ownership, since 2026-10-28).
 
-## The field (`field_model.py`, `public_field.py`, `sample_field.py`)
+## The field (`field_model.py`, `public_field.py`)
 
-Config `field.sampler = two_group` (since 2026-10-23): the field is **its own lineups**, simulated from
-the fitted two-group model (`data/nba/models/field_two_group.json`) on the **public projection**
-(`pub_fpts`, the Stokastic replica), cached by a key made from the public projection alone so an edit
-to our numbers cannot move it. Every candidate in our pool is scored against it. The alternative
-`projection_model` is the old sampler: the pickled bin model (`field_distribution_model.pkl`, fitted on
-last season's contest bins) draws entries from **our** pool by normalised projection. `field.cap`
-10000 is the largest field size simulated; bigger contests are sampled down and the payout table scaled.
+The field is **its own lineups** (since 2026-10-23), simulated from the fitted two-group model
+(`data/nba/models/field_two_group.json`) on the **public projection** (`pub_fpts`, the Stokastic replica),
+cached by a key made from the public projection alone so an edit to our numbers cannot move it. Every
+candidate in our pool is scored against it (`simulate_contest.simulate_vs_field`). `field.cap` 10000 is
+the largest field size simulated; bigger contests are sampled down and the payout table scaled.
 
 The two-group field is cached on disk by its key (`data/nba/derived/field_cache/<key>.json`) and any
 smaller size is served from a bigger cached field. Only two things build it: the sim, once per run at

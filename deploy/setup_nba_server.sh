@@ -39,9 +39,6 @@ systemctl --user disable --now ivan-nba-capture.timer ivan-nba-nightly.timer iva
 UNITS="$HOME/.config/systemd/user"; mkdir -p "$UNITS"
 sed "s|__ROOT__|$ROOT|g" deploy/ivan-nba-pull.service > "$UNITS/ivan-nba-pull.service"; cp deploy/ivan-nba-pull.timer "$UNITS/ivan-nba-pull.timer"
 systemctl --user daemon-reload && systemctl --user enable --now ivan-nba-pull.timer && echo "ivan-nba-pull.timer: every 30 minutes"
-# the one pool becomes one directory per slate (idempotent; scripts/nba/migrate_slates.py)
-venv/bin/python scripts/nba/migrate_slates.py | tail -3
-venv/bin/python scripts/nba/migrate_edits_by_day.py | tail -2
 # ivan-web mounts the desk at import time, so it must restart once the database exists (Restart=always brings it back)
 OLD=$(systemctl show ivan-web -p MainPID --value 2>/dev/null || echo 0)
 [[ "$OLD" != "0" ]] && kill "$OLD" && sleep 4

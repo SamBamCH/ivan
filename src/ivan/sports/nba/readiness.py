@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Optional
 

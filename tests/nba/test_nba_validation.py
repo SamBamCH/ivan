@@ -1,7 +1,6 @@
 """The projection scorecard (ivan.sports.nba.validation): the join, the error decomposition, the classes and the findings."""
 from datetime import date, datetime
 
-import numpy as np
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine

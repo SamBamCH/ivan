@@ -93,7 +93,7 @@ contests to `data/nba/derived/contests/<id>/` (`lineups.parquet` one row per uni
 `players.csv` the side table joined to the pool, `field.json` summary with `final` and `locked_entries`).
 **DraftKings keeps standings about two weeks**, so scrape within days. The script runs on any day, open slate or
 not (`slates.open_any`: the newest held slate's session when none is open today). The derived contests are what
-`calibrate_field.py`, `field_model.py fit` and `backtest_field.py` learn from and are checked against.
+`field_model.py fit` and `backtest_field.py` learn from and are checked against.
 
 `scrape` notes its outcome on every held slate it touched (`standings.record_scrape` → `slates/<dg>/results/scrape.json`:
 the contests, which exported, which failed, whether a login was needed); a failure there turns the day **red** on the

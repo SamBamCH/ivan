@@ -74,7 +74,7 @@ def lines_from_record(rows: list, players: list) -> Dict[str, dict]:
 def rates_as_of(session: Session, day: date, players: list, odds: pd.DataFrame) -> Dict[str, Dict[str, float]]:
     """Per player the per-minute rates the live projection would have used at the tip: history before the day (shrunk) with
     the books' means over the projected minutes where priced."""
-    from ivan.sports.nba.projection.history import STATS, build_history, load_box_scores
+    from ivan.sports.nba.projection.history import build_history, load_box_scores
     from ivan.sports.nba.projection.market import blend_rates, market_means, market_rates
     from ivan.sports.nba.projection.rates import shrunk_rates
     box = load_box_scores(session)

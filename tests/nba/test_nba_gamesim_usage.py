@@ -3,7 +3,7 @@ from datetime import date
 
 import pandas as pd
 
-from ivan.sports.nba.gamesim import possessions as X, usage as U
+from ivan.sports.nba.gamesim import usage as U
 
 
 def _pg(game_id, day, fga_a=10, fga_b=5):

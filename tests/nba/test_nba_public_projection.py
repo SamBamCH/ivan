@@ -1,5 +1,4 @@
 """The public (Stokastic-like) projection replica: priced from the props, unpriced from history and salary."""
-import pandas as pd
 
 from ivan.sports.nba import public_projection as PP
 

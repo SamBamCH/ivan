@@ -297,7 +297,6 @@ def pool_report(session: Session, config: dict, log: Log = print) -> dict:
     L = [coerce_player_ids(x) for (x,) in slate_lineups(session, Lineup.player_ids_list).all()]
     if not L or not opt:
         return {}
-    import numpy as np
     from collections import Counter
     tot = np.array([sum(means.get(i, 0.0) for i in l) for l in L])
     exp = Counter(i for l in L for i in l)
@@ -309,28 +308,6 @@ def pool_report(session: Session, config: dict, log: Log = print) -> dict:
     return rep
 
 
-def write_field_ownership(session: Session, config: dict, log: Log = print) -> dict:
-    """
-    Store a generic field's exposure as every player's ownership (not part of the generate step since 2026-10-28: it cost
-    a public-field build after every generate). With the two-group sampler the field is the public one at
-    public_field.ownership_field_size entries; the projection_model sampler draws field.cap entries from the pool.
-    """
-    from ivan.sports.nba.sample_field import DEFAULT_CONTEST, field_ownership, write_ownership
-    try:
-        if str(_cfg(config, "field.sampler", "projection_model")) == "two_group":
-            from ivan.sports.nba.public_field import ownership_field_size
-            size = ownership_field_size()
-        else:
-            size = int(_cfg(config, "field.cap", 10000))
-        own = field_ownership(session, config, size, DEFAULT_CONTEST, rng=np.random.default_rng(seed_for("ownership")))
-    except Exception as e:   # noqa: BLE001 - ownership is a by-product; the pool is the step
-        log(f"ownership not written: {type(e).__name__}: {e}")
-        return {}
-    n = write_ownership(session, own)
-    names = {int(i): nm for i, nm in session.query(NBAPlayer.id, NBAPlayer.name).all()}
-    top = sorted(own.items(), key=lambda kv: -kv[1])[:6]
-    log(f"ownership from the sampled field written for {n} players; top " + ", ".join(f"{names.get(pid, pid).split()[-1]} {x:.0f}%" for pid, x in top))
-    return {int(pid): round(float(x), 2) for pid, x in own.items()}
 
 
 def generate_field(n_lineups: int, jobs: int, config_path: str | Path, log: Log = print, progress: bool = True,

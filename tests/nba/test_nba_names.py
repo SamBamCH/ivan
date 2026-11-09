@@ -42,7 +42,7 @@ def test_rekey_rewrites_rows_and_leaves_conflicts(tmp_path):
 
 
 def test_rekey_store_and_edit_files(tmp_path):
-    import importlib.util, sys, json, pickle
+    import importlib.util, json, pickle
     import pandas as pd
     spec = importlib.util.spec_from_file_location("normalize_names", str(__import__("pathlib").Path(__file__).parents[2] / "scripts" / "nba" / "normalize_names.py"))
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
