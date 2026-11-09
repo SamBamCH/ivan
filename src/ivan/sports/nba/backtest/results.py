@@ -115,7 +115,7 @@ def score_contest(contest: dict, ours: set, ent: pd.DataFrame, pay: np.ndarray, 
     cover; the field's duplication; our entries in it (the Entry IDs in `ours` and the entries under `user`). A mid-slate export
     is not scored (unscored(...)): the late swap's fetch shows every not-yet-tipped player as LOCKED, ours included.
     """
-    from ivan.sports.nba.data_fetch.standings import export_is_final, locked_entries
+    from ivan.sports.nba.data_clean.standings import export_is_final, locked_entries
     cid = int(contest["contest_id"])
     n_locked = locked_entries(ent)
     if not export_is_final(ent):
@@ -183,7 +183,9 @@ def compute(dg: int, session: Session, ours_ids: Optional[Dict[int, set]] = None
     contests with a final export, those where our user name appears. `exports` ({contest id: (stamp, text)}) stands in for the
     raw store in tests. Rows carry `entries` (ours, with lineups) and `side` (the export's player table, final exports only).
     """
-    from ivan.sports.nba.data_fetch.standings import our_contest_counts, parse_export, slate_contests
+    from ivan.sports.nba.data_fetch.standings import our_contest_counts
+    from ivan.sports.nba.data_clean.standings import parse_export
+    from ivan.sports.nba.data_fetch.contests import slate_contests
     user = user if user is not None else our_user()
     ours_ids = {int(k): set(v) for k, v in (ours_ids or {}).items()}
     rows = {int(r.contest_id): dict(contest_id=int(r.contest_id), name=r.name, entry_fee=float(r.entry_fee or 0), total_entries=int(r.total_entries or 0))

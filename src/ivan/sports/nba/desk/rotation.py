@@ -24,7 +24,7 @@ class RotationMixin:
         opponent's score at the end of every SCORE_STEP minutes, the margin, and the exact score per minute for the hover.
         None when the feed is not on disk.
         """
-        from ivan.sports.nba.data_fetch import pbp as PBP
+        from ivan.sports.nba.data_clean import pbp as PBP
         try:
             sc = PBP.game_score(str(game_id))
         except Exception:   # noqa: BLE001 - a missing or odd feed: no strip
@@ -66,7 +66,7 @@ class RotationMixin:
           source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute, the
                            starters who had not started the game before flagged (new_starter)
         """
-        from ivan.sports.nba.data_fetch import pbp as PBP
+        from ivan.sports.nba.data_clean import pbp as PBP
         from ivan.sports.nba.projection.live import OUT_STATUSES
         from ivan.sports.nba.projection import skeleton as SK
         players = self.players(team)

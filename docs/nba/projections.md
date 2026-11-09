@@ -90,7 +90,7 @@ added back on the desk (Map), starting at his history or 6 minutes.
 ### 7. The rotation skeleton (`skeleton.py`, `rotation.py`, `team_profile.py`; config `minutes_model = rotation`)
 
 `rotation.curves` gives, per player, the recency-weighted share of recent games he was on the floor
-in each of the 48 minutes (from the stint table built by `pbp.py`). Each regular's curve is a slot.
+in each of the 48 minutes (from the stint table, `data_clean/pbp.py`). Each regular's curve is a slot.
 Tonight the slots are filled from the solve and the injury report: an available player keeps his own
 slot; an absent owner's slot is inherited by the players the solve says are owed minutes beyond their
 own, same position group first; a player with no history takes what he inherits or a flat prior.

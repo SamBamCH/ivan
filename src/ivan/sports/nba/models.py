@@ -447,3 +447,59 @@ class NBAPlayerNote(NBABase):
     created_at     = Column(DateTime, nullable=False)
     updated_at     = Column(DateTime, nullable=False)
     cleared_at     = Column(DateTime, nullable=True)
+
+
+# ----------------------------------------------------------------------------- the play-by-play tables (data_clean.pbp writes them)
+class NBAStint(NBABase):
+    """One stretch on the floor for one player in one game."""
+    __tablename__ = "nba_stint"
+    __table_args__ = (UniqueConstraint("game_id", "player_name", "stint_no", name="uq_nba_stint"),)
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    game_id     = Column(String, nullable=False, index=True)
+    game_date   = Column(Date, nullable=True, index=True)
+    team        = Column(String, nullable=False, index=True)
+    player_name = Column(String, nullable=False, index=True)       # normalized
+    stint_no    = Column(Integer, nullable=False)
+    start_sec   = Column(Float, nullable=False)                     # elapsed game seconds at entry
+    end_sec     = Column(Float, nullable=False)
+    minutes     = Column(Float, nullable=False)                     # scaled to the box score
+    period_in   = Column(Integer, nullable=True)
+    period_out  = Column(Integer, nullable=True)
+    margin_in   = Column(Integer, nullable=True)                    # team minus opponent at entry
+    margin_out  = Column(Integer, nullable=True)
+    to_buzzer   = Column(Integer, nullable=True)                    # 1 when the stint ended with the game
+    starter     = Column(Integer, nullable=True)
+    raw_ratio   = Column(Float, nullable=True)                      # raw stint total / box minutes (far from 1 = a missed substitution)
+
+
+class NBAFoul(NBABase):
+    """One foul called on one player in one game."""
+    __tablename__ = "nba_foul"
+    __table_args__ = (UniqueConstraint("game_id", "player_name", "elapsed", "kind", name="uq_nba_foul"),)
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    game_id     = Column(String, nullable=False, index=True)
+    game_date   = Column(Date, nullable=True, index=True)
+    team        = Column(String, nullable=False, index=True)
+    player_name = Column(String, nullable=False, index=True)       # normalized
+    period      = Column(Integer, nullable=False)
+    elapsed     = Column(Float, nullable=False)                     # elapsed game seconds
+    foul_no     = Column(Integer, nullable=True)                    # his personal-foul count after this one (None for a technical)
+    kind        = Column(String, nullable=True)                     # the play-by-play subType: Shooting, Personal, Loose Ball, Offensive, Technical...
+    personal    = Column(Integer, nullable=False, default=1)        # 1 = counts toward six
+
+
+class NBASub(NBABase):
+    """One recorded substitution: player_in came on for player_out at `elapsed` game seconds."""
+    __tablename__ = "nba_sub"
+    __table_args__ = (UniqueConstraint("game_id", "team", "player_out", "player_in", "elapsed", name="uq_nba_sub"),)
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    game_id     = Column(String, nullable=False, index=True)
+    game_date   = Column(Date, nullable=True, index=True)
+    team        = Column(String, nullable=False, index=True)
+    player_out  = Column(String, nullable=False, index=True)       # normalized
+    player_in   = Column(String, nullable=False, index=True)
+    period      = Column(Integer, nullable=False)
+    elapsed     = Column(Float, nullable=False)

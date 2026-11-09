@@ -247,7 +247,7 @@ def _field_target(metric: str) -> Optional[dict]:
     """
     if metric in _FIELD_TARGET:
         return _FIELD_TARGET[metric]
-    from ivan.sports.nba.data_fetch.standings import DERIVED_DIR
+    from ivan.sports.nba.data_clean.standings import DERIVED_DIR
     vals, wts, n_contests, dates = [], [], 0, []
     for d in sorted(DERIVED_DIR.glob("*")) if DERIVED_DIR.is_dir() else []:
         lp, pc = d / "lineups.parquet", d / "players.csv"

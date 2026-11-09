@@ -1,4 +1,4 @@
-"""ingest.store_props replaces the odds table by game: a fetch of one slate's games leaves another slate's rows, a back-to-back's
+"""data_clean.odds.store_props replaces the odds table by game: a fetch of one slate's games leaves another slate's rows, a back-to-back's
 two games sit side by side, rows without a game are replaced by player, and old games are dropped."""
 from datetime import datetime, timedelta, timezone
 
@@ -6,8 +6,8 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from ivan.sports.nba import ingest as I
 from ivan.sports.nba.models import NBAOdds
+from ivan.sports.nba.data_clean import odds as O
 
 
 def _utc(dt: datetime) -> str:
@@ -28,20 +28,20 @@ def test_store_props_replaces_by_game_and_drops_old_games():
     with Session(eng) as s:
         legacy = _rows(None, None, ["old legacy"], last_update=_utc(now - timedelta(hours=30)))
         legacy += _rows(None, None, ["stale legacy"], last_update=_utc(now - timedelta(days=5)))
-        assert I.store_props(s, pd.DataFrame(_rows("g_thu", thu, ["a", "b"]) + _rows("g_old", now - timedelta(days=4), ["z"]) + legacy)) == 5
+        assert O.store_props(s, pd.DataFrame(_rows("g_thu", thu, ["a", "b"]) + _rows("g_old", now - timedelta(days=4), ["z"]) + legacy)) == 5
         have = pd.read_sql("select * from odds", eng)
         assert set(have.game_id.dropna()) == {"g_thu"} and set(have.player) == {"a", "b", "old legacy"}      # g_old and the 5-day-old legacy row are gone
         # Friday's fetch: a's Friday game joins Thursday's (a back-to-back), c is new; Thursday's rows stay for Thursday's slate
-        I.store_props(s, pd.DataFrame(_rows("g_fri", fri, ["a", "c"], home="IND", away="MIA")))
+        O.store_props(s, pd.DataFrame(_rows("g_fri", fri, ["a", "c"], home="IND", away="MIA")))
         have = pd.read_sql("select * from odds", eng)
         assert sorted(have[have.player == "a"].game_id) == ["g_fri", "g_thu"] and set(have.player) == {"a", "b", "c", "old legacy"}
         # a re-fetch of Friday's game replaces only its rows (b's Thursday row and a's Thursday row are untouched)
-        I.store_props(s, pd.DataFrame(_rows("g_fri", fri, ["a"], book="fd")))
+        O.store_props(s, pd.DataFrame(_rows("g_fri", fri, ["a"], book="fd")))
         have = pd.read_sql("select * from odds", eng)
         fri_rows = have[have.game_id == "g_fri"]
         assert list(fri_rows.player) == ["a"] and list(fri_rows.sportsbook) == ["fd"] and len(have[have.game_id == "g_thu"]) == 2
         # rows without a game (an old capture restored) replace that player's rows without a game only
-        I.store_props(s, pd.DataFrame(_rows(None, None, ["old legacy"], book="mg", last_update=_utc(now - timedelta(hours=1)))))
+        O.store_props(s, pd.DataFrame(_rows(None, None, ["old legacy"], book="mg", last_update=_utc(now - timedelta(hours=1)))))
         have = pd.read_sql("select * from odds", eng)
         assert list(have[have.player == "old legacy"].sportsbook) == ["mg"] and len(have) == 4
-        assert I.store_props(s, None) == 0 and I.store_props(s, pd.DataFrame()) == 0
+        assert O.store_props(s, None) == 0 and O.store_props(s, pd.DataFrame()) == 0

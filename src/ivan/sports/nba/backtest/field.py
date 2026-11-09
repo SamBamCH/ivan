@@ -41,11 +41,11 @@ from sqlalchemy.orm import Session
 from ivan.core import archive
 from ivan.sports.nba.names import normalize_name
 from ivan.sports.nba.field import model as FM
-from ivan.sports.nba.data_fetch import standings as S
 from ivan.sports.nba.paths import DIAG_DIR, NBA_DATA_DIR
 from ivan.sports.nba.field.solver import FieldPlayer
 from ivan.sports.nba.field.public_field import OUT_STATUSES, POOL_MIN_PUB, field_params
 from ivan.sports.nba.utils import _coerce_positions
+from ivan.sports.nba.data_clean import standings as SD
 
 Log = Callable[[str], None]
 OUT_DIR = DIAG_DIR / "field_backtest"
@@ -89,13 +89,13 @@ class SlateView:
 
 
 # ----------------------------------------------------------------------------- which contests
-def final_contests(derived_dir: Path = S.DERIVED_DIR, contest_ids: Optional[List[int]] = None) -> List[dict]:
+def final_contests(derived_dir: Path = SD.DERIVED_DIR, contest_ids: Optional[List[int]] = None) -> List[dict]:
     """The derived contests built from a final export (field.json + the folder), oldest capture first."""
     out = []
     for d in sorted(Path(derived_dir).iterdir()):
         if not d.name.isdigit() or not (d / "field.json").exists() or not (d / "lineups.parquet").exists():
             continue
-        if not S.derived_is_final(int(d.name), derived_dir):
+        if not SD.derived_is_final(int(d.name), derived_dir):
             continue
         m = json.loads((d / "field.json").read_text())
         if m.get("capture_id") is None or (contest_ids and int(m["contest_id"]) not in set(contest_ids)):
@@ -305,7 +305,7 @@ def compare_contest(meta: dict, view: SlateView, preds: Dict[str, Optional[Dict[
 
 # ----------------------------------------------------------------------------- the run
 def run(session: Session, field_size: int = 3000, workers: int = 8, seed: int = 0, since: Optional[str] = None, until: Optional[str] = None,
-        contest_ids: Optional[List[int]] = None, with_model: bool = True, derived_dir: Path = S.DERIVED_DIR, out_dir: Path = OUT_DIR,
+        contest_ids: Optional[List[int]] = None, with_model: bool = True, derived_dir: Path = SD.DERIVED_DIR, out_dir: Path = OUT_DIR,
         cache_dir: Path = CACHE_DIR, log: Log = print) -> dict:
     """Every final derived contest in the window compared to the model, the lock ownership and the softmax model. Writes
     contests.csv, players.csv, report.txt and summary.json under out_dir/<stamp>/ and returns them with the frames."""

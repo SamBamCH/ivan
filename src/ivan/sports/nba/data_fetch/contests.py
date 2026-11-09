@@ -16,6 +16,8 @@ scripts/nba/sim.py calls ensure_contest for every contest it is asked to run.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, List, Optional
@@ -142,3 +144,62 @@ def ensure_contest(session: Session, contest_id: int, log: Log = print) -> Optio
     session.commit()
     log(f"contest {contest_id} ({hc.name}) stored from the contest detail")
     return hc
+
+
+# ----------------------------------------------------------------------------- the stored contests, wherever they live
+Log = Callable[[str], None]
+
+
+SPORT = "nba"
+
+
+CONTEST_COLS = "contest_id, draft_group_id, name, date, entry_fee, contest_type, total_entries, multi_entry"
+
+
+def _contest_query(where: str, table: str = "historical_contest_information") -> str:
+    return f"select {CONTEST_COLS} from {table} where {where}"
+
+
+def _rows(con, q: str, **params) -> List[SimpleNamespace]:
+    from sqlalchemy import text
+    try:
+        return [SimpleNamespace(**dict(r._mapping)) for r in con.execute(text(q), params)]
+    except Exception:   # noqa: BLE001 - a table this connection does not have (no hist attached, a slate file without the table)
+        return []
+
+
+def slate_contests(session: Session, draft_group: int) -> List[SimpleNamespace]:
+    """
+    The slate's DraftKings contests, wherever they live since the one-directory-per-slate split (2026-11-03): the slate's own
+    database when this machine holds it, else the history file's pre-split copy (`_migrated_historical_contest_information`),
+    else the session's own table (a test database). Rows have contest_id, draft_group_id, name, entry_fee, contest_type,
+    total_entries, multi_entry.
+    """
+    from ivan.sports.nba import slates as SL
+    dg = int(draft_group)
+    if SL.holds(dg):
+        with SL.engine(dg).connect() as con:
+            rows = _rows(con, _contest_query("draft_group_id = :d"), d=dg)
+        if rows:
+            return rows
+    for table in ("historical_contest_information", "hist._migrated_historical_contest_information"):
+        rows = _rows(session, _contest_query("draft_group_id = :d", table), d=dg)
+        if rows:
+            return rows
+    return []
+
+
+def stored_contest(session: Session, contest_id: int) -> Optional[SimpleNamespace]:
+    """One contest by id, from the session's table, the history file's pre-split copy, or any held slate's database."""
+    from ivan.sports.nba import slates as SL
+    cid = int(contest_id)
+    for table in ("historical_contest_information", "hist._migrated_historical_contest_information"):
+        rows = _rows(session, _contest_query("contest_id = :c", table), c=cid)
+        if rows:
+            return rows[0]
+    for dg in SL.held():
+        with SL.engine(dg).connect() as con:
+            rows = _rows(con, _contest_query("contest_id = :c"), c=cid)
+        if rows:
+            return rows[0]
+    return None

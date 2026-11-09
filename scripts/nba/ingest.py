@@ -15,7 +15,11 @@ it on a click (a different slate reloads by itself).
 import argparse
 import logging
 
-from ivan.sports.nba.ingest import IngestError, classic_slates, project_slate, record_external_projections, run_ingest
+from ivan.sports.nba.data_fetch.slate import IngestError, classic_slates
+
+from ivan.sports.nba.ingest import project_slate, run_ingest
+
+from ivan.sports.nba.projection.record import record_external_projections
 from ivan.sports.nba import slates as S
 
 

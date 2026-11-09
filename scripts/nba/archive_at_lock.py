@@ -31,7 +31,8 @@ import pandas as pd
 
 from ivan.core.archive import archive_slate
 from ivan.database.session import init_db
-from ivan.sports.nba.ingest import GAME_LINE_COLS, ensure_schema
+from ivan.sports.nba.data_clean.odds import GAME_LINE_COLS
+from ivan.sports.nba.ingest import ensure_schema
 from ivan.sports.nba.models import NBAPlayer, NBAProjectionCapture, StartingLineups
 from ivan.sports.nba.paths import LOGS_DIR, NBA_DATA_DIR
 from ivan.sports.nba.projection.market import load_odds

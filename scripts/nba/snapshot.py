@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 
-from ivan.sports.nba.ingest import IngestError, capture_pool
+from ivan.sports.nba.data_fetch.slate import IngestError
+
+from ivan.sports.nba.ingest import capture_pool
 from ivan.sports.nba import slates as S
 
 

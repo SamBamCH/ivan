@@ -26,6 +26,8 @@ from sqlalchemy import text
 
 from ivan.database.session import get_session, init_db
 from ivan.sports.nba.data_fetch import pbp as P
+from ivan.sports.nba.ingest import ensure_schema
+from ivan.sports.nba.data_clean import pbp as PC
 
 
 def main() -> int:
@@ -40,7 +42,7 @@ def main() -> int:
     rb = sub.add_parser("rebuild"); rb.add_argument("--since", default=None)
     a = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
-    engine = init_db("nba"); P.ensure_tables(engine); session = get_session(engine)
+    engine = init_db("nba"); ensure_schema(engine); session = get_session(engine)
 
     if a.cmd == "fetch":
         ids = [x.strip() for x in a.game_ids.split(",")] if a.game_ids else P.games_without_stints(session, date.fromisoformat(a.since) if a.since else None)[: a.max_games]
@@ -56,8 +58,8 @@ def main() -> int:
         print(f"done: {ok} of {len(ids)}")
         return 0
     if a.cmd == "rotation":
-        rm = P.rotation_map(session, a.team.upper(), before=date.fromisoformat(a.before) if a.before else None, n_games=a.games)
-        print(P.format_rotation(rm) if rm else f"no stints for {a.team}")
+        rm = PC.rotation_map(session, a.team.upper(), before=date.fromisoformat(a.before) if a.before else None, n_games=a.games)
+        print(PC.format_rotation(rm) if rm else f"no stints for {a.team}")
         return 0
     if a.cmd == "fouls":
         ids = [g for (g,) in session.execute(text("select distinct game_id from nba_stint")).all()] if a.all else P.games_without_fouls(session)

@@ -13,4 +13,5 @@ Modules
   rates     per-minute stat rates with shrinkage and the usage bump
   fpts      Monte Carlo fantasy points (mean, sd, double-double bonuses)
   engine    project_team(): one call from roster + availability to a table
+  record    the capture rows and the projections CSV: the record the scorecard scores
 """

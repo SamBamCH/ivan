@@ -56,7 +56,7 @@ from ivan.sports.nba.lateswap.entry_parsing import OriginalEntry
 from ivan.sports.nba.field.solver import FieldPlayer, generate_single_classic_lineup
 from ivan.sports.nba.gamesim.draw import generate_player_samples
 from ivan.sports.nba.contest.simulate import contests_in_entries, payout_tiers, player_samples_matrix, scale_payouts
-from ivan.sports.nba.data_fetch.standings import parse_export
+from ivan.sports.nba.data_clean.standings import parse_export
 from ivan.sports.nba.utils import _coerce_positions
 
 Log = Callable[[str], None]
@@ -325,7 +325,7 @@ def complete_field(session: Session, export: pd.DataFrame, fps: Dict[int, FieldP
     With target_own (%Drafted per player, actual_ownership), the hidden slots are filled so the open players' ownership
     matches DraftKings' too: each pass adds a per-player bonus proportional to the gap and completes the field again.
     """
-    from ivan.sports.nba.data_fetch.standings import parse_lineup
+    from ivan.sports.nba.data_clean.standings import parse_lineup
     ent, _ = parse_export(export.to_csv(index=False))
     rows = [parse_lineup(s) for s in ent.lineup.tolist()]
     rows = [r for r in rows if len(r) == 8]

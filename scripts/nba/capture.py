@@ -31,7 +31,8 @@ from ivan.database.session import init_db
 from ivan.sports.common.draftkings import fetch_all_contests, summarize_slates
 from ivan.sports.nba.slate import autopilot
 from ivan.sports.nba.data_fetch import contests as C
-from ivan.sports.nba.ingest import IngestError, ensure_schema, fetch_game_lines, fetch_slate, run_ingest
+from ivan.sports.nba.data_fetch.slate import IngestError, fetch_game_lines, fetch_slate
+from ivan.sports.nba.ingest import ensure_schema, run_ingest
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.paths import NBA_DATA_DIR, LOGS_DIR
 

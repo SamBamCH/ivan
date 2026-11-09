@@ -28,6 +28,7 @@ from pathlib import Path
 from ivan.core import raw
 from ivan.sports.nba.data_fetch import standings as S
 from ivan.sports.nba import slates as SL
+from ivan.sports.nba.data_clean import standings as SD
 
 
 def main() -> int:
@@ -51,14 +52,14 @@ def main() -> int:
     if a.cmd in ("status", "scrape") and not getattr(a, "contest_ids", None):
         plan = S.contests_to_scrape(session, now - timedelta(days=a.days), now, public_n=a.public,
                                     entries_csv=Path(a.entries) if a.entries else None, now=now)
-        derived = S.derived_ids() - S.partial_derived_ids()
+        derived = SD.derived_ids() - SD.partial_derived_ids()
         for s in plan:
             print(f"slate {s['slate_key']} locked {s['lock']:%a %m-%d %H:%M}: {len(s['contests'])} contests ({len(s['ours'])} ours), "
                   f"{len(s['scraped'])} exported final, {sum(1 for c in s['contests'] if c in derived)} derived, {len(s['to_scrape'])} to scrape")
             if not s["ours"]:
                 print(f"    (no entries file for this slate: only the public contests; --entries FILE names ours)")
             for c in s["contests"]:
-                state = "final    " if c in s["scraped"] else ("mid-slate" if S.has_standings(c) else "pending  ")
+                state = "final    " if c in s["scraped"] else ("mid-slate" if SD.has_standings(c) else "pending  ")
                 print(f"    {c} {state} {'derived' if c in derived else '       '} {'ours  ' if c in s['ours'] else 'public'}  {s['names'].get(c, '')}")
         if not plan:
             print("no played slates in the window (a slate counts once its lock is 5 hours past)")
@@ -84,14 +85,14 @@ def main() -> int:
         if a.no_derive or not r["ok"]:
             return 0 if not r["failed"] else 2
         for cid in r["ok"]:
-            S.derive_contest(session, cid, log=print)
+            SD.derive_contest(session, cid, log=print)
         return 0 if not r["failed"] else 2
 
     if a.contest_ids:
         for cid in [int(x) for x in a.contest_ids.split(",") if x.strip()]:
-            S.derive_contest(session, cid, log=print)
+            SD.derive_contest(session, cid, log=print)
     else:
-        out = S.derive_pending(session, log=print)
+        out = SD.derive_pending(session, log=print)
         print(f"derived {len(out)} contest(s)")
     return 0
 

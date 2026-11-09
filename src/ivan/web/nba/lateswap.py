@@ -115,7 +115,7 @@ async def standings_upload(request: Request, files: list[UploadFile] = File(...)
     """
     import re
     from ivan.core import raw
-    from ivan.sports.nba.data_fetch.standings import parse_export
+    from ivan.sports.nba.data_clean.standings import parse_export
     saved, errors = [], []
     for f in files:
         data = await f.read(MAX_STANDINGS + 1)

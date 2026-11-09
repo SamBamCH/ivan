@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from ivan.core import archive
 from ivan.sports.nba.data_fetch import standings as S
 from ivan.sports.nba.models import HistoricalContest, NBABase, NBAProjectionCapture
+from ivan.sports.nba.data_clean import standings as SD
 
 EXPORT = ("Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS\n"
           "1,11,user1 (1/20),0,352.5,PG Luka Doncic SG Amen Thompson SF Kawhi Leonard PF Jalen Johnson C Bam Adebayo G Cam Spencer F Kevin Durant UTIL Jock Landale,,Luka Doncic,PG,61.2%,70.5\n"
@@ -18,10 +19,10 @@ NAMES = ["Luka Doncic", "Amen Thompson", "Kawhi Leonard", "Jalen Johnson", "Bam 
 
 
 def test_parse_export_entries_and_side_table():
-    ent, side = S.parse_export(EXPORT)
+    ent, side = SD.parse_export(EXPORT)
     assert len(ent) == 4 and ent.names.iloc[0][:2] == ["Luka Doncic", "Amen Thompson"] and ent.names.iloc[3] == [None] * 8
     assert list(side.name) == ["Luka Doncic", "Cam Spencer", "Nikola Vucevic"] and side.drafted_pct.iloc[0] == 61.2 and side.fpts.iloc[2] == 28.0
-    assert [s for s, _ in S.parse_lineup("PG Ja Morant SG Desmond Bane UTIL Jaren Jackson Jr.")] == ["PG", "SG", "UTIL"]
+    assert [s for s, _ in SD.parse_lineup("PG Ja Morant SG Desmond Bane UTIL Jaren Jackson Jr.")] == ["PG", "SG", "UTIL"]
 
 
 @pytest.fixture
@@ -40,22 +41,22 @@ def test_derive_contest_matches_names_and_counts_copies(session, tmp_path):
         session.add(NBAProjectionCapture(captured_at=datetime(2026, 10, 21, 17, 45), draft_group_id=555, lock=lock, source="ours", player_id=100 + i,
                                          player_name=n.lower(), minutes_proj=30.0, fpts_mean=30.0 + i, fpts_std=8.0, salary=4000 + 500 * i, starter="expected"))
     session.commit()
-    s = S.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=lambda m: None, allow_partial=True)   # one of four entries is LOCKED
+    s = SD.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=lambda m: None, allow_partial=True)   # one of four entries is LOCKED
     assert s["entries"] == 4 and s["entries_matched"] == 3 and s["unique"] == 2 and s["max_copies"] == 2 and s["short_entries"] == 1
     assert s["locked_entries"] == 1 and s["final"] is False
-    lu, side, summary = S.load_field(9, tmp_path)
+    lu, side, summary = SD.load_field(9, tmp_path)
     assert lu.copies.tolist() == [2, 1] and lu.salary.iloc[0] == sum(4000 + 500 * i for i in range(8)) and lu.proj_sum.iloc[0] == pytest.approx(sum(30.0 + i for i in range(8)))
     assert side.loc[side.name == "Cam Spencer", "fpts_proj"].iloc[0] == 35.0 and side.loc[side.name == "Nikola Vucevic", "team"].iloc[0] == "T0"
-    assert S.derived_ids(tmp_path) == {9}
+    assert SD.derived_ids(tmp_path) == {9}
 
 
 FINAL = "\n".join(EXPORT.splitlines()[:4]) + "\n"          # the same export without the LOCKED entry
 
 
 def test_a_mid_slate_export_is_not_a_field(session, tmp_path):
-    ent, _ = S.parse_export(EXPORT)
-    assert S.locked_entries(ent) == 1 and not S.export_is_final(ent)            # 1 of 4 entries locked: 25% > PARTIAL_MAX_SHARE
-    assert S.export_is_final(S.parse_export(FINAL)[0])
+    ent, _ = SD.parse_export(EXPORT)
+    assert SD.locked_entries(ent) == 1 and not SD.export_is_final(ent)            # 1 of 4 entries locked: 25% > PARTIAL_MAX_SHARE
+    assert SD.export_is_final(SD.parse_export(FINAL)[0])
     lock = datetime(2026, 10, 21, 18, 0)
     players = [dict(id=100 + i, name=n, team="T%d" % (i % 4), salary=4000 + 500 * i, position="PG") for i, n in enumerate(NAMES)]
     archive.archive_slate(session, sport="nba", slate_key="555", lock=lock, mode="classic", players=players, source="ingest", captured_at=datetime(2026, 10, 21, 17, 45))
@@ -63,17 +64,17 @@ def test_a_mid_slate_export_is_not_a_field(session, tmp_path):
     session.commit()
     msgs = []
     # the default refuses the mid-slate export and writes nothing
-    assert S.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=msgs.append) is None
+    assert SD.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=msgs.append) is None
     assert not (tmp_path / "9").exists() and any("mid-slate" in m for m in msgs)
     # a folder the nightly built from a partial export before the flag existed is recognised by its short-entry share and removed
-    S.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=lambda m: None, allow_partial=True)
-    assert S.derived_ids(tmp_path) == {9} and S.partial_derived_ids(tmp_path) == {9}
-    assert S.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=lambda m: None) is None
-    assert S.derived_ids(tmp_path) == set()
+    SD.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=lambda m: None, allow_partial=True)
+    assert SD.derived_ids(tmp_path) == {9} and SD.partial_derived_ids(tmp_path) == {9}
+    assert SD.derive_contest(session, 9, text=EXPORT, out_dir=tmp_path, log=lambda m: None) is None
+    assert SD.derived_ids(tmp_path) == set()
     # the final export derives, is flagged final, and a final folder is never removed
-    s = S.derive_contest(session, 9, text=FINAL, out_dir=tmp_path, log=lambda m: None)
+    s = SD.derive_contest(session, 9, text=FINAL, out_dir=tmp_path, log=lambda m: None)
     assert s["final"] is True and s["locked_entries"] == 0 and s["entries_matched"] == 3
-    assert S.derived_is_final(9, tmp_path) and not S.remove_partial(9, tmp_path) and S.derived_ids(tmp_path) == {9}
+    assert SD.derived_is_final(9, tmp_path) and not SD.remove_partial(9, tmp_path) and SD.derived_ids(tmp_path) == {9}
 
 
 def test_our_contest_ids_read_the_slates_own_entries_file(tmp_path):

@@ -40,7 +40,7 @@ def main() -> int:
             logging.warning(f"scorecard failed: {type(e).__name__}: {e}")
         try:
             from ivan.sports.nba.data_fetch import pbp as P
-            P.ensure_tables(engine)
+            ensure_schema(engine)
             ids = P.games_without_stints(session, since=__import__("datetime").date(season_year(season), 10, 1))[:40]
             for gid in ids:
                 P.process_game(session, gid, log=logging.info); __import__("time").sleep(0.8)
@@ -58,7 +58,7 @@ def main() -> int:
         except Exception as e:   # noqa: BLE001
             logging.warning(f"play-by-play failed: {type(e).__name__}: {e}")
         try:
-            from ivan.sports.nba.data_fetch.standings import derive_pending
+            from ivan.sports.nba.data_clean.standings import derive_pending
             derived = derive_pending(session, log=logging.info)
             logging.info(f"standings derived: {len(derived)}")
         except Exception as e:   # noqa: BLE001

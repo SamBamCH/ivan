@@ -101,7 +101,7 @@ class Lobby:
     def _fetch_lobby(self) -> dict:
         out = {}
         try:
-            from ivan.sports.nba.ingest import classic_slates
+            from ivan.sports.nba.data_fetch.slate import classic_slates
             for sl in classic_slates():                       # every day the lobby lists; the day picker places each on its day
                 start = str(sl.get("start") or "")
                 out[str(sl["id"])] = dict(label=f"{start} · {str(sl.get('name') or '').replace('NBA ', '')[:30]}", lock_dt=None, start=start, name=sl.get("name"),
@@ -259,7 +259,7 @@ class DeskBase:
         hist_key = getattr(self, "_hist_key", None)
         if getattr(self, "_season_key", None) != hist_key:     # per-player season and recent-game tables: only when the box scores grew
             self.season = self.season_averages(self.slate.box)
-            from ivan.sports.nba.data_fetch import pbp as PBP
+            from ivan.sports.nba.data_clean import pbp as PBP
             try:
                 self.fouls = PBP.fouls_per_game(self.session)
             except Exception:   # noqa: BLE001 - no foul table yet
@@ -320,7 +320,7 @@ class DeskBase:
         player's last downgrade, changes.status_cutoffs), cached on the odds table's stamp and the status stamps: built on the first
         hover after a change (about a second), then read per cell."""
         from ivan.sports.nba.slate import changes as CH
-        from ivan.sports.nba.ingest import odds_stamp
+        from ivan.sports.nba.data_clean.odds import odds_stamp
         from ivan.sports.nba.projection.market import MARKET_TO_STAT, fresh_odds
         cutoffs = CH.status_cutoffs(self.session)
         key = (odds_stamp(self.session), self.pool_stamp[2], tuple(sorted((k, str(v)) for k, v in cutoffs.items())))
@@ -367,7 +367,8 @@ class DeskBase:
         if t - getattr(self, "_odds_checked", 0.0) < ODDS_CHECK_S:
             return
         self._odds_checked = t
-        from ivan.sports.nba.ingest import ensure_market_rates, odds_stamp
+        from ivan.sports.nba.ingest import ensure_market_rates
+        from ivan.sports.nba.data_clean.odds import odds_stamp
         stamp = odds_stamp(self.session)
         if stamp == getattr(self, "_odds_followed", None):
             return

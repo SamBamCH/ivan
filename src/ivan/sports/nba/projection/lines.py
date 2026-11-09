@@ -1,6 +1,6 @@
 """
 Game lines reduced to one row per game: the consensus spread, total and
-win probability, from the per-book rows in game_odds (ingest.store_game_lines).
+win probability, from the per-book rows in game_odds (data_clean.odds.store_game_lines).
 
 spread_home   median across books of the home side's spread (negative = home favoured)
 total         median across books of the total

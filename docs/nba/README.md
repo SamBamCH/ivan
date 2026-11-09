@@ -8,10 +8,10 @@ process runs; the commands are `scripts/nba/`, the desk's pages `src/ivan/web/nb
 
 ```
 src/ivan/sports/nba/
-  models.py  slates.py  ingest.py  names.py  scoring.py  paths.py  utils.py
-  data_fetch/   contests, newsfeed, boxscores, pbp, live, standings, experience    what talks to the outside world
-  data_clean/   boxscores                                                          fetched payloads into the tables
-  projection/   market, history, solve, skeleton, rotation, rates, fpts, engine, live, store   a player's projection
+  models.py  slates.py  ingest.py (fetch, store, project: the pipeline)  names.py  scoring.py  paths.py  utils.py
+  data_fetch/   slate, contests, newsfeed, boxscores, pbp, live, standings, experience   what talks to the outside world
+  data_clean/   boxscores, odds, pbp, standings                                    fetched payloads into the tables, read back
+  projection/   market, history, solve, skeleton, rotation, rates, fpts, engine, live, store, record   a player's projection
   gamesim/      script, rotation, usage, profiles, world, draw                     the games simulated, n worlds at once
   field/        public_projection, public_field, model, generate, solver            the public's field; our candidate pool
   contest/      simulate, choose, export                                            each contest simulated, lineups chosen

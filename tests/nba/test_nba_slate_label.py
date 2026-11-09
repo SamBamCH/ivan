@@ -1,5 +1,5 @@
-"""The slate's label in the bar and the picker: lock time · games · DK's slate title (ingest.slate_title, desk.Lobby.slate_label)."""
-from ivan.sports.nba.ingest import slate_title
+"""The slate's label in the bar and the picker: lock time · games · DK's slate title (data_fetch.slate.slate_title, desk.Lobby.slate_label)."""
+from ivan.sports.nba.data_fetch.slate import slate_title
 from ivan.sports.nba.desk import Lobby
 
 

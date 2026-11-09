@@ -1,25 +1,26 @@
 """
-NBA slate ingest: fetch, store, project. Mirrors ivan.sports.nfl.ingest.
+The slate pipeline: fetch, store, project. The desk's Refresh, scripts/nba/ingest.py and the autopilot tick all run it
+(run_ingest); nothing here prompts.
 
-fetch_slate   DraftKings draftables for a draft group (raw dk/draftables), the
-              Rotowire lineups page (raw rotowire/lineups), and optionally the
-              player props for the slate's teams (raw odds/events, odds/props).
-store_slate   nba_player (whole pool, DK statuses, DK's own FPPG), starting_lineups
-              with fetched_at, odds + nba_market_rate, and an archive capture.
-project_slate the minutes-anchored projection (projection/live.py) on the pool,
-              a projections CSV artifact, and one nba_projection_capture row per
-              player so accuracy can be read by offset before lock.
-
-Nothing here prompts; scripts/nba/ingest.py and capture.py pass the draft group.
+    run_ingest        fetch (data_fetch.slate.fetch_slate), then in ONE transaction: store_slate, void the mappings a scratch
+                      made stale, project_slate; then the slate's record, the public field when asked, Rotowire's news
+    store_slate       the pool replaced (nba_player), the starters, the status marks, the props and game lines
+                      (data_clean.odds), this pool's market rates, the public projection, the archive capture
+    project_slate     every team through project_team (THE way a team is projected: the frame, the grid, the history-only
+                      comparison, into nba_player and the projection store), then the capture rows and the projections
+                      CSV (projection.record)
+    capture_pool      the snapshot: record the projection as it stands without projecting anything
+    market rates      market_rates_current / ensure_market_rates / refresh_market_rates: this pool's rates from the odds
+                      table's rows for its own games, rebuilt whenever a props fetch moved the table
+    after_pull        a consumer, after the feed replaced the pool: its own edited teams re-projected on top
+    restore_from_archive   a past slate loaded from its archive capture and projected with the model as it is now
+    ensure_schema     the history database's tables (a slate's own are slates.ensure_slate_schema)
 """
 from __future__ import annotations
 
-import re
-
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime
 from typing import Iterable, Callable, Optional
 
 import numpy as np
@@ -27,29 +28,22 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.core import raw
 from ivan.core.archive import archive_slate, ensure_tables as ensure_archive_tables
-from ivan.core.config import require_env
 from ivan.sports.nba.names import normalize_name
 from ivan.database.session import add_missing_columns
-from ivan.sports.common.draftkings import (get_players_for_slate, _derive_opponent_for_player,
-                                           _parse_gametime_to_local, list_slates)
-from ivan.sports.common.odds import get_game_odds, get_odds, parse_game_odds, parse_odds
-from ivan.sports.nba.data_fetch.boxscores import fetch_rotowire_html, parse_rotowire, store_starting_lineups
-from ivan.sports.nba.models import (NBABase, NBAGameOdds, NBAPlayer, NBAOdds, NBAMarketRate, NBAProjectionCapture, StartingLineups)
+from ivan.sports.nba.data_fetch.boxscores import store_starting_lineups
+from ivan.sports.nba.models import (NBABase, NBAPlayer, NBAOdds, StartingLineups)
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection import store as PSTORE
 from ivan.sports.nba.projection.engine import ProjectionParams
 from ivan.sports.nba.projection.live import LiveSlate, basis_minutes_for_market, read_overrides_full, store_market_rates
 from ivan.sports.nba.slate import changes as CH
-from ivan.sports.nba.projection.market import NBA_MARKETS, fresh_odds, market_means
+from ivan.sports.nba.projection.market import fresh_odds, market_means
+from ivan.sports.nba.data_fetch.slate import IngestError, SlateFetch, fetch_slate
+from ivan.sports.nba.data_clean.odds import GAME_LINE_COLS, odds_stamp, store_game_lines, store_props
+from ivan.sports.nba.projection.record import ProjectInfo, record_projection
 
 Log = Callable[[str], None]
-ODDS_SPORT = "basketball_nba"
-
-
-class IngestError(RuntimeError):
-    pass
 
 
 def ensure_schema(engine) -> None:
@@ -62,162 +56,6 @@ def ensure_schema(engine) -> None:
     add_missing_columns(engine, NBABase.metadata, only={t.name for t in tables})
     ensure_archive_tables(engine)
 
-
-# ------------------------------------------------------------------------------ slates
-def slate_title(suffix) -> Optional[str]:
-    """DraftKings' slate title from the lobby's ContestStartTimeSuffix: " (Early Only)" -> "Early Only"; None when the slate has none
-    (the main slate of the night carries no suffix)."""
-    t = re.sub(r"^[\s(]+|[\s)]+$", "", str(suffix or "")).strip()
-    return t or None
-
-
-def classic_slates(day: Optional[datetime] = None) -> list[dict]:
-    """Today's (or `day`'s) classic NBA draft groups from the DK lobby: id, start, name, contests, games, lock, title (DK's slate
-    title when it has one, e.g. "Early Only")."""
-    out = []
-    for s in list_slates("NBA"):
-        if str(s.get("game_type", "")).lower() != "classic":
-            continue
-        # DK's start is a display string ("Tue 2:00PM"); the lock comes from the draftables' game times
-        lock = None
-        if s.get("start_utc"):
-            try:                                              # "2026-10-25T23:00:00.0000000Z" -> local naive datetime
-                from datetime import timezone
-                lock = datetime.fromisoformat(str(s["start_utc"])[:19]).replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
-            except ValueError:
-                lock = None
-        out.append({"id": int(s["id"]), "start": s.get("start"), "name": s.get("name"), "contests": s.get("contests"),
-                    "games": s.get("games"), "lock": lock, "title": slate_title(s.get("suffix"))})
-    return out
-
-
-# ------------------------------------------------------------------------------ fetch
-@dataclass
-class SlateFetch:
-    draft_group_id: int
-    players: list[dict] = field(default_factory=list)      # rows for nba_player
-    lock: Optional[datetime] = None
-    starters: Optional[pd.DataFrame] = None
-    odds: Optional[pd.DataFrame] = None
-    game_lines: Optional[pd.DataFrame] = None               # parse_game_odds rows for the slate's games
-    teams: set = field(default_factory=set)
-    fetched_at: datetime = field(default_factory=datetime.now)
-
-
-def _fppg(d: dict) -> Optional[float]:
-    for a in d.get("draftStatAttributes") or []:
-        try:
-            if int(a.get("id", -1)) == 90:
-                return float(a.get("value"))
-        except (TypeError, ValueError):
-            continue
-    for a in d.get("draftStatAttributes") or []:
-        try:
-            return float(a.get("value"))
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def pool_from_draftables(draftables: list[dict], draft_group_id: int) -> tuple[list[dict], set]:
-    """One row per player (first roster slot), DK status and FPPG kept."""
-    rows, seen, teams = [], set(), set()
-    for d in draftables:
-        name = normalize_name(d.get("displayName") or "")
-        if not name or name in seen:
-            continue
-        if d.get("draftableId") is None or d.get("salary") is None or d.get("position") is None:
-            continue
-        seen.add(name)
-        team = d.get("teamAbbreviation"); comp = d.get("competition") or {}
-        opp = _derive_opponent_for_player(team, comp)
-        teams.update(t for t in (team, opp) if t)
-        gt = _parse_gametime_to_local(comp.get("startTime"))
-        if gt is not None and getattr(gt, "tzinfo", None) is not None:
-            gt = gt.replace(tzinfo=None)          # naive local time, like every other datetime in the DB
-        rows.append(dict(id=int(d["draftableId"]), name=name, team=team, opponent=opp, position=d["position"],
-                         roster_slot_id=d.get("rosterSlotId"), gametime=gt,
-                         salary=int(d["salary"]), status=d.get("status"), dk_avg_fpts=_fppg(d),
-                         draft_group_id=int(draft_group_id)))
-    return rows, teams
-
-
-def fetch_slate(session: Session, draft_group_id: int, *, update_odds: bool, starters: bool = True,
-                api_key: Optional[str] = None, log: Log = print, lines: Optional[bool] = None) -> SlateFetch:
-    """DK draftables, Rotowire's lineups, the props (update_odds, ~12 credits a game) and the game lines (`lines`, ~3
-    credits; None = with the props). The lines are the spread and total the desk and the minutes model read: until
-    2026-10-29 only the autopilot tick fetched them, so a day worked by hand had no spreads."""
-    out = SlateFetch(draft_group_id=int(draft_group_id))
-    log(f"fetching DK draftables for draft group {draft_group_id}")
-    draftables = get_players_for_slate(int(draft_group_id), raw_sport="nba")
-    out.players, out.teams = pool_from_draftables(draftables, draft_group_id)
-    if not out.players:
-        raise IngestError("DraftKings returned no players for that draft group; nothing changed.")
-    times = [p["gametime"] for p in out.players if p.get("gametime")]
-    out.lock = min(times) if times else None
-    if starters:
-        try:
-            html = fetch_rotowire_html()
-            raw.store("nba", "rotowire/lineups", datetime.now().strftime("%Y-%m-%d"), html, ext="html")
-            out.starters = parse_rotowire(html)
-            log(f"rotowire: {len(out.starters)} starters listed, "
-                f"{int(out.starters.confirmed.sum()) if len(out.starters) else 0} confirmed")
-        except Exception as e:   # noqa: BLE001 - starters are optional
-            log(f"WARNING: rotowire fetch failed: {type(e).__name__}: {e}")
-    if update_odds:
-        key = api_key or require_env("ODDS_API_KEY")
-        odds = get_odds(ODDS_SPORT, key, sorted(out.teams), markets=NBA_MARKETS, raw_sport="nba")
-        df = parse_odds(odds, games=True)                               # each row carries its game: a slate reads only its own games' rows
-        if len(df) and "player" in df.columns:
-            df["player"] = df["player"].map(normalize_name)        # the NBA key (names.py): the shared parser keeps a suffix the pool drops
-        if df is None or len(df) == 0:
-            raise IngestError("the-odds-api returned no NBA props; check ODDS_API_KEY and the plan. Nothing changed.")
-        out.odds = df
-        log(f"props: {len(df)} rows, {df.player.nunique()} players, {df.sportsbook.nunique()} books")
-    if update_odds if lines is None else lines:
-        try:
-            out.game_lines = fetch_game_lines(api_key=api_key, log=log)
-        except Exception as e:   # noqa: BLE001 - the lines are a convenience on top of the pool and the props
-            log(f"WARNING: game lines fetch failed: {type(e).__name__}: {e}")
-    return out
-
-
-def fetch_game_lines(api_key: Optional[str] = None, log: Log = print) -> Optional[pd.DataFrame]:
-    """Moneyline, spread and total for every upcoming NBA game (raw odds/lines; ~3 credits). None when the API returns nothing."""
-    key = api_key or require_env("ODDS_API_KEY")
-    payload, _ = get_game_odds(ODDS_SPORT, key, markets="h2h,spreads,totals", raw_sport="nba")
-    df = parse_game_odds(payload) if payload else None
-    if df is None or df.empty:
-        log("WARNING: the-odds-api returned no NBA game lines")
-        return None
-    df["commence_time"] = pd.to_datetime(df["commence_time"], utc=True).dt.tz_convert("America/Chicago").dt.tz_localize(None)
-    log(f"game lines: {df.game_id.nunique()} games, {len(df)} rows, {df.bookmaker.nunique()} books")
-    return df
-
-
-GAME_LINE_COLS = ["game_id", "sport_key", "commence_time", "home_team", "away_team", "home_abbr", "away_abbr", "bookmaker", "market",
-                  "last_update", "outcome_name", "side", "point", "price"]
-
-
-def store_game_lines(session: Session, lines: pd.DataFrame, fetched_at: Optional[datetime] = None) -> int:
-    """Replace the stored lines of every game in `lines`. Returns rows stored."""
-    if lines is None or lines.empty:
-        return 0
-    games = lines["game_id"].unique().tolist()
-    session.query(NBAGameOdds).filter(NBAGameOdds.game_id.in_(games)).delete(synchronize_session=False)
-    rows = lines[GAME_LINE_COLS].to_dict("records")
-    now = fetched_at or datetime.now()
-    for r in rows:
-        r["fetched_at"] = now
-        r["price"] = None if pd.isna(r.get("price")) else int(r["price"])
-        r["point"] = None if pd.isna(r.get("point")) else float(r["point"])
-        r["commence_time"] = None if pd.isna(r.get("commence_time")) else pd.Timestamp(r["commence_time"]).to_pydatetime()
-    session.bulk_insert_mappings(NBAGameOdds, rows)
-    session.commit()
-    return len(rows)
-
-
-# ------------------------------------------------------------------------------ store
 @dataclass
 class StoreInfo:
     players: int = 0
@@ -227,7 +65,6 @@ class StoreInfo:
     game_lines: int = 0
     capture_id: Optional[int] = None
     status_changes: list = field(default_factory=list)     # players whose status or starter flag moved in this refresh (their older props set aside)
-
 
 @contextmanager
 def one_transaction(session: Session):
@@ -250,7 +87,6 @@ def one_transaction(session: Session):
             session.rollback()
             raise
 
-
 def locally_edited_teams(session: Session) -> set:
     """On a consumer: the teams whose players this machine pinned or whose grid it painted (its own layer of the current slate,
     not the published one)."""
@@ -262,7 +98,6 @@ def locally_edited_teams(session: Session) -> set:
     if S.rotations_dir().is_dir():
         teams |= {f.stem for f in S.rotations_dir().glob("*.json")}
     return teams
-
 
 def after_pull(session: Session, *, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """
@@ -280,7 +115,6 @@ def after_pull(session: Session, *, n_sims: Optional[int] = None, log: Log = pri
         players = info.players
     return dict(moved=False, teams=mine, players=players, draft_group=current)
 
-
 def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = False, starters: bool = True, n_sims: Optional[int] = None,
                  log: Log = print, field: bool = False, news: bool = True, lines: Optional[bool] = None, by: str = "desk") -> tuple:
     """
@@ -295,50 +129,6 @@ def refresh_pool(session: Session, draft_group_id: int, *, update_odds: bool = F
     out = run_ingest(session, int(draft_group_id), update_odds=update_odds, starters=starters, n_sims=n_sims, log=log, field=field, news=news, lines=lines, by=by)
     return out["stored"], out["projected"], out["news"], out["changes"]
 
-
-PROPS_KEEP_DAYS = 3        # odds rows of a game that tipped longer ago than this are dropped at the next props store (the captures keep them)
-
-
-def store_props(session: Session, odds: pd.DataFrame) -> int:
-    """
-    Replace the odds table's rows for the games a fetch priced. The rows of every game in `odds` (game_id) go, then the fetched rows
-    come in; a row without a game (stored before 2026-11-07, or a capture made then) is replaced by player, as the table used to be.
-    Other games' rows stay: a fetch for one slate's teams must not strip another slate's games, and a back-to-back's two games
-    sit side by side, each read by its own slate (market.fresh_rows). Games that tipped more than PROPS_KEEP_DAYS ago are dropped
-    (legacy rows by last_update). Returns the rows stored.
-    """
-    if odds is None or len(odds) == 0:
-        return 0
-    odds = odds.copy()
-    for c in ("game_id", "commence_time", "home_abbr", "away_abbr"):
-        if c not in odds.columns:
-            odds[c] = None
-    odds = odds.astype(object).where(odds.notna(), None)              # NaN -> NULL
-    games = [str(g) for g in odds.game_id.dropna().unique()]
-    for i in range(0, len(games), 500):
-        session.query(NBAOdds).filter(NBAOdds.game_id.in_(games[i:i + 500])).delete(synchronize_session=False)
-    players = [str(x) for x in odds[odds.game_id.isna()].player.dropna().unique()]
-    for i in range(0, len(players), 500):
-        session.query(NBAOdds).filter(NBAOdds.player.in_(players[i:i + 500])).delete(synchronize_session=False)
-    session.bulk_insert_mappings(NBAOdds, odds.to_dict("records"))
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=PROPS_KEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    session.query(NBAOdds).filter(NBAOdds.commence_time.isnot(None), NBAOdds.commence_time < cutoff).delete(synchronize_session=False)
-    session.query(NBAOdds).filter(NBAOdds.commence_time.is_(None), NBAOdds.last_update.isnot(None),
-                                  NBAOdds.last_update < cutoff).delete(synchronize_session=False)
-    session.commit()
-    return int(len(odds))
-
-
-def odds_stamp(session: Session) -> tuple:
-    """(rows, max id) of the odds table: a props fetch replaces the rows of the games it priced, so the stamp moves with every fetch
-    (the books' own last_update does not: a fetch stores the books' timestamps, which predate it). (0, None) without the table."""
-    try:
-        n, m = session.execute(text("select count(*), max(id) from odds")).one()
-        return (int(n or 0), None if m is None else int(m))
-    except Exception:   # noqa: BLE001
-        return (0, None)
-
-
 def market_rates_current(session: Session) -> bool:
     """False when the odds table is not the one this slate's market rates were built from (the stamp store_market_rates kept on the
     rows against odds_stamp now). The rates are a snapshot taken when the slate stored them, and the table is shared by the day's
@@ -352,7 +142,6 @@ def market_rates_current(session: Session) -> bool:
     if row is None:
         return False
     return row[0] == n and row[1] == max_id
-
 
 def ensure_market_rates(session: Session, history=None, log: Log = print) -> bool:
     """Rebuild this pool's market rates when the odds table moved since they were built (market_rates_current), past the status
@@ -369,7 +158,6 @@ def ensure_market_rates(session: Session, history=None, log: Log = print) -> boo
     session.commit()
     log(f"the books moved since this slate's market rates were built: {n} rates rebuilt")
     return True
-
 
 def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=None) -> int:
     """This pool's market rates (nba_market_rate) from the props of its own games only (market.fresh_odds: the row's game is the
@@ -389,7 +177,6 @@ def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=N
     slate = LiveSlate(session, use_market=False, history=history)
     basis = basis_minutes_for_market(slate, read_overrides_full(), set())
     return store_market_rates(session, means, basis, odds_stamp=stamp)
-
 
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
     info = StoreInfo()
@@ -437,44 +224,6 @@ def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> S
         f"{info.market_rates} market rates, {info.game_lines} line rows; capture {info.capture_id}")
     return info
 
-
-# ------------------------------------------------------------------------------ project
-@dataclass
-class ProjectInfo:
-    players: int = 0
-    priced: int = 0
-    projections_path: Optional[str] = None
-    captures: int = 0
-
-
-def starter_label(slate: LiveSlate, name: str, team: str) -> str:
-    st = slate.starters.get(team)
-    if st is None:
-        return "unknown"
-    if name not in st:
-        return "bench"
-    return "confirmed" if slate.starters_confirmed.get(team) else "expected"
-
-
-def history_context(slate: LiveSlate, name: str) -> dict:
-    """Where a player's minutes baseline came from: his trailing state (team of the last game, games, minutes, start and play rates)."""
-    st = slate.state
-    if name not in st.index:
-        return dict(hist_team=None, hist_games=0, hist_min=None, start_ewm=None, play_ewm=None)
-    s = st.loc[name]
-    return dict(hist_team=s["team"], hist_games=int(s["games"]), hist_min=float(s["min_ewm"]) * float(s["play_ewm"]),
-                start_ewm=float(s["start_ewm"]), play_ewm=float(s["play_ewm"]))
-
-
-def market_fpts_by_player(session: Session) -> dict[str, float]:
-    """The books' implied fantasy points per priced player: the market means at DK weights (turnovers, never priced, left out)."""
-    from ivan.sports.nba.scoring import DK_WEIGHTS
-    out: dict[str, float] = {}
-    for r in session.query(NBAMarketRate).all():
-        out[r.player_name] = out.get(r.player_name, 0.0) + DK_WEIGHTS.get(r.stat, 0.0) * float(r.market_mean)
-    return out
-
-
 def refresh_public_projection(session: Session, log: Log = print) -> dict:
     """The public projection alone (public_field.refresh_public_projection), a second or two; the field is not touched."""
     try:
@@ -483,7 +232,6 @@ def refresh_public_projection(session: Session, log: Log = print) -> dict:
         return _refresh(session, slate.hist, log=log)
     except Exception as e:   # noqa: BLE001 - the public side is a by-product; the pool and the projection stand
         session.rollback(); log(f"public projection failed: {type(e).__name__}: {e}"); return {}
-
 
 def refresh_field(session: Session, log: Log = print) -> dict:
     """The public field and ownership on the stored public projection (public_field.refresh_field_ownership): about a
@@ -494,7 +242,6 @@ def refresh_field(session: Session, log: Log = print) -> dict:
     except Exception as e:   # noqa: BLE001
         session.rollback(); log(f"field refresh failed: {type(e).__name__}: {e}"); return {}
 
-
 def refresh_ownership(session: Session, log: Log = print) -> dict:
     """The public projection, the field and ownership from the pool and props as stored (public_field.refresh_public).
     Runs with every pool refresh (store_slate); Publish never touches it, so our edits cannot move ownership."""
@@ -504,7 +251,6 @@ def refresh_ownership(session: Session, log: Log = print) -> dict:
         return refresh_public(session, slate.hist, log=log)
     except Exception as e:   # noqa: BLE001 - never fails a pool refresh
         session.rollback(); log(f"public refresh failed: {type(e).__name__}: {e}"); return {}
-
 
 def project_team(session: Session, slate: LiveSlate, team: str, overrides: dict, params: Optional[ProjectionParams] = None,
                  *, write: bool = True) -> dict:
@@ -527,7 +273,6 @@ def project_team(session: Session, slate: LiveSlate, team: str, overrides: dict,
     if write:
         PSTORE.save(rec)
     return rec
-
 
 def project_slate(session: Session, *, n_sims: Optional[int] = None, write_capture: bool = True, write_csv: bool = True,
                   log: Log = print, source: str = "ours", params: Optional[ProjectionParams] = None, write_ownership: bool = False,
@@ -559,7 +304,6 @@ def project_slate(session: Session, *, n_sims: Optional[int] = None, write_captu
     return record_projection(session, slate, frames, now, source=source, write_capture=write_capture, write_csv=write_csv,
                              write_ownership=write_ownership, minutes_model=params.minutes_model, log=log, info=info)
 
-
 def capture_pool(session: Session, *, log: Log = print, source: str = "ours", write_csv: bool = True) -> ProjectInfo:
     """
     Record the projection as it stands: capture rows (source "ours", the ones the scorecard scores) and the projections CSV,
@@ -586,92 +330,6 @@ def capture_pool(session: Session, *, log: Log = print, source: str = "ours", wr
     return record_projection(session, slate, frames, datetime.now(), source=source, write_capture=True, write_csv=write_csv,
                              minutes_model=ProjectionParams.from_config().minutes_model, log=log, info=info)
 
-
-def record_projection(session: Session, slate: LiveSlate, frames: list, now: datetime, *, source: str = "ours", write_capture: bool = True,
-                      write_csv: bool = True, write_ownership: bool = False, minutes_model: Optional[str] = None, log: Log = print,
-                      info: Optional[ProjectInfo] = None) -> ProjectInfo:
-    """The capture rows (nba_projection_capture, one per player, plus DK's own FPPG as a yardstick) and the projections CSV
-    artifact for a set of team frames. Shared by project_slate (fresh frames) and capture_pool (the store's)."""
-    info = info or ProjectInfo()
-    allp = pd.concat(frames)
-    info.players = int(len(allp)); info.priced = int(allp["priced"].sum()) if "priced" in allp else 0
-    by_name = {normalize_name(p.name): p for p in slate.players}
-    market_fpts = market_fpts_by_player(session)
-    rows = []
-    for name, r in allp.iterrows():
-        p = by_name.get(name)
-        if p is None:
-            continue                                        # a stored frame from before a roster change: the player is gone
-        rows.append(dict(player_id=p.id, player_name=name, team=p.team, opponent=p.opponent, gametime=p.gametime,
-                         salary=p.salary, status=p.status, starter=starter_label(slate, name, p.team),
-                         minutes_proj=float(r["minutes"]), fpts_mean=float(r["fpts_mean"]), fpts_std=float(r["fpts_std"]),
-                         priced=bool(r.get("priced", False)), pinned=bool(r.get("pinned", False)),
-                         baseline_min=float(r["baseline"]), fpm=float(r["fpm"]), usage_mult=float(r["usage_mult"]),
-                         market_fpts=market_fpts.get(name), minutes_model=minutes_model, minutes_role=r.get("role"),
-                         p_out=None if r.get("p_out") is None else float(r["p_out"]),
-                         minutes_p10=None if pd.isna(r.get("minutes_p10", np.nan)) else float(r["minutes_p10"]),
-                         minutes_p90=None if pd.isna(r.get("minutes_p90", np.nan)) else float(r["minutes_p90"]),
-                         **history_context(slate, name)))
-    for p in slate.players:   # players ruled out: a row with no projection keeps the record of the scratch
-        if normalize_name(p.name) not in allp.index:
-            rows.append(dict(player_id=p.id, player_name=normalize_name(p.name), team=p.team, opponent=p.opponent,
-                             gametime=p.gametime, salary=p.salary, status=p.status, starter="out",
-                             minutes_proj=0.0, fpts_mean=None, fpts_std=None, priced=False, pinned=False,
-                             baseline_min=None, fpm=None, usage_mult=None, market_fpts=market_fpts.get(normalize_name(p.name)),
-                             **history_context(slate, normalize_name(p.name))))
-    dg = next((p.draft_group_id for p in slate.players if p.draft_group_id), None)
-    lock = min((p.gametime for p in slate.players if p.gametime), default=None)
-    if write_ownership:
-        refresh_ownership(session, log=log)
-    if write_capture:
-        for r in rows:
-            session.add(NBAProjectionCapture(captured_at=now, draft_group_id=dg, lock=lock, source=source, **r))
-        # DK's own FPPG as a free yardstick, once per capture
-        for p in slate.players:
-            if p.dk_avg_fpts is not None:
-                session.add(NBAProjectionCapture(captured_at=now, draft_group_id=dg, lock=lock, source="dk_avg",
-                                                 player_id=p.id, player_name=normalize_name(p.name), team=p.team,
-                                                 opponent=p.opponent, gametime=p.gametime, salary=p.salary,
-                                                 status=p.status, fpts_mean=float(p.dk_avg_fpts)))
-        session.commit()
-        info.captures = len(rows)
-    if write_csv:
-        try:
-            from ivan.core import artifacts
-            path = artifacts.projections_path(S.output_dir(), now)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(rows).to_csv(path, index=False)
-            info.projections_path = str(path)
-        except Exception as e:   # noqa: BLE001
-            log(f"WARNING: projections artifact not written: {type(e).__name__}: {e}")
-    log(f"projected {info.players} players ({info.priced} priced); {info.captures} capture rows"
-        f"{'; ' + info.projections_path if info.projections_path else ''}")
-    return info
-
-
-def record_external_projections(session: Session, csv_path: Path, source: str = "stokastic", log: Log = print) -> int:
-    """Keep a third-party projection CSV (Player, Projection, Std Dev, Ownership %) as capture rows; never touches ours."""
-    df = pd.read_csv(csv_path)
-    by_name = {normalize_name(p.name): p for p in session.query(NBAPlayer).all()}
-    now = datetime.now(); n = 0
-    dg = next((p.draft_group_id for p in by_name.values() if p.draft_group_id), None)
-    lock = min((p.gametime for p in by_name.values() if p.gametime), default=None)
-    for _, r in df.iterrows():
-        name = normalize_name(str(r.get("Player", "")))
-        p = by_name.get(name)
-        session.add(NBAProjectionCapture(captured_at=now, draft_group_id=dg, lock=lock, source=source,
-                                         player_id=p.id if p else None, player_name=name, team=p.team if p else None,
-                                         opponent=p.opponent if p else None, gametime=p.gametime if p else None,
-                                         salary=p.salary if p else None, status=p.status if p else None,
-                                         fpts_mean=float(r.get("Projection")) if pd.notna(r.get("Projection")) else None,
-                                         fpts_std=float(r.get("Std Dev")) if pd.notna(r.get("Std Dev")) else None))
-        n += 1
-    session.commit()
-    log(f"recorded {n} {source} projections ({sum(1 for _, r in df.iterrows() if normalize_name(str(r.get('Player',''))) in by_name)} matched the pool)")
-    return n
-
-
-# ------------------------------------------------------------------------------ all
 def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool = True, starters: bool = True,
                n_sims: Optional[int] = None, log: Log = print, fetched: Optional[SlateFetch] = None, field: bool = False, news: bool = True,
                lines: Optional[bool] = None, by: str = "desk") -> dict:
@@ -721,7 +379,6 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
             log(f"changed {team}: " + "; ".join(x["text"] for x in items))
         return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r, "changes": moved}
 
-
 def void_stale_mappings(session: Session, log: Log = print) -> list:
     """The mappings a player now out makes void (ivan.sports.nba.slate.mapping.void_stale), with this machine's pins file rewritten."""
     from ivan.sports.nba.slate import mapping as MAP
@@ -731,7 +388,6 @@ def void_stale_mappings(session: Session, log: Log = print) -> list:
     if voided:
         write_overrides(local)
     return voided
-
 
 def check_news(session, log: Log = print, draft_group_id: Optional[int] = None) -> Optional[dict]:
     """Rotowire's news page into nba_news (newsfeed.check) for a refresh: None and a log line when it fails. With a draft group,
@@ -751,7 +407,6 @@ def check_news(session, log: Log = print, draft_group_id: Optional[int] = None) 
                 log(f"news link skipped: {type(e).__name__}: {e}")
     return out
 
-
 def link_slate_news(session, draft_group_id: int) -> int:
     """Link the headlines of the slate's teams to the slate (nba_slate_news). Returns how many links are new."""
     from ivan.sports.nba.models import NBANews, NBASlateNews
@@ -767,7 +422,6 @@ def link_slate_news(session, draft_group_id: int) -> int:
     if n:
         session.commit()
     return n
-
 
 def restore_from_archive(session, draft_group_id: int, *, capture_id: Optional[int] = None, n_sims: Optional[int] = None, log: Log = print) -> dict:
     """

@@ -30,7 +30,7 @@ CONTEST = dict(contest_id=9, name="Big", entry_fee=5.0, total_entries=4)
 
 
 def test_a_final_export_is_scored_as_draftkings_scored_it():
-    from ivan.sports.nba.data_fetch.standings import parse_export
+    from ivan.sports.nba.data_clean.standings import parse_export
     ent, _ = parse_export(FINAL)
     r = SB.score_contest(CONTEST, {"12", "13"}, ent, np.array([10.0, 6.0, 2.0, 0.0]), datetime(2026, 11, 5, 10, 31))
     assert r["final"] and r["scored"].startswith("DraftKings' final export 11-05 10:31")
@@ -41,7 +41,7 @@ def test_a_final_export_is_scored_as_draftkings_scored_it():
 
 
 def test_a_mid_slate_export_is_not_scored():
-    from ivan.sports.nba.data_fetch.standings import parse_export
+    from ivan.sports.nba.data_clean.standings import parse_export
     ent, _ = parse_export(MID)
     r = SB.score_contest(CONTEST, {"12", "13"}, ent, np.array([10.0, 6.0, 2.0, 0.0]), datetime(2026, 11, 4, 18, 6))
     assert not r["final"] and r["entries"] == [] and r["won"] is None and r["net"] is None and r["roi"] is None
