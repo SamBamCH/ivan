@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-scripts/nba/mapping.py — the team mappings a player now out makes void (ivan.sports.nba.slate.mapping): what every refresh and every
-re-projection on the desk does on their own; from a terminal to see or force it.
+scripts/nba/mapping.py — the team mappings a player now out or a changed five makes void (ivan.sports.nba.slate.mapping): what every
+refresh and every re-projection on the desk does on their own; from a terminal to see or force it.
 
     venv/bin/python scripts/nba/mapping.py --slate DG            # list the stale mappings (team: who is out) and void them
     venv/bin/python scripts/nba/mapping.py --slate DG --dry-run  # list only
@@ -29,10 +29,16 @@ def main() -> int:
         by_team: dict = {}
         for name, team, status in session.query(NBAPlayer.name, NBAPlayer.team, NBAPlayer.status).all():
             by_team.setdefault(team, {})[normalize_name(name)] = status or ""
-        stale = {t: MAP.stale_outs(t, st, local) for t, st in sorted(by_team.items()) if t}
-        stale = {t: o for t, o in stale.items() if o}
-        for t, o in stale.items():
-            print(f"{t}: {', '.join(o)} out since it was mapped: void")
+        stale = {}
+        for t, st in sorted(by_team.items()):
+            if not t:
+                continue
+            outs = MAP.stale_outs(t, st, local)
+            lineup = MAP.stale_starters(t, MAP.live_starters(session, t, st.keys(), local), local)
+            if outs or lineup:
+                stale[t] = (outs, lineup)
+                print(f"{t}: " + (f"{', '.join(outs)} out since it was mapped" if outs else "")
+                      + (" and " if outs and lineup else "") + (f"the five changed (-{', '.join(lineup['benched'])} +{', '.join(lineup['promoted'])})" if lineup else "") + ": void")
         print(f"{len(stale)} stale mapping(s) on slate {dg}")
         return 0
     voided = void_stale_mappings(session, log=print)

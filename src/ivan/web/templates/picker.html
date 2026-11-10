@@ -62,7 +62,7 @@
           </div>
           <div class="acts">
             <a class="primary" href="{{ s.path(frame.root) }}">open</a>
-            {% if s.load %}
+            {% if s.load and s.load.get('button', True) %}
             <form method="post" action="{{ frame.root }}{{ s.load.url }}" style="display:inline">{% for k, v in s.load.fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button type="submit" title="{{ s.load.title or 'load this slate into the workspace' }}">{{ s.load.label or 'load' }}</button></form>
             {% endif %}
             <span class="small muted">slate {{ s.key }}</span>

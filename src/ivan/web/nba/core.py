@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ivan.core import feed
@@ -263,9 +263,9 @@ def _team_url(request: Request, team: str) -> str:
 
 def _days_of(rows: list, now: datetime) -> list[Day]:
     """Lobby.slate_days rows -> the frame's days (ivan.web.sports). A lobby slate this machine does not hold carries a load form (its
-    page starts that load when opened; the form is the picker's button and the fallback when a job holds the slate): the producer
-    fetches the slate from DraftKings, the consumer asks the laptop for it. An archived one opens on its backtest, where Restore
-    loads it."""
+    page starts that load when opened, so the picker shows no button for it, `button: False`; the form is the page's fallback when a
+    job holds the slate): the producer fetches the slate from DraftKings, the consumer asks the laptop for it. An archived one opens
+    on its backtest, where Restore loads it."""
     out = []
     for d_iso, _label, slates in rows:
         d = date.fromisoformat(d_iso)
@@ -274,7 +274,7 @@ def _days_of(rows: list, now: datetime) -> list[Day]:
             src = {"loaded": "working", "held": "working"}.get(sl["source"], sl["source"])
             load = None
             if sl["source"] == "lobby" and not sl["loaded"]:
-                load = {"url": "/slate", "fields": {"draft_group": sl["id"], "source": "lobby", "day": d_iso},
+                load = {"url": "/slate", "fields": {"draft_group": sl["id"], "source": "lobby", "day": d_iso}, "button": False,
                         "label": "fetch from the laptop" if CONSUMER else "load into the desk",
                         "title": ("ask the laptop for this slate and copy it here" if CONSUMER else
                                   "fetch this slate from DraftKings, project it and work it (every other slate stays as it is)")}
@@ -326,6 +326,47 @@ def sport_job() -> Optional[dict]:
     return dict(id=j.id, name=j.name, status=j.status, duration=j.duration, log=runner.read_log(j, tail_lines=8))
 
 
+JOB_STRIP_DONE_SECONDS = 90        # a finished job stays on the bar's strip this long
+
+
+def job_strip(now: Optional[float] = None) -> Optional[dict]:
+    """The bar's one-line read of the sport's jobs (any slate's): the running or queued job, else the one that ended within
+    JOB_STRIP_DONE_SECONDS; None when there is nothing to say. {name, status, slate, label, duration, estimate, active, failed}."""
+    now = now if now is not None else time.time()
+    jobs = runner.all()
+    j = next((x for x in jobs if x.status == "running"), None) or next((x for x in jobs if x.status == "queued"), None)
+    if j is None:
+        j = next((x for x in jobs if x.finished and (now - x.finished) < JOB_STRIP_DONE_SECONDS), None)
+    if j is None:
+        return None
+    dg = (j.meta or {}).get("slate")
+    label = ""
+    if dg is not None:
+        lock = S.meta_time(S.read_meta(int(dg)), "lock")
+        label = f"{lock:%m-%d %H:%M}" if lock else f"slate {dg}"
+    est = (j.meta or {}).get("estimate")
+    return dict(id=j.id, name=j.name, status=j.status, slate=dg, label=label, duration=j.duration, estimate=est,
+                active=j.is_active, failed=j.status in ("failed", "cancelled"))
+
+
+@app.get("/jobstrip", response_class=HTMLResponse)
+def jobstrip(request: Request):
+    """The frame's job strip (ivan.web.sports.Sport.job_strip): one line on the sport's running job, with its slate as a link; empty
+    when nothing runs and nothing just ended. data-active="1" tells the bar to poll faster."""
+    j = job_strip()
+    if j is None:
+        return HTMLResponse('<span class="jobstrip-in" data-active="0"></span>')
+    href = slate_url(request, int(j["slate"])) if j["slate"] is not None else auth.root_of(request) + "/"
+    dur = f" · {j['duration']:.0f}s" if j["duration"] else ""
+    left = ""
+    if j["active"] and j["estimate"] and j["duration"] is not None:
+        left = f" · ≈{max(0, int(j['estimate'] - j['duration']))}s left"
+    cls = "running" if j["active"] else ("failed" if j["failed"] else "done")
+    label = f'<a href="{href}">{j["label"]}</a> · ' if j["label"] else ""
+    return HTMLResponse(f'<span class="jobstrip-in" data-active="{1 if j["active"] else 0}" title="the sport\'s job: it runs on in the background while you move between pages; the slate\'s pipeline panel has its log">'
+                        f'<i class="dot {cls}"></i> {label}<b class="{cls}">{j["name"]}</b> {j["status"]}{dur}{left}</span>')
+
+
 ACTIONS = [dict(label="Fetch upcoming slates", path="/fetch-upcoming",
                 title="load every classic slate the DraftKings lobby lists (today and tomorrow) that this desk does not hold yet, then store "
                       "every contest of those slates and the payout table of each (scripts/nba/fetch_upcoming.py; free; a few minutes)")]
@@ -339,7 +380,7 @@ def sport() -> Sport:
     SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nba_days, summary=nba_summary, tools=[], app=app,
                   ledger=None if CONSUMER else results.ledger_days,       # the picker's money per day; never on the consumer (the server)
                   day_status=None if CONSUMER else readiness.day_status,  # a past day's readiness for the backtest: the calendar's colours
-                  actions=[] if CONSUMER else ACTIONS, job=None if CONSUMER else sport_job,
+                  actions=[] if CONSUMER else ACTIONS, job=None if CONSUMER else sport_job, job_strip="/jobstrip",
                   default_view=lambda s, now: {"lateswap": "lateswap", "backtest": "backtest"}.get(mode_for(s.day, s.lock, now), "games"))
     frame.install_picker(app, SPORT)
     return SPORT

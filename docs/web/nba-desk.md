@@ -1,6 +1,6 @@
 # The NBA desk
 
-`src/ivan/web/nba/` (one module per concern: `core.py` the app and the Desk object, `pages.py`, `team.py`, `pipeline.py`, `lateswap.py`, `exposures.py`, `exports.py`; the desk's model is `ivan.sports.nba.desk`, no web imports; FastAPI + Jinja + htmx, templates `src/ivan/web/templates/nba_desk.html`
+`src/ivan/web/nba/` (one module per concern: `core.py` the app and the Desk object, `pages.py`, `team.py`, `pipeline.py`, `lateswap.py`, `exposures.py`, `exports.py`, `rerun.py`, `backtest.py`; the desk's model is `ivan.sports.nba.desk`, no web imports; FastAPI + Jinja + htmx, templates `src/ivan/web/templates/nba_desk.html`
 and `_nba_*.html`). One page to manage a slate in the last minutes before lock, plus the pipeline
 panel, the exposures and the late swap. Mounted at `/nba` inside the one Ivan UI (`scripts/serve.py`,
 [README.md](README.md)); the login is the site's. Every link carries the mount prefix (`root`). The flow of
@@ -26,7 +26,8 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
     laptop for slate N…") and the board shows the progress: a spinner, the seconds so far and the last lines the load
     logged (fetching DraftKings, Rotowire, storing, projecting each team, the news), refreshed every 2 s; when it is done
     the whole page reloads on the new slate.
-    When that slate's jobs run the page says so and offers the load as a button (`POST /slate`, the picker's button).
+    When that slate's jobs run the page says so and offers the load as a button (`POST /slate`; the picker shows no load
+    button of its own since opening the slate is the load).
   - a **held slate** opens on the view its lock picks: **pre-lock** before its first lock, **post-lock** (the late
     swap) after it, **backtest** once its day has passed (`backtest.slate.mode_for`). A refresh of the slate running
     meanwhile shows as "refreshing the pool…" in the bar and as an amber **progress banner** at the top of the board (what
@@ -50,6 +51,10 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
   last tick's time shows next to it ("held" when it stood down, "failed" in red). See
   [../nba/game-day.md](../nba/game-day.md#2-refresh-through-the-day). On a consumer the same spot shows
   the laptop's state instead: autopilot on/off, who published last (desk, autopilot, nightly) and when.
+- **The job strip** (the frame's bar, every page of the sport: `GET /nba/jobstrip`, `Sport.job_strip`): one thin line on
+  the sport's running job, any slate's (its slate as a link, the job's name, status, seconds so far and the estimate's
+  seconds left), read every 4 s while one runs and every 20 s otherwise, so a job started on one page stays in sight on
+  the next; a job that ended stays on the strip for 90 s (green done, red failed). The slate's pipeline panel has the log.
 - **A− fit A+**: the page size. **fit** (the default) scales the whole page so the team grid with its columns fills
   the window's width; A− / A+ set a size by hand. Remembered in this browser only.
 
@@ -59,6 +64,13 @@ The slate page **reads**. Nothing on it edits a projection: a team's minutes, pi
 its own page (below), and every edit there writes the team into the pool at once, so this page, the sim, the chooser
 and the other desk all show the same numbers. You open a team only to map its minutes, when **needs you** sends you,
 or when news breaks.
+
+**Needs you** leads, when it applies, with **this pool is from HH:MM**: another held slate of the same day was refreshed
+after this one and its pool carries DraftKings statuses this one does not (`Desk.sibling_changes`: the players of this slate
+whose status differs on the most recently refreshed sibling, downgrades first, with a **Refresh DK** button). 2026-11-06:
+the Turbo slate was last refreshed at 13:10 and kept Barnes questionable with 31 minutes while the main slate, refreshed at
+18:40, had him OUT, and the Turbo lineups carried him at full exposure. The same players carry the flag on their team's
+card ("OUT on the 18:00 slate's pool, refreshed 18:40 (here Q): refresh this slate", a bad alert when it rules him out).
 
 1. **Games strip** (`_nba_games.html`, also at the top of every team page): one table above the actions, fixed column widths and row heights: each tip time heads four
    columns (away, home, spread as "DET -7.5" or "PK" for a pick'em, total), and row N holds every tip's Nth game
@@ -147,7 +159,7 @@ slate's jobs run and while the slate refreshes (edits wait for the refresh; a jo
 
 | Level | Fires when |
 |---|---|
-| bad | a rotation player is OUT or scratched ("out, frees N minutes"); dnp-prone, deep bench projected like a rotation player, impossible band, distribution suspect |
+| bad | a rotation player is OUT or scratched ("out, frees N minutes"); a fresher sibling slate of the day has him OUT ("OUT on the 18:00 slate's pool, refreshed 18:40 (here Q): refresh this slate"; another status difference is a warn); dnp-prone, deep bench projected like a rotation player, impossible band, distribution suspect |
 | (flag) | **cut-prone: N% of nights under 8 min**: a 10+ minute row whose own cut rate is 30% or more; the World draws those nights; a named starter is exempt |
 | warn | a new starter or a benched regular; the market disagrees with history ("market ..."); a questionable rotation player; new team / above recent maximum / market implies other minutes / no history for a 10+ minute player; a 24+ minute player left with no minutes in the rotation; no Rotowire lineup or an unconfirmed one inside 75 minutes of tip |
 | info | minutes far from history for a 12+ minute player; the available roster's history minutes far from 241; rotation depth notes; unpriced rotation players |
@@ -202,7 +214,7 @@ the solved worlds whose optimal lineup holds him, bold when the mean-projection 
 projected after the solve, a dash before the first Solve), **pub** and its **val**, **own**. The foot row adds each
 column up for the team (fpts: the World's, the plan's in the hover; opt: the worlds solved).
 
-Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line
+Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line, the lowest line first
 (when the book posted it, the line, the over and under prices) and the alternates condensed to one row per book (the
 lines within 3 of the consensus line with the over price; alternates price overs only), headed by ours, the books' mean
 and the minutes it was priced over. The lines are fetched the first time the cell is hovered (`GET
@@ -255,10 +267,13 @@ floor; the grid autosaves every stroke (`/rotation`). Row lock holds a row exact
 unlocked rows around the locks (`/rotation/propose` with `source=propose`, or a past game's grid with
 `game_id`); **Hold all** locks everything as drawn; **Clear locks**; **Map** adds a player the cut left off
 (`/rotation/add`), **drop** removes one, **restore** undoes. A player the mapping counted on ruled OUT (a DK status on a
-refresh, a scratch call) voids the mapping on its own (`ivan.sports.nba.slate.mapping`, `Desk.void_if_stale` before every
-re-projection, `ingest.void_stale_mappings` inside the refresh; `scripts/nba/mapping.py`): the grid and the team's positive
-minutes pins go, the model's rotation for the new pool shows, the card says so and reads unmapped; the old mapping is kept
-as a scenario assuming him in. The refresh note and the team's dot carry it ("mapping void: Johnson out"). Spot colours mark the slot each player
+refresh, a scratch call), or a five that comes in differently from the five the grid was drawn for (Rotowire's lineup with
+the hand starter calls, a full five against a full five), voids the mapping on its own (`ivan.sports.nba.slate.mapping`,
+`Desk.void_if_stale` before every re-projection, `ingest.void_stale_mappings` inside the refresh; `scripts/nba/mapping.py`):
+the grid and the team's positive minutes pins go, the model's proposal for the new pool and five shows, the card says so and
+reads unmapped; the old mapping is kept as a scenario assuming what it assumed ("Johnson in", "Hauser starting"), so it comes
+back on its own if the news reverses. A five that comes in as mapped changes nothing. The refresh note and the team's dot
+carry it ("mapping void: the lineup came in differently (-Hauser +Pritchard)"). Spot colours mark the slot each player
 inherited (the lanes under the grid name each spot's holders; there is no separate key); fouls are shown on
 historical views (a digit in a cell is that player's n-th foul in that minute). The row sums are the minutes projection; the foot row adds them up under `min` and, under `proj`, adds up the team's projected fantasy points beside its trailing average.
 Rookies carry a purple **R** badge with their games played this season (`R4`) and a purple edge on the name, on
@@ -295,30 +310,48 @@ proj, value, ownership, flags. A name or a team opens the team's page. The fpts 
 ## Backtest (view `backtest`, `/?view=backtest&dg=<draft group>`, `_nba_backtest.html`)
 
 A past slate, read only (`ivan.sports.nba.backtest.slate`, terminal `scripts/nba/backtest_slate.py --draft-group N |
---date YYYY-MM-DD`). Built in about two seconds from what is on disk; the desk's working tables are not touched.
+--date YYYY-MM-DD`; the panels' routes are `ivan.web.nba.backtest`). Built in about four seconds from what is on disk and
+kept for two minutes so the panels open at once; the desk's working tables are not touched. Top to bottom:
 
+- **The head**: the day, the slate, its lock, and **Restore into the desk** (`POST /slate`, source archive): loads the
+  slate's archive capture (the pool as it stood at lock) into the slate's own directory and opens its desk, so a past slate
+  can be worked again like a live one (a what-if, the chain re-run by hand). Nothing on the backtest page changes; it is
+  only needed when a past slate is to be re-worked.
+- **The readiness strip** (`_nba_bt_fetch.html`, `GET /backtest/fetch`; a held slate only): the state the calendar colours
+  the day with (`ivan.sports.nba.backtest.readiness.slate_status`: **ready** when every team's box score and, where we
+  played, every contest's final export are on file; **failed** when a fetch failed; **pending** otherwise) with the reason,
+  and on the laptop two buttons for what is missing, each a job: **Fetch box scores** (`POST /backtest/fetch/boxscores` =
+  `scripts/nba/nightly.py --max-games 40`: the season's box scores not yet stored, this day's among them, then the
+  scorecards and the play-by-play; off when every team is on file) and **Fetch standings** (`POST /backtest/fetch/standings`
+  = `scripts/nba/standings.py --slate N scrape`: the final export of every contest of ours on this slate and the largest
+  public ones, through the logged-in Chrome; off when every contest is scored, and on a desk without the login). The strip
+  polls while the job runs and the page reloads on the new data when it is done. The morning after a slate, with the box
+  scores and the standings not yet in, this is where they are fetched from.
 - **Tiles**: net and ROI, winnings on fees, entries cashed, the sim's claim (the chooser's ROI for the same entries,
-  fee-weighted; red when it claimed far more than happened). The money (the tiles, the contests, the ROI timeline, our
-  lineups) shows **on the laptop only**: a consumer desk (the server) gets a line saying so and keeps the model's
-  sections (by tip, fields, players by team). The same numbers, summed per day and over the season, are on the NBA picker
-  and the Ivan home tile ([README.md](README.md#the-money)); `ivan.sports.nba.backtest.results` makes them for all three.
-- **Contests**: fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, where the
-  points came from. Our entries are the Entry IDs in the upload files the desk wrote (`chosen_entries.classic.*.csv`,
-  `lateswap.*.csv`). A contest is scored only from a **final** standings export (every game over, no LOCKED slot,
-  `standings.export_is_final`): DraftKings' own points, ranks from them, ties sharing the payouts of the places they
-  cover (the payout table). A contest whose newest export is the late swap's mid-slate fetch (every not-yet-tipped
-  player reads LOCKED, ours included) or that has no export is listed **unscored**, greyed, with what it cost: it is
-  not in the tiles, and the line under them says how many and the fees until `scripts/nba/standings.py scrape` brings
-  the final export. Nothing is rescored from the box scores (2026-11-04: eleven such contests scored on one to four
-  visible players read as a $28.86 loss on a slate that made $194.82; the rescore of final exports also differed from
-  DraftKings' points by $46 across the slate).
-- **ROI through the night**: what our entries were expected to make at each point: the chooser's claim before lock,
-  every late swap run's expected ROI for the entries as held and after its swaps (`lateswap.<stamp>.json`, the
-  expected payouts it computed with the games started so far), then the final. Late news moves a slate after the first
-  lock; this shows when the expectation fell.
-- **By tip**: each tip's games judged on the projection before lock and on the newest capture taken by that tip (ours
-  or the archive's at-tip capture, up to 12 minutes after it): minutes and points MAE and bias of the rotation
-  players, and the players the late news moved most, with what they scored.
+  fee-weighted; red when it claimed far more than happened). The money (the tiles, the contests and their panels) shows
+  **on the laptop only**: a consumer desk (the server) gets a line saying so and keeps the players. The same numbers,
+  summed per day and over the season, are on the NBA picker and the Ivan home tile ([README.md](README.md#the-money));
+  `ivan.sports.nba.backtest.results` makes them for all three.
+- **Contests**: fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, the share of
+  the field duplicated, where the points came from. Our entries are the ones under our DraftKings user name plus the Entry
+  IDs in the upload files the desk wrote (`chosen_entries.classic.*.csv`, `lateswap.*.csv`). A contest is scored only from
+  a **final** standings export (every game over, no LOCKED slot, `standings.export_is_final`): DraftKings' own points,
+  ranks from them, ties sharing the payouts of the places they cover (the payout table). A contest whose newest export is
+  the late swap's mid-slate fetch (every not-yet-tipped player reads LOCKED, ours included) or that has no export is listed
+  **unscored**, greyed, with what it cost: it is not in the tiles, and the line under them says how many and the fees until
+  Fetch standings brings the final export. Nothing is rescored from the box scores (2026-11-04: eleven such contests scored
+  on one to four visible players read as a $28.86 loss on a slate that made $194.82; the rescore of final exports also
+  differed from DraftKings' points by $46 across the slate).
+  **A row opens the contest's panel** (`GET /backtest/contest/<id>`, `_nba_bt_contest.html`,
+  `ivan.sports.nba.backtest.slate.contest_detail`): the contest-level data only, player performance being the table
+  below. Its tiles (net and ROI, cashed and best rank, the chooser's claim with its time and method, the **payout curve**:
+  what 1st, 2nd, 3rd, 5th, 10th ... and the last paid place got), the places paid, the cash line, the winning score, the
+  duplication; **our entries** in it, best first (rank, points, payout, copies of the lineup in this field, the sim's ROI for
+  the lineup at choose time: chooser runs from 2026-10-29 keep it per lineup, matched through the chooser's upload file, so
+  a late-swapped entry shows its claim at choose time, and the lineup); **the field**: every player this field owned, by
+  ownership (DraftKings' %drafted in this contest), our projected ownership at the first tip (red when the field had 10+
+  points more than we projected), our share of our entries in this contest, **lev** = the field's ownership minus ours (red
+  when the field was 10+ points heavier on him than we were, green the other way), points projected and scored.
 - **Current code** (`_nba_rerun.html`, `ivan.web.nba.rerun`; terminal `scripts/nba/rerun_slate.py --slate N [-n 1000]
   [--tip HHMM]`): what the game simulation on this checkout says about the slate, drawn from its **tip record** (the
   pool, grid rows, props and lines as the desk had them at the first tip; [../nba/data.md](../nba/data.md)) with the
@@ -335,19 +368,18 @@ A past slate, read only (`ivan.sports.nba.backtest.slate`, terminal `scripts/nba
   percentile the actual fell at (red under 10 or over 90). The stat select (fantasy points, minutes, points, rebounds,
   assists, threes, steals, blocks, turnovers, attempts, free throws) re-renders the block. Records live under
   `data/nba/slates/<dg>/rerun/<stamp>-<commit>/`; a slate archived before 2026-10-23 has no tip record and the button says so.
-- **Fields**: per contest the entries, unique lineups, the share duplicated, the most copies, the winning score, our
-  entries' mean copies; the most-owned players of the largest contest, DraftKings' ownership against our projected
-  ownership at the first tip and our exposure.
-- **Notes at lock**: the desk's player notes that stood at lock.
-- **Players by team**: minutes and points projected (our last capture before lock) against played, the miss, our
-  exposure, the field's ownership (DraftKings' %drafted in the largest contest), our projected ownership, the note.
-  Below each team's table, the game as played over our grid: the grid drawn on the desk (the day's, under
-  `data/nba/days/<day>/edits/rotations/<TEAM>.json`), else the grid rows the archive kept at the tip (`rotation_cells`,
-  kept from 2026-10-29 by `archive_at_lock.py`), each minute marked on the floor in both, played but not in ours, or in
-  ours and sat; the share of the 240 player-minutes on the floor in both.
-- **Our lineups**: every entry, best first: rank, points, payout, copies of it in that contest's field, and the sim's
-  ROI for that lineup at choose time (chooser runs from 2026-10-29 keep it per lineup with its players, `by_lineup`;
-  matched to the entry through the chooser's upload file, so a late-swapped entry shows its claim at choose time).
+- **Players**: a row of **team chips** (projected → scored fantasy points, the grid agreement), then **every player of
+  the slate in one sortable table** (`_nba_bt_rows.html`, `flat_table`), the most points scored first: team, position,
+  salary, the lineup at lock (S confirmed starter, s expected, b bench), minutes and fantasy points projected (our last
+  capture before lock) → played, the miss, the value as played (points per $1k), our share of our entries, the field's
+  ownership (DraftKings' %drafted in the largest contest), our projected ownership at the first tip, **lev** (the field's
+  ownership minus ours), the desk's note that stood at lock. DNP rows grey, priced rows green. A chip or a team cell opens
+  the **team's panel** (`GET /backtest/team/<TEAM>`, `_nba_bt_team.html`) above the table: the team's totals, **the game
+  as played over our grid** (the grid drawn on the desk, `slates/<dg>/edits/rotations/<TEAM>.json`, else the grid rows
+  the archive kept at the tip, `rotation_cells`, kept from 2026-10-29 by `archive_at_lock.py`; each minute marked on the
+  floor in both, played but not in ours, or in ours and sat; the share of the 240 player-minutes on the floor in both) and
+  the team's rows with the same columns. The same overlay is on a live slate's team page, per past game (the last-game
+  panel's **vs our grid** box).
 
 The plan this is phase 1 of: [../nba/notes/slate_views_plan_2026-10-29.md](../nba/notes/slate_views_plan_2026-10-29.md).
 
@@ -361,8 +393,9 @@ needs, every contest slices it, and the largest contest's field becomes the owne
 **Field + ownership** (`/pipeline/field` = `scripts/nba/field_ownership.py`, about 45s) builds the field on
 the stored public projection and writes ownership from it, on demand; nothing else does on a slate day. The desk warns
 when a team's mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
-`/pipeline/status` (polled every 2 s while a job runs; the poll that finds the job done reloads the whole page, so every
-section shows what it wrote; a failed job leaves its log on the screen), cancel at `/pipeline/cancel/<job id>`, logs
+`/pipeline/status` (polled every 2 s while a job runs; the poll that finds the job done reloads the whole page, whatever
+the job was, so every section shows what it wrote; a pool-writing job, field, sim or solve, has the desk reload the pool
+first; a failed job leaves its log on the screen), cancel at `/pipeline/cancel/<job id>`, logs
 under `data/nba/jobs/`. The entries upload (`/entries`, the contests section) replaces the slate's
 `data/nba/slates/<dg>/input/entries.csv`.
 

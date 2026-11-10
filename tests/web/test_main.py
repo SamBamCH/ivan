@@ -356,9 +356,10 @@ def test_nba_run_estimate_warns_but_never_refuses(open_site, monkeypatch):
 
 
 def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(open_site, monkeypatch):
-    """There is no Snapshot button (Generate and Sim take the snapshot); the status poll that finds a field or sim job just done
-    answers HX-Refresh, and the desk's pool stamp sees an ownership written behind its back, so the reloaded board and the
-    projections CSV export carry the new numbers."""
+    """There is no Snapshot button (Generate and Sim take the snapshot); the status poll that finds a job of the slate just done
+    answers HX-Refresh (every job: the page shows what it wrote), and for a pool-writing one the desk's pool stamp sees an ownership
+    written behind its back first, so the reloaded board and the projections CSV export carry the new numbers. A failed job leaves the
+    page as it is, its log in the partial."""
     import time
     from ivan.web import nba as D
     from ivan.web.nba import pipeline as P
@@ -384,7 +385,10 @@ def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(o
     assert r.status_code == 200 and "0.432" in r.text
     job.name = "choose"
     r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
-    assert r.status_code == 200 and "HX-Refresh" not in r.headers                             # a job that does not write the pool: the partial
+    assert r.status_code == 200 and r.headers.get("HX-Refresh") == "true"                     # a job that does not write the pool reloads too
+    job.status = "failed"
+    r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
+    assert r.status_code == 200 and "HX-Refresh" not in r.headers                             # a failed job: the partial, no reload
     from ivan.sports.nba import slates as S
     with d.lock, S.using(dg):
         d.session.query(NBAPlayer).filter(NBAPlayer.id == pid).update({"ownership": before}); d.session.commit(); d.rebuild()

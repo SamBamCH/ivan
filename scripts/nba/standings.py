@@ -6,6 +6,7 @@ Real contest fields from DraftKings (ivan.sports.nba.data_fetch.standings).
 
     scripts/nba/standings.py status [--days 3]                 played slates and which contests are exported / derived
     scripts/nba/standings.py scrape [--days 3] [--public 3] [--contest-ids 1,2] [--headless]
+    scripts/nba/standings.py --slate 156184 scrape [--days 7]    that slate's contests only (the backtest view's Fetch standings)
     scripts/nba/standings.py derive [--contest-ids 1,2]        parse every final export without a derived folder
 
 An export taken while games were on (the late swap's standings fetch) shows the
@@ -52,6 +53,8 @@ def main() -> int:
     if a.cmd in ("status", "scrape") and not getattr(a, "contest_ids", None):
         plan = S.contests_to_scrape(session, now - timedelta(days=a.days), now, public_n=a.public,
                                     entries_csv=Path(a.entries) if a.entries else None, now=now)
+        if a.slate:                                            # --slate N: that slate's contests only (the backtest view's Fetch standings)
+            plan = [s for s in plan if int(s["slate_key"]) == int(dg)]
         derived = SD.derived_ids() - SD.partial_derived_ids()
         for s in plan:
             print(f"slate {s['slate_key']} locked {s['lock']:%a %m-%d %H:%M}: {len(s['contests'])} contests ({len(s['ours'])} ours), "

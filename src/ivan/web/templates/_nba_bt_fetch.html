@@ -1,0 +1,18 @@
+{# the backtest's readiness strip (ivan.web.nba.backtest.fetch_strip / fetch_ctx): what the backtest has on file for this slate
+   (ivan.sports.nba.backtest.readiness.slate_status, the calendar's colour), the buttons that fetch what is missing (the laptop only;
+   each is a job: scripts/nba/standings.py --slate N scrape, scripts/nba/nightly.py), the fetch running. Polls itself while one runs and
+   reloads the page when it is done. #}
+{% set f = fetch %}
+<div id="bt-fetch" class="bt-fetch {% if f.status %}st-{{ f.status.state }}{% endif %}" {% if f.job %}hx-get="{{ root }}/backtest/fetch" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  {% if f.status %}<span class="st {{ f.status.state }}">{{ f.status.state }}</span> <span class="muted small">{{ f.status.why }}</span>
+  {% else %}<span class="muted small">readiness is known for held slates only</span>{% endif %}
+  {% if f.can %}
+  <span class="acts">
+    <button type="button" hx-post="{{ root }}/backtest/fetch/boxscores" hx-target="#bt-fetch" hx-swap="outerHTML" {% if f.job or not f.box_missing %}disabled{% endif %} title="{% if f.box_missing %}fetch the box scores not yet stored (this day's among them; nba_api, a minute or two), then the scorecards and the play-by-play: scripts/nba/nightly.py{% else %}every team's box score is on file{% endif %}">Fetch box scores</button>
+    <button type="button" hx-post="{{ root }}/backtest/fetch/standings" hx-target="#bt-fetch" hx-swap="outerHTML" {% if f.job or not f.money_open or not f.standings_ok %}disabled{% endif %} title="{% if not f.standings_ok %}no DraftKings login on this desk{% elif f.money_open %}export the final standings of every contest of ours on this slate (and the largest public ones) through the logged-in Chrome: scripts/nba/standings.py --slate N scrape. Press it once every game is over{% else %}every contest of ours is scored from a final export{% endif %}">Fetch standings</button>
+  </span>
+  {% endif %}
+  {% if f.job %}<span class="jobstat running">{{ f.job.name }} · {{ f.job.status }}{% if f.job.duration %} · {{ '%.0f'|format(f.job.duration) }}s{% endif %}</span> <span class="muted small">the page reloads when it is done</span>
+  {% elif f.last and f.last.status == 'failed' %}<span class="jobstat failed">{{ f.last.name }} failed</span>{% endif %}
+  {% if f.log %}<pre class="log">{{ f.log }}</pre>{% endif %}
+</div>

@@ -42,7 +42,12 @@ every game's spread and total (about 3 credits; `ingest.py --lines`), which the 
 blowout draw read: nothing else fetches them on a day worked by hand. `props` fetches the lines and the
 player props (about 12 credits per game) and re-derives the market rates. Pins and locked grid rows
 survive a refresh; statuses and props change underneath them. Fetch props once the books have posted
-most of the slate (early evening for a 7pm lock) and again if the news moved.
+most of the slate (early evening for a 7pm lock) and again if the news moved. Each held slate is refreshed on its own:
+a day with a main slate and a Turbo or Night slate needs each one refreshed (the autopilot tick does every held slate
+that has not locked). When a sibling slate of the day has been refreshed more recently and its pool carries statuses this
+one does not, **needs you** says so first, names the players and offers the refresh, and the players carry the flag on
+their cards (2026-11-06: the Turbo slate, last refreshed at 13:10, kept Barnes questionable at 31 minutes while the main
+slate refreshed at 18:40 had him OUT).
 
 A refresh takes about 10 seconds: the fetch, the market means (the props de-vigged in one
 vectorised pass, `projection/market.py`), the pool, the projection and the public projection land
@@ -91,14 +96,16 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
 - **call a starter** (toggle) when Rotowire has not confirmed yet; a call that benches him sets his props posted before the
   call aside until the books post him again (so does a refresh that rules a player out or drops him from the five; an upgrade
   never does).
-- **a player ruled out voids the team's mapping** (`ivan.sports.nba.slate.mapping`, inside every refresh and before every
-  re-projection on the desk; `scripts/nba/mapping.py --slate DG` from a terminal). The mapping was made against a pool the
-  grid's fingerprint recorded; when one of those players is OUT (DK's status or a scratch call here), the grid and the
-  team's positive minutes pins go, the model initialises the new pool itself (the last game's rotation minus the outs,
-  plus returners) and its rotation is on the grid; the team reads **unmapped** until you accept it (**Hold all**) or paint
-  and hold. Nothing has to be cleared by hand first. The voided mapping is kept as a scenario assuming the player in
-  ("Johnson in"), so a reversed call puts it straight back. Other changes (a starter, a status short of OUT, a player
-  back) still only mark the team **changed** for you to look at.
+- **a player ruled out, or a lineup that comes in differently, voids the team's mapping** (`ivan.sports.nba.slate.mapping`,
+  inside every refresh and before every re-projection on the desk; `scripts/nba/mapping.py --slate DG` from a terminal). The
+  mapping was made against a pool and a five the grid's fingerprint recorded; when one of those players is OUT (DK's status
+  or a scratch call here), or Rotowire's five with your starter calls is a full five that differs from the five it was drawn
+  for, the grid and the team's positive minutes pins go, the model initialises the new pool itself (the last game's
+  rotation minus the outs, plus returners, the new five opening) and its proposal is on the grid; the team reads
+  **unmapped** until you accept it (**Hold all**) or paint and hold. Nothing has to be unlocked or cleared by hand first,
+  and a lineup that comes in as you mapped it changes nothing. The voided mapping is kept as a scenario assuming what it
+  assumed ("Johnson in", "Hauser starting"), so a reversed call or lineup puts it straight back. Other changes (a status
+  short of OUT, a player back, a lineup not posted when you mapped) still only mark the team **changed** for you to look at.
 - **paint the rotation grid**: who is on the floor in each of the 48 minutes. The grid autosaves on every
   stroke to `data/nba/days/<day>/edits/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
   projection, **Re-fill** fills the unlocked rows around the locks, **Hold all** locks the grid as drawn,
@@ -139,9 +146,11 @@ The actions bar's **chain** says what is current: `pool HH:MM › snapshot › f
 stage green when built after the pool's last write, amber when the pool moved since (run it again), red when the
 pool moved 10+ minutes ago and the stage never followed.
 
-When a refresh, a **Field + ownership** build or a sim finishes, the page reloads on the new pool: the desk's pool stamp
-(`Desk._stamp`) covers the ownership column too, so the board's own column and the projections CSV export
-(`/export/projections.csv`) carry the new numbers at once, whoever wrote them (a desk job, a script, the autopilot).
+When a refresh or any job of the slate finishes well (field, generate, sim, choose, solve, the late swap), the page reloads
+on what it wrote; a pool-writing job (field, sim, solve) has the desk reload the pool first: its stamp (`Desk._stamp`)
+covers the ownership column too, so the board's own column and the projections CSV export (`/export/projections.csv`)
+carry the new numbers at once, whoever wrote them (a desk job, a script, the autopilot). A failed job does not reload: its
+log stays in the pipeline panel. The bar's job strip shows the running job on every page meanwhile.
 
 ## 5. Generate, simulate, choose
 

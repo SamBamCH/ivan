@@ -240,6 +240,20 @@
   table.bt-grid td.c.both { background:var(--accent) } table.bt-grid td.c.act { background:#34a853 } table.bt-grid td.c.ours { background:#f3b2ad }
   .bt-rot .sw { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:-1px; margin:0 2px 0 6px } .bt-rot .sw.both { background:var(--accent) } .bt-rot .sw.act { background:#34a853 } .bt-rot .sw.ours { background:#f3b2ad }
   .bt tr.final td { font-weight:700; border-top:2px solid var(--line) }
+  .needs .sib { font-size:13px; margin:4px 0 6px; padding:6px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:6px } .needs .sib form { display:inline; margin-left:8px } .needs .sib .warn { color:var(--warn) }
+  .bt tr.pick { cursor:pointer } .bt tr.pick:hover td { background:#eef4ff } .bt tr.pick.on td { background:#e3ecfb }
+  .bt-panel { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; padding:8px 12px; margin:8px 0 12px }
+  .bt-panel .ph { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap } .bt-panel .ph h3 { margin:0 } .bt-panel .ph .x { margin-left:auto; font:inherit; font-size:16px; line-height:1; border:0; background:none; cursor:pointer; color:var(--muted) }
+  .bt-panel h4 { font-size:12px; margin:10px 0 2px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em } .bt-panel h4 .muted { text-transform:none; letter-spacing:0; font-weight:400 }
+  .bt-two { display:grid; grid-template-columns:minmax(420px, 3fr) minmax(360px, 2fr); gap:16px } @media (max-width:1100px) { .bt-two { grid-template-columns:1fr } }
+  .bt-tiles.small .tile { padding:6px 12px; min-width:120px } .bt-tiles.small .tile b { font-size:16px } .bt-tiles .tile.curve { flex:1 1 320px } .bt-tiles .tile b.lo { color:var(--bad) } .bt-tiles .tile b.hi { color:var(--ok) }
+  .bt-chips { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 } .bt-chips button { font:inherit; font-size:12px; padding:3px 9px; border-radius:12px; border:1px solid #cfcfcf; background:#fff; cursor:pointer; color:var(--ink) }
+  .bt-chips button:hover { border-color:var(--accent) } .bt-chips button.on { background:#eef4ff; border-color:var(--accent) } .bt-chips .ag { font-size:11px; color:var(--muted) } .bt-chips .ag.ok { color:var(--ok) } .bt-chips .ag.warn { color:var(--bad) }
+  .bt-players td.note { white-space:normal; max-width:260px } .bt-players button.tm { font:inherit; font-size:12px; font-weight:600; color:var(--accent); background:none; border:0; padding:0; cursor:pointer }
+  .bt-fetch { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; margin:6px 0 }
+  .bt-fetch .st { font-size:11px; font-weight:700; text-transform:uppercase; padding:1px 7px; border-radius:10px; background:#eee; color:#555 } .bt-fetch .st.ready { background:#dcfce7; color:var(--ok) } .bt-fetch .st.failed { background:#fee2e2; color:var(--bad) }
+  .bt-fetch .acts { display:inline-flex; gap:6px; margin-left:auto } .bt-fetch .acts button { font:inherit; font-size:12px; padding:3px 9px; border-radius:6px; border:1px solid #cfcfcf; background:#fff; cursor:pointer } .bt-fetch .acts button:disabled { opacity:.45; cursor:not-allowed }
+  .bt-fetch pre.log { flex-basis:100%; margin:0; font-size:11px; color:var(--muted); white-space:pre-wrap }
   /* the actions bar: the steps of a slate in order */
   .actions { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:6px 0 12px }
   .act-row { display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap } .act-row form { display:inline; margin:0 } .act-row + .act-row { margin-top:6px }

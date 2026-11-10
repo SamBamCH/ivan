@@ -29,7 +29,10 @@ and a slate's page shows that slate, fetching it first when the sport has to (th
 it does not hold when its page is opened, [nba-desk.md](nba-desk.md)).
 
 A sport may put **actions** on its picker (`Sport.actions`, POST buttons under the heading) and show its sport-level
-**job** there (`Sport.job`: name, status, the log's tail; the page refreshes every 5 s while it runs). NBA (the laptop
+**job** there (`Sport.job`: name, status, the log's tail; the page refreshes every 5 s while it runs). A sport may also
+give the bar a **job strip** (`Sport.job_strip`: an address under its root answering one line of HTML on its running
+job, any slate's; the bar polls it every 4 s while a job runs, every 20 s otherwise, on every page of the sport), so a
+job started on one page is in sight on the next; NBA answers at `/nba/jobstrip`. NBA (the laptop
 only): **Fetch upcoming slates** = `scripts/nba/fetch_upcoming.py` as a job: every classic slate the lobby lists (today,
 tomorrow) that the desk does not hold is loaded into its own directory, then every contest of those slates and each one's
 payout table are stored (free; a few minutes the first time, one request per payout table).
@@ -37,7 +40,7 @@ payout table are stored (free; a few minutes the first time, one request per pay
 | Piece | Module | What |
 |---|---|---|
 | main | `ivan.web.main` | builds the app: `/static`, the login, the home page, one sub-application per sport mounted at `/<sport>`. A sport whose module fails to import (a missing dependency, no database) is listed with the error and the rest of the site runs. `IVAN_SPORTS` or `--sports nba,nfl` mounts a subset. |
-| the sports | `ivan.web.sports` | `Sport`: key, label, the slate views, the tools, `days(now)` (the slate index the picker and the calendar read), `summary(now)` (the home tile), `ledger` (the money), `day_status` (a past day's readiness), `actions` and `job` (the picker's buttons and running job). `SlateInfo` / `Day` are what the index returns. `REGISTRY` is what main mounted. |
+| the sports | `ivan.web.sports` | `Sport`: key, label, the slate views, the tools, `days(now)` (the slate index the picker and the calendar read), `summary(now)` (the home tile), `ledger` (the money), `day_status` (a past day's readiness), `actions` and `job` (the picker's buttons and running job), `job_strip` (the bar's one-line job read). `SlateInfo` / `Day` are what the index returns. `REGISTRY` is what main mounted. |
 | the frame | `ivan.web.frame` | the bar's context (`ctx`), the picker pages installed at every sport's root (`install_picker`), the shared Jinja environment |
 | NBA | `ivan.web.nba` (package; model in `ivan.sports.nba.desk`) | the desk: pre-lock, players, post-lock (late swap), backtest, the team page. [nba-desk.md](nba-desk.md) |
 | NFL | `ivan.web.nfl` (package: `core.py`, `pipeline.py`, `backtest_hub.py`, `*_view.py`) | the desk (the NBA desk's look: games strip, actions, contests, the open game's correlation check, the pool), sim report, choose, exposures, backtest (the slate's builds); tools: the backtest runs hub, models, validation, dupes, jobs. [nfl-app.md](nfl-app.md) |
@@ -58,7 +61,7 @@ Each sport's `days(now)` lists what it knows, by the day the slate locks:
 - **NBA**: the DraftKings lobby's classic draft groups (today, tomorrow), every slate with an archive
   capture, every held slate (`Lobby.slate_days`), each labelled lock time · game count · DK's slate title when it has
   one ("Early Only", "Turbo"; the main slate has none). A lobby slate not held carries
-  a **load** form (the picker's button; its page starts the same load by itself).
+  a **load** form, which its page submits by itself when opened (the picker shows no load button: **open** is the load).
 - **NFL**: the lobby's showdown and classic draft groups, the archive's ingest captures with the settle
   job's status (`slate_status`), the slates any backtest run replayed (`run_index`), and the working slate
   (the pool in `nfl_player`, keyed by the capture archived at its lock).

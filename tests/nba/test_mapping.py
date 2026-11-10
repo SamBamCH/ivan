@@ -1,4 +1,4 @@
-"""A team's mapping is void once a player it counted on is out (ivan.sports.nba.slate.mapping)."""
+"""A team's mapping is void once a player it counted on is out, or the five it was drawn for changes (ivan.sports.nba.slate.mapping)."""
 import json
 
 import pandas as pd
@@ -19,10 +19,10 @@ def slate(tmp_path, monkeypatch):
     S.release(tok)
 
 
-def _mapped(team, names, available):
+def _mapped(team, names, available, starters=()):
     rows = [[True] * 36 + [False] * 12, [False] * 12 + [True] * 36, [True] * 10 + [False] * 38][:len(names)]
     grid = pd.DataFrame(rows, index=names, columns=list(range(48)))
-    ROT.save_drawn(team, grid, locked=names, fingerprint=dict(available=sorted(available), out=[], status={}, starters=[]))
+    ROT.save_drawn(team, grid, locked=names, fingerprint=dict(available=sorted(available), out=[], status={}, starters=sorted(starters)))
 
 
 def test_a_new_out_voids_the_mapping_and_keeps_it_as_a_scenario(slate):
@@ -55,3 +55,30 @@ def test_a_scratch_call_is_a_new_out_too_and_published_grids_are_left_alone(slat
     p.write_text(json.dumps({"team": "CHI", "players": names, "grid": [[1] * 48, [0] * 48], "locked": names,
                              "fingerprint": dict(available=names, out=[], status={}, starters=[])}))
     assert ROT.load_drawn("CHI").attrs["source"] == "published" and MAP.stale_outs("CHI", {"a one": "OUT", "b two": ""}, {}) == []
+
+
+FIVE = ["a one", "b two", "c three", "d four", "e five"]
+
+
+def test_a_changed_five_voids_the_mapping_and_keeps_the_old_lineup_as_a_scenario(slate):
+    names = FIVE + ["f six"]
+    _mapped("DEN", names[:3], names, starters=FIVE)
+    local = {"a one": {"minutes": 36.0}, "f six": {"minutes": 12.0}}
+    assert MAP.stale_starters("DEN", set(FIVE), local) is None                                           # the lineup came in as mapped
+    assert MAP.stale_starters("DEN", None, local) is None and MAP.stale_starters("DEN", {"a one"}, local) is None   # no lineup yet / not a full five
+    ch = MAP.stale_starters("DEN", set(FIVE[:4]) | {"f six"}, local)
+    assert ch["benched"] == ["e five"] and ch["promoted"] == ["f six"]
+    rep = MAP.void_mapping("DEN", [], names, local, log=lambda m: None, lineup=ch)
+    assert rep["label"] == "Five starting" and rep["pins"] == 2 and rep["out"] == [] and "lineup came in differently" in rep["why"]
+    assert ROT.load_drawn("DEN") is None and local == {}
+    sc = SC.load_scenario("DEN", rep["scenario"])
+    assert sc["assumes"] == {"e five": "starts", "f six": "bench"}
+    assert SC.holds(sc["assumes"], dict(out=set(), available=set(names), starters=set(FIVE)))             # the old five back: the scenario holds again
+    assert not SC.holds(sc["assumes"], dict(out=set(), available=set(names), starters=set(FIVE[:4]) | {"f six"}))
+    assert MAP.stale_starters("DEN", set(FIVE[:4]) | {"f six"}, local) is None                           # void once
+
+
+def test_an_out_and_a_changed_five_void_together():
+    assert MAP.change_label(["b two"], dict(old=[], new=[], benched=["b two"], promoted=["f six"])) == "Two in"       # the out starter is covered by "in"
+    assert MAP.change_label(["b two"], dict(old=[], new=[], benched=["b two", "e five"], promoted=["f six", "g seven"])) == "Two in · Five starting"
+    assert MAP.change_label([], dict(old=[], new=[], benched=["e five"], promoted=["f six"])) == "Five starting"

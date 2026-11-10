@@ -523,16 +523,18 @@ class DeskBase:
         return self.optimal_status()["players"].get(str(int(pid)), {}) if pid is not None else {}
 
     def void_if_stale(self, team: str) -> Optional[dict]:
-        """A player the team's mapping had available is out now (a status, a scratch call): the mapping is void (ivan.sports.nba.slate.mapping):
-        grid cleared, positive minutes pins lifted, the old mapping kept as a scenario assuming him in; the card says so."""
+        """A player the team's mapping had available is out now (a status, a scratch call), or the five came in differently from the five
+        it was drawn for: the mapping is void (ivan.sports.nba.slate.mapping): grid cleared, positive minutes pins lifted, the model's
+        rotation for the new pool and five proposed, the old mapping kept as a scenario assuming what it assumed; the card says so."""
         from ivan.sports.nba.slate import mapping as MAP
         statuses = {normalize_name(p.name): (p.status or "") for p in self.players(team)}
         outs = MAP.stale_outs(team, statuses, self.overrides)
-        if not outs:
+        lineup = MAP.stale_starters(team, self.starters_of(team), self.overrides)
+        if not outs and not lineup:
             return None
-        rep = MAP.void_mapping(team, outs, statuses.keys(), self.local_overrides, log=lambda m: None)
+        rep = MAP.void_mapping(team, outs, statuses.keys(), self.local_overrides, log=lambda m: None, lineup=lineup)
         self.write_local()
-        self.flash.append(f"{team}: {', '.join(n.split()[-1].title() for n in outs)} now out: the mapping is void, the model's rotation is on the grid"
+        self.flash.append(f"{team}: {rep['why']}: the mapping is void, the model's proposal for the new pool is on the grid"
                           f" ({rep['pins']} minutes pin(s) lifted{'; the old mapping is scenario ' + repr(rep['label']) if rep['scenario'] else ''}): accept it (Hold all) or paint and hold")
         return rep
 
@@ -651,6 +653,48 @@ class DeskBase:
             age = (now - t).total_seconds() / 60 if t is not None else None
             out.append(dict(label=label, at=t, age=age, warn=bool(age is not None and age > warn), what=what))
         return out
+
+    def sibling_changes(self, now: Optional[datetime] = None) -> Optional[dict]:
+        """
+        What a fresher pool of another held slate of the same day knows that this one does not: the players of this slate whose
+        DraftKings status differs on the sibling slate refreshed most recently after this one. 2026-11-06: the Turbo slate was last
+        refreshed at 13:10 and kept Barnes questionable with 31 minutes while the main slate, refreshed at 18:40, had him OUT, and the
+        Turbo lineups carried him at full exposure. None when no sibling is fresher or nothing differs; else {slate, label,
+        refreshed_at, here_at, changes: [{name, team, here, there, down}]}, downgrades first. Cached on the two refresh stamps.
+        """
+        from sqlalchemy import text as _t
+        meta = S.read_meta(self.dg)
+        day = str(meta.get("day") or "")
+        here_at = S.meta_time(meta, "refreshed_at") or self.pool_stamp[0]
+        if not day or here_at is None:
+            return None
+        sibs = [(S.meta_time(m, "refreshed_at"), dg2, m) for dg2, m in S.held_meta().items() if int(dg2) != int(self.dg) and str(m.get("day") or "") == day]
+        sibs = [(t, dg2, m) for t, dg2, m in sibs if t is not None and t > here_at]
+        if not sibs:
+            return None
+        t2, dg2, m2 = max(sibs, key=lambda x: x[0])
+        key = (int(dg2), t2, here_at, self.pool_stamp[0])
+        cache = getattr(self, "_sibling_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        try:
+            with S.engine(int(dg2)).connect() as con:
+                there = {normalize_name(n): (st or "").upper().replace("NONE", "") for n, st in con.execute(_t("select name, status from nba_player")).all() if n}
+        except Exception:   # noqa: BLE001 - a sibling without a pool yet
+            there = {}
+        out_st = {"OUT", "O", "IR", "SUSP"}
+        changes = []
+        for p in self.slate.players:
+            n = normalize_name(p.name)
+            here = (p.status or "").upper().replace("NONE", "")
+            if n in there and there[n] != here:
+                changes.append(dict(name=p.name, key=n, team=p.team, here=here or "no status", there=there[n] or "no status", down=there[n] in out_st and here not in out_st))
+        changes.sort(key=lambda c: (not c["down"], c["team"], c["name"]))
+        lock2 = S.meta_time(m2, "lock")
+        label = (f"{lock2:%H:%M}" if lock2 else f"slate {dg2}") + (f" {m2['title']}" if m2.get("title") else "")
+        res = dict(slate=int(dg2), label=label, refreshed_at=t2, here_at=here_at, changes=changes) if changes else None
+        self._sibling_cache = (key, res)
+        return res
 
     def header(self, now: datetime) -> dict:
         ps = self.slate.players

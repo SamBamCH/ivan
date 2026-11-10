@@ -19,11 +19,15 @@
   {% if view != 'players' %}{% include "_nba_pipeline.html" %}{% endif %}
 {% endif %}
 {% if view == 'games' %}
-  <div class="needs {% if not needs %}ok{% endif %}" id="needs">
+  <div class="needs {% if not needs and not siblings %}ok{% endif %}" id="needs">
     <b>needs you</b>
+    {% if siblings %}<div class="sib" title="another held slate of today was refreshed after this one and its pool carries DraftKings statuses this pool does not: this slate's lineups are built on what it last saw">
+      <b class="warn">this pool is from {{ siblings.here_at.strftime('%H:%M') }}</b>: the {{ siblings.label }} slate's pool, refreshed {{ siblings.refreshed_at.strftime('%H:%M') }}, has {{ siblings.changes|length }} status change{{ '' if siblings.changes|length == 1 else 's' }} this one does not know:
+      {% for c in siblings.changes[:8] %}<b>{{ c.name }}</b> {{ c.team }} <span class="{% if c.down %}bad{% else %}muted{% endif %}">{{ c.there }}</span> <span class="muted small">(here {{ c.here }})</span>{% if not loop.last %} · {% endif %}{% endfor %}{% if siblings.changes|length > 8 %} · <span class="muted small">+{{ siblings.changes|length - 8 }} more</span>{% endif %}
+      <form method="post" action="{{ root }}/refresh" class="inline"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups + news for this slate (free)">Refresh DK</button></form></div>{% endif %}
     {% if needs %}<span class="muted small">{{ needs|length }} team{{ '' if needs|length == 1 else 's' }} · nearest tip first · open the team to map or call it</span>
       <ul>{% for n in needs %}<li><a class="chip {{ n.colour or 'unmapped' }}" href="{{ team_url(n.team) }}">{{ n.team }}</a> <span class="muted small">{% if n.tip %}{{ n.tip.strftime('%H:%M') }}{% if n.mins_to_tip is not none and n.mins_to_tip > 0 %} · in {{ (n.mins_to_tip // 60)|int }}h {{ (n.mins_to_tip % 60)|int }}m{% endif %}{% endif %}</span> {{ n.why|join(' · ') }}</li>{% endfor %}</ul>
-    {% else %}<span class="muted small">nothing: every team is mapped and unchanged, no open question near a tip, no lineup missing. The next refresh may change that.</span>{% endif %}
+    {% elif not siblings %}<span class="muted small">nothing: every team is mapped and unchanged, no open question near a tip, no lineup missing. The next refresh may change that.</span>{% endif %}
   </div>
   {% if news_table %}{% with nt = news_table %}{% include "_nba_news.html" %}{% endwith %}{% endif %}
   {% include "_nba_contests.html" %}

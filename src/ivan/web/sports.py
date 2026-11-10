@@ -32,7 +32,8 @@ class SlateInfo:
     mode: str = ""                        # classic | showdown | ...
     detail: str = ""                      # one line for the picker card: contests, lineups, settle status
     status: str = ""                      # open | waiting | settled | ... (the settle job's word), "" when unknown
-    load: Optional[dict] = None           # for a slate the picker can load into the workspace: {"url": POST target, "fields": {...}}
+    load: Optional[dict] = None           # for a slate the picker can load into the workspace: {"url": POST target, "fields": {...}, "label", "title",
+                                          #   "button": False when the picker shows no button for it (the slate's page starts the load itself)}
     games: Optional[int] = None           # games on the slate, when the index knows (the day's main slate is the biggest)
 
     def path(self, root: str) -> str:
@@ -73,6 +74,8 @@ class Sport:
                                                                   # (ivan.sports.nba.backtest.readiness.day_status); the calendar and the picker colour the day by it
     actions: list = field(default_factory=list)                  # [{label, path, title}] sport-level buttons on the picker (POST to <root><path>), e.g. fetch upcoming
     job: Optional[Callable[[], Optional[dict]]] = None           # the sport's running job for the picker: {"name", "status", "log"} or None
+    job_strip: str = ""                                          # an address under the sport root answering one line of HTML on the sport's running
+                                                                  # job (any slate's); the frame's bar polls it on every page, so a job is never out of sight
     default_view: Callable[[SlateInfo, datetime], str] = lambda s, now: "backtest"
     main_slate: Callable[[Day, datetime], Optional[SlateInfo]] = lambda d, now: main_slate(d)
     app: object = None                    # the mounted sub-application (FastAPI), None while it is not built

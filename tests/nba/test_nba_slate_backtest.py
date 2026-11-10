@@ -1,4 +1,5 @@
-"""slate_backtest: the view a slate opens in, ties sharing payouts, a final export scored as DraftKings did, a mid-slate one not."""
+"""slate_backtest: the view a slate opens in, ties sharing payouts, a final export scored as DraftKings did, a mid-slate one not; the flat
+player table and one contest drilled into."""
 from datetime import date, datetime
 
 import numpy as np
@@ -57,14 +58,44 @@ def test_summary_counts_only_final_contests():
     assert SB.summarize([a])["final"]
 
 
-def test_roi_timeline(tmp_path):
-    import json
-    (tmp_path / "lateswap.20261028-185931.json").write_text(json.dumps({"when": "2026-10-28T18:57:13", "games_started": 2, "games_total": 3, "contests": [
-        {"contest_id": "7", "entries": [{"entry_id": "a", "original": {"exp_payout": 1.0}, "best": {"exp_payout": 2.0}},
-                                         {"entry_id": "zz", "original": {"exp_payout": 9.0}, "best": {"exp_payout": 9.0}}]}]}))
-    results = [dict(contest_id=7, entry_fee=1.0, fees=1.0, won=0.5, entries=[dict(entry_id="a")],
-                    claim=dict(roi=3.0, at=datetime(2026, 10, 28, 17, 50)))]
-    tl = SB.roi_timeline(results, datetime(2026, 10, 28, 18, 0), date(2026, 10, 28), out_dir=tmp_path)
-    assert [x["what"].split(":")[0] for x in tl] == ["the chooser's claim before lock", "late swap", "final"]
-    assert tl[1]["roi"] == 0.0 and tl[1]["roi_swapped"] == 1.0 and tl[1]["entries"] == 1     # another player's entry is not ours
-    assert tl[-1]["roi"] == -0.5
+def test_flat_table_adds_team_position_miss_and_value():
+    players = {"BOS": [dict(name="ann one", salary=8000.0, fpts_proj=40.0, fpts_act=52.0, played=True, min_proj=34.0, min_act=36.0),
+                       dict(name="bob two", salary=4000.0, fpts_proj=12.0, fpts_act=None, played=False, min_proj=10.0, min_act=None)],
+               "NYK": [dict(name="cal three", salary=5000.0, fpts_proj=20.0, fpts_act=30.0, played=True, min_proj=28.0, min_act=30.0)]}
+    rows = SB.flat_table(players, {"ann one": "PG/SG"})
+    assert [r["name"] for r in rows] == ["ann one", "cal three", "bob two"]          # most points scored first
+    ann = rows[0]
+    assert ann["team"] == "BOS" and ann["pos"] == "PG/SG" and ann["delta"] == 12.0 and ann["value"] == 6.5
+    assert rows[2]["delta"] is None and rows[2]["value"] is None and rows[2]["pos"] == ""
+
+
+def test_payout_curve_rungs_end_at_the_last_paid_place():
+    pay = np.array([100.0, 50.0, 20.0, 10.0, 10.0, 5.0, 5.0, 5.0, 0.0, 0.0])
+    curve = SB.payout_curve(pay)
+    assert [(c["place"], c["payout"]) for c in curve] == [(1, 100.0), (2, 50.0), (3, 20.0), (5, 10.0), (8, 5.0)]
+    assert SB.payout_curve(np.zeros(4)) == []
+
+
+def test_contest_detail_lists_our_entries_and_the_field(tmp_path):
+    """One contest drilled into from the export alone: our entries with their copies, every owned player with our share of our entries
+    there and his projection row, the payout curve; the money as score_contest gives it."""
+    players = {"ann one": dict(team="BOS", pos="PG", salary=9000.0, own_proj=50.0, fpts_proj=60.0, fpts_act=70.5, played=True),
+               "ian nine": dict(team="NYK", pos="C", salary=4000.0, own_proj=5.0, fpts_proj=20.0, fpts_act=28.0, played=True)}
+    cd = SB.contest_detail(None, 1, 9, lock=datetime(2026, 11, 5, 19, 0), players=players, export=("20261105-103100", FINAL), contest=CONTEST,
+                           pay=np.array([10.0, 6.0, 2.0, 0.0]), out_dir=tmp_path)
+    c = cd["contest"]
+    assert c["final"] and c["found"] == 0                      # no upload file names an Entry ID and no user name is given: nothing is ours
+    assert cd["paid"] == 3 and [r["place"] for r in cd["curve"]] == [1, 2, 3]
+    ann = next(f for f in cd["field"] if f["name"] == "ann one")
+    assert ann["own"] == 61.2 and ann["team"] == "BOS" and ann["fpts_act"] == 70.5 and ann["own_proj"] == 50.0 and ann["exposure"] is None
+    assert cd["field"][0]["name"] == "ann one"                 # by ownership
+    cd = SB.contest_detail(None, 1, 9, players=players, export=("20261105-103100", FINAL), contest=CONTEST, pay=np.array([10.0, 6.0, 2.0, 0.0]),
+                           out_dir=tmp_path, user="us")
+    c = cd["contest"]
+    assert c["found"] == 2 and c["won"] == 8.0 and cd["n_ours"] == 2 and [e["copies"] for e in c["entries"]] == [2, 1]
+    ann = next(f for f in cd["field"] if f["name"] == "ann one"); ian = next(f for f in cd["field"] if f["name"] == "ian nine")
+    assert ann["exposure"] == 1.0 and ian["exposure"] == 0.5
+    mid = SB.contest_detail(None, 1, 9, players=players, export=("20261104-180600", MID), contest=CONTEST, pay=np.array([10.0, 6.0, 2.0, 0.0]), out_dir=tmp_path)
+    assert not mid["contest"]["final"] and mid["curve"] == [] and mid["paid"] == 0
+    none = SB.contest_detail(None, 1, 9, players=players, export=None, contest=CONTEST, out_dir=tmp_path)
+    assert not none["contest"]["final"] and "no standings export" in none["contest"]["scored"]

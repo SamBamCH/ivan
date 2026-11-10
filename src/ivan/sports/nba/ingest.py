@@ -429,13 +429,13 @@ def run_ingest(session, draft_group_id: int, *, update_odds: bool, project: bool
         except Exception:   # noqa: BLE001
             moved = {}
         for v in voided:                                  # a voided mapping is a change of the team: the board's dot and the refresh note say so
-            moved.setdefault(v["team"], []).append(dict(kind="mapping", player=None, text=f"mapping void: {', '.join(n.split()[-1].title() for n in v['out'])} out; map the team again"))
+            moved.setdefault(v["team"], []).append(dict(kind="mapping", player=None, text=f"mapping void: {v['why']}; the model's proposal is on the grid, map the team again"))
         for team, items in sorted(moved.items()):
             log(f"changed {team}: " + "; ".join(x["text"] for x in items))
         return {"fetched": fetched, "stored": stored, "projected": projected, "ownership": ownership, "news": news_r, "changes": moved}
 
 def void_stale_mappings(session: Session, log: Log = print) -> list:
-    """The mappings a player now out makes void (ivan.sports.nba.slate.mapping.void_stale), with this machine's pins file rewritten."""
+    """The mappings a player now out or a changed five makes void (ivan.sports.nba.slate.mapping.void_stale), with this machine's pins file rewritten."""
     from ivan.sports.nba.slate import mapping as MAP
     from ivan.sports.nba.projection.live import write_overrides
     local = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}

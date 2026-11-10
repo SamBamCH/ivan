@@ -7,11 +7,10 @@ from datetime import datetime
 from typing import Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from ivan.database.session import get_session
 from ivan.web import frame
 from ivan.web.sports import SlateInfo, find_slate
 from . import core as A
-from .core import LOADING, LOCK, _days_of, _render, _team_url, app, bound, desk, engine, slate, slate_url
+from .core import LOADING, LOCK, _days_of, _render, _team_url, app, bound, desk, slate, slate_url
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.desk import LOBBY, CONSUMER
 from .lateswap import _lateswap_ctx
@@ -209,28 +208,22 @@ def team_page(request: Request, day: str, key: str, team: str):
 
 
 def _backtest_board(request: Request, dg: Optional[int]):
-    """A slate's backtest, read only (ivan.sports.nba.backtest.slate = scripts/nba/backtest_slate.py): nothing is loaded or deleted.
-    A held slate is read through its own database (its contests, lineups and sims), another through the history (its captures)."""
-    from ivan.sports.nba.backtest import slate as SB
+    """A slate's backtest, read only (ivan.sports.nba.backtest.slate = scripts/nba/backtest_slate.py; the routes of its panels are
+    ivan.web.nba.backtest): nothing is loaded or deleted. A held slate is read through its own database (its contests, lineups and
+    sims), another through the history (its captures)."""
+    from .backtest import backtest_of, fetch_ctx
     if dg is None:
         return _render(request, "_nba_board.html", busy=None, view="backtest", bt=None, bt_error="no slate picked", menu=[], games=[], players=[],
                        lateswap=None, exposures=None, card=None, game=None, open_team=None)
-    sess = S.session(dg) if S.holds(dg) else get_session(engine)      # its own session: the page never waits on the desk's lock
-    try:
-        with S.using(int(dg)):
-            bt, err = SB.slate_backtest(sess, int(dg)), None
-    except Exception as e:   # noqa: BLE001 - show what failed instead of a blank page
-        bt, err = None, f"{type(e).__name__}: {e}"
-    finally:
-        sess.close()
+    bt, err = backtest_of(int(dg))
     from .rerun import rerun_ctx
     try:
         rr = rerun_ctx(int(dg), request.query_params.get("stat")) if S.holds(dg) else {}     # the current code's rerun of this slate (its tip records live in its directory)
     except Exception:   # noqa: BLE001 - a record from another version of the code: the block says there is none
         rr = {}
     return _render(request, "_nba_board.html", busy=None, view="backtest", bt=bt, bt_error=err, menu=[], games=[], players=[],
-                   lateswap=None, exposures=None, card=None, game=None, open_team=None,
-                   actuals=not CONSUMER, **rr)                          # the money (our entries, contests, the ROI timeline) is this machine's only
+                   lateswap=None, exposures=None, card=None, game=None, open_team=None, bt_held=S.holds(dg),
+                   actuals=not CONSUMER, **fetch_ctx(int(dg)), **rr)   # the money (our entries, the contests) is this machine's only
 
 
 VIEW_ALIAS = {"exposures": "games"}                           # the exposures are a section of pre-lock
@@ -269,6 +262,7 @@ def board(request: Request, view: str = "games", after: str = "", dg: Optional[i
             players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
         return _render(request, "_nba_board.html", busy=None, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
                        news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(), needs=_needs_you(menu, now),
+                       siblings=desk.sibling_changes(now) if view in ("games", "lateswap") else None,
                        questions_sum=desk.questions_summary(now), team_url=lambda t: _team_url(request, t), **_pipeline_ctx())
 
 

@@ -1,0 +1,28 @@
+{# the backtest's player table (ivan.sports.nba.backtest.slate.flat_table rows, or one team's rows): our projection at lock against the box
+   score, our share of our entries, the field's ownership (DK %drafted, the largest contest), our projected ownership at the first tip, the
+   note that stood at lock. `team_url` is set when the team column should open the team's panel. Sortable: click a header. #}
+{% macro ptable(rows, team_col=True, root='', id='') %}
+<table class="players sortable bt-players" {% if id %}id="{{ id }}"{% endif %}>
+  <thead><tr>
+    <th>player</th>{% if team_col %}<th>tm</th>{% endif %}<th>pos</th><th class="n">sal</th><th title="the lineup at lock: S starter (confirmed / expected), b bench">st</th>
+    <th class="n" title="minutes: projected → played">min</th><th class="n" title="fantasy points: projected → scored">fpts</th><th class="n" title="scored minus projected">Δ</th>
+    <th class="n" title="points scored per $1k of salary">val</th><th class="n" title="share of our entries holding him">ours</th>
+    <th class="n" title="the field's ownership (DK %drafted, the largest contest)">field</th><th class="n" title="our projected ownership at the first tip">proj own</th>
+    <th class="n" title="the field's ownership minus ours: + the field had more of him than we did">lev</th><th>note</th></tr></thead>
+  <tbody>{% for p in rows %}{% set lev = (p.own - 100 * p.exposure) if p.own is not none and p.exposure is not none else none %}
+    <tr class="{% if not p.played %}dnp{% endif %} {% if p.priced %}priced{% endif %}">
+      <td>{% if p.starter in ('S', 'confirmed', 'expected', 'True') %}<b>{{ p.name }}</b>{% else %}{{ p.name }}{% endif %}{% if p.status and p.status not in ('', 'NONE') %} <span class="status">{{ p.status }}</span>{% endif %}{% if not p.played %} <span class="status">DNP</span>{% endif %}</td>
+      {% if team_col %}<td>{% if root %}<button type="button" class="tm" hx-get="{{ root }}/backtest/team/{{ p.team }}" hx-target="#bt-team" hx-swap="innerHTML show:#bt-team:top" title="open {{ p.team }}: the game as played over our grid, its rows">{{ p.team }}</button>{% else %}{{ p.team }}{% endif %}</td>{% endif %}
+      <td class="pos">{{ p.pos or '' }}</td><td class="n" data-v="{{ p.salary or 0 }}">{{ (p.salary / 1000)|round(1) if p.salary else '' }}{% if p.salary %}k{% endif %}</td>
+      <td class="small">{% if p.starter == 'confirmed' %}S{% elif p.starter == 'expected' %}<i title="expected, not confirmed at lock">s</i>{% elif p.starter in ('S', 'True') %}S{% else %}<span class="muted">b</span>{% endif %}</td>
+      <td class="n" data-v="{{ p.min_act or 0 }}">{{ '%.0f'|format(p.min_proj) if p.min_proj is not none else '—' }} → {{ '%.0f'|format(p.min_act) if p.min_act is not none else '—' }}</td>
+      <td class="n" data-v="{{ p.fpts_act or 0 }}">{{ '%.1f'|format(p.fpts_proj) if p.fpts_proj is not none else '—' }} → <b>{{ '%.1f'|format(p.fpts_act) if p.fpts_act is not none else '—' }}</b></td>
+      <td class="n {% if p.delta is not none and p.delta <= -8 %}lo{% elif p.delta is not none and p.delta >= 8 %}hi{% endif %}" data-v="{{ p.delta or 0 }}">{{ '%+.1f'|format(p.delta) if p.delta is not none else '' }}</td>
+      <td class="n" data-v="{{ p.value or 0 }}">{{ '%.1f'|format(p.value) if p.value is not none else '' }}</td>
+      <td class="n" data-v="{{ p.exposure or 0 }}">{{ '%.0f%%'|format(100 * p.exposure) if p.exposure else '' }}</td>
+      <td class="n" data-v="{{ p.own or 0 }}">{{ '%.1f%%'|format(p.own) if p.own is not none else '' }}</td>
+      <td class="n" data-v="{{ p.own_proj or 0 }}">{{ '%.1f%%'|format(p.own_proj) if p.own_proj is not none else '' }}</td>
+      <td class="n {% if lev is not none and lev >= 10 %}lo{% elif lev is not none and lev <= -10 %}hi{% endif %}" data-v="{{ lev or 0 }}">{{ '%+.0f'|format(lev) if lev is not none else '' }}</td>
+      <td class="small note">{{ p.note or '' }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endmacro %}

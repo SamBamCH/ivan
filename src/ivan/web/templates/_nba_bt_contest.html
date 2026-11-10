@@ -1,0 +1,39 @@
+{# one contest drilled into (ivan.web.nba.backtest.contest_panel = ivan.sports.nba.backtest.slate.contest_detail): the contest-level
+   data only. Player performance is the player table's; this is our entries in this field, who the field was on against who we were on,
+   the payout curve and the duplication. Opened from a row of the contests table, into #bt-contest. #}
+{% macro money(x) %}{% if x is none %}—{% else %}{{ '-' if x < 0 else '' }}${{ '%.2f'|format(x|abs) }}{% endif %}{% endmacro %}
+{% macro pct(x) %}{% if x is none %}—{% else %}{{ '%+.0f%%'|format(100 * x) }}{% endif %}{% endmacro %}
+<div class="bt-panel" id="bt-contest-panel">
+  {% if bt_error %}<p class="bad">{{ bt_error }}</p>{% elif not cd %}<p class="muted">nothing on file for this contest</p>{% else %}{% set c = cd.contest %}
+  <div class="ph"><h3>{{ c.name }}</h3>
+    <span class="muted small">{{ money(c.entry_fee) }} · {{ c.field or c.total_entries }} entries{% if c.final %} · {{ cd.paid }} paid ({{ '%.0f%%'|format(100 * cd.paid / c.field) if c.field else '' }}) · cash line <b>{{ '%.1f'|format(c.min_cash) if c.min_cash is not none else '—' }}</b> · winner <b>{{ '%.1f'|format(c.winner) if c.winner is not none else '—' }}</b> · {{ '%.0f%%'|format(100 * c.dup_share) if c.dup_share is not none else '—' }} of entries duplicated, {{ c.max_copies }} copies at most{% endif %} · <span title="{{ c.scored }}">{{ 'scored from ' ~ c.scored if c.final else 'unscored: ' ~ c.scored }}</span></span>
+    <button type="button" class="x" onclick="document.getElementById('bt-contest').innerHTML = ''" title="close">&times;</button></div>
+  {% if c.final %}
+  <div class="bt-tiles small">
+    <div class="tile"><b class="{% if c.net < 0 %}lo{% elif c.net > 0 %}hi{% endif %}">{{ money(c.net) }}</b><span>net · {{ pct(c.roi) }} ROI on {{ money(c.fees) }}</span></div>
+    <div class="tile"><b>{{ c.cashed }} / {{ c.found }}</b><span>entries cashed · best rank {{ c.best_rank or '—' }}</span></div>
+    <div class="tile"><b>{{ pct(cd.claim.roi) if cd.claim else '—' }}</b><span>the chooser's claim{% if cd.claim and cd.claim.at %} ({{ cd.claim.at.strftime('%H:%M') }}{% if cd.claim.method %}, {{ cd.claim.method }}{% endif %}){% endif %}</span></div>
+    {% if cd.curve %}<div class="tile curve"><b>{{ money(cd.curve[0].payout) }}</b><span>1st · {% for r in cd.curve[1:] %}{{ r.place }}{% if r.place == cd.paid %} (last paid){% endif %} {{ money(r.payout) }}{% if not loop.last %} · {% endif %}{% endfor %}</span></div>{% endif %}
+  </div>
+  <div class="bt-two">
+    <div>
+      <h4>our entries <span class="muted small">{{ c.entries|length }}, best first · copies = identical lineups in this field, ours included · claimed = the sim's ROI for the lineup at choose time</span></h4>
+      {% if c.entries %}<table class="players sortable bt-entries"><thead><tr><th class="n">rank</th><th class="n">points</th><th class="n">payout</th><th class="n">copies</th><th class="n">claimed</th><th>lineup</th></tr></thead>
+        <tbody>{% for e in c.entries %}<tr class="{% if e.payout > 0 %}cash{% endif %}"><td class="n">{{ e.rank }}</td><td class="n">{{ '%.2f'|format(e.points) }}</td><td class="n" data-v="{{ e.payout }}">{{ money(e.payout) if e.payout else '' }}</td><td class="n">{{ e.copies }}</td><td class="n" data-v="{{ e.claim_roi or 0 }}">{{ pct(e.claim_roi) if e.claim_roi is not none else '' }}</td><td class="small lineup">{{ e.names|select|join(' · ') }}</td></tr>{% endfor %}</tbody></table>
+      {% else %}<p class="muted small">none of our entries found in this export (our user name, or an Entry ID of an upload file)</p>{% endif %}
+    </div>
+    <div>
+      <h4>the field <span class="muted small">every player this field owned, by ownership · ours = share of our {{ cd.n_ours }} entries here · lev = field minus ours</span></h4>
+      <table class="players sortable bt-field"><thead><tr><th>player</th><th>tm</th><th class="n">sal</th><th class="n" title="DraftKings' %drafted in this contest">field</th><th class="n" title="our projected ownership at the first tip">proj own</th><th class="n" title="share of our entries in this contest">ours</th><th class="n" title="field minus ours, points: + the field had more of him">lev</th><th class="n">fpts</th></tr></thead>
+        <tbody>{% for f in cd.field %}{% set lev = (f.own - 100 * f.exposure) if f.own is not none and f.exposure is not none else none %}{% set m = (f.own - f.own_proj) if f.own is not none and f.own_proj is not none else none %}
+          <tr class="{% if f.played is false %}dnp{% endif %}"><td>{{ f.name }}</td><td>{{ f.team or '' }}</td><td class="n" data-v="{{ f.salary or 0 }}">{{ (f.salary / 1000)|round(1) ~ 'k' if f.salary else '' }}</td>
+          <td class="n" data-v="{{ f.own or 0 }}">{{ '%.1f%%'|format(f.own) if f.own is not none else '' }}</td>
+          <td class="n {% if m is not none and m >= 10 %}lo{% elif m is not none and m <= -10 %}hi{% endif %}" data-v="{{ f.own_proj or 0 }}" title="{% if m is not none %}the field's minus our projected: {{ '%+.1f'|format(m) }}{% endif %}">{{ '%.1f%%'|format(f.own_proj) if f.own_proj is not none else '—' }}</td>
+          <td class="n" data-v="{{ f.exposure or 0 }}">{{ '%.0f%%'|format(100 * f.exposure) if f.exposure else '' }}</td>
+          <td class="n {% if lev is not none and lev >= 10 %}lo{% elif lev is not none and lev <= -10 %}hi{% endif %}" data-v="{{ lev or 0 }}">{{ '%+.0f'|format(lev) if lev is not none else '' }}</td>
+          <td class="n" data-v="{{ f.fpts_act or 0 }}">{{ '%.1f'|format(f.fpts_proj) if f.fpts_proj is not none else '—' }} → {{ '%.1f'|format(f.fpts_act) if f.fpts_act is not none else '—' }}</td></tr>{% endfor %}</tbody></table>
+    </div>
+  </div>
+  {% else %}<p class="muted small">Not scored: {{ c.scored }}. {{ c.ours }} of ours in it for {{ money(c.fees) }}. Fetch the standings (above) once every game is over.</p>{% endif %}
+  {% endif %}
+</div>

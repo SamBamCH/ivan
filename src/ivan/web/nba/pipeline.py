@@ -467,18 +467,20 @@ def _submit(step: str, form: dict) -> list:
     return jobs
 
 
-POOL_WRITERS = ("field", "sim", "solve")   # jobs that write the pool (every player's ownership) or the optimal file: the page reloads on them when they are done
+POOL_WRITERS = ("field", "sim", "solve")   # jobs that write the pool (every player's ownership) or the optimal file: the desk reloads the pool before the page
 
 
 @slate.get("/pipeline/status", response_class=HTMLResponse)
 def pipeline_status(request: Request):
     """Only the job status, log and results: what polls while a job runs, so nobody's typing in the form is overwritten. The poll
-    that finds a pool-writing job (POOL_WRITERS) just done answers HX-Refresh instead: the desk reloads the pool (the stamp sees the
-    new ownership, Desk.maybe_reload) and the whole page, board and export included, shows it."""
+    that finds a job of this slate just done answers HX-Refresh instead, so the whole page (the board, the exposures, the picks, the
+    export) shows what the job wrote; a pool-writing job (POOL_WRITERS) has the desk reload the pool first (the stamp sees the new
+    ownership, Desk.maybe_reload). A failed or cancelled job leaves the page as it is, with its log in this panel."""
     with LOCK:
         ctx = _pipeline_ctx()
-        if ctx["just_finished"] and ctx["jobs"][0].name in POOL_WRITERS and ctx["jobs"][0].status == "done":
-            desk.maybe_reload()
+        if ctx["just_finished"] and ctx["jobs"][0].status == "done":
+            if ctx["jobs"][0].name in POOL_WRITERS:
+                desk.maybe_reload()
             return Response(status_code=200, headers={"HX-Refresh": "true"})
         return _render(request, "_nba_pipeline_status.html", **ctx)
 

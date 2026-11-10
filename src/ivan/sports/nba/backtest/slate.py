@@ -8,7 +8,11 @@ show the same.
 
     mode_for(day, first_lock, now)   which view a slate opens in: "backtest" (an earlier day), "lateswap" (today, after
                                       the first lock), "prelock" (before the first lock)
-    slate_backtest(session, dg)      everything for one slate: summary, contests, our entries, players by team
+    slate_backtest(session, dg)      everything for one slate: summary, contests, players by team and as one table, the
+                                      rotations as played over our grid
+    contest_detail(session, dg, cid) one contest drilled into: our entries with their claims, the field's ownership against
+                                      ours, the payout curve, the duplication
+    flat_table(players, positions)   every player of the slate in one list, by points scored
 
 Where the numbers come from:
   our entries   the entries DraftKings lists under our user name (config backtest.dk_user: "SamBamCH (3/10)") plus the
@@ -26,17 +30,15 @@ Where the numbers come from:
                 own simulated ROI and cash rate (runs from 2026-10-29 keep them, by_lineup), matched through the
                 chooser's upload file (the entry's lineup at choose time, before any late swap)
   rotations     per team, the game's stints as a 48-minute grid (rotation.last_game_grid) over our grid: the one drawn on
-                the desk (filed under data/nba/input/edits/<dg>/<TEAM>.json when the slate was left; the live file while the
-                slate is still loaded), else the grid row the archive at tip kept (rotation_cells, kept from 2026-10-29),
-                else our minutes only; agreement = the share of the 240 player-minutes on the floor in both
-  by tip        late news moves the projection after the first lock, so each tip's games are also judged on the newest
-                capture taken by that tip (ours or at_tip, up to TIP_GRACE after it) beside the pre-lock one: minutes and
-                points MAE, bias, and the players the late news moved most
-  ROI timeline  what our entries were expected to make at each point: the chooser's claim before lock, each late swap
-                run's expected payout for the entries as held and as swapped (lateswap.<stamp>.json), the final result
+                the desk (the slate's edits/rotations/<TEAM>.json), else the grid row the archive at tip kept
+                (rotation_cells, kept from 2026-10-29), else our minutes only; agreement = the share of the 240
+                player-minutes on the floor in both
   players       the scorecard join (validation.build_scorecard): our last projection before lock vs the box score,
                 with the desk's notes that stood at lock; our exposure from our entries; the field's ownership from
-                the largest contest's export (DK's %drafted)
+                the largest contest's export (DK's %drafted); the position from the slate's pool when this machine holds it
+  a contest     its own final export: our entries in it (rank, points, payout, copies, the claim), every player's
+                ownership in that field against our projected ownership at the first tip and our share of our entries
+                there, the payout curve (the places paid, what 1st, 10th ... the last paid place got), the duplication
 """
 from __future__ import annotations
 
@@ -249,98 +251,6 @@ def projected_ownership(session: Session, dg: int) -> Dict[str, float]:
     return {}
 
 
-TIP_GRACE = pd.Timedelta(minutes=12)
-
-
-def by_tip(session: Session, dg: int, box_rows: pd.DataFrame) -> List[dict]:
-    """Per tip: the games' players judged on the pre-lock projection and on the newest capture by that tip (see the module doc)."""
-    caps = pd.read_sql(text("select captured_at, source, lock, gametime, player_name, team, minutes_proj, fpts_mean from nba_projection_capture "
-                            "where draft_group_id = :d and source in ('ours', 'at_tip')").bindparams(d=int(dg)), session.get_bind())
-    if caps.empty or box_rows.empty:
-        return []
-    for c in ("captured_at", "lock", "gametime"):
-        caps[c] = pd.to_datetime(caps[c])
-    lock = caps["lock"].dropna().min() if caps["lock"].notna().any() else caps.gametime.min()
-    pre = caps[(caps.source == "ours") & (caps.captured_at <= lock)]
-    if pre.empty:
-        pre = caps[caps.captured_at == caps.captured_at.min()]
-    pre = pre[pre.captured_at == pre.captured_at.max()].drop_duplicates("player_name", keep="last").set_index("player_name")
-    act = box_rows.set_index("player_name")
-    out = []
-    for tip, g in caps.groupby("gametime"):
-        if pd.isna(tip):
-            continue
-        upto = caps[(caps.captured_at <= tip + TIP_GRACE) & caps.player_name.isin(g.player_name.unique())]
-        last = upto[upto.captured_at == upto.captured_at.max()].drop_duplicates("player_name", keep="last").set_index("player_name") if len(upto) else None
-        names = [n for n in g.player_name.unique() if n in act.index and n in pre.index]
-        rows = []
-        for n in names:
-            a = act.loc[n]
-            if isinstance(a, pd.DataFrame):
-                a = a.iloc[0]
-            t = last.loc[n] if last is not None and n in last.index else pre.loc[n]
-            rows.append(dict(name=n, team=str(pre.loc[n, "team"]), min_act=float(a.min_act or 0), fpts_act=float(a.fpts_act or 0),
-                             min_pre=_f(pre.loc[n, "minutes_proj"]) or 0.0, fpts_pre=_f(pre.loc[n, "fpts_mean"]) or 0.0,
-                             min_tip=_f(t["minutes_proj"]) or 0.0, fpts_tip=_f(t["fpts_mean"]) or 0.0))
-        if not rows:
-            continue
-        df = pd.DataFrame(rows)
-        rot = df[(df.min_pre >= 10) | (df.min_tip >= 10) | (df.min_act >= 10)]
-        df["moved"] = df.fpts_tip - df.fpts_pre
-        out.append(dict(tip=tip.to_pydatetime(), at=(last.captured_at.max().to_pydatetime() if last is not None and len(last) else None), n=len(df),
-                        teams=sorted(df.team.unique()),
-                        min_mae_pre=float((rot.min_pre - rot.min_act).abs().mean()) if len(rot) else None,
-                        min_mae_tip=float((rot.min_tip - rot.min_act).abs().mean()) if len(rot) else None,
-                        fpts_mae_pre=float((rot.fpts_pre - rot.fpts_act).abs().mean()) if len(rot) else None,
-                        fpts_mae_tip=float((rot.fpts_tip - rot.fpts_act).abs().mean()) if len(rot) else None,
-                        fpts_bias_pre=float((rot.fpts_pre - rot.fpts_act).mean()) if len(rot) else None,
-                        fpts_bias_tip=float((rot.fpts_tip - rot.fpts_act).mean()) if len(rot) else None,
-                        moved=df.reindex(df.moved.abs().sort_values(ascending=False).index).head(8)[lambda d: d.moved.abs() >= 1.0].to_dict("records")))
-    return sorted(out, key=lambda r: r["tip"])
-
-
-def roi_timeline(results: List[dict], lock: Optional[datetime], day: Optional[date], out_dir: Optional[Path] = None) -> List[dict]:
-    """What our entries were expected to make at each point of the night (see the module doc), against the fees."""
-    out_dir = Path(out_dir) if out_dir else S.output_dir()          # the slate's output directory (the current slate)
-    fees = sum(r["fees"] for r in results)
-    if not fees:
-        return []
-    cids = {str(r["contest_id"]) for r in results}
-    fee_of = {str(r["contest_id"]): float(r["entry_fee"]) for r in results}
-    ours = {e["entry_id"] for r in results for e in r["entries"]}
-    out = []
-    claimed = [(r["claim"]["roi"], r["fees"], r["claim"]["at"]) for r in results if r.get("claim") and r["claim"].get("roi") is not None]
-    if claimed:
-        out.append(dict(at=max(c[2] for c in claimed), what="the chooser's claim before lock", games=None,
-                        roi=sum(a * w for a, w, _ in claimed) / sum(w for _, w, _ in claimed), roi_swapped=None, entries=None))
-    for f in sorted(Path(out_dir).glob("lateswap.*.json")):
-        t = _stamp_of(f)
-        if t is None or day is None or t.date() != day:
-            continue
-        try:
-            d = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        held = swapped = cost = 0.0; n = 0
-        for c in d.get("contests") or []:
-            if str(c.get("contest_id")) not in cids:
-                continue
-            fee = fee_of[str(c["contest_id"])]
-            for e in c.get("entries") or []:
-                if str(e.get("entry_id")) not in ours:
-                    continue
-                o = (e.get("original") or {}).get("exp_payout"); b = (e.get("best") or {}).get("exp_payout")
-                if o is None:
-                    continue
-                held += float(o); swapped += float(b if b is not None else o); cost += fee; n += 1
-        if n:
-            out.append(dict(at=datetime.fromisoformat(d["when"]) if d.get("when") else t, what=f"late swap: {d.get('games_started')} of {d.get('games_total')} games started",
-                            games=d.get("games_started"), roi=held / cost - 1, roi_swapped=swapped / cost - 1, entries=n))
-    won = sum(r["won"] for r in results)
-    out.append(dict(at=None, what="final", games=None, roi=won / fees - 1, roi_swapped=None, entries=sum(len(r["entries"]) for r in results)))
-    return out
-
-
 def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) -> dict:
     from ivan.sports.nba.backtest import validation as V
     now = now or datetime.now()
@@ -384,13 +294,12 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
                 n = r.player_name
                 lst.append(dict(name=n, min_proj=_f(r.minutes_proj), min_act=_f(getattr(r, "min_act", None)), fpts_proj=_f(r.fpts_proj),
                                 fpts_act=_f(getattr(r, "fpts_act", None)), err=_f(getattr(r, "fpts_err", None)), played=bool(getattr(r, "played", False)),
-                                starter=str(getattr(r, "starter", "") or ""), note=getattr(r, "note", None) if isinstance(getattr(r, "note", None), str) else None,
+                                starter=str(getattr(r, "starter", "") or ""), status=str(getattr(r, "status", "") or "").upper().replace("NONE", ""),
+                                priced=bool(getattr(r, "priced", False)) if getattr(r, "priced", None) is not None and getattr(r, "priced") == getattr(r, "priced") else False,
+                                note=getattr(r, "note", None) if isinstance(getattr(r, "note", None), str) else None,
                                 exposure=(exp[n] / len(entries)) if entries else None, own=own.get(n), own_proj=own_proj.get(n),
                                 salary=_f(getattr(r, "salary", None))))
             players[str(t)] = lst
-    from ivan.sports.nba.backtest.validation import actuals_for
-    tips = by_tip(session, int(dg), actuals_for(session, day)) if day else []
-    timeline = roi_timeline(scored, lock, day)
     rotations = {}
     if day is not None:
         cells = archived_cells(session, int(dg))
@@ -401,18 +310,106 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
                 ov = None
             if ov:
                 rotations[t] = ov
-    field = []
-    if own:
-        allp = {p["name"]: dict(p, team=t) for t, lst in players.items() for p in lst}
-        for n, o in sorted(own.items(), key=lambda kv: -kv[1])[:15]:
-            p = allp.get(n, {})
-            field.append(dict(name=n, team=p.get("team"), own=o, own_proj=own_proj.get(n), exposure=(exp[n] / len(entries)) if entries else None,
-                              fpts_act=p.get("fpts_act"), fpts_proj=p.get("fpts_proj")))
     for r in results:
         r.pop("side", None)
+        r.pop("entries", None)                                    # the contest's own panel (contest_detail) lists them
     return dict(draft_group=int(dg), day=day, lock=lock, mode=mode_for(day, lock, now), summary=summary, contests=results,
-                entries=sorted(entries, key=lambda e: (-e["payout"], e["rank"])), players=players, rotations=rotations, field=field, tips=tips, timeline=timeline, field_contest=biggest["name"] if biggest else None,
-                scorecard=bool(card is not None and len(card.rows)), notes=(card.summary.get("notes") if card is not None and card.summary else []) or [])
+                players=players, table=flat_table(players, positions_of(session)), rotations=rotations, field_contest=biggest["name"] if biggest else None,
+                scorecard=bool(card is not None and len(card.rows)))
+
+def positions_of(session: Session) -> Dict[str, str]:
+    """{normalized name: DraftKings position} from the slate's pool when the session reaches one (a held slate); {} otherwise."""
+    try:
+        rows = session.execute(text("select name, position from nba_player")).all()
+    except Exception:   # noqa: BLE001 - the history engine of a slate not held has no pool
+        return {}
+    return {normalize_name(n): str(p or "") for n, p in rows if n}
+
+
+def flat_table(players: Dict[str, list], positions: Optional[Dict[str, str]] = None) -> List[dict]:
+    """Every player of the slate in one list, the most points scored first: the team's rows with the team, his position, the miss
+    (scored minus projected) and his value as played (points per $1k)."""
+    positions = positions or {}
+    out = []
+    for team, lst in players.items():
+        for p in lst:
+            d = (p["fpts_act"] - p["fpts_proj"]) if p.get("fpts_act") is not None and p.get("fpts_proj") is not None else None
+            sal = p.get("salary")
+            val = (p["fpts_act"] / sal * 1000.0) if sal and p.get("fpts_act") is not None else None
+            out.append(dict(p, team=team, pos=positions.get(p["name"], ""), delta=d, value=val))
+    out.sort(key=lambda r: (-(r["fpts_act"] or 0), -(r["fpts_proj"] or 0)))
+    return out
+
+
+CURVE_PLACES = (1, 2, 3, 5, 10, 25, 50, 100, 250, 1000, 5000)
+
+
+def payout_curve(pay: np.ndarray) -> List[dict]:
+    """A few rungs of the payout table: 1st, 2nd, 3rd, 5th, 10th ... and the last place paid, each with its payout."""
+    paid = int((pay > 0).sum())
+    if not paid:
+        return []
+    places = sorted({p for p in CURVE_PLACES if p < paid} | {paid})
+    return [dict(place=p, payout=float(pay[p - 1])) for p in places]
+
+
+def contest_detail(session: Optional[Session], dg: int, cid: int, lock: Optional[datetime] = None, players: Optional[Dict[str, dict]] = None,
+                   export: Optional[tuple] = None, contest: Optional[dict] = None, pay: Optional[np.ndarray] = None, out_dir: Optional[Path] = None,
+                   user: Optional[str] = None) -> dict:
+    """
+    One contest of a past slate, read only: the contest scored from its newest export (results.score_contest, final exports only;
+    a mid-slate or missing export comes back unscored with the reason), our entries in it (rank, points, payout, copies in the
+    field, the chooser's claim for the lineup), every player of the field by ownership (DK's %drafted in this contest, our
+    projected ownership at the first tip, our share of our entries here, points projected and scored) with our own players
+    merged in, the payout curve and the duplication. `players` is {normalized name: his row from slate_backtest} for the
+    projection columns; `export` (stamp, text), `contest` and `pay` stand in for the raw store, the contests table and the payouts
+    table in tests.
+    """
+    from ivan.sports.nba.data_clean.standings import parse_export
+    from ivan.core import raw
+    cid = int(cid)
+    if contest is None:
+        from ivan.sports.nba.data_fetch.contests import slate_contests
+        row = next((r for r in slate_contests(session, int(dg)) if int(r.contest_id) == cid), None)
+        contest = dict(contest_id=cid, name=row.name if row else f"contest {cid}", entry_fee=float(row.entry_fee or 0) if row else 0.0,
+                       total_entries=int(row.total_entries or 0) if row else 0)
+    ids = our_entry_ids([cid], out_dir).get(cid, set())
+    if export is None:
+        art = R.final_exports([cid]).get(cid)
+        export = (art.stamp, raw.load(art.path, R.SPORT)) if art is not None else None
+    if export is None:
+        return dict(contest=R.unscored(contest, ids, "no standings export: scrape it (scripts/nba/standings.py scrape)"), field=[], curve=[], paid=0, claim=None)
+    stamp, txt = export
+    export_at = datetime.strptime(stamp, "%Y%m%d-%H%M%S") if stamp else None
+    ent, side = parse_export(txt)
+    if pay is None:
+        pay = R.payout_table(session, cid, len(ent))
+    r = R.score_contest(contest, ids, ent, pay, export_at, user)
+    r.pop("side", None)
+    claim = claims([cid], lock, out_dir).get(cid)
+    picked = chosen_lineups([cid], lock, out_dir)
+    by = (claim or {}).get("by_players") or {}
+    for e in r["entries"]:
+        k = picked.get(e["entry_id"])
+        cl = by.get(k) if k else None
+        e["claim_roi"] = None if cl is None else cl.get("avg_roi")
+        e["claim_cash"] = None if cl is None else cl.get("cash_pct")
+    if claim:
+        claim = {k: v for k, v in claim.items() if k != "by_players"}
+    players = players or {}
+    n_ours = len(r["entries"])
+    exp = Counter(normalize_name(n) for e in r["entries"] for n in e["names"] if n)
+    own = {normalize_name(n): float(p) for n, p in zip(side.name, side.drafted_pct) if p == p} if len(side) else {}
+    fpts_side = {normalize_name(n): float(f) for n, f in zip(side.name, side.fpts) if f == f} if len(side) else {}
+    field = []
+    for n in set(own) | set(exp):
+        p = players.get(n, {})
+        field.append(dict(name=n, team=p.get("team"), pos=p.get("pos"), salary=p.get("salary"), own=own.get(n), own_proj=p.get("own_proj"),
+                          exposure=(exp[n] / n_ours) if n_ours else None, fpts_proj=p.get("fpts_proj"),
+                          fpts_act=fpts_side.get(n, p.get("fpts_act")), played=p.get("played")))
+    field.sort(key=lambda f: (-(f["own"] or 0), -(f["exposure"] or 0)))
+    return dict(contest=r, field=field, curve=payout_curve(pay) if r["final"] else [], paid=int((pay > 0).sum()) if r["final"] else 0, claim=claim, n_ours=n_ours)
+
 
 
 def _f(v) -> Optional[float]:

@@ -1,0 +1,18 @@
+{# one team on the backtest (ivan.web.nba.backtest.team_panel): the game as played over our grid, then its rows; opened from a team
+   chip or a team cell of the player table, into #bt-team #}
+{% from "_nba_bt_rows.html" import ptable %}
+<div class="bt-panel" id="bt-team-panel">
+  {% if bt_error %}<p class="bad">{{ bt_error }}</p>{% else %}
+  {% set played = rows|selectattr('played')|list %}
+  <div class="ph"><h3>{{ team }}</h3>
+    <span class="muted small">proj <b>{{ '%.0f'|format(rows|map(attribute='fpts_proj')|select('number')|sum) }}</b> · actual <b>{{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }}</b> fpts · {{ played|length }} played of {{ rows|length }} in the pool{% if ov and ov.agreement is not none %} · grid agreement <b class="{% if ov.agreement >= 0.8 %}ok{% elif ov.agreement < 0.6 %}warn{% endif %}">{{ '%.0f%%'|format(100 * ov.agreement) }}</b>{% endif %}</span>
+    <button type="button" class="x" onclick="document.getElementById('bt-team').innerHTML = ''" title="close">&times;</button></div>
+  {% if ov %}
+  <div class="bt-rot"><div class="muted small">as played over our grid ({{ ov.source }}) · <i class="sw both"></i> both <i class="sw act"></i> played, not in ours <i class="sw ours"></i> in ours, sat · a row's minutes: played<span class="muted">/ours</span></div>
+    <table class="bt-grid"><tbody>{% for r in ov.rows %}<tr><td class="nm" title="played {{ r.min_act }} min{% if r.min_ours is not none %} · ours {{ r.min_ours }}{% endif %}{% if r.min_proj is not none %} · projected {{ '%.0f'|format(r.min_proj) }}{% endif %}">{{ r.name }}</td>
+      <td class="mn">{{ r.min_act }}{% if r.min_ours is not none %}<span class="muted">/{{ r.min_ours }}</span>{% endif %}</td>
+      {% for c in r.cells %}<td class="c {{ c }} {% if loop.index0 % 12 == 0 %}q{% endif %}"></td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+  {% else %}<p class="muted small">no stints stored for this game yet (the nightly's play-by-play), so no grid to lay ours over</p>{% endif %}
+  {{ ptable(rows, team_col=False) }}
+  {% endif %}
+</div>

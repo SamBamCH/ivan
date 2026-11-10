@@ -18,11 +18,11 @@ STAT_GAP = 0.15                                                                 
 
 
 def _split_props(rows: list, line) -> tuple[list, list, int]:
-    """The hover's two parts from every (book, line) on file: the main lines as they are (one row each: posted, book, line, over,
-    under; a row posted before the player's status moved is kept and flagged `stale`) and the alternates condensed to one row per
+    """The hover's two parts from every (book, line) on file: the main lines by line, lowest first (one row each: posted, book, line,
+    over, under; a row posted before the player's status moved is kept and flagged `stale`) and the alternates condensed to one row per
     book, the lines within ALT_SPAN of the consensus line (the median main line when there is none) with their over price, and how
     many more the book posts; stale alternates are left out. An alternate market prices overs only. Third: the stale count."""
-    main = [b for b in rows if not b["alt"]]
+    main = sorted((b for b in rows if not b["alt"]), key=lambda b: (float(b["line"]) if b.get("line") is not None else 0.0, str(b["book"])))
     alts = [b for b in rows if b["alt"] and not b.get("stale")]
     n_stale = sum(1 for b in rows if b.get("stale"))
     if not alts:
@@ -89,6 +89,8 @@ class RowsMixin:
         starters = self.starters_of(team)
         confirmed = self.slate.starters_confirmed.get(team, False)
         mk = self.market_means()
+        sib = self.sibling_changes()
+        elsewhere = {c["key"]: c for c in (sib["changes"] if sib else [])}
         rows = []
         for p in self.players(team):
             name = normalize_name(p.name)
@@ -112,6 +114,8 @@ class RowsMixin:
                 flags.append(f"out, frees {hist_min:.0f} min")
             if status in ("Q", "GTD", "D") and hist_min and hist_min >= ROTATION_MIN:
                 flags.append("questionable")
+            if name in elsewhere and (elsewhere[name]["down"] or (hist_min and hist_min >= ROTATION_MIN)):
+                flags.append(f"{elsewhere[name]['there']} on the {sib['label']} slate's pool, refreshed {sib['refreshed_at']:%H:%M} (here {elsewhere[name]['here']}): refresh this slate")
             if starter and s is not None and float(s["start_ewm"]) < 0.5:
                 flags.append("new starter")
             if starter is False and s is not None and float(s["start_ewm"]) > 0.6 and not out:
@@ -229,6 +233,8 @@ class RowsMixin:
             for f in r["flags"]:
                 if f.startswith("out, frees") or f == "scratched":
                     alerts.append(("bad", f"{r['name']}: {f}"))
+                elif " slate's pool, refreshed " in f:                      # a status a fresher sibling slate knows: bad when it rules him out
+                    alerts.append(("bad" if f.split(" on the ")[0] in ("OUT", "O", "IR", "SUSP") else "warn", f"{r['name']}: {f}"))
                 elif f == "no minutes in the rotation":
                     if (r["hist_min"] or 0) >= ROTATION_MIN:
                         alerts.append(("warn", f"{r['name']}: {f} ({r['hist_min']:.0f} min history)"))

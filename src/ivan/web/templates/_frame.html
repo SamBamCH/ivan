@@ -44,10 +44,25 @@
   {% endif %}
   {% if caller %}{{ caller() }}{% endif %}
   <span class="spacer"></span>
+  {% if frame.sport and frame.sport.job_strip %}<span class="jobstrip" id="jobstrip" data-url="{{ frame.root }}{{ frame.sport.job_strip }}"></span>{% endif %}
   {% if frame.sport %}{% for lab, path in frame.tools %}<a class="tool" href="{{ frame.root }}{{ path }}">{{ lab }}</a>{% endfor %}{% endif %}
   {% if frame.login %}<a class="tool" href="{{ frame.site }}/logout" title="sign out of Ivan in this browser">sign out</a>{% endif %}
 </nav>
 <script>
+  // the job strip: the sport's running job on every page (Sport.job_strip answers one line of HTML; the NBA desk's /jobstrip), read
+  // every 4 s while a job runs, every 20 s otherwise, so a job started on one page is in sight on the next
+  (() => {
+    const el = document.getElementById("jobstrip"); if (!el) return;
+    let timer = null;
+    function tick() {
+      fetch(el.dataset.url, {credentials: "same-origin"}).then(r => r.ok ? r.text() : "").then(html => {
+        el.innerHTML = html; const inner = el.firstElementChild; const active = inner && inner.dataset.active === "1";
+        el.classList.toggle("on", !!(inner && inner.textContent.trim()));
+        clearTimeout(timer); timer = setTimeout(tick, active ? 4000 : 20000);
+      }).catch(() => { clearTimeout(timer); timer = setTimeout(tick, 30000); });
+    }
+    tick();
+  })();
   // the slate dropdown opens the slate's page (which shows that slate, loading it first when the workspace holds another);
   // the arrows step through every slate in time order, across days
   function ivanPickSlate(sel) {
