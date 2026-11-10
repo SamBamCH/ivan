@@ -45,7 +45,7 @@ def test_scorecard_rows_per_layer():
     assert card.loc[("minutes", "minutes"), "n"] == 2                                          # the DNP is left out
     assert card.loc[("fantasy points", "fpts"), "mae_published"] is not None and 0.0 <= card.loc[("fantasy points", "fpts"), "in_band"] <= 1.0
     assert card.loc[("ownership and the field", "ownership"), "n"] == 0
-    assert set(card.index.get_level_values(0)) == {l for l, _, _ in RR.LAYERS} | {"ownership and the field"}
+    assert set(card.index.get_level_values(0)) == {l for l, _, _ in RR.LAYERS} | {"ownership and the field", "minutes by role"}
 
 
 def test_lines_from_record_and_player_view():

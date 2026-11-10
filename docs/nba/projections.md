@@ -100,6 +100,15 @@ together, minus tonight's outs, plus the returners; the depth cut stands when th
 A player the cut dropped can be
 added back on the desk (Map), starting at his history or 6 minutes.
 
+**The pool is soft** (`cuts.py`, `data/nba/models/cuts.json`, `scripts/nba/gamesim.py fit-cuts`; config `gamesim.cuts`).
+The depth cut and your drops name the rotation; the World does not take it as certain. Every row but a named starter's carries `p_cut`, his own chance that the rotation does not hold for him tonight (under 8 minutes), read
+off his role and how often he was cut in his last 10 roster games (bench players cut 0 of 10 are cut again 10% of the
+time, 1-2 → 19%, 3-4 → 39%, 5+ → 53%; starters 4%); every available player the plan left at zero or you dropped carries `fringe_p`
+and `fringe_minutes`, the chance he plays anyway and the minutes he takes when he does (39% and 8.4 on the zero-minute
+players of every tip record). A named starter is certain; a typed minutes pin or a locked row says how long he plays when he plays, not whether the coach uses him (config `gamesim.cuts`: `unpinned` makes a typed pin certain too, `off` restores the hard pool). The card's min
+hover shows the cut chance, the blank rows under the grid say `plays 39% · 8 min`
+([notes/minutes_distribution_2026-11-10.md](notes/minutes_distribution_2026-11-10.md)).
+
 ### 7. The rotation skeleton (`skeleton.py`, `rotation.py`, `team_profile.py`; config `minutes_model = rotation`)
 
 `rotation.curves` gives, per player, the recency-weighted share of recent games he was on the floor
@@ -122,9 +131,12 @@ rule (the most-played five).
 ### 8. The minutes band (`worlds.py`: the World's drawn minutes)
 
 `minutes_proj` is the plan: the grid row's minutes. The band around it (`minutes_p10` / `minutes_p90`, the drawn
-mean in the card's hover) is the World's: the grid drawn under each player's scratch probability, his foul rate and
-the coach's measured reaction to fouls, the substitution times jittered by his spread, overtime for the five at the
-buzzer. Garbage time is **off** (`config/nba.json → gamesim.garbage`): the grid's minutes are the books' implied
+mean in the card's hover) is the World's: the grid drawn under each player's scratch probability, his cut chance (a cut
+night hands his row to his heirs, or keeps a token first stint of about four minutes), the fringe's play-nights (their
+minutes come off the five on the floor at the end of a half, the bench first), his foul rate and the coach's measured
+reaction to fouls, the substitution times jittered by **his own** spread (scaled so his drawn sd matches the sd of his
+last 20 games played, `history.min_sd20`: Pritchard 7.4, a metronome starter 4), overtime for the five at the buzzer.
+The pool's drawn minutes then sum to what real pools play, about 223 of 240, not 240. Garbage time is **off** (`config/nba.json → gamesim.garbage`): the grid's minutes are the books' implied
 minutes, which already discount the nights a favourite's starters sit the fourth quarter, so a pull on top of them
 would count those nights twice ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md): 57% of worlds
 on a slate of big spreads, every star four minutes short). `team_minutes.py` keeps the scratch probabilities by DK

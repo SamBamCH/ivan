@@ -148,6 +148,7 @@ slate's jobs run and while the slate refreshes (edits wait for the refresh; a jo
 | Level | Fires when |
 |---|---|
 | bad | a rotation player is OUT or scratched ("out, frees N minutes"); dnp-prone, deep bench projected like a rotation player, impossible band, distribution suspect |
+| (flag) | **cut-prone: N% of nights under 8 min**: a 10+ minute row whose own cut rate is 30% or more; the World draws those nights; a named starter is exempt |
 | warn | a new starter or a benched regular; the market disagrees with history ("market ..."); a questionable rotation player; new team / above recent maximum / market implies other minutes / no history for a 10+ minute player; a 24+ minute player left with no minutes in the rotation; no Rotowire lineup or an unconfirmed one inside 75 minutes of tip |
 | info | minutes far from history for a 12+ minute player; the available roster's history minutes far from 241; rotation depth notes; unpriced rotation players |
 
@@ -183,15 +184,16 @@ this side's attempts against the line, the drawn total and margin against the bo
 against the plan's), the state of the optimal solve (when, how many worlds, stale when a team was projected since) and
 the **Solve** button ([../nba/projections.md](../nba/projections.md), the optimal share).
 
-Rows: starters first, then the players who are out, then the bench, minutes descending. Per player:
+Rows: starters first, then the players who are out, then the bench, minutes descending; the available players the plan
+left at zero or you dropped sit as blank rows with `plays 39% · 8 min`, the World's fringe (the + beside a dropped name restores him). Per player:
 status, Rotowire starter mark, history minutes (and the last games), the plan's minutes with the World's drawn band,
 the seven stats as planned, **fpts** (the World's) and **pub** (the public projection the field plays to), DK FPPG,
 salary, value, the optimal share, the rate source (market or history), the ownership, the market-implied minutes for
 priced players, the flags.
 
 The grid's columns, right of the 48 minute cells, are the two layers side by side. Layer 1, what you tell the
-simulation: **min** (the row's minutes, a pin box; hover for this season's games with a DNP row in red, and the drawn
-minutes with their 10-90 band), then one column per stat, **pts reb ast 3pm stl blk tov** (the plan for the game: the
+simulation: **min** (the row's minutes, a pin box; hover for this season's games with a DNP row in red, the drawn
+minutes with their 10-90 band, his cut chance, and his own minutes sd), then one column per stat, **pts reb ast 3pm stl blk tov** (the plan for the game: the
 row's minutes × his per-minute rate; green when the rate is the books', amber when the plan sits 15%+ from the books'
 mean). Layer 2, what came out: **fpts** (the World's mean ± sd over the worlds the game was drawn in; hover for each
 stat as planned and as drawn, the books' line and mean, the 10-50-90 of his night, the plan's total), **sim** (the

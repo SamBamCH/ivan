@@ -101,6 +101,10 @@ class NBAPlayer(NBABase):
     minutes_p90     = Column(Float,     nullable=True)
     rotation_cells  = Column(JSON,      nullable=True)   # his row of the rotation grid (48 x 0/1), when the rotation model projected him
     boundary_sd     = Column(Float,     nullable=True)   # spread of his substitution times, minutes
+    p_cut           = Column(Float,     nullable=True)   # the soft pool (projection/cuts.py): P(tonight's rotation does not hold for him: under 8 minutes)
+    fringe_p        = Column(Float,     nullable=True)   # a player the mapping left at zero: P(he plays anyway) ...
+    fringe_minutes  = Column(Float,     nullable=True)   # ... and the minutes he takes when he does
+    minutes_sd      = Column(Float,     nullable=True)   # his own spread: sd of his minutes over his last 20 games played (history.min_sd20)
     status_changed_at = Column(DateTime, nullable=True)  # when he was last downgraded (to an out status, out of the five; changes.mark_status_changes): a prop
                                                         # a book posted before it priced his old role and does not count for him (market.fresh_rows cutoffs)
 

@@ -43,7 +43,8 @@ from sqlalchemy.orm import Session
 
 STAMP = "%Y%m%d-%H%M"
 PLAYER_FIELDS = ("id", "name", "team", "opponent", "position", "roster_slot_id", "gametime", "salary", "status", "dk_avg_fpts", "draft_group_id",
-                 "starter", "minutes_proj", "fpts_mean", "fpts_std", "p_out", "minutes_p10", "minutes_p90", "ownership", "pub_fpts", "rotation_cells")
+                 "starter", "minutes_proj", "fpts_mean", "fpts_std", "p_out", "minutes_p10", "minutes_p90", "ownership", "pub_fpts", "rotation_cells",
+                 "p_cut", "fringe_p", "fringe_minutes", "minutes_sd", "rates", "boundary_sd")
 
 
 def tips_dir(dg: int, root: Optional[Path] = None) -> Path:

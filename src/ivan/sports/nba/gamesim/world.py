@@ -76,6 +76,10 @@ class PlayerIn:
     p_out: float
     fpts_mean: float
     fpts_std: float
+    p_cut: float = 0.0                  # the soft pool (projection.cuts): P(the rotation does not hold for him tonight)
+    fringe_p: float = 0.0               # a player the plan left at zero: P(he plays anyway) ...
+    fringe_minutes: float = 0.0         # ... and the minutes he takes when he does
+    minutes_sd: Optional[float] = None  # his own spread: the sd of his minutes over his recent games (history.min_sd20)
 
 
 @dataclass
@@ -170,7 +174,7 @@ def slate_inputs(session: Session, teams: Optional[dict] = None) -> List[GameIn]
     from ivan.sports.nba.projection.lines import GameLines
     teams = teams or load_teams()
     players = session.execute(select(__import__("ivan.sports.nba.models", fromlist=["NBAPlayer"]).NBAPlayer)).scalars().all()
-    players = [p for p in players if p.team and p.opponent and p.fpts_mean is not None]
+    players = [p for p in players if p.team and p.opponent and (p.fpts_mean is not None or (p.fringe_p or 0) > 0)]
     tips: dict = {}
     for p in players:
         if p.gametime and (p.team not in tips or p.gametime < tips[p.team]):
@@ -195,7 +199,9 @@ def slate_inputs(session: Session, teams: Optional[dict] = None) -> List[GameIn]
         games[key].players.setdefault(p.team, []).append(PlayerIn(
             pid=int(p.id), name=normalize_name(p.name), team=p.team, minutes=float(p.minutes_proj or 0.0), rates=_rates_of(p, LEAGUE_RATES),
             cells=[int(x) for x in p.rotation_cells] if isinstance(p.rotation_cells, list) and len(p.rotation_cells) == MINUTES else None,
-            boundary_sd=float(p.boundary_sd) if p.boundary_sd else None, p_out=float(p.p_out or 0.0), fpts_mean=float(p.fpts_mean), fpts_std=float(p.fpts_std or 0.0)))
+            boundary_sd=float(p.boundary_sd) if p.boundary_sd else None, p_out=float(p.p_out or 0.0), fpts_mean=float(p.fpts_mean or 0.0), fpts_std=float(p.fpts_std or 0.0),
+            p_cut=float(p.p_cut or 0.0), fringe_p=float(p.fringe_p or 0.0), fringe_minutes=float(p.fringe_minutes or 0.0),
+            minutes_sd=float(p.minutes_sd) if p.minutes_sd else None))
     return list(games.values())
 
 
@@ -231,13 +237,18 @@ def _grid_from(players: Sequence[PlayerIn]) -> pd.DataFrame:
 
 def setup_team(players: Sequence[PlayerIn], opp_players: Sequence[PlayerIn], n: int, rng: np.random.Generator, P: float, target_points: Optional[float],
                prof_state: pd.DataFrame, profiles: PR.ShootingProfiles, foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], teams: dict) -> TeamSetup:
-    players = [p for p in players if p.minutes > 0 or p.cells]
+    players = [p for p in players if p.minutes > 0 or p.cells or p.fringe_p > 0]
     names = [p.name for p in players]; k = len(names)
     grid = _grid_from(players)
-    spreads = {p.name: (p.boundary_sd if p.boundary_sd else RO.default_spread(p.minutes)) for p in players}
+    spreads = {p.name: RO.spread_for(p.boundary_sd, p.minutes, p.minutes_sd, grid.loc[p.name].values if p.name in grid.index else None) for p in players}
     rates = {p.name: foul_rates.rate(foul_state, p.name, p.minutes) for p in players}
+    from ivan.sports.nba.projection import cuts as CUTS
+    ct = CUTS.load_table()
     d = RO.draw(grid, spreads, n, rng, np.zeros((n, MINUTES)), np.zeros(n, dtype=int), p_out={p.name: p.p_out for p in players if p.p_out},
-                foul_rate=rates, groups=groups, garbage=False)
+                foul_rate=rates, groups=groups, garbage=False,
+                p_cut={p.name: p.p_cut for p in players if p.p_cut > 0},
+                dnp_share={p.name: CUTS.dnp_share(ct, p.minutes, None) for p in players if p.p_cut > 0}, token_minutes=CUTS.token_minutes(ct),
+                fringe={p.name: (p.fringe_p, p.fringe_minutes, max(2.0, 0.6 * p.fringe_minutes)) for p in players if p.fringe_p > 0 and p.minutes <= 0})
     order = [d["names"].index(nm) for nm in names]
     F = d["onfloor"][:, order, :]; fouls = d["fouls"][:, order]
     avail = ~d["fouled_out"][:, order] & (F.sum(axis=2) > 0)

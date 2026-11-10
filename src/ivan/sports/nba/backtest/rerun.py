@@ -71,16 +71,20 @@ def lines_from_record(rows: list, players: list) -> Dict[str, dict]:
     return GameLines(cons, tips=tips).by_team
 
 
-def rates_as_of(session: Session, day: date, players: list, odds: pd.DataFrame) -> Dict[str, Dict[str, float]]:
-    """Per player the per-minute rates the live projection would have used at the tip: history before the day (shrunk) with
-    the books' means over the projected minutes where priced."""
+def history_as_of(session: Session, day: date):
+    """(HistoryState, its state before the day) from the box scores strictly before the day."""
     from ivan.sports.nba.projection.history import build_history, load_box_scores
+    box = load_box_scores(session)
+    hist = build_history(box[box.game_date < day])
+    return hist, hist.before(day)
+
+
+def rates_as_of(session: Session, day: date, players: list, odds: pd.DataFrame, history=None) -> Dict[str, Dict[str, float]]:
+    """Per player the per-minute rates the live projection would have used at the tip: history before the day (shrunk) with
+    the books' means over the projected minutes where priced. `history`: (HistoryState, state) already built."""
     from ivan.sports.nba.projection.market import blend_rates, market_means, market_rates
     from ivan.sports.nba.projection.rates import shrunk_rates
-    box = load_box_scores(session)
-    box = box[box.game_date < day]
-    hist = build_history(box)
-    state = hist.before(day)
+    hist, state = history if history is not None else history_as_of(session, day)
     basis = {str(p["name"]): float(p.get("minutes_proj") or 0.0) for p in players}
     market = {}
     if odds is not None and len(odds):
@@ -97,14 +101,45 @@ def rates_as_of(session: Session, day: date, players: list, odds: pd.DataFrame) 
     return out
 
 
+def soft_pool(players: list, state: pd.DataFrame) -> int:
+    """
+    A tip record written before the soft pool (2026-11-10) has no p_cut / fringe_p / minutes_sd: fill them from the history state
+    as of the day the way the mapping does now (projection.cuts: every row rated except named starters, since the record does not
+    say which rows carried a minutes pin; a zero-minute available player is fringe). Records that carry the fields are left alone. Returns
+    how many players were filled.
+    """
+    from ivan.sports.nba.projection import cuts as CUTS
+    from ivan.sports.nba.projection.live import OUT_STATUSES
+    if any("p_cut" in p for p in players):
+        return 0
+    table = CUTS.load_table(); n = 0
+    for p in players:
+        nm = normalize_name(str(p.get("name") or "")); row = state.loc[nm] if nm in state.index else None
+        own = None if row is None or "cut10" not in row.index or pd.isna(row["cut10"]) else float(row["cut10"])
+        sd = None if row is None or "min_sd20" not in row.index or pd.isna(row["min_sd20"]) else float(row["min_sd20"])
+        mins = float(p.get("minutes_proj") or 0.0); status = str(p.get("status") or "").upper()
+        if mins > 0:
+            p["p_cut"] = CUTS.cut_probability(table, mins, own, starter=str(p.get("starter") or "") in ("confirmed", "expected"), held=False, mode="all")
+            p["fringe_p"] = 0.0; p["fringe_minutes"] = 0.0; p["minutes_sd"] = sd
+        elif status not in OUT_STATUSES and p.get("fpts_mean") is None:
+            fp, fm, _ = CUTS.fringe_profile(table, own)
+            p["p_cut"] = 0.0; p["fringe_p"] = fp; p["fringe_minutes"] = fm; p["minutes_sd"] = None
+        else:
+            p["p_cut"] = 0.0; p["fringe_p"] = 0.0; p["fringe_minutes"] = 0.0; p["minutes_sd"] = None
+        n += 1
+    return n
+
+
 def inputs_from_tip(session: Session, dg: int, tip: datetime, root: Optional[Path] = None) -> Tuple[List[W.GameIn], date, dict]:
     rec = T.read_tip(dg, tip, root)
     if rec is None:
         raise FileNotFoundError(f"slate {dg} has no tip record at {tip:%Y-%m-%d %H:%M}")
-    players = [p for p in rec["players"] if p.get("team") and p.get("opponent") and p.get("fpts_mean") is not None]
     day = tip.date()
+    hist, state = history_as_of(session, day)
+    soft_pool(rec["players"], state)                            # a record from before the soft pool: its cut and fringe fields from the history as of the day
+    players = [p for p in rec["players"] if p.get("team") and p.get("opponent") and (p.get("fpts_mean") is not None or (p.get("fringe_p") or 0) > 0)]
     by_team = lines_from_record(rec["game_lines"], players)
-    rates = rates_as_of(session, day, players, rec["odds"])
+    rates = rates_as_of(session, day, players, rec["odds"], history=(hist, state))
     ev = X.load_events(); ev["game_date"] = pd.to_datetime(ev.game_date).dt.date
     seg = X.team_segments(ev[ev.game_date < day])
     paces = SC.team_paces(seg) if len(seg) else {}
@@ -123,8 +158,10 @@ def inputs_from_tip(session: Session, dg: int, tip: datetime, root: Optional[Pat
         games[key].players.setdefault(p["team"], []).append(W.PlayerIn(
             pid=int(p["id"]), name=normalize_name(str(p["name"])), team=p["team"], minutes=float(p.get("minutes_proj") or 0.0), rates=rates[str(p["name"])],
             cells=[int(x) for x in cells] if isinstance(cells, list) and len(cells) == W.MINUTES else None,
-            boundary_sd=default_spread(float(p.get("minutes_proj") or 0.0)), p_out=float(p.get("p_out") or 0.0),
-            fpts_mean=float(p["fpts_mean"]), fpts_std=float(p.get("fpts_std") or 0.0)))
+            boundary_sd=float(p["boundary_sd"]) if p.get("boundary_sd") else default_spread(float(p.get("minutes_proj") or 0.0)), p_out=float(p.get("p_out") or 0.0),
+            fpts_mean=float(p.get("fpts_mean") or 0.0), fpts_std=float(p.get("fpts_std") or 0.0),
+            p_cut=float(p.get("p_cut") or 0.0), fringe_p=float(p.get("fringe_p") or 0.0), fringe_minutes=float(p.get("fringe_minutes") or 0.0),
+            minutes_sd=float(p["minutes_sd"]) if p.get("minutes_sd") else None))
     meta = dict(tip=tip.isoformat(timespec="minutes"), players=len(players), lined=sum(1 for g in games.values() if g.total is not None), games=len(games),
                 record=rec["meta"])
     return list(games.values()), day, meta
@@ -208,6 +245,32 @@ def scorecard(world: W.World, act: pd.DataFrame, games_act: Dict[tuple, Optional
                 e = np.asarray(errs)
                 rows.append(dict(layer=layer, metric=m, n=len(errs), mae=float(np.abs(e).mean()), bias=float(e.mean()), in_band=float(np.mean(inb)), pit=float(np.mean(pits)),
                                  mae_published=float(np.mean(pubs)) if pubs else None, note="the projection at the tip" if pubs else None))
+    # the minutes layer by planned role (DNPs counted: a cut to zero is the point) and the pool's leakage
+    a_all = act.set_index("player"); a_all = a_all[~a_all.index.duplicated()]
+    plan = {world.pids[j]: (published.get(world.pids[j]) or {}).get("minutes") for j in range(len(world.names))}
+    for label, lo, hi in (("deep (<=12)", 0.0, 12.0), ("bench (12-22)", 12.0, 22.0), ("starter (22-30)", 22.0, 30.0), ("star (30+)", 30.0, 99.0)):
+        errs, inb, below, above, under8, pubs, sds = [], [], [], [], [], [], []
+        for nm, j in idx.items():
+            pl = plan.get(world.pids[j])
+            if pl is None or pl <= 0 or not (lo <= pl < hi) or nm not in a_all.index:
+                continue
+            truth = float(a_all.loc[nm, "minutes"] or 0.0); draw = world.stats["minutes"][:, j]
+            errs.append(float(draw.mean()) - truth); inb.append(_band(draw, truth)); sds.append(float(draw.std()))
+            below.append(truth < np.percentile(draw, 10)); above.append(truth > np.percentile(draw, 90)); under8.append(truth < 8.0)
+            pubs.append(abs(float(pl) - truth))
+        if errs:
+            e = np.asarray(errs)
+            rows.append(dict(layer="minutes by role", metric=label, n=len(errs), mae=float(np.abs(e).mean()), bias=float(e.mean()), in_band=float(np.mean(inb)), pit=None,
+                             mae_published=float(np.mean(pubs)),
+                             note=f"below p10 {np.mean(below):.0%} · above p90 {np.mean(above):.0%} · under 8 min {np.mean(under8):.0%} · drawn sd {np.mean(sds):.1f} vs error sd {e.std():.1f}"))
+    teams = sorted(set(world.team_of)); pool = set(world.names)
+    if teams:
+        drawn_pool = float(world.stats["minutes"].mean(axis=0).sum()) / len(teams)
+        mine = act[act.team.isin(teams)]
+        actual_pool = float(mine[mine.player.isin(pool)].minutes.fillna(0).sum()) / len(teams)
+        outside = mine[~mine.player.isin(pool) & (mine.minutes.fillna(0) > 0)]
+        rows.append(dict(layer="minutes by role", metric="pool minutes a team", n=len(teams), mae=drawn_pool, bias=drawn_pool - actual_pool, in_band=None, pit=None, mae_published=None,
+                         note=f"drawn {drawn_pool:.0f} vs the pool's actual {actual_pool:.0f}; {outside.minutes.sum() / len(teams):.0f} a team went to {len(outside)} players outside the World"))
     rows.append(dict(layer="ownership and the field", metric="ownership", n=0, mae=None, bias=None, in_band=None, pit=None, mae_published=None, note="not rerun: the field model is a separate component"))
     return rows
 

@@ -245,6 +245,10 @@ MAE and bias, the share of actuals inside the drawn 10-90 band and the mean perc
 what was published at the tip (the projection, the line) beside it; since 2026-11-09 the published projection is itself the
 World's mean (the desk draws each game when it projects), so the two fantasy-point columns differ by the inputs' drift
 between the tip record's mapping and the rerun's history cut, not by model. The record (`slates/<dg>/rerun/<stamp>-<commit>/`)
+adds a **minutes by role** block (planned ≤12 / 12-22 / 22-30 / 30+: bias, MAE, in-band, the actuals below the drawn p10
+and above the p90, the share under 8 minutes, the drawn sd against the error's; DNPs counted) and a **pool minutes a
+team** row (the World's drawn minutes against what the pool's players really played, and the minutes that went to players
+outside the World), the gate for anything that touches who plays; it
 keeps every stat of every player in every world, so the backtest view draws each player's distribution with his actual
 inside it ([../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-viewbacktestdgdraft-group-_nba_backtesthtml)).
 A slate archived before 2026-10-23 has no tip record and cannot be rerun. First result (slate 156184, 2026-11-06, 500

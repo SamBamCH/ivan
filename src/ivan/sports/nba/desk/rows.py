@@ -94,6 +94,9 @@ class RowsMixin:
             name = normalize_name(p.name)
             s = state.loc[name] if name in state.index else None
             r = proj.loc[name] if name in proj.index else None
+            fringe = bool(r is not None and r.get("fringe", False))
+            fr_p = None if not fringe else float(r.get("fringe_p") or 0.0); fr_min = None if not fringe else float(r.get("fringe_minutes") or 0.0)
+            r = None if fringe else r                                   # a fringe row is "no minutes" on the card; its chance rides along
             h = hist.loc[name] if name in hist.index else None
             status = (p.status or "").upper()
             out = r is None
@@ -124,6 +127,8 @@ class RowsMixin:
                     flags.append(f"market {gap:+.0%} vs history")
             if r is not None and not r.get("priced") and float(r["minutes"]) >= 20:
                 flags.append("unpriced")
+            if r is not None and not pd.isna(r.get("p_cut", np.nan)) and float(r["p_cut"]) >= 0.3 and float(r["minutes"]) >= 10:
+                flags.append(f"cut-prone: {float(r['p_cut']):.0%} of nights under 8 min")
             if r is not None and r.get("minutes_p90") is not None and not pd.isna(r.get("minutes_p90")) and float(r["minutes_p90"]) > 48:
                 flags.append(f"impossible band: p90 {float(r['minutes_p90']):.0f} min")
             if r is not None and not pd.isna(r.get("fpts_std", np.nan)) and float(r["fpts_mean"]) >= 8 and float(r["fpts_std"]) > 1.2 * float(r["fpts_mean"]):
@@ -153,6 +158,10 @@ class RowsMixin:
             q = None if r is None else r.get("quantiles")
             q = q if isinstance(q, list) and len(q) == 101 else None
             min_sim = None if r is None or pd.isna(r.get("minutes_sim", np.nan)) else float(r["minutes_sim"])
+            if fringe and name in proj.index and not pd.isna(proj.loc[name].get("minutes_sim", np.nan)):
+                min_sim = float(proj.loc[name]["minutes_sim"])              # what the World drew for him across his play-worlds
+            p_cut = None if r is None or pd.isna(r.get("p_cut", np.nan)) else float(r["p_cut"])
+            p_zero = None if r is None or pd.isna(r.get("p_zero", np.nan)) else float(r["p_zero"])
             opt = self.optimal_of(p.id)
             ov = override_of(self.overrides, name)
             mk = self.market_rows.get(name, {})
@@ -177,7 +186,8 @@ class RowsMixin:
                              fppm_pin=ov.get("fppm"), low_pin=ov.get("min_low"), high_pin=ov.get("min_high"), stats=stats,
                              fpts_pin=ov.get("fpts"), pub_pin=ov.get("pub"), fpts_model=fpts_model, fpts_plan=plan,
                              p10=None if q is None else q[10], p50=None if q is None else q[50], p90=None if q is None else q[90], min_sim=min_sim,
-                             opt=opt.get("share"), opt_mean=bool(opt.get("in_mean")),
+                             opt=opt.get("share"), opt_mean=bool(opt.get("in_mean")), p_cut=p_cut, p_zero=p_zero, fringe=fringe, fringe_p=fr_p, fringe_minutes=fr_min,
+                             minutes_sd=None if r is None or r.get("minutes_sd") is None or pd.isna(r.get("minutes_sd")) else float(r["minutes_sd"]),
                              layer=self._layer_of(name), local=dict(self.local_overrides.get(name, {})), published_pins=self._published_of(name),
                              fpts=fpts, sd=sd,
                              fpm=None if r is None else float(r["fpm"]),

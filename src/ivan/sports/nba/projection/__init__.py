@@ -16,6 +16,7 @@ Modules
   rotation      the grid's proposal from the stints, the drawn grids, the old minutes sampler (the game sim's check uses it)
   team_profile, team_minutes   the coach's pattern; the scratch probabilities and roles
   minutes, rates, lines        the old allocator (alloc = headroom), the rates with shrinkage and the usage bump, the game lines
+  cuts          the soft pool: a player's own chance of being cut tonight, a zero-minute player's chance of playing (cuts.json)
   engine        project_team(): layer 1, one call from roster + availability + history to the mapping
   live          LiveSlate: the pool, starters, market rates and overrides in; write_plan / write_sim out
   worlds        layer 2: simulate_game, the World per game read back per player; the fpts pin

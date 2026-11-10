@@ -22,6 +22,7 @@ from .minutes import MinutesInputs, allocate_team_minutes, baseline_minutes, sal
 from .rates import shrunk_rates, fpts_per_minute, apply_usage_bump, USAGE_RECOVERY
 from .market import blend_rates
 from .team_minutes import load_params as load_team_params, role_of, scratch_probability, tau_from_band
+from . import cuts as CUTS
 
 MINUTES_MODELS = ("rotation",)
 
@@ -210,6 +211,10 @@ def project_team(
             alloc["pinned"] = [bool(alloc.loc[n, "pinned"]) or n in locks.index for n in alloc.index]
         zero_minutes = [n for n in alloc.index if alloc.loc[n, "minutes"] <= 0]
         alloc = alloc[alloc["minutes"] > 0]
+        # the soft pool's fringe: left off the floor by the plan (the depth cut) or dropped by hand (a 0-minute pin makes him unavailable
+        # to the plan; his status says he is not hurt), not the players ruled out
+        from .live import OUT_STATUSES
+        fringe = [p for p in avail if p.name in zero_minutes] + [p for p in roster if not p.available and (p.status or "").upper() not in OUT_STATUSES and p.name in recs]
         avail = [p for p in avail if p.name in alloc.index]
         rot["zero_minutes"] = zero_minutes
     if params.alloc == "solve":
@@ -235,6 +240,7 @@ def project_team(
         raise ValueError(f"unknown minutes_model {params.minutes_model!r}; expected one of {MINUTES_MODELS}")
     by_name = {p.name: p for p in avail}
     team_params = params.team_params or load_team_params()
+    cut_table = CUTS.load_table(); cut_mode = CUTS.cuts_mode()
     roles, p_out = {}, {}
     for name in alloc.index:
         p = by_name[name]
@@ -257,14 +263,35 @@ def project_team(
         if stat_pins and mins > 0:
             # a typed total is his for the game whatever his minutes: that stat's rate is total / minutes, the others stay
             rates = {**rates, **{s: v / mins for s, v in stat_pins.items()}}; fpm = fpts_per_minute(rates)
+        s_row = srow(name)
+        own = None if s_row is None or "cut10" not in s_row.index else float(s_row["cut10"])
+        held = by_name[name].minutes_override is not None               # a typed minutes pin; a locked row holds his minutes when he plays, not whether he does
         rec = {"player_name": name, "minutes": mins, "baseline": r["baseline"],
                "pinned": bool(alloc.loc[name, "pinned"]), "usage_mult": float(bump[name]),
                "games": r["games"], "fpm": fpm, "priced": r["priced"], "fpm_pinned": fpm_override is not None,
                "band_pinned": tau_from_band(by_name[name].minutes_low, by_name[name].minutes_high) is not None,
                "stat_pinned": sorted(stat_pins),
-               "role": roles[name], "p_out": p_out[name], "rates": rates}
+               "role": roles[name], "p_out": p_out[name], "rates": rates, "fringe": False,
+               "p_cut": CUTS.cut_probability(cut_table, mins, own, starter=bool(by_name[name].starter), held=held, status=by_name[name].status, mode=cut_mode),
+               "cut10": own, "fringe_p": 0.0, "fringe_minutes": 0.0,
+               "minutes_sd": None if s_row is None or "min_sd20" not in s_row.index or pd.isna(s_row["min_sd20"]) else float(s_row["min_sd20"])}
         for s in STATS:
             rec[f"proj_{s}"] = mins * rates[s]
         rec["fpts_mean"] = mins * fpm                 # the plan's total; the distribution is the World's (projection.worlds)
+        rows.append(rec)
+    # the fringe: available players the plan left at zero. They stay in the frame at 0 minutes with their history rates and the
+    # chance the night uses them anyway (projection.cuts.fringe_profile), so the World can hand them the minutes real nights do
+    for p in (fringe if params.minutes_model == "rotation" and params.rotation is not None and params.rotation.get("skeleton") else []):
+        if cut_mode == "off":
+            break
+        r = recs[p.name]; s_row = srow(p.name)
+        own = None if s_row is None or "cut10" not in s_row.index else float(s_row["cut10"])
+        fp, fm, _ = CUTS.fringe_profile(cut_table, own)
+        rates = {s: r["rates"][s] for s in STATS}
+        rec = {"player_name": p.name, "minutes": 0.0, "baseline": r["baseline"], "pinned": False, "usage_mult": 1.0, "games": r["games"], "fpm": r["fpm"],
+               "priced": r["priced"], "fpm_pinned": False, "band_pinned": False, "stat_pinned": [], "role": "deep", "p_out": 0.0, "rates": rates, "fringe": True,
+               "p_cut": 0.0, "cut10": own, "fringe_p": fp, "fringe_minutes": fm, "minutes_sd": None, "fpts_mean": 0.0}
+        for s in STATS:
+            rec[f"proj_{s}"] = 0.0
         rows.append(rec)
     return pd.DataFrame(rows).set_index("player_name")

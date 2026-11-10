@@ -20,6 +20,9 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
         layer B with the real margin path plugged in: the new draw (fouls, heirs by flow, the path's garbage time) against the
         current sampler on the same proposed grids: minutes MAE, bias and 10-90 coverage by role, by final margin, for the
         players who really reached five fouls
+    scripts/nba/gamesim.py fit-cuts [--no-write]
+        the soft pool's table (projection/cuts.py -> data/nba/models/cuts.json): per role and own recent cut share, how often the
+        rotation does not hold for a player (under 8 minutes), how often that is a DNP, the token minutes; the fringe profile
     scripts/nba/gamesim.py check-usage [--start 2026-01-10 --end 2026-02-28]
         layer C with the truth plugged in: the shares over the real fives and possessions against the per-minute rate x true
         minutes, per stat (attempts, threes, trips, turnovers, assists, rebounds, steals, blocks), overall / starters / bench /
@@ -28,6 +31,7 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -141,6 +145,25 @@ def cmd_check_rotation(args) -> None:
         print(); print(r[key].round(3).to_string(index=False))
 
 
+def cmd_fit_cuts(args) -> None:
+    from ivan.sports.nba.projection import cuts as CUTS
+    from ivan.sports.nba.projection.history import load_box_scores
+    s = get_session(init_db("nba"))
+    box = load_box_scores(s)
+    t = CUTS.fit(box)
+    ft = CUTS.fringe_from_tips(s, box)
+    if ft:
+        t["fringe"] = ft
+        print(f"fringe from the tip records: {ft['_source']}; plays {ft['_p_play_all']:.2f} of nights, {ft['_mean_all']} min when he does")
+    print(f"{t['rows']} player-games through {t['fitted_on']}; token minutes when cut but used {t['token_minutes']}")
+    print(f"{'role':8s} " + " ".join(f"{b:>14s}" for b, _, _ in CUTS.BINS) + "   P(cut) [P(DNP | cut)] (n)")
+    for role, _, _ in CUTS.ROLES:
+        print(f"{role:8s} " + " ".join(f"{t['p_cut'][role][b]:.2f} [{t['p_dnp_given_cut'][role][b]:.2f}] {t['n'][role][b]:>5d}" for b, _, _ in CUTS.BINS))
+    print("fringe (planned zero): " + "; ".join(f"{b}: plays {f['p_play']:.2f}, {f['mean']:.1f} ± {f['sd']:.1f} min (n {f.get('n', '?')}{', pooled' if f.get('pooled') else ''})" for b, f in t["fringe"].items() if not b.startswith("_")))
+    if not args.no_write:
+        print("written " + str(CUTS.save_table(t)))
+
+
 def cmd_draw_world(args) -> None:
     import time
     from ivan.sports.nba import slates
@@ -161,7 +184,6 @@ def cmd_draw_world(args) -> None:
 
 
 def cmd_calibrate_world(args) -> None:
-    import json
     from ivan.sports.nba import slates
     from ivan.sports.nba.gamesim import world as W
     slates.use(args.slate); s = slates.session(args.slate)
@@ -184,6 +206,7 @@ def main() -> None:
     u = sub.add_parser("check-usage"); u.add_argument("--start", default="2026-01-10"); u.add_argument("--end", default="2026-02-28"); u.set_defaults(fn=cmd_check_usage)
     b = sub.add_parser("check-rotation"); b.add_argument("--start", default="2026-01-10"); b.add_argument("--end", default="2026-01-31"); b.add_argument("-n", type=int, default=300)
     b.add_argument("--jitter", type=float, default=None); b.set_defaults(fn=cmd_check_rotation)
+    fc = sub.add_parser("fit-cuts"); fc.add_argument("--no-write", action="store_true"); fc.set_defaults(fn=cmd_fit_cuts)
     d = sub.add_parser("draw-world"); d.add_argument("--slate", type=int, required=True); d.add_argument("-n", type=int, default=1000); d.add_argument("--seed", type=int, default=None)
     d.add_argument("--top", type=int, default=15); d.set_defaults(fn=cmd_draw_world)
     cw = sub.add_parser("calibrate-world"); cw.add_argument("--slate", type=int, required=True); cw.add_argument("-n", type=int, default=400); cw.add_argument("--rounds", type=int, default=2)

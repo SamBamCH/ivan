@@ -302,7 +302,7 @@ class LiveSlate:
             if p.team != team:
                 continue
             name = normalize_name(p.name)
-            if name in proj.index:
+            if name in proj.index and not bool(proj.loc[name].get("fringe", False)):
                 r = proj.loc[name]
                 p.minutes_proj = float(r["minutes"]); p.fpts_updated_at = datetime.now(); n += 1
                 p.fpts_mean = float(r["fpts_mean"]); p.fpts_std = None; p.fpts_quantiles = None
@@ -311,10 +311,20 @@ class LiveSlate:
                 p.rates = {k: float(v) for k, v in r["rates"].items()} if isinstance(r.get("rates"), dict) else None
                 p.rotation_cells = [int(x) for x in rot["grid"].loc[name].values] if rot and name in rot["grid"].index else None
                 p.boundary_sd = float(rot["spreads"][name]) if rot and name in (rot.get("spreads") or {}) else None
+                p.p_cut = float(r.get("p_cut") or 0.0); p.fringe_p = None; p.fringe_minutes = None
+                p.minutes_sd = None if r.get("minutes_sd") is None or pd.isna(r.get("minutes_sd")) else float(r["minutes_sd"])
+            elif name in proj.index:
+                # the fringe: at zero in the plan, available, with the chance the night uses him (the World draws it); not a projection
+                r = proj.loc[name]
+                p.fpts_mean = None; p.fpts_std = None; p.minutes_proj = 0.0; p.fpts_quantiles = None
+                p.minutes_role = "deep"; p.p_out = None; p.minutes_p10 = None; p.minutes_p90 = None; p.rotation_cells = None; p.boundary_sd = None
+                p.rates = {k: float(v) for k, v in r["rates"].items()} if isinstance(r.get("rates"), dict) else None
+                p.p_cut = None; p.fringe_p = float(r.get("fringe_p") or 0.0); p.fringe_minutes = float(r.get("fringe_minutes") or 0.0); p.minutes_sd = None
+                p.fpts_updated_at = datetime.now()
             else:
                 p.fpts_mean = None; p.fpts_std = None; p.minutes_proj = 0.0; p.fpts_quantiles = None
                 p.minutes_role = None; p.p_out = None; p.rates = None; p.minutes_p10 = None; p.minutes_p90 = None
-                p.rotation_cells = None; p.boundary_sd = None
+                p.rotation_cells = None; p.boundary_sd = None; p.p_cut = None; p.fringe_p = None; p.fringe_minutes = None; p.minutes_sd = None
         return n
 
     def write_sim(self, team: str, sim: pd.DataFrame) -> int:

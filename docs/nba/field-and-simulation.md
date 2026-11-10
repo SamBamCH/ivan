@@ -87,7 +87,9 @@ field); the NFL's conditioned closed-form sim has no NBA counterpart yet.
 Every game of the slate is simulated minute by minute, n worlds at once: the script (`gamesim.script`) draws the night's
 pace and each six-minute segment's possessions around the two teams' trailing paces (`data/nba/models/gamesim/teams.json`)
 and the books' total and spread; the rotation (`gamesim.rotation`) turns each team's skeleton grid into every player's
-coverage of every minute, with scratches and foul-outs handed to heirs by the measured flow across position groups,
+coverage of every minute, with the soft pool (a player's own chance of being cut tonight, a zero-minute player's chance of
+playing a few minutes: `projection.cuts`, [projections.md](projections.md#6-the-pool-who-is-in-tonights-rotation-config-depth_cut-depth_extra-pool)),
+scratches and foul-outs handed to heirs by the measured flow across position groups,
 fouls at each player's own rate and the coach's measured reaction, garbage time off the emergent score (closers out
 while the lead holds) and overtime for the five at the buzzer; each minute the team's possessions end once each as
 two-point attempts, three-point attempts, free-throw trips and turnovers at the roster's pie, split among the five on

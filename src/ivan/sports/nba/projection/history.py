@@ -77,6 +77,8 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
       eff_min      decayed minutes behind the rates (shrinkage weight)
       start_ewm    EWM of the starter flag (halflife START_HALFLIFE)
       play_ewm     EWM of "played when dressed" (halflife PLAY_HALFLIFE)
+      cut10        share of his last 10 roster games (DNP included) under 8 minutes: the soft pool's signal (projection.cuts)
+      min_sd20     sd of his minutes over his last 20 games played: his own spread (the World scales his substitution jitter to it)
       games        games played so far
     A DNP game (dressed, 0 minutes) only moves play_ewm: it says nothing
     about minutes-when-playing or rates, but a lot about whether the coach
@@ -96,16 +98,20 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
         r_num = np.zeros(len(STATS)); r_den = 0.0
         n = 0
         mean = 0.0
+        last10: list = []; last20: list = []
         for row in g.itertuples(index=False):
             mins = float(row.minutes)
             p_num = a_pl * p_num + float(mins > 0); p_den = a_pl * p_den + 1.0
+            last10.append(mins); last10 = last10[-10:]
+            cut10 = float(np.mean([x < 8.0 for x in last10]))
             if mins <= 0:
                 if n == 0:
                     continue  # nothing to carry yet
                 rec = dict(out[-1]); rec.update(game_date=row.game_date, game_id=row.game_id,
-                                                team=row.team, play_ewm=p_num / p_den)
+                                                team=row.team, play_ewm=p_num / p_den, cut10=cut10)
                 out.append(rec)
                 continue
+            last20.append(mins); last20 = last20[-20:]
             # minutes: EWM mean and variance
             m_num = a_min * m_num + mins; m_den = a_min * m_den + 1.0
             mean = m_num / m_den
@@ -121,11 +127,12 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
                 "game_id": row.game_id,
                 "min_ewm": mean, "min_ewm_sd": float(np.sqrt(v_num / m_den)),
                 "eff_min": r_den, "start_ewm": s_num / s_den, "play_ewm": p_num / p_den, "games": n,
+                "cut10": cut10, "min_sd20": float(np.std(last20)) if len(last20) >= 5 else float("nan"),
             }
             for i, s in enumerate(STATS):
                 rec[f"rate_{s}"] = r_num[i] / r_den
             out.append(rec)
-    cols = ["player_name", "team", "game_date", "game_id", "min_ewm", "min_ewm_sd", "eff_min", "start_ewm", "play_ewm", "games"] + [f"rate_{s}" for s in STATS]
+    cols = ["player_name", "team", "game_date", "game_id", "min_ewm", "min_ewm_sd", "eff_min", "start_ewm", "play_ewm", "games", "cut10", "min_sd20"] + [f"rate_{s}" for s in STATS]
     rows = pd.DataFrame(out, columns=cols) if not out else pd.DataFrame(out)       # no box scores yet: the columns, no rows
 
     # team-level production: EWM of total fantasy points per team-game

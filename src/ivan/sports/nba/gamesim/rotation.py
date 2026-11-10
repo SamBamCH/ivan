@@ -5,6 +5,11 @@ Layer B: the rotation under game events. Who is on the floor, minute by minute, 
 The skeleton grid (projection/skeleton.py: the coach's slots filled with tonight's players) is the plan. A world jitters
 every substitution's time once (so the floor stays at five), then the game happens to the plan:
 
+  the soft pool a world where the rotation does not hold for a player (p_cut, projection.cuts: his own recent cut rate by role)
+                hands his row to his heirs like a scratch (the DNP share) or keeps a token first stint and hands over the rest;
+                a player the plan left at zero (fringe_p) plays his few minutes at the end of a half in his play-worlds, the five
+                on the floor giving them up, and is an heir at his play weight. The pool's minutes then sum to what real pools
+                play (about 223 of 240), not 240 (docs/nba/notes/minutes_distribution_2026-11-10.md);
   scratches     a world where a player is out (p_out) hands his minutes to his heirs: the owed minutes flow across position
                 groups by the measured mid-game matrix (fouls.DEFAULT_FLOW: a big's go 40% to bigs, 30% to guards, 8% to
                 wings, a fifth to nobody in particular) and inside a group to the players with room in those minutes
@@ -115,21 +120,23 @@ def _raster(entry: np.ndarray, exit_: np.ndarray) -> np.ndarray:
 
 
 def _hand_over(F: np.ndarray, w: np.ndarray, i: int, freed: np.ndarray, from_minute: np.ndarray, groups: Sequence[str], flow: Dict[str, Dict[str, float]],
-               avail: np.ndarray) -> None:
+               avail: np.ndarray, heir_w: Optional[np.ndarray] = None) -> None:
     """
     Worlds `w`: player i's freed coverage (len(w), 48) from each world's `from_minute` goes to his heirs: across groups by the
-    flow matrix, inside a group by the room each available player has in that minute. What no heir can take is left for
-    the per-minute renormalisation (the rotation plays short: everyone else a little longer).
+    flow matrix, inside a group by the room each available player has in that minute (times his heir weight: a fringe player
+    at his play chance, a pool player at one). What no heir can take is left for the per-minute renormalisation (the rotation
+    plays short: everyone else a little longer).
     """
     k = F.shape[1]
     g_out = groups[i]
+    hw = np.ones(k) if heir_w is None else np.asarray(heir_w, dtype=float)
     for hg, share in flow.get(g_out, {}).items():
         if share <= 0:
             continue
         members = [j for j in range(k) if j != i and groups[j] == hg]
         if not members:
             continue
-        room = np.clip(1.0 - F[w][:, members, :], 0.0, 1.0) * avail[w][:, members, None]            # (len(w), |members|, 48)
+        room = np.clip(1.0 - F[w][:, members, :], 0.0, 1.0) * avail[w][:, members, None] * hw[members][None, :, None]   # (len(w), |members|, 48)
         tot = room.sum(axis=1, keepdims=True)
         take = np.where(tot > 0, room / np.maximum(tot, 1e-9), 0.0) * (freed * share)[:, None, :]
         F[np.ix_(w, members, np.arange(MINUTES))] += take
@@ -172,14 +179,35 @@ def _renormalise(F: np.ndarray, weights: Optional[np.ndarray] = None, passes: in
             np.clip(F, 0.0, 1.0, out=F)
 
 
+def spread_for(boundary_sd: Optional[float], planned: float, minutes_sd: Optional[float], cells=None, jitter_scale: float = JITTER_SCALE) -> float:
+    """
+    A player's substitution spread (minutes): his measured boundary sd (or the level default), scaled so the jitter puts his own
+    minutes sd on him when it is known (history.min_sd20: Pritchard 7.4, a metronome starter 4). The jitter of s stints' entries
+    and exits puts about sqrt(2 s) x jitter x spread of sd on his minutes; the spread is kept within 0.8 and 6 minutes.
+    """
+    base = float(boundary_sd) if boundary_sd else default_spread(planned)
+    if minutes_sd is None or not np.isfinite(minutes_sd) or planned <= 0:
+        return base
+    row = np.asarray(cells, dtype=bool) if cells is not None else None
+    stints = max(1, int(((~np.concatenate([[False], row[:-1]])) & row).sum())) if row is not None and row.any() else 1
+    implied = float(np.sqrt(2.0 * stints)) * jitter_scale * base
+    target = float(np.clip(minutes_sd, 2.0, 10.0))
+    return float(np.clip(base * target / max(implied, 1e-6), 0.8, 6.0))
+
+
 def draw(grid: pd.DataFrame, spreads: Dict[str, float], n: int, rng: np.random.Generator, margin_path: np.ndarray, overtime: np.ndarray,
          *, p_out: Optional[Dict[str, float]] = None, foul_rate: Optional[Dict[str, float]] = None, groups: Optional[Dict[str, str]] = None,
-         flow: Optional[Dict[str, Dict[str, float]]] = None, jitter_scale: Optional[float] = None, garbage: bool = True) -> dict:
+         flow: Optional[Dict[str, Dict[str, float]]] = None, jitter_scale: Optional[float] = None, garbage: bool = True,
+         p_cut: Optional[Dict[str, float]] = None, dnp_share: Optional[Dict[str, float]] = None, token_minutes: float = 4.0,
+         fringe: Optional[Dict[str, Tuple[float, float, float]]] = None) -> dict:
     """
     grid: rows players, 48 columns of 0/1 (the plan). spreads: player -> sd of his substitution times (minutes). margin_path:
     (n, 48) the team's lead at the end of each minute in each world. overtime: (n,) extra periods. p_out: scratch probability
     per player. foul_rate: fouls per minute on the floor per player (None: no fouls drawn). groups: player -> big | guard | wing.
-    Returns {"onfloor": (n, k, 48), "minutes": (n, k), "ot_minutes": (n, k), "garbage_at": (n,), "fouls": (n, k), "fouled_out": (n, k), "names"}.
+    p_cut: per player, P(the rotation does not hold for him tonight); dnp_share: of those nights, the share with no minutes (the
+    rest keep a token first stint of token_minutes); fringe: player -> (P(plays), minutes when he does, their sd) for the players
+    the plan left at zero. Returns {"onfloor": (n, k, 48), "minutes": (n, k), "ot_minutes": (n, k), "garbage_at": (n,), "fouls": (n, k),
+    "fouled_out": (n, k), "cut": (n, k), "fringe_played": (n, k), "names"}.
     """
     jitter_scale = JITTER_SCALE if jitter_scale is None else float(jitter_scale)
     flow = flow or DEFAULT_FLOW
@@ -218,6 +246,8 @@ def draw(grid: pd.DataFrame, spreads: Dict[str, float], n: int, rng: np.random.G
             F[:, i, :] += _raster(B[:, s], B[:, s + 1])
     np.clip(F, 0.0, 1.0, out=F)
     avail = np.ones((n, k), dtype=bool)
+    fringe = fringe or {}
+    heir_w = np.array([float(fringe[nm][0]) if nm in fringe else 1.0 for nm in names])
     _renormalise(F, base[None, :] * avail)
     all_minutes = np.zeros(n, dtype=int)
     # scratches
@@ -229,7 +259,59 @@ def draw(grid: pd.DataFrame, spreads: Dict[str, float], n: int, rng: np.random.G
             continue
         avail[outw, i] = False
         freed = F[outw, i, :].copy(); F[outw, i, :] = 0.0
-        _hand_over(F, outw, i, freed, all_minutes[outw], grp, flow, avail)
+        _hand_over(F, outw, i, freed, all_minutes[outw], grp, flow, avail, heir_w)
+    # the soft pool, part one: cuts. The rotation does not hold for him tonight: the DNP share hands his row to the heirs like a
+    # scratch, the rest keep his first token_minutes and hand over the remainder from there (projection.cuts)
+    cut = np.zeros((n, k), dtype=bool)
+    for nm, pc in (p_cut or {}).items():
+        if nm not in idx or not pc:
+            continue
+        i = idx[nm]; w_cut = np.flatnonzero((rng.random(n) < float(pc)) & avail[:, i])
+        if not len(w_cut):
+            continue
+        cut[w_cut, i] = True
+        is_dnp = rng.random(len(w_cut)) < float((dnp_share or {}).get(nm, 0.5))
+        dnp, tok = w_cut[is_dnp], w_cut[~is_dnp]
+        if len(dnp):
+            avail[dnp, i] = False
+            freed = F[dnp, i, :].copy(); F[dnp, i, :] = 0.0
+            _hand_over(F, dnp, i, freed, all_minutes[dnp], grp, flow, avail, heir_w)
+        for w in tok:
+            C = np.cumsum(F[w, i, :])
+            if C[-1] <= token_minutes:
+                continue
+            m0 = min(int(np.searchsorted(C, float(token_minutes), side="left")) + 1, MINUTES - 1)
+            freed = np.zeros((1, MINUTES)); freed[0, m0:] = F[w, i, m0:]; F[w, i, m0:] = 0.0
+            avail[w, i] = False
+            _hand_over(F, np.array([w]), i, freed, np.array([m0]), grp, flow, avail, heir_w)
+    # the soft pool, part two: the fringe. A player the plan left at zero plays in his play-worlds: his minutes at the end of the
+    # game (up to six of them at the end of the first half), the five on the floor giving them up pro rata
+    fringe_played = np.zeros((n, k), dtype=bool)
+    for nm, (pp, mu, sd) in fringe.items():
+        if nm not in idx or pp <= 0:
+            continue
+        i = idx[nm]; w_play = np.flatnonzero(rng.random(n) < float(pp))
+        if not len(w_play):
+            continue
+        fringe_played[w_play, i] = True
+        mins = np.clip(rng.normal(float(mu), float(sd), len(w_play)), 1.0, 24.0)
+        inv = 1.0 / (base + 4.0)                                              # who gives the minutes up: the bench first, a star last
+        inv[i] = 0.0
+        for w, d in zip(w_play, mins):
+            half = min(6.0, max(0.0, d - 6.0)); endg = d - half
+            for lo, hi in ((24.0 - half, 24.0), (float(MINUTES) - endg, float(MINUTES))):
+                if hi - lo <= 0.05:
+                    continue
+                cov = _raster(np.array([lo]), np.array([hi]))[0]
+                for m in np.flatnonzero(cov > 0):
+                    col = F[w, :, m]
+                    u = col * inv
+                    tot = u.sum()
+                    if tot <= 1e-9:
+                        continue
+                    col -= np.minimum(col, cov[m] * u / tot)                      # exactly his coverage comes off the five, weighted to the bench
+                    col[i] = cov[m]
+                    F[w, :, m] = col
     _renormalise(F, base[None, :] * avail)
     # fouls as a process along the on-floor minutes: exponential gaps at the player's rate (the hazard is flat in the foul
     # count, measured 2026-11-07: 2.9-3.3 per 36 holding 0..5 fouls); each sit after the 4th and 5th shrinks the exposure the
@@ -253,12 +335,12 @@ def draw(grid: pd.DataFrame, spreads: Dict[str, float], n: int, rng: np.random.G
                     if kth == 6:
                         freed = np.zeros((1, MINUTES)); freed[0, m:] = F[w, i, m:]; F[w, i, m:] = 0.0
                         fouled_out[w, i] = True; avail[w, i] = False; fouls[w, i] = 6
-                        _hand_over(F, np.array([w]), i, freed, np.array([m]), grp, flow, avail)
+                        _hand_over(F, np.array([w]), i, freed, np.array([m]), grp, flow, avail, heir_w)
                         break
                     s = sit_share(kth, float(MINUTES - m))
                     if s < 1.0:
                         freed = np.zeros((1, MINUTES)); freed[0, m:] = F[w, i, m:] * (1.0 - s); F[w, i, m:] *= s
-                        _hand_over(F, np.array([w]), i, freed, np.array([m]), grp, flow, avail)
+                        _hand_over(F, np.array([w]), i, freed, np.array([m]), grp, flow, avail, heir_w)
                         row = np.cumsum(F[w, i, :])                                  # the exposure after the sit
                     t = t + gaps[w, kth]                                              # the next foul's on-floor minute
                     if t > row[-1]:
@@ -298,7 +380,7 @@ def draw(grid: pd.DataFrame, spreads: Dict[str, float], n: int, rng: np.random.G
         last = F[ot_w, :, MINUTES - 1]
         ot_minutes[ot_w] = last * (OT_MIN * overtime[ot_w])[:, None]
     minutes = F.sum(axis=2) + ot_minutes
-    return dict(onfloor=F, minutes=minutes, ot_minutes=ot_minutes, garbage_at=garbage_at, fouls=fouls, fouled_out=fouled_out, names=names)
+    return dict(onfloor=F, minutes=minutes, ot_minutes=ot_minutes, garbage_at=garbage_at, fouls=fouls, fouled_out=fouled_out, cut=cut, fringe_played=fringe_played, names=names)
 
 
 # ----------------------------------------------------------------------------- the check

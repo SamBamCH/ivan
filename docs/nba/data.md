@@ -19,7 +19,7 @@ The design note is [notes/plan_slates_2026-11-03.md](notes/plan_slates_2026-11-0
 
 | Table | Where | What | Written by | Feed |
 |---|---|---|---|---|
-| `nba_player` | slate | **the pool**: one row per DK player of the slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`; `status_changed_at` (when he was last downgraded, to an out status or out of the five: props posted before it do not count, `changes.mark_status_changes`); the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), `project_slate`, `project.py` | slate bundle |
+| `nba_player` | slate | **the pool**: one row per DK player of the slate: salary, position, status, DK FPPG (`dk_avg_fpts`), our `minutes_proj`, `fpts_mean`, `fpts_std`, `fpts_quantiles`, `minutes_p10/p90`, `minutes_role`, `p_out`, `rates`, `rotation_cells`, the soft pool's `p_cut`, `fringe_p`, `fringe_minutes`, `minutes_sd` (projection/cuts.py); `status_changed_at` (when he was last downgraded, to an out status or out of the five: props posted before it do not count, `changes.mark_status_changes`); the public `pub_fpts` and `ownership` | the pool refresh (`ingest.store_slate`), `project_slate`, `project.py` | slate bundle |
 | `starting_lineups` | slate | Rotowire's expected and confirmed starters, with `fetched_at` | the pool refresh | slate bundle |
 | `odds` | history | player props as (book, market, line, prices), each row with its game (`game_id`, `commence_time`, `home_abbr`, `away_abbr` from the odds API event): the day's slates share them | `data_clean.odds.store_props` (a props fetch replaces the games it priced and drops games older than 3 days; the restore of a capture) | live; a slate's projection reads only the rows of its own games (`market.fresh_odds`); `scripts/nba/odds_games.py` shows them by game, `--backfill` gives pre-2026-11-07 rows their game |
 | `nba_market_rate` | slate | per player and stat: market mean ÷ basis minutes, books, line | `live.store_market_rates` after a props fetch | slate bundle |
@@ -95,6 +95,7 @@ data/nba/
 │   ├── historical_lines.csv        closing-ish game lines for past days (fetch_historical_lines.py)
 │   └── stok.csv                    a Stokastic export to record as a yardstick (ingest.py --stok-csv)
 ├── models/
+│   ├── cuts.json                   the soft pool (projection/cuts.py, `gamesim.py fit-cuts`): P(cut) and P(DNP | cut) by role and own-cut bin, the token minutes, the fringe profile
 │   ├── projection_calibration.json per-stat negative-binomial dispersion: a prop line's over price to a mean (market.means_from_tails; hand-kept, fitted 2026-10)
 │   ├── team_minutes.json           the projection's game constants: scratch probabilities by status and salary, margin sd, overtime rate (hand-kept; measured 2026-10)
 │   ├── correlation.json            the role-pair correlation table measured 2026-10 on walk-forward residuals: the game sim's check target
