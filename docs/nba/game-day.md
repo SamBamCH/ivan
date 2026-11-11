@@ -52,7 +52,9 @@ slate refreshed at 18:40 had him OUT).
 A refresh takes about 10 seconds: the fetch, the market means (the props de-vigged in one
 vectorised pass, `projection/market.py`), the pool, the projection and the public projection land
 in one transaction. Nothing else runs: the public field and the ownership column are **not** rebuilt
-by a refresh, a generate or an edit (since 2026-10-28). The sim builds the field it needs and writes
+by a refresh, a generate or an edit (since 2026-10-28); the ownership column carries over from the last build when
+the refresh replaces the pool (`ingest.carry_ownership`), so it reads the last field's exposure, not zero, until the next
+Field + ownership or sim. The sim builds the field it needs and writes
 ownership from the largest contest's field; the actions bar's **Field + ownership** button
 (`scripts/nba/field_ownership.py`, about 45 seconds at `field.ownership_entries` = 3,000) builds it
 on demand when you want the column fresh before a sim. `ingest.py --field` does both in one go.
