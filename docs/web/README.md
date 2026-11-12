@@ -80,11 +80,20 @@ the results (a consumer desk, the server, leaves `Sport.ledger` None and shows n
 - the **home page's strip** above the tiles (`ivan.web.main.money` = `ivan.core.pnl.combined`; terminal
   `scripts/pnl.py [--year] [--sports] [--cap] [--rate] [--basis]`): this calendar year over every sport, each sport's line, and
   the US federal tax on the total (`ivan.core.tax.compute_tax`, one return for every sport). The first row of the tax
-  table is the filing in `config/tax.json` (filing status, standard deduction, rate, the 90% loss cap), and its
-  after-tax figure is the headline; the rows under it change one thing each: itemizing under the 90% cap, itemizing at
-  100%, the standard deduction (no losses deducted), net DFS, and the other count of winnings and losses. Losses
-  count only when itemizing, and from 2026 only 90% of them: with the configured `other_itemized` of 0 the standard
-  deduction is the larger, so the configured row taxes the winnings in full. An estimate, not tax advice.
+  table is the filing in `config/tax.json`, and its after-tax figure is the headline; the rows under it change one
+  thing each. An estimate, not tax advice.
+
+The configured filing is a **business** (`reporting_mode: business`, Schedule C): the winnings are gross receipts and
+the losses, with `business_expenses` (the year's data, subscriptions, the server), come off them there, with no
+itemizing and no standard-deduction comparison. The 2026 cap still applies: the deduction is 90% of (losses +
+expenses) and never more than the winnings, so a break-even year is taxed on 10% of its losses and a losing year on
+nothing (no loss to set against other income or carry forward). The profit left carries self-employment tax
+(`se_tax`: 12.4% up to `ss_wage_base` less `w2_wages`, 2.9% on all of it, both on 92.35% of the profit, none under
+$400), half of which comes off income; the table shows it in its own column, inside the estimate. The rows under the
+configured one: a business at 100% of losses, a business without self-employment tax, a hobby itemizing under the 90%
+cap, a hobby on the standard deduction (no losses deducted, the winnings taxed in full), and the other count of
+winnings and losses. `reporting_mode: gross_165d` makes the hobby the configured filing (its rows: itemizing at 90%
+and 100%, the standard deduction, net DFS).
 
 What counts as winnings and losses is `wager_basis` in `config/tax.json` (`ivan.core.tax.wagering_totals`; `scripts/pnl.py --basis`):
 

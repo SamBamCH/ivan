@@ -153,11 +153,12 @@ another question: what the chooser's picks would have made, entered or not.
 
 ```bash
 venv/bin/python scripts/nfl/backtest_tax.py [--dk-history export.csv] [--runs-dir ...] [--since --until] [--bankroll 2000]
-    [--cap 0.9 --rate 0.22 | --brackets --other-income 90000] [--mode gross_165d|net_dfs] [--played-only] [--in-field] [--volumes ...] [--n-boot ...]
+    [--cap 0.9 --rate 0.22 | --brackets --other-income 90000] [--mode business|gross_165d|net_dfs] [--played-only] [--in-field] [--volumes ...] [--n-boot ...]
 ```
 
 What the chosen lineups would have returned after US federal gambling tax (2026 rules: 90% of losses
-deductible; `config/tax.json`, verify with a CPA; engine `ivan.core.tax.compute_tax(W, L, cfg)`, tested in
+deductible; `config/tax.json`, whose filing is a business on Schedule C with self-employment tax unless `--mode` says
+otherwise; verify with a CPA; engine `ivan.core.tax.compute_tax(W, L, cfg)`, tested in
 `tests/core/test_tax.py`). Each entry is settled from the best evidence in order: a DraftKings
 contest-history export, our own entries in a scraped contest, the lineup's actual points placed in the
 scraped field, points only, nothing. The report: year to date (W, L, deductible, itemize decision,

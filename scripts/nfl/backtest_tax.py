@@ -4,7 +4,7 @@ After-tax backtest of the lineups the pipeline chose.
 
     python scripts/nfl/backtest_tax.py [--dk-history export.csv] [--runs-dir DIR ...] [--tax-year 2026] [--bankroll 2000]
         [--cap 0.9] [--rate 0.22] [--brackets] [--filing-status single] [--other-income 90000]
-        [--other-itemized 0] [--state-rate 0.05] [--mode gross_165d|net_dfs] [--itemize auto|always|never]
+        [--other-itemized 0] [--state-rate 0.05] [--mode business|gross_165d|net_dfs] [--itemize auto|always|never]
         [--reserve-pct 0.3] [--played-only] [--in-field auto|yes|no] [--volumes 0.5,1,2,4,8] [--no-plot]
 
 For each contest, the last choose run before lock says what we would have
@@ -28,7 +28,7 @@ from ivan.database.session import add_missing_columns, get_session, init_db
 from ivan.sports.nfl import backtest_report, backtest_tax as bt
 from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import OUTPUT_DIR
-from ivan.core.tax import GROSS, NET, load_tax_config
+from ivan.core.tax import BUSINESS, GROSS, NET, load_tax_config
 
 BACKTEST_DIR = OUTPUT_DIR / "backtest"
 
@@ -55,7 +55,7 @@ def parse_args():
     t.add_argument("--other-income", type=float, default=None, dest="other_taxable_income")
     t.add_argument("--state-rate", type=float, default=None)
     t.add_argument("--no-state-loss-deduction", action="store_true")
-    t.add_argument("--mode", choices=[GROSS, NET], default=None, dest="reporting_mode")
+    t.add_argument("--mode", choices=[BUSINESS, GROSS, NET], default=None, dest="reporting_mode")
     t.add_argument("--itemize", choices=["auto", "always", "never"], default=None)
     t.add_argument("--reserve-pct", type=float, default=None, dest="tax_reserve_pct", help="share of each win swept to a tax reserve")
     v = ap.add_argument_group("volume sweep")

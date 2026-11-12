@@ -487,7 +487,7 @@ def test_home_shows_each_sports_money_and_the_total_with_its_tax(open_site, monk
     monkeypatch.setattr(REGISTRY["mma"], "ledger", None)
     r = open_site.get("/")
     assert r.status_code == 200 and 'class="money"' in r.text
-    for text in ("+$400.00", "-$600.00", "+$1,000.00", "Tax on", "90% of losses deductible", "won $2,800.00", "lost $2,400.00", "every entry fee as a loss"):
+    for text in ("+$400.00", "-$600.00", "+$1,000.00", "Tax on", "Filed as a business (Schedule C)", "a hobby, itemizing (90% of losses deductible)", "SE tax", "won $2,800.00", "lost $2,400.00", "every entry fee as a loss"):
         assert text in r.text, text
     monkeypatch.setattr(REGISTRY["nfl"], "ledger", lambda now: 1 / 0)          # one sport's ledger failing: its tile says so, the rest stands
     r = open_site.get("/")

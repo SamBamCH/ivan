@@ -71,10 +71,10 @@ def main() -> int:
                else f"won {usd(own['W'])} on the entries that beat their fee, lost {usd(own['L'])} on the rest")
     print(f"\ntax on {m['year']}: {counted} "
           f"({c['filing_status']}, standard deduction {usd(c['standard_deduction'])}, {c['describe']})")
-    print(f"  {'':72} {'deducted':>10} {'taxable':>10} {'phantom':>10} {'est. tax':>10} {'after tax':>11} {'ROI':>5}")
+    print(f"  {'':72} {'deducted':>10} {'taxable':>10} {'phantom':>10} {'SE tax':>9} {'est. tax':>10} {'after tax':>11} {'ROI':>5}")
     for t in m["tax"]:
-        ded = t["deductible"] if (t["itemize"] or t["reporting_mode"] == "net_dfs") else 0.0
-        print(f"  {t['label'][:72]:72} {usd(ded):>10} {usd(t['taxable_gambling']):>10} {usd(t['phantom']):>10} {usd(t['est_tax']):>10} {money(t['after_tax_profit']):>11} {pct(t['after_tax_roi']):>5}")
+        ded = t["deductible"] if (t["itemize"] or t["reporting_mode"] != "gross_165d") else 0.0
+        print(f"  {t['label'][:72]:72} {usd(ded):>10} {usd(t['taxable_gambling']):>10} {usd(t['phantom']):>10} {usd(t['se_tax']):>9} {usd(t['est_tax']):>10} {money(t['after_tax_profit']):>11} {pct(t['after_tax_roi']):>5}")
     if m["all_time"]["contests"] != tot["contests"]:
         print(f"\nall years on file: {money(m['all_time']['net'])} on {usd(m['all_time']['fees'])} in fees")
     return 0
