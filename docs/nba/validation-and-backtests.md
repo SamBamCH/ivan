@@ -73,12 +73,15 @@ share the places they cover). Our entries are the ones DraftKings lists under ou
 entries file names (unscored, with their fees, until scraped final) plus any final export where our name appears. Per
 slate the result is cached in `data/nba/slates/<dg>/results/ledger.json`: a slate whose every contest has a final export
 is **complete** and never recomputed (past results do not change); an incomplete one is re-checked at most every ten
-minutes and recomputed only when a newer final export is on disk. The nightly warms the ledgers after the standings
-derive, so the first page after a scrape does not pay the parse (about 2 s a slate).
+minutes and recomputed when the exports on disk of any of the slate's contests are not the ones it saw (an export of a
+contest the entries file does not name may carry our user name). The nightly warms the ledgers after the standings
+derive, so the first page after a scrape does not pay the parse (about 2 s a slate). Each contest also carries the
+tax's two sums (`gross_win`, `gross_loss`: per entry, the payout over the fee and what was lost of the fee).
 
 Where it shows, **on this machine only** (a consumer desk, the server, gets none of it: `Sport.ledger` is None there and
-the backtest view keeps only the model's columns): the Ivan home tile (the season), the NBA picker's strip under its
-heading (the season) and each day's row and heading (that day), and the slate's backtest view (that slate). The model's
+the backtest view keeps only the model's columns): the Ivan home tile (the season), the home page's strip over every
+sport with the tax on the total ([../web/README.md](../web/README.md#the-money), `scripts/pnl.py`), the NBA picker's
+strip under its heading (the season) and each day's row and heading (that day), and the slate's backtest view (that slate). The model's
 checks below are separate from this: the money is the actual, they are the claims.
 
 ## The record at each game's tip (`ivan.sports.nba.backtest.tips`, `scripts/nba/tips.py`)

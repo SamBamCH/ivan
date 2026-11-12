@@ -11,7 +11,7 @@ from ivan.sports.nfl import backtest_tax as bt
 from ivan.sports.nfl.models import (ContestEntryResult, ContestFieldScores, ContestPayout, HistoricalContest, NFLBase,
                                     NFLDSTGame, NFLStat, ShowdownLineup, ShowdownPlayer)
 from ivan.sports.nfl.placement import payout_vector, place, places_paid, prize_pool, remove_our_copies
-from ivan.sports.nfl.tax import TaxConfig
+from ivan.core.tax import TaxConfig
 
 TIERS = [{"min": 1, "max": 1, "amount": 100.0}, {"min": 2, "max": 3, "amount": 20.0}, {"min": 4, "max": 5, "amount": 5.0}]
 

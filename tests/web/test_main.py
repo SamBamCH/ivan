@@ -468,3 +468,57 @@ def test_nba_grid_stat_columns_pin_a_total(open_site):
         with _S.using(dg):                                                                         # the cleanup outside a request: the slate in context by hand
             d.set_override(key, points=old.get("points")); d.reproject(team)
 
+
+
+def _ledger(fees, won, gross_win, day):
+    """One sport's results ledger with one scored contest (ivan.core.pnl.roll_up)."""
+    from ivan.core import pnl
+    row = dict(final=True, fees=fees, won=won, found=10, cashed=2, gross_win=gross_win, gross_loss=gross_win - (won - fees))
+    return dict(pnl.roll_up([dict(key="1", day=day, complete=True, contests=[row])]), source="a test ledger")
+
+
+def test_home_shows_each_sports_money_and_the_total_with_its_tax(open_site, monkeypatch):
+    """Each tile carries its sport's ledger (Sport.ledger); the strip above sums the year over every sport and prices the tax on it
+    (ivan.core.pnl.combined: winnings less the deductible share of the losses). A machine with no ledger shows no money at all."""
+    from datetime import datetime
+    day = f"{datetime.now().year}-01-05"
+    monkeypatch.setattr(REGISTRY["nba"], "ledger", lambda now: _ledger(1000.0, 400.0, 300.0, day))
+    monkeypatch.setattr(REGISTRY["nfl"], "ledger", lambda now: _ledger(2000.0, 3000.0, 2500.0, day))
+    monkeypatch.setattr(REGISTRY["mma"], "ledger", None)
+    r = open_site.get("/")
+    assert r.status_code == 200 and 'class="money"' in r.text
+    for text in ("+$400.00", "-$600.00", "+$1,000.00", "Tax on", "90% of losses deductible", "won $2,800.00", "lost $2,400.00"):
+        assert text in r.text, text
+    monkeypatch.setattr(REGISTRY["nfl"], "ledger", lambda now: 1 / 0)          # one sport's ledger failing: its tile says so, the rest stands
+    r = open_site.get("/")
+    assert r.status_code == 200 and "results unavailable: ZeroDivisionError" in r.text and "-$600.00" in r.text
+    monkeypatch.setattr(REGISTRY["nba"], "ledger", None)
+    monkeypatch.setattr(REGISTRY["nfl"], "ledger", None)
+    r = open_site.get("/")
+    assert r.status_code == 200 and 'class="money"' not in r.text and "net ·" not in r.text
+
+
+def test_nfl_slate_page_shows_what_our_entries_made(open_site, monkeypatch):
+    """A past NFL slate's backtest page leads with its results (ivan.sports.nfl.results.slate_results), a contest row opens the
+    contest's panel; on a consumer (the server) neither is shown."""
+    from ivan.core import pnl
+    from ivan.web.nfl import core as N
+    won = dict(contest_id=77, draft_group="999999", name="NFL Showdown $3 Play-Action", entry_fee=3.0, mode="showdown", field=1000, lock=None, day="2020-01-01",
+               ours=3, found=3, final=True, fees=9.0, won=12.0, net=3.0, roi=1 / 3, best_rank=1, best_points=120.5, cashed=2, min_cash=None,
+               gross_win=7.0, gross_loss=4.0, export_at=None, scored="DraftKings' standings")
+    open_ = dict(won, contest_id=78, name="NFL Showdown never scraped", final=False, found=0, ours=20, fees=60.0, won=None, net=None, roi=None,
+                 best_rank=None, best_points=None, cashed=0, gross_win=None, gross_loss=None, scored="the chooser entered it; no standings scraped")
+    monkeypatch.setattr(N.results, "slate_results", lambda session, key: dict(slate_key=str(key), contests=[won, open_], summary=pnl.agg([won, open_]), complete=False))
+    monkeypatch.setattr(N.results, "contest_entries", lambda session, cid: dict(contest=won, entries=[
+        dict(entry_id=1, rank=1, tie_size=1, points=120.5, payout=10.0, net=7.0, lineup="CPT Josh Allen FLEX James Cook", copies=1)]) if cid == 77 else None)
+    r = open_site.get("/nfl/2020-01-01/999999/?view=backtest")
+    assert r.status_code == 200
+    for text in ("Results", "NFL Showdown $3 Play-Action", "+$3.00", "2 / 3", "/nfl/results/contest/77", "unscored: the chooser entered it", "$60.00 in fees out of the totals"):
+        assert text in r.text, text
+    r = open_site.get("/nfl/results/contest/77")
+    assert r.status_code == 200 and "CPT Josh Allen FLEX James Cook" in r.text and "+$7.00" in r.text
+    assert open_site.get("/nfl/results/contest/5").status_code == 404
+    monkeypatch.setattr(N, "_consumer", lambda: True)
+    r = open_site.get("/nfl/2020-01-01/999999/?view=backtest")
+    assert r.status_code == 200 and "NFL Showdown $3 Play-Action" not in r.text
+    assert open_site.get("/nfl/results/contest/77").status_code == 404

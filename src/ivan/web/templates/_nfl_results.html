@@ -1,0 +1,41 @@
+{# What our entries made on one slate (ivan.sports.nfl.results.slate_results; terminal: scripts/nfl/results.py --slate KEY): the totals,
+   then one row per contest; a row opens the contest's panel (our entries as DraftKings ranked and paid them). `results` is None on a
+   consumer (the server shows no money). #}
+{% if results %}
+<style>
+  .res-tiles { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 10px } .res-tiles .t { border:1px solid var(--line); border-radius:8px; padding:8px 14px; min-width:150px }
+  .res-tiles .t b { display:block; font-size:20px } .res-tiles .t span { font-size:12px; color:var(--muted) }
+  table.res td, table.res th { font-size:13px; white-space:nowrap } table.res td.wrap { white-space:normal } table.res tr.pick { cursor:pointer } table.res tr.pick:hover td { background:#f5f8ff }
+  table.res tr.on td { background:#eef4ff } table.res tr.unscored td { color:var(--muted) }
+</style>
+<div class="card">
+  <h2>Results <span class="muted small">what our entries made on this slate, as DraftKings ranked and paid them</span></h2>
+  {% if results.error %}<p class="bad">results unavailable: {{ results.error }}</p>
+  {% elif not results.contests %}<p class="muted">No entry of ours is recorded for this slate's contests. The finishes come with the standings: <code>scripts/nfl/settle.py</code> (the nightly job) scrapes every contest the chooser entered, with our DraftKings user name.</p>
+  {% else %}{% set sm = results.summary %}
+  <div class="res-tiles">
+    <div class="t"><b class="{{ 'lo' if sm.net < 0 else 'hi' }}">{{ sm.net|smoney or '$0.00' }}</b><span>net · {{ sm.roi|spct or '—' }} ROI</span></div>
+    <div class="t"><b>{{ sm.won|money }}</b><span>won on {{ sm.fees|money }} in fees</span></div>
+    <div class="t"><b>{{ sm.cashed }} / {{ sm.entries }}</b><span>entries cashed · {{ sm.contests }} contest{{ '' if sm.contests == 1 else 's' }}</span></div>
+    {% if sm.unscored %}<div class="t"><b class="warn">{{ sm.unscored }}</b><span>unscored · {{ sm.fees_unscored|money }} in fees out of the totals</span></div>{% endif %}
+  </div>
+  <div class="wide"><table class="compact res">
+    <tr><th>Contest</th><th class="num">Fee</th><th class="num" title="entries in the contest">Field</th><th class="num">Ours</th><th class="num" title="our best finish">Best</th><th class="num" title="our best score">Points</th><th class="num">Cashed</th><th class="num">Won</th><th class="num">Net</th><th class="num">ROI</th><th>Scored from</th></tr>
+    {% for r in results.contests %}
+    {% if r.final %}<tr class="pick" hx-get="{{ root }}/results/contest/{{ r.contest_id }}" hx-target="#res-contest" hx-swap="innerHTML" onclick="this.closest('table').querySelectorAll('tr.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="open this contest's panel: our entries in it">
+      <td class="wrap">{{ r.name }}</td><td class="num">{{ r.entry_fee|money }}</td><td class="num">{{ '{:,}'.format(r.field) if r.field else '' }}</td><td class="num">{{ r.found }}</td>
+      <td class="num">{{ '{:,}'.format(r.best_rank) if r.best_rank else '' }}</td><td class="num">{{ '%.2f'|format(r.best_points) if r.best_points is not none else '' }}</td><td class="num">{{ r.cashed }}</td>
+      <td class="num">{{ r.won|money }}</td><td class="num {{ 'lo' if r.net < 0 else ('hi' if r.net > 0 else '') }}">{{ r.net|smoney }}</td><td class="num">{{ r.roi|spct }}</td>
+      <td class="muted small">{{ r.scored }}</td></tr>
+    {% else %}<tr class="unscored">
+      <td class="wrap">{{ r.name }}</td><td class="num">{{ r.entry_fee|money }}</td><td class="num">{{ '{:,}'.format(r.field) if r.field else '' }}</td><td class="num">{{ r.ours or '?' }}</td>
+      <td class="num"></td><td class="num"></td><td class="num"></td><td class="num">—</td><td class="num">—</td><td class="num">—</td>
+      <td class="small">unscored: {{ r.scored }}</td></tr>
+    {% endif %}
+    {% endfor %}
+  </table></div>
+  <div id="res-contest"></div>
+  <p class="muted small">Rank, points and payout are the ones DraftKings' standings gave each entry under our user name (ties already shared), fetched by the settle job after the slate; net is that against the entry fees. Nothing is rescored. Terminal: <code>scripts/nfl/results.py --slate {{ results.slate_key }}</code>.</p>
+  {% endif %}
+</div>
+{% endif %}

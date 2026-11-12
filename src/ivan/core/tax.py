@@ -1,4 +1,4 @@
-# src/ivan/sports/nfl/tax.py
+# src/ivan/core/tax.py
 """
 US federal gambling tax on a year of DFS results, as a pure function.
 

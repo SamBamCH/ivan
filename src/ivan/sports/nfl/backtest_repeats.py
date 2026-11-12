@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from ivan.sports.nfl import backtest_tax as bt
-from ivan.sports.nfl.tax import TaxConfig, compute_tax
+from ivan.core.tax import TaxConfig, compute_tax
 
 PCTS = (5, 25, 50, 75, 95)
 

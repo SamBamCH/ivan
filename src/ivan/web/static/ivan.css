@@ -47,6 +47,12 @@ body.plain h1 { font-size:22px; margin:0 0 16px } body.plain h2 { font-size:17px
 .ledger { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:baseline; margin:-6px 0 14px; font-size:14px }
 .ledger .big { font-size:22px; font-weight:700 }
 .ledger-day { font-size:16px; font-weight:700; margin-left:10px }
+.money { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 18px 6px; margin:0 0 16px }
+.money .ledger { margin:0 0 8px } .money .by-sport { display:flex; flex-wrap:wrap; gap:6px 22px; font-size:14px; margin:0 0 10px }
+.money .by-sport a { text-decoration:none; color:inherit } .money .by-sport a:hover b { color:var(--accent) }
+table.tax { border-collapse:collapse; width:100%; font-size:13px } table.tax th, table.tax td { padding:4px 8px; border-top:1px solid var(--line); text-align:left }
+table.tax th { font-weight:600 } table.tax th .muted { font-weight:400 } table.tax .n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
+table.tax tr.own td { font-weight:600 } table.tax tr.own td .muted { font-weight:400 }
 /* the day is a calendar (templates/_frame.html): the button in the bar, the month popover, a past day coloured by its readiness
    (ivan.sports.nba.readiness: green ready, red a fetch failed, none not attempted), the open day, today, a held day */
 nav.frame .crumb-cal { position:relative; display:inline-block }

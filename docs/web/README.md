@@ -69,13 +69,32 @@ Each sport's `days(now)` lists what it knows, by the day the slate locks:
 
 ## The money
 
-A sport may give the frame a `ledger(now)` (`Sport.ledger`): `{"overall": agg, "days": {iso day: agg}}` with fees, won,
-net, ROI, entries, cashed, contests and how many slates are not final. The frame shows it on the **picker** (a strip
-under the sport's heading for the season; each day's row and the chosen day's heading for that day) and the sport's
-`summary` may carry `ledger` for the **home tile** (the season). NBA gives it on the laptop only (`ivan.sports.nba.backtest.results`,
-from DraftKings' final standings exports and the payout tables, our entries by our DraftKings user name; cached per slate,
-complete slates never recomputed); a consumer desk leaves it None, so the server shows no money anywhere. The slate's
-own backtest view shows the same slate's numbers ([nba-desk.md](nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml)).
+A sport may give the frame a `ledger(now)` (`Sport.ledger`): `{"overall": agg, "days": {iso day: agg}, "source"}` with
+fees, won, net, ROI, entries, cashed, contests, how many slates are not scored, and the tax's two sums (`gross_win`: the
+payout over the fee of every entry that beat its fee; `gross_loss`: what every other entry lost of its fee). Every sport
+builds it with `ivan.core.pnl.roll_up` from one row per contest. It shows in three places, all on a machine that has
+the results (a consumer desk, the server, leaves `Sport.ledger` None and shows no money anywhere):
+
+- the **picker**: a strip under the sport's heading (every slate on file), each day's row and the chosen day's heading;
+- the sport's **home tile**: net, ROI, fees, entries cashed, days;
+- the **home page's strip** above the tiles (`ivan.web.main.money` = `ivan.core.pnl.combined`; terminal
+  `scripts/pnl.py [--year] [--sports] [--cap] [--rate]`): this calendar year over every sport, each sport's line, and
+  the US federal tax on the total (`ivan.core.tax.compute_tax` on the summed `gross_win` and `gross_loss`, one return
+  for every sport). The first row of the tax table is the filing in `config/tax.json` (filing status, standard
+  deduction, rate, the 90% loss cap), and its after-tax figure is the headline; the rows under it change one thing
+  each: itemizing under the 90% cap, itemizing at 100%, the standard deduction (no losses deducted), net DFS. Losses
+  count only when itemizing, and from 2026 only 90% of them: with the configured `other_itemized` of 0 the standard
+  deduction is the larger, so the configured row taxes the winnings in full. An estimate, not tax advice.
+
+Where each sport's ledger comes from:
+
+- **NBA** (`ivan.sports.nba.backtest.results`, `scripts/nba/results.py`): DraftKings' final standings exports and the
+  payout tables, our entries by our DraftKings user name; cached per slate, complete slates never recomputed. The
+  slate's backtest view shows the same slate's numbers ([nba-desk.md](nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml)).
+- **NFL** (`ivan.sports.nfl.results`, `scripts/nfl/results.py`): the finish DraftKings gave each of our entries in the
+  scraped standings (`contest_entry_result`, written by the settle job's scrape) against the entry fees; read from the
+  database on every page, no cache. The slate's backtest page leads with the same slate's numbers ([nfl-app.md](nfl-app.md)).
+- **MMA**: none yet.
 
 ## Login and public access
 
