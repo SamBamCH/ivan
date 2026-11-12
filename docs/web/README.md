@@ -78,13 +78,46 @@ the results (a consumer desk, the server, leaves `Sport.ledger` None and shows n
 - the **picker**: a strip under the sport's heading (every slate on file), each day's row and the chosen day's heading;
 - the sport's **home tile**: net, ROI, fees, entries cashed, days;
 - the **home page's strip** above the tiles (`ivan.web.main.money` = `ivan.core.pnl.combined`; terminal
-  `scripts/pnl.py [--year] [--sports] [--cap] [--rate]`): this calendar year over every sport, each sport's line, and
-  the US federal tax on the total (`ivan.core.tax.compute_tax` on the summed `gross_win` and `gross_loss`, one return
-  for every sport). The first row of the tax table is the filing in `config/tax.json` (filing status, standard
-  deduction, rate, the 90% loss cap), and its after-tax figure is the headline; the rows under it change one thing
-  each: itemizing under the 90% cap, itemizing at 100%, the standard deduction (no losses deducted), net DFS. Losses
-  count only when itemizing, and from 2026 only 90% of them: with the configured `other_itemized` of 0 the standard
-  deduction is the larger, so the configured row taxes the winnings in full. An estimate, not tax advice.
+  `scripts/pnl.py [--year] [--sports] [--cap] [--rate] [--basis]`): this calendar year over every sport, each sport's line, and
+  the US federal tax on the total (`ivan.core.tax.compute_tax`, one return for every sport). The first row of the tax
+  table is the filing in `config/tax.json`, and its after-tax figure is the headline; the rows under it change one
+  thing each. An estimate, not tax advice.
+
+The configured filing is a **business** (`reporting_mode: business`, Schedule C): the winnings are gross receipts and
+the losses, with `business_expenses` (the year's data, subscriptions, the server), come off them there, with no
+itemizing and no standard-deduction comparison. The 2026 cap still applies: the deduction is 90% of (losses +
+expenses) and never more than the winnings, so a break-even year is taxed on 10% of its losses and a losing year on
+nothing (no loss to set against other income or carry forward). The profit left carries self-employment tax
+(`se_tax`: 12.4% up to `ss_wage_base` less `w2_wages`, 2.9% on all of it, both on 92.35% of the profit, none under
+$400), half of which comes off income; the table shows it in its own column, inside the estimate. The rows under the
+configured one: a business at 100% of losses, a business without self-employment tax, a hobby itemizing under the 90%
+cap, a hobby on the standard deduction (no losses deducted, the winnings taxed in full), and the other count of
+winnings and losses. `reporting_mode: gross_165d` makes the hobby the configured filing (its rows: itemizing at 90%
+and 100%, the standard deduction, net DFS).
+
+What counts as winnings and losses is `wager_basis` in `config/tax.json` (`ivan.core.tax.wagering_totals`; `scripts/pnl.py --basis`):
+
+- `entry` (the default): each entry is one wager. An entry that beats its fee adds its payout over the fee to the
+  winnings; any other entry adds what it did not get back of its fee to the losses. Nothing is netted between entries.
+- `fees`: every payout is winnings and every entry fee a loss, so the cap (and the standard deduction) also reaches
+  the fees of the winning entries. The reading that never understates the tax.
+
+Both give the same profit. Which one a DFS return should use is not settled by anything this project can cite (the IRS
+treats a DFS entry fee as a wager, CCA 202042015, and its public guidance says winnings are reported in full and
+losses separately, without saying whether a winning wager's own stake comes off): the page shows both, and the choice
+belongs to a CPA. The NFL after-tax backtest counts per entry (its spec).
+
+**DraftKings' entry history** (`ivan.core.dk_history`, `scripts/dk_history.py`): the account's own export of every
+entry with its fee and winnings (draftkings.com → My Contests → History → Download Entry History), imported with
+`scripts/dk_history.py import [PATH] [--since DAY | --all]` (the newest `draftkings-contest-entry-history*.csv` in
+`~/Downloads`, entries since January 1 of this year, into `data/dk/entry_history.csv` by entry id; a later export
+replaces). Where imported it is the money of every contest it lists, laid over each sport's ledger
+(`dk_history.merge`): a contest both have takes the history's money; a contest only the history has (its standings
+were never scraped) becomes a row of its slate where the sport knows the contest's draft group, else of a slate of
+its day (`dk-<day>`); an unscored contest of a day before the export that the history does not list is dropped (we
+did not enter it). A sport with no results code gets its ledger from the history alone, on the home tile when the
+sport is mounted (MMA) and as a line of the home strip either way. `scripts/dk_history.py` with no argument prints
+what is stored per year and sport. Import a fresh export whenever the standings of a slate were missed.
 
 Where each sport's ledger comes from:
 
@@ -94,7 +127,7 @@ Where each sport's ledger comes from:
 - **NFL** (`ivan.sports.nfl.results`, `scripts/nfl/results.py`): the finish DraftKings gave each of our entries in the
   scraped standings (`contest_entry_result`, written by the settle job's scrape) against the entry fees; read from the
   database on every page, no cache. The slate's backtest page leads with the same slate's numbers ([nfl-app.md](nfl-app.md)).
-- **MMA**: none yet.
+- **MMA** and any sport without a workspace: DraftKings' entry history alone, once imported.
 
 ## Login and public access
 

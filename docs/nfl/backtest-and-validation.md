@@ -138,6 +138,11 @@ no standings: it is listed with its fees (the chooser's entry count times the fe
 contest with standings and no entry of ours is one we chose for and did not enter, and is not counted. Read from the
 database on every call (one grouped query); nothing is cached.
 
+DraftKings drops a contest's standings after some weeks, so a slate settle missed cannot be scraped later. For those,
+import the account's entry history (`scripts/dk_history.py import`, [../web/README.md](../web/README.md#the-money)):
+its fees and winnings replace the scraped money contest by contest, the contests it alone has appear under their
+draft group (money only: no lineups, so no contest panel), and unscored contests it does not list are dropped.
+
 Where it shows, on the laptop only (`Sport.ledger` is None on a consumer, the server): the NFL home tile, the NFL
 picker's strip and each day's row and heading, the Results card that leads a past slate's backtest page with a panel
 per contest ([../web/nfl-app.md](../web/nfl-app.md)), and, with every other sport and the tax on the total, the home
@@ -148,11 +153,12 @@ another question: what the chooser's picks would have made, entered or not.
 
 ```bash
 venv/bin/python scripts/nfl/backtest_tax.py [--dk-history export.csv] [--runs-dir ...] [--since --until] [--bankroll 2000]
-    [--cap 0.9 --rate 0.22 | --brackets --other-income 90000] [--mode gross_165d|net_dfs] [--played-only] [--in-field] [--volumes ...] [--n-boot ...]
+    [--cap 0.9 --rate 0.22 | --brackets --other-income 90000] [--mode business|gross_165d|net_dfs] [--played-only] [--in-field] [--volumes ...] [--n-boot ...]
 ```
 
 What the chosen lineups would have returned after US federal gambling tax (2026 rules: 90% of losses
-deductible; `config/tax.json`, verify with a CPA; engine `ivan.core.tax.compute_tax(W, L, cfg)`, tested in
+deductible; `config/tax.json`, whose filing is a business on Schedule C with self-employment tax unless `--mode` says
+otherwise; verify with a CPA; engine `ivan.core.tax.compute_tax(W, L, cfg)`, tested in
 `tests/core/test_tax.py`). Each entry is settled from the best evidence in order: a DraftKings
 contest-history export, our own entries in a scraped contest, the lineup's actual points placed in the
 scraped field, points only, nothing. The report: year to date (W, L, deductible, itemize decision,

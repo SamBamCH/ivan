@@ -10,8 +10,12 @@ TaxConfig; defaults are the 2026 rules (One Big Beautiful Bill Act: only 90%
 of losses deductible) with the cap configurable because a retroactive repeal
 is pending. Not tax advice; verify the figures in config/tax.json with a CPA.
 
-Two reporting modes, side by side wherever the backtest reports:
-  gross_165d  winnings are income, losses an itemized deduction (IRC 165(d))
+Three reporting modes, side by side wherever the money or the backtest reports:
+  business    the play is a trade or business (Schedule C): winnings are gross receipts and the losses, with the
+              activity's business expenses, come off them there, without itemizing; the loss cap still applies (the
+              deduction is cap x (losses + expenses), never more than the winnings, so a year cannot show a loss);
+              the profit left carries self-employment tax, half of which comes off income
+  gross_165d  a hobby: winnings are income, losses an itemized deduction (IRC 165(d))
   net_dfs     taxable = max(P, 0), as DraftKings' 1099-MISC reports DFS
 """
 from __future__ import annotations
@@ -28,8 +32,12 @@ TAX_CONFIG_PATH = PROJECT_ROOT / "config" / "tax.json"
 
 GROSS = "gross_165d"
 NET = "net_dfs"
-REPORTING_MODES = (GROSS, NET)
+BUSINESS = "business"
+REPORTING_MODES = (GROSS, NET, BUSINESS)
+SE_FACTOR, SE_SOCIAL_SECURITY, SE_MEDICARE, SE_FLOOR = 0.9235, 0.124, 0.029, 400.0
 ITEMIZE_CHOICES = ("auto", "always", "never")
+FEES, ENTRY = "fees", "entry"
+WAGER_BASES = (FEES, ENTRY)
 
 # Fallback standard deductions if config/tax.json is missing. Verify.
 STANDARD_DEDUCTION_2026 = {"single": 16100.0, "married_joint": 32200.0, "married_separate": 16100.0,
@@ -50,12 +58,20 @@ class TaxConfig:
     state_allows_loss_deduction: bool = True
     reporting_mode: str = GROSS
     itemize: str = "auto"                      # auto | always | never
+    wager_basis: str = ENTRY                   # how a ledger's entries become W and L (wagering_totals): entry | fees
     tax_reserve_pct: Optional[float] = None    # share of each win swept into a tax reserve (ledger only)
+    business_expenses: float = 0.0             # business mode: the activity's expenses for the year (data, subscriptions, the server);
+                                               # under the same cap as the losses, and never below the winnings
+    se_tax: bool = True                        # business mode: self-employment tax on the Schedule C profit
+    ss_wage_base: float = 184500.0             # the Social Security wage base of the tax year (2026; verify)
+    w2_wages: float = 0.0                      # wages already taxed for Social Security: they use up the wage base first
     label: str = ""
 
     def __post_init__(self):
         if self.reporting_mode not in REPORTING_MODES:
             raise ValueError(f"reporting_mode must be one of {REPORTING_MODES}, got {self.reporting_mode!r}")
+        if self.wager_basis not in WAGER_BASES:
+            raise ValueError(f"wager_basis must be one of {WAGER_BASES}, got {self.wager_basis!r}")
         if self.itemize not in ITEMIZE_CHOICES:
             raise ValueError(f"itemize must be one of {ITEMIZE_CHOICES}, got {self.itemize!r}")
         if not 0.0 <= self.loss_cap_pct <= 1.0:
@@ -75,7 +91,9 @@ class TaxConfig:
         return replace(self, **changes)
 
     def describe(self) -> str:
-        parts = ["net DFS" if self.reporting_mode == NET else f"gross, {self.loss_cap_pct:.0%} loss cap"]
+        parts = ["net DFS" if self.reporting_mode == NET else
+                 (f"business (Schedule C), {self.loss_cap_pct:.0%} loss cap, " + ("self-employment tax" if self.se_tax else "no self-employment tax"))
+                 if self.reporting_mode == BUSINESS else f"gross, {self.loss_cap_pct:.0%} loss cap"]
         if self.reporting_mode == GROSS:
             parts.append({"auto": "itemize if it beats the standard deduction", "always": "itemizing",
                           "never": "standard deduction"}[self.itemize])
@@ -104,9 +122,23 @@ class TaxResult:
     effective_rate: Optional[float]   # est_tax / taxable_gambling
     reporting_mode: str
     mode: str
+    se_tax: float = 0.0               # business mode: the self-employment tax inside federal_tax
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
+
+
+# --------------------------------------------------------------------------- what counts as winnings and losses
+def wagering_totals(cfg: TaxConfig, *, fees: float, won: float, gross_win: float, gross_loss: float) -> Tuple[float, float]:
+    """
+    (W, L) of a results ledger under the configured count. "entry" (the default): each entry is one wager, and what it
+    won is its payout over its own fee (the stake of a winning wager is not winnings), what it lost is what it did not
+    get back of its fee; nothing is netted between entries. "fees": every payout is winnings and every entry fee a loss
+    (W = won, L = fees), so the loss cap bites on the fees of the winning entries too: the reading that never understates
+    the tax. Both give the same profit W - L; they differ in how much the cap, or the standard deduction, leaves taxed.
+    Which one a return should use is a question for a CPA (docs/web/README.md, the money).
+    """
+    return (float(won), float(fees)) if cfg.wager_basis == FEES else (float(gross_win), float(gross_loss))
 
 
 # --------------------------------------------------------------------------- brackets
@@ -122,6 +154,15 @@ def bracket_tax(taxable: float, brackets: Sequence[Tuple[float, float]]) -> floa
     return tax
 
 
+def self_employment_tax(profit: float, cfg: TaxConfig) -> float:
+    """Self-employment tax on a Schedule C profit: 12.4% up to what is left of the wage base after wages, 2.9% on all of it, both on
+    92.35% of the profit; none under $400 or when the config turns it off. The 0.9% additional Medicare tax is not modelled."""
+    if not cfg.se_tax or profit < SE_FLOOR:
+        return 0.0
+    base = profit * SE_FACTOR
+    return SE_SOCIAL_SECURITY * min(base, max(cfg.ss_wage_base - cfg.w2_wages, 0.0)) + SE_MEDICARE * base
+
+
 # --------------------------------------------------------------------------- the engine
 def compute_tax(W: float, L: float, cfg: TaxConfig, total_fees: Optional[float] = None) -> TaxResult:
     """
@@ -135,7 +176,15 @@ def compute_tax(W: float, L: float, cfg: TaxConfig, total_fees: Optional[float] 
     P = W - L
     std = cfg.std_deduction
 
-    if cfg.reporting_mode == NET:
+    se = 0.0
+    if cfg.reporting_mode == BUSINESS:
+        deductible = min(cfg.loss_cap_pct * (L + max(0.0, cfg.business_expenses)), W)
+        itemized_total = cfg.other_itemized
+        itemize = False
+        taxable_gambling = W - deductible                 # the Schedule C profit
+        se = self_employment_tax(taxable_gambling, cfg)
+        incremental = taxable_gambling - se / 2           # half the self-employment tax comes off income
+    elif cfg.reporting_mode == NET:
         deductible = min(W, L)
         itemized_total = cfg.other_itemized
         itemize = False
@@ -160,8 +209,8 @@ def compute_tax(W: float, L: float, cfg: TaxConfig, total_fees: Optional[float] 
 
     if cfg.mode == "bracket":
         other = cfg.other_taxable_income
-        if cfg.reporting_mode == NET:
-            with_ = other + taxable_gambling - max(std, cfg.other_itemized)
+        if cfg.reporting_mode in (NET, BUSINESS):
+            with_ = other + incremental - max(std, cfg.other_itemized)
             without = other - max(std, cfg.other_itemized)
         else:
             with_ = other + W - deduction_with
@@ -170,6 +219,7 @@ def compute_tax(W: float, L: float, cfg: TaxConfig, total_fees: Optional[float] 
     else:
         federal = cfg.marginal_rate * incremental
 
+    federal += se
     state_taxable = taxable_gambling if cfg.state_allows_loss_deduction else W
     state = cfg.state_rate * state_taxable
     est = federal + state
@@ -180,7 +230,7 @@ def compute_tax(W: float, L: float, cfg: TaxConfig, total_fees: Optional[float] 
         federal_tax=federal, state_tax=state, est_tax=est, after_tax_profit=after,
         after_tax_roi=(after / total_fees) if total_fees else None,
         effective_rate=(est / taxable_gambling) if taxable_gambling > 0 else None,
-        reporting_mode=cfg.reporting_mode, mode=cfg.mode)
+        reporting_mode=cfg.reporting_mode, mode=cfg.mode, se_tax=se)
 
 
 # --------------------------------------------------------------------------- closed forms

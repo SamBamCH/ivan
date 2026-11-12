@@ -487,7 +487,7 @@ def test_home_shows_each_sports_money_and_the_total_with_its_tax(open_site, monk
     monkeypatch.setattr(REGISTRY["mma"], "ledger", None)
     r = open_site.get("/")
     assert r.status_code == 200 and 'class="money"' in r.text
-    for text in ("+$400.00", "-$600.00", "+$1,000.00", "Tax on", "90% of losses deductible", "won $2,800.00", "lost $2,400.00"):
+    for text in ("+$400.00", "-$600.00", "+$1,000.00", "Tax on", "Filed as a business (Schedule C)", "a hobby, itemizing (90% of losses deductible)", "SE tax", "won $2,800.00", "lost $2,400.00", "every entry fee as a loss"):
         assert text in r.text, text
     monkeypatch.setattr(REGISTRY["nfl"], "ledger", lambda now: 1 / 0)          # one sport's ledger failing: its tile says so, the rest stands
     r = open_site.get("/")
@@ -504,7 +504,7 @@ def test_nfl_slate_page_shows_what_our_entries_made(open_site, monkeypatch):
     from ivan.core import pnl
     from ivan.web.nfl import core as N
     won = dict(contest_id=77, draft_group="999999", name="NFL Showdown $3 Play-Action", entry_fee=3.0, mode="showdown", field=1000, lock=None, day="2020-01-01",
-               ours=3, found=3, final=True, fees=9.0, won=12.0, net=3.0, roi=1 / 3, best_rank=1, best_points=120.5, cashed=2, min_cash=None,
+               ours=3, found=3, final=True, detail=True, fees=9.0, won=12.0, net=3.0, roi=1 / 3, best_rank=1, best_points=120.5, cashed=2, min_cash=None,
                gross_win=7.0, gross_loss=4.0, export_at=None, scored="DraftKings' standings")
     open_ = dict(won, contest_id=78, name="NFL Showdown never scraped", final=False, found=0, ours=20, fees=60.0, won=None, net=None, roi=None,
                  best_rank=None, best_points=None, cashed=0, gross_win=None, gross_loss=None, scored="the chooser entered it; no standings scraped")

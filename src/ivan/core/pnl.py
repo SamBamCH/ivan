@@ -13,7 +13,9 @@ and L of ivan.core.tax), so gross_win - gross_loss = won - fees.
     combined(ledgers, year)      every sport's year, the total, and the tax on the total under each scenario
 
 The tax is on the year's total over every sport (one return): ivan.core.tax.compute_tax(W, L) with config/tax.json,
-where only loss_cap_pct (90% from 2026) of the losses is deductible, and only by itemizing.
+where only loss_cap_pct (90% from 2026) of the losses is deductible, and only by itemizing. What W and L are is the
+config's wager_basis (ivan.core.tax.wagering_totals): "entry" (the default: each entry's fee netted against its own
+payout, gross_win and gross_loss) or "fees" (every payout is winnings, every entry fee a loss: the conservative reading).
 
     scripts/pnl.py               the same numbers in the terminal (the home page's strip)
 """
@@ -21,7 +23,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional
 
-from ivan.core.tax import GROSS, NET, TaxConfig, compute_tax, load_tax_config
+from ivan.core.tax import BUSINESS, ENTRY, FEES, GROSS, NET, TaxConfig, compute_tax, load_tax_config, wagering_totals
 
 SUMS = ("fees", "won", "gross_win", "gross_loss", "fees_unscored")
 COUNTS = ("entries", "cashed", "contests", "unscored")
@@ -83,11 +85,21 @@ def year_totals(ledger: Optional[dict], year: int) -> dict:
 
 def tax_scenarios(base: TaxConfig) -> List[TaxConfig]:
     """The rows of the tax table: the configured filing, then what the cap and the choice to itemize each change."""
+    other = (base.with_(wager_basis=ENTRY, label="as configured, but each entry's fee netted against its own payout first") if base.wager_basis == FEES else
+             base.with_(wager_basis=FEES, label="as configured, but every payout as winnings and every entry fee as a loss"))
+    if base.reporting_mode == BUSINESS:
+        return [base.with_(label="as configured"),
+                base.with_(loss_cap_pct=1.00, label="a business, 100% of losses deductible (pre-2026, or a repeal)"),
+                base.with_(se_tax=False, label="a business, without self-employment tax"),
+                base.with_(reporting_mode=GROSS, itemize="always", label="a hobby, itemizing (90% of losses deductible)"),
+                base.with_(reporting_mode=GROSS, itemize="never", label="a hobby, the standard deduction (no losses deducted)"),
+                other]
     return [base.with_(label="as configured"),
             base.with_(reporting_mode=GROSS, loss_cap_pct=0.90, itemize="always", label="itemizing, 90% of losses deductible (the 2026 rule)"),
             base.with_(reporting_mode=GROSS, loss_cap_pct=1.00, itemize="always", label="itemizing, 100% of losses deductible (pre-2026, or a repeal)"),
             base.with_(reporting_mode=GROSS, itemize="never", label="standard deduction (no losses deducted)"),
-            base.with_(reporting_mode=NET, label="net DFS (taxed on the profit, as the 1099 reports it)")]
+            base.with_(reporting_mode=NET, label="net DFS (taxed on the profit, as the 1099 reports it)"),
+            other]
 
 
 def combined(ledgers: Dict[str, Optional[dict]], year: int, cfg: Optional[TaxConfig] = None, labels: Optional[Dict[str, str]] = None) -> dict:
@@ -105,8 +117,11 @@ def combined(ledgers: Dict[str, Optional[dict]], year: int, cfg: Optional[TaxCon
     all_time = total(led["overall"] for led in ledgers.values() if led and led.get("overall"))
     tax = []
     for c in tax_scenarios(cfg):
-        r = compute_tax(tot["gross_win"], tot["gross_loss"], c, total_fees=tot["fees"])
-        tax.append(dict(r.as_dict(), label=c.label, describe=c.describe(), loss_cap_pct=c.loss_cap_pct, rate=c.marginal_rate if c.mode == "flat" else None))
+        W, L = wagering_totals(c, fees=tot["fees"], won=tot["won"], gross_win=tot["gross_win"], gross_loss=tot["gross_loss"])
+        r = compute_tax(W, L, c, total_fees=tot["fees"])
+        tax.append(dict(r.as_dict(), label=c.label, describe=c.describe(), loss_cap_pct=c.loss_cap_pct, wager_basis=c.wager_basis,
+                        rate=c.marginal_rate if c.mode == "flat" else None))
     return dict(year=int(year), sports=sports, total=tot, all_time=all_time, tax=tax,
-                config=dict(describe=cfg.describe(), loss_cap_pct=cfg.loss_cap_pct, marginal_rate=cfg.marginal_rate, mode=cfg.mode,
+                config=dict(describe=cfg.describe(), reporting_mode=cfg.reporting_mode, business_expenses=cfg.business_expenses, se_tax=cfg.se_tax,
+                            wager_basis=cfg.wager_basis, loss_cap_pct=cfg.loss_cap_pct, marginal_rate=cfg.marginal_rate, mode=cfg.mode,
                             filing_status=cfg.filing_status, standard_deduction=cfg.std_deduction, state_rate=cfg.state_rate))

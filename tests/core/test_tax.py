@@ -139,7 +139,7 @@ def test_scenario_table_has_both_caps_and_modes():
 
 def test_load_tax_config_defaults_and_overrides(tmp_path):
     cfg = load_tax_config()                      # the checked-in config/tax.json
-    assert cfg.loss_cap_pct == 0.90 and cfg.reporting_mode == GROSS and cfg.mode == "flat"
+    assert cfg.loss_cap_pct == 0.90 and cfg.reporting_mode == "business" and cfg.se_tax and cfg.wager_basis == "entry" and cfg.mode == "flat"
     assert cfg.std_deduction == 16100
     mfj = load_tax_config(filing_status="married_joint", use_brackets=True)
     assert mfj.std_deduction == 32200 and mfj.mode == "bracket"
@@ -152,3 +152,29 @@ def test_validation():
         TaxConfig(reporting_mode="weird")
     with pytest.raises(ValueError):
         TaxConfig(loss_cap_pct=1.5)
+
+
+def test_business_filing_deducts_losses_without_itemizing_under_the_cap():
+    """Schedule C: winnings less 90% of (losses + expenses), never below zero; the profit left carries self-employment tax, half of
+    which comes off income. No standard-deduction comparison, no loss to use elsewhere."""
+    from ivan.core.tax import BUSINESS, self_employment_tax
+    cfg = TaxConfig(reporting_mode=BUSINESS, marginal_rate=0.22, se_tax=False)
+    r = compute_tax(10000.0, 8000.0, cfg, total_fees=20000.0)
+    assert r.deductible == pytest.approx(7200.0) and r.taxable_gambling == pytest.approx(2800.0) and r.phantom == pytest.approx(800.0)
+    assert r.est_tax == pytest.approx(616.0) and r.after_tax_profit == pytest.approx(1384.0) and r.se_tax == 0.0 and not r.itemize
+    even = compute_tax(5000.0, 5000.0, cfg)                                        # break even: taxed on 10% of the losses
+    assert even.taxable_gambling == pytest.approx(500.0) and even.est_tax == pytest.approx(110.0)
+    lost = compute_tax(3000.0, 5000.0, cfg)                                        # a losing year: nothing taxed, nothing carried
+    assert lost.deductible == 3000.0 and lost.taxable_gambling == 0.0 and lost.est_tax == 0.0 and lost.after_tax_profit == -2000.0
+    spent = compute_tax(10000.0, 8000.0, cfg.with_(business_expenses=1000.0))      # expenses are under the same cap
+    assert spent.deductible == pytest.approx(8100.0) and spent.taxable_gambling == pytest.approx(1900.0)
+    se_cfg = cfg.with_(se_tax=True)
+    s = compute_tax(10000.0, 8000.0, se_cfg)
+    se = 2800.0 * 0.9235 * 0.153
+    assert s.se_tax == pytest.approx(se) and s.federal_tax == pytest.approx(0.22 * (2800.0 - se / 2) + se)
+    assert self_employment_tax(399.0, se_cfg) == 0.0                               # under the $400 floor
+    capped = self_employment_tax(10000.0, se_cfg.with_(w2_wages=se_cfg.ss_wage_base))   # the wage base used up by wages: Medicare only
+    assert capped == pytest.approx(10000.0 * 0.9235 * 0.029)
+    b = compute_tax(10000.0, 8000.0, se_cfg.with_(brackets=((0.0, 0.10), (50000.0, 0.22)), other_taxable_income=60000.0, standard_deduction=10000.0))
+    assert b.federal_tax == pytest.approx(0.22 * (2800.0 - se / 2) + se)           # layered on other income, all in the 22% bracket
+    assert "business (Schedule C)" in se_cfg.describe()

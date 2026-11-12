@@ -1,4 +1,6 @@
 {
+  "_note_wager_basis": "how the results ledgers (the home page, scripts/pnl.py) count winnings and losses. 'entry': each entry is one wager; a winning entry's winnings are its payout over its own fee, a losing entry's loss is its fee (no netting between entries). 'fees': every payout is winnings and every entry fee a loss, so the loss cap also bites on the fees of winning entries; the conservative reading. Unsettled for DFS: ask a CPA. The home page shows the other count as its last row. The NFL after-tax backtest counts per entry (its spec).",
+  "_note_reporting_mode": "business = the play is filed as a trade or business (Schedule C): losses and business_expenses (the year's data, subscriptions, server) come off the winnings without itemizing, capped at loss_cap_pct of them and at the winnings; the profit left carries self-employment tax (se_tax; ss_wage_base less w2_wages is the room left under the Social Security base). gross_165d = a hobby (losses only by itemizing). net_dfs = taxed on the profit.",
   "_note": "2026 federal figures as understood in Oct 2026; VERIFY with a CPA before relying on them. brackets are [lower_bound, rate] rows per filing status. defaults.use_brackets switches the engine from the flat marginal_rate to the bracket table layered on other_taxable_income.",
   "defaults": {
     "tax_year": 2026,
@@ -10,8 +12,13 @@
     "use_brackets": false,
     "state_rate": 0.0,
     "state_allows_loss_deduction": true,
-    "reporting_mode": "gross_165d",
+    "reporting_mode": "business",
+    "business_expenses": 0,
+    "se_tax": true,
+    "ss_wage_base": 184500,
+    "w2_wages": 0,
     "itemize": "auto",
+    "wager_basis": "entry",
     "tax_reserve_pct": null
   },
   "standard_deduction": {

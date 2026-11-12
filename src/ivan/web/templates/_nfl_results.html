@@ -22,7 +22,12 @@
   <div class="wide"><table class="compact res">
     <tr><th>Contest</th><th class="num">Fee</th><th class="num" title="entries in the contest">Field</th><th class="num">Ours</th><th class="num" title="our best finish">Best</th><th class="num" title="our best score">Points</th><th class="num">Cashed</th><th class="num">Won</th><th class="num">Net</th><th class="num">ROI</th><th>Scored from</th></tr>
     {% for r in results.contests %}
-    {% if r.final %}<tr class="pick" hx-get="{{ root }}/results/contest/{{ r.contest_id }}" hx-target="#res-contest" hx-swap="innerHTML" onclick="this.closest('table').querySelectorAll('tr.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="open this contest's panel: our entries in it">
+    {% if r.final and not r.detail %}<tr title="from DraftKings' entry history: the money, without the entries' lineups (the standings were never scraped)">
+      <td class="wrap">{{ r.name }}</td><td class="num">{{ r.entry_fee|money }}</td><td class="num">{{ '{:,}'.format(r.field) if r.field else '' }}</td><td class="num">{{ r.found }}</td>
+      <td class="num">{{ '{:,}'.format(r.best_rank) if r.best_rank else '' }}</td><td class="num">{{ '%.2f'|format(r.best_points) if r.best_points is not none else '' }}</td><td class="num">{{ r.cashed }}</td>
+      <td class="num">{{ r.won|money }}</td><td class="num {{ 'lo' if r.net < 0 else ('hi' if r.net > 0 else '') }}">{{ r.net|smoney }}</td><td class="num">{{ r.roi|spct }}</td>
+      <td class="muted small">{{ r.scored }}</td></tr>
+    {% elif r.final %}<tr class="pick" hx-get="{{ root }}/results/contest/{{ r.contest_id }}" hx-target="#res-contest" hx-swap="innerHTML" onclick="this.closest('table').querySelectorAll('tr.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="open this contest's panel: our entries in it">
       <td class="wrap">{{ r.name }}</td><td class="num">{{ r.entry_fee|money }}</td><td class="num">{{ '{:,}'.format(r.field) if r.field else '' }}</td><td class="num">{{ r.found }}</td>
       <td class="num">{{ '{:,}'.format(r.best_rank) if r.best_rank else '' }}</td><td class="num">{{ '%.2f'|format(r.best_points) if r.best_points is not none else '' }}</td><td class="num">{{ r.cashed }}</td>
       <td class="num">{{ r.won|money }}</td><td class="num {{ 'lo' if r.net < 0 else ('hi' if r.net > 0 else '') }}">{{ r.net|smoney }}</td><td class="num">{{ r.roi|spct }}</td>
