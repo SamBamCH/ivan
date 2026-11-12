@@ -213,7 +213,7 @@ def main(argv=None) -> int:
     if sport != "nfl":
         return 0
     from ivan.sports.nfl import backtest_repeats, backtest_report
-    from ivan.sports.nfl.tax import load_tax_config
+    from ivan.core.tax import load_tax_config
     # settlement reads the actuals: the live database when only reporting (repairs and later scrapes land there), else the replay copy
     session = get_session(init_db("nfl", f"sqlite:///{live_db}"))      # the actuals always come from the live database
     dirs = [d for d in rp.replayed_dirs(out_root, sport) if since <= _lock_of(d) <= until]

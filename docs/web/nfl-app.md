@@ -21,7 +21,14 @@ dropdown: **desk**, **sim report**, **choose**, **exposures**, **backtest**.
   (`/nfl/desk`, `/nfl/contests`, ...) are the same pages for the working slate; `/nfl/pipeline` redirects to the desk.
 - A **lobby slate** not yet ingested opens on the desk with Ingest's slate set to it; ingesting makes it the working slate
   (the old one's lineups and sims go with the clear buttons).
-- A **past slate** opens on its **backtest**: the slate's builds page (every run that replayed it, with the commit,
+- A **past slate** opens on its **backtest**. First the **Results** card (`_nfl_results.html`;
+  `ivan.sports.nfl.results.slate_results`; `scripts/nfl/results.py --slate <key>`): what our entries made on the slate
+  as DraftKings ranked and paid them (net and ROI, won on fees, entries cashed), then one row per contest (fee, field,
+  ours, best rank, best score, cashed, won, net, ROI); a contest row opens its panel under the table
+  (`GET /nfl/results/contest/{id}`, `_nfl_results_contest.html`, `scripts/nfl/results.py --contest <id>`): our entries
+  best first with rank, tie, points, payout, net, our copies of the lineup and the lineup. A contest the chooser entered
+  that was never scraped is listed as unscored with its fees, out of the totals. The laptop only: a consumer (the
+  server) shows no money. Then the slate's builds (every run that replayed it, with the commit,
   the parameters and the result; `scripts/nfl/slate_runs.py <key>`, [../nfl/backtest-and-validation.md](../nfl/backtest-and-validation.md))
   and what the archive holds for it. Its other views read what the pipeline left on disk for it, tied to the
   slate through DraftKings' contest list (`historical_contest_information`): **sim report** the sim reports of its
@@ -109,7 +116,7 @@ or "locked") and its mode.
 | **Models** `/models` | `output/models/` | the per-component scoreboard over code iterations: a fixed benchmark window replayed per commit with `replay.py --through STAGE`, repeat noise bands; a form runs it |
 | **Dupes** `/dupes` | `dupe_analysis` | the dupe model's predicted copies against the copies real fields held, by predicted copies, captain, ownership decile, team split, stack, salary left; residuals from projected and from actual ownership |
 | **Backtest** `/backtest`, `/backtest/{name}` | `output/backtests/<name>/` | the run hub: Data (what the window lacks and what each fetch costs), Contests (tick what to enter), Parameters (repeats, workers, lineups, sims, field cap, seed), Results (sim claim vs actual, after tax, repeats distribution, assumption checks, per slate and contest; **Pin** / **Unpin** = `scripts/nfl/retention.py --pin/--unpin NAME`, keeps the run's heavy files past the 30-day sweep). `/backtest/tax` the after-tax report, `/backtest/plan` the readiness per slate |
-| **Slate** `/backtest/slate/{key}` | every run root | one slate's builds = `scripts/nfl/slate_runs.py KEY`: what the archive holds for it, then every run that replayed it (hub runs, Models runs, lab replays) with the commit, stage, parameters, models version, chooser, and the slate's fees / sim claim / actual / mean over repeats; linked from the hub's slate rows and landing page (`slate_runs.py --list`) |
+| **Slate** `/backtest/slate/{key}` | every run root, `contest_entry_result` | the slate's Results card (`scripts/nfl/results.py --slate KEY`, the laptop only), then its builds = `scripts/nfl/slate_runs.py KEY`: what the archive holds for it, then every run that replayed it (hub runs, Models runs, lab replays) with the commit, stage, parameters, models version, chooser, and the slate's fees / sim claim / actual / mean over repeats; linked from the hub's slate rows and landing page (`slate_runs.py --list`) |
 
 ## If something goes wrong
 

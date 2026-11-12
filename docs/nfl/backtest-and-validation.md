@@ -121,7 +121,30 @@ recorded), the week's box scores, the derived `lineups.parquet` and `scores.npy`
 ([overnight.md](overnight.md)). It only knows which contests *we* played from the chooser's output on the
 same machine, so ingest, contest fetch and choose on the producer for every slate you enter.
 
-## The after-tax backtest (`backtest_tax.py`, `tax.py`, `/backtest/tax`)
+## The money (`ivan.sports.nfl.results`, `scripts/nfl/results.py`)
+
+```bash
+venv/bin/python scripts/nfl/results.py                       # every slate summed per day and overall
+venv/bin/python scripts/nfl/results.py --slate 156014        # one slate (a draft group), per contest
+venv/bin/python scripts/nfl/results.py --contest 197536097   # our entries in one contest, best first
+```
+
+What our entries made, from DraftKings' word only: the rank, points and payout the scraped standings gave each entry
+under our user name (`contest_entry_result`, written by `get_contest_data.py --username`, which settle runs after the
+slate; ties already shared) against the contest's entry fee (`historical_contest_information`). Nothing is rescored
+and nothing is a model. A slate is a draft group and its day the local day of its first lock. A contest is **unscored**
+when settle's status row lists it as played (the chooser's output named it), no finish of ours is recorded and it has
+no standings: it is listed with its fees (the chooser's entry count times the fee) and left out of every total. A
+contest with standings and no entry of ours is one we chose for and did not enter, and is not counted. Read from the
+database on every call (one grouped query); nothing is cached.
+
+Where it shows, on the laptop only (`Sport.ledger` is None on a consumer, the server): the NFL home tile, the NFL
+picker's strip and each day's row and heading, the Results card that leads a past slate's backtest page with a panel
+per contest ([../web/nfl-app.md](../web/nfl-app.md)), and, with every other sport and the tax on the total, the home
+page's strip ([../web/README.md](../web/README.md#the-money), `scripts/pnl.py`). The after-tax backtest below answers
+another question: what the chooser's picks would have made, entered or not.
+
+## The after-tax backtest (`backtest_tax.py`, `ivan.core.tax`, `/backtest/tax`)
 
 ```bash
 venv/bin/python scripts/nfl/backtest_tax.py [--dk-history export.csv] [--runs-dir ...] [--since --until] [--bankroll 2000]
@@ -129,8 +152,8 @@ venv/bin/python scripts/nfl/backtest_tax.py [--dk-history export.csv] [--runs-di
 ```
 
 What the chosen lineups would have returned after US federal gambling tax (2026 rules: 90% of losses
-deductible; `config/tax.json`, verify with a CPA; engine `tax.compute_tax(W, L, cfg)`, tested in
-`tests/nfl/test_tax.py`). Each entry is settled from the best evidence in order: a DraftKings
+deductible; `config/tax.json`, verify with a CPA; engine `ivan.core.tax.compute_tax(W, L, cfg)`, tested in
+`tests/core/test_tax.py`). Each entry is settled from the best evidence in order: a DraftKings
 contest-history export, our own entries in a scraped contest, the lineup's actual points placed in the
 scraped field, points only, nothing. The report: year to date (W, L, deductible, itemize decision,
 taxable, phantom income, tax, after-tax ROI), a scenario table, the tax each format adds, sim vs actual

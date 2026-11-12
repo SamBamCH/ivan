@@ -13,7 +13,8 @@ scores, and nothing is a model: this is the money.
 
 The cache: a slate whose every contest has a final export is complete and never recomputed (past results do not
 change). An incomplete one (a contest still mid-slate or unscraped) is re-checked at most every RECHECK minutes, and
-recomputed only when a contest's newest final export is newer than the one the ledger saw. So a page that sums the
+recomputed only when the exports on disk of the slate's contests (any of them: one we did not list may carry our user name) are not
+the ones the ledger saw. So a page that sums the
 season reads a few small JSON files, and the first page after a scrape pays the parse once.
 
 The actuals are the local machine's: a consumer desk (the server) does not get them (ivan.web.nba.core leaves the
@@ -33,12 +34,13 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.core import raw
+from ivan.core import pnl, raw
 from ivan.sports.nba.names import normalize_name
 
 SPORT = "nba"
+SOURCE = "DraftKings' final standings exports and the payout tables (scripts/nba/results.py; scripts/nba/standings.py scrape fetches them)"
 RECHECK = timedelta(minutes=10)          # how often an incomplete slate's exports are looked at again
-LEDGER_VERSION = 2                       # bump when the ledger's content changes: older files are recomputed
+LEDGER_VERSION = 3                       # bump when the ledger's content changes: older files are recomputed
 
 
 def our_user() -> Optional[str]:
@@ -104,7 +106,7 @@ def unscored(contest: dict, ours, why: str, export_at: Optional[datetime] = None
     n = int(ours) if isinstance(ours, (int, np.integer)) else len(ours)
     return dict(contest, ours=n, found=0, final=False, scored=why, export_at=export_at, field=field, locked=locked, entries=[],
                 fees=float(contest["entry_fee"]) * n, won=None, net=None, roi=None, best_rank=None, cashed=0, min_cash=None,
-                unique=None, max_copies=None, dup_share=None, winner=None, side=None)
+                gross_win=None, gross_loss=None, unique=None, max_copies=None, dup_share=None, winner=None, side=None)
 
 
 def score_contest(contest: dict, ours: set, ent: pd.DataFrame, pay: np.ndarray, export_at: Optional[datetime] = None,
@@ -144,6 +146,9 @@ def score_contest(contest: dict, ours: set, ent: pd.DataFrame, pay: np.ndarray, 
     out["won"] = float(sum(r["payout"] for r in rows))
     out["fees"] = float(contest["entry_fee"]) * (len(rows) or len(ours))
     out["net"] = out["won"] - out["fees"]
+    fee = float(contest["entry_fee"])                                  # the tax's W and L (ivan.core.tax): per entry, what it won over its fee and what it lost of it
+    out["gross_win"] = float(sum(max(r["payout"] - fee, 0.0) for r in rows))
+    out["gross_loss"] = out["gross_win"] - out["net"]
     out["best_rank"] = rows[0]["rank"] if rows else None
     out["cashed"] = sum(1 for r in rows if r["payout"] > 0)
     out["roi"] = out["net"] / out["fees"] if out["fees"] else None
@@ -223,19 +228,13 @@ def compute(dg: int, session: Session, ours_ids: Optional[Dict[int, set]] = None
 
 
 def _compact(r: dict) -> dict:
-    keep = ("contest_id", "name", "entry_fee", "ours", "found", "final", "scored", "field", "fees", "won", "net", "roi", "best_rank", "cashed", "min_cash")
+    keep = ("contest_id", "name", "entry_fee", "ours", "found", "final", "scored", "field", "fees", "won", "net", "roi", "best_rank", "cashed", "min_cash", "gross_win", "gross_loss")
     d = {k: r.get(k) for k in keep}
     d["export_at"] = r["export_at"].isoformat(timespec="minutes") if r.get("export_at") else None
     return d
 
 
-def _agg(rows: List[dict]) -> dict:
-    """fees, won, net, roi, entries, cashed, contests over the final rows; what the unscored ones cost."""
-    fin = [r for r in rows if r.get("final")]
-    fees = float(sum(r["fees"] for r in fin)); won = float(sum(r["won"] or 0 for r in fin))
-    return dict(fees=fees, won=won, net=won - fees, roi=(won - fees) / fees if fees else None, entries=int(sum(r.get("found") or 0 for r in fin)),
-                cashed=int(sum(r.get("cashed") or 0 for r in fin)), contests=len(fin), unscored=len(rows) - len(fin),
-                fees_unscored=float(sum(r["fees"] for r in rows if not r.get("final"))))
+_agg = pnl.agg          # fees, won, net, roi, entries, cashed, contests, gross_win, gross_loss over the final rows; what the unscored ones cost
 
 
 def ledger_path(dg: int, root: Optional[Path] = None) -> Path:
@@ -259,15 +258,17 @@ def _is_current(led: dict, now: datetime, root: Optional[Path] = None) -> bool:
     checked = datetime.fromisoformat(led["checked_at"]) if led.get("checked_at") else None
     if checked is not None and now - checked < RECHECK:
         return True
-    seen = {int(k): v for k, v in (led.get("exports") or {}).items()}
-    cur = {cid: a.stamp for cid, a in final_exports(set(seen) | set(led.get("wanted") or [])).items()}
+    seen = {int(k): v for k, v in {**(led.get("other_exports") or {}), **(led.get("exports") or {})}.items()}
+    ids = set(seen) | set(led.get("wanted") or []) | set(led.get("slate_contests") or [])       # every contest of the slate: an export of one we
+    cur = {cid: a.stamp for cid, a in final_exports(ids).items()}                               # did not list may carry our user name
     return cur == seen
 
 
 def slate_ledger(dg: int, now: Optional[datetime] = None, force: bool = False, root: Optional[Path] = None, session: Optional[Session] = None) -> dict:
     """
     The slate's result, compact, from the cache when it is current (see the module doc) else recomputed and written to
-    slates/<dg>/results/ledger.json: {draft_group, day, computed_at, checked_at, complete, user, exports, wanted, contests, summary}.
+    slates/<dg>/results/ledger.json: {draft_group, day, computed_at, checked_at, complete, user, exports, other_exports, slate_contests,
+    wanted, contests, summary}.
     """
     from ivan.sports.nba import slates as S
     from ivan.sports.nba.data_fetch.standings import our_contest_ids
@@ -283,13 +284,17 @@ def slate_ledger(dg: int, now: Optional[datetime] = None, force: bool = False, r
     try:
         with S.using(dg):
             rows = compute(dg, sess, root=root)
+            from ivan.sports.nba.data_fetch.contests import slate_contests
+            known = sorted(int(r.contest_id) for r in slate_contests(sess, dg))
     finally:
         if own:
             sess.close()
     wanted = sorted(our_contest_ids(dg, root=root))
     exports = {str(r["contest_id"]): r["export_at"].strftime("%Y%m%d-%H%M%S") for r in rows if r.get("export_at")}
+    others = {str(c): a.stamp for c, a in final_exports(known).items() if str(c) not in exports}     # exports seen that gave no row (not our contests)
     meta = S.read_meta(dg, root) if S.holds(dg, root) else {}
-    led = dict(version=LEDGER_VERSION, draft_group=dg, day=meta.get("day"), computed_at=now.isoformat(timespec="seconds"),
+    led = dict(slate_contests=known, other_exports=others,
+version=LEDGER_VERSION, draft_group=dg, day=meta.get("day"), computed_at=now.isoformat(timespec="seconds"),
                checked_at=now.isoformat(timespec="seconds"), user=our_user(), entries_file=bool(wanted),
                complete=bool(rows) and all(r["final"] for r in rows) and (not wanted or all(any(r["contest_id"] == c and r["final"] for r in rows) for c in wanted)),
                exports=exports, wanted=wanted, contests=[_compact(r) for r in rows], summary=_agg(rows))
@@ -312,8 +317,7 @@ def ledger_days(now: Optional[datetime] = None, root: Optional[Path] = None, tod
     from ivan.sports.nba import slates as S
     now = now or datetime.now()
     today = today or now.date()
-    days: Dict[str, dict] = {}
-    slates: Dict[int, dict] = {}
+    slates = []
     for dg, meta in S.held_meta(root).items():
         day = str(meta.get("day") or "")[:10]
         if not day or date.fromisoformat(day) >= today:
@@ -322,19 +326,7 @@ def ledger_days(now: Optional[datetime] = None, root: Optional[Path] = None, tod
             led = slate_ledger(dg, now, root=root)
         except Exception:   # noqa: BLE001 - one broken slate must not take the page down
             continue
-        if not led["contests"]:
-            continue
-        slates[dg] = dict(led["summary"], day=day, complete=led["complete"], contests_list=led["contests"])
-        days.setdefault(day, []).append(led)
-    out_days = {}
-    for day, leds in days.items():
-        rows = [c for led in leds for c in led["contests"]]
-        a = _agg(rows)
-        a["slates"] = [led["draft_group"] for led in leds]
-        a["incomplete"] = sum(1 for led in leds if not led["complete"])
-        out_days[day] = a
-    overall = _agg([c for led in [slates[d] for d in slates] for c in led["contests_list"]])
-    overall["days"] = len(out_days); overall["slates"] = len(slates); overall["incomplete"] = sum(1 for s in slates.values() if not s["complete"])
-    for s in slates.values():
-        s.pop("contests_list", None)
-    return dict(overall=overall, days=dict(sorted(out_days.items(), reverse=True)), slates=slates)
+        slates.append(dict(key=led["draft_group"], day=day, complete=led["complete"], contests=led["contests"]))
+    out = pnl.roll_up(slates)
+    out["source"] = SOURCE
+    return out

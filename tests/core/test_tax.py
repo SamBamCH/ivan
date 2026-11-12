@@ -3,7 +3,7 @@ import math
 
 import pytest
 
-from ivan.sports.nfl.tax import (GROSS, NET, TaxConfig, after_tax_closed_form, bracket_tax, breakeven_profit_ratio,
+from ivan.core.tax import (GROSS, NET, TaxConfig, after_tax_closed_form, bracket_tax, breakeven_profit_ratio,
                                  compute_tax, load_tax_config, scenario_configs)
 
 ITEMIZE = TaxConfig(loss_cap_pct=0.90, marginal_rate=0.22, itemize="always")

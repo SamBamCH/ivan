@@ -13,7 +13,7 @@ UI in `src/ivan/web/` ([../web/nfl-app.md](../web/nfl-app.md)).
 | [ownership-and-dupes.md](ownership-and-dupes.md) | How ownership is projected and corrected, and how many copies of a lineup the field holds. |
 | [simulation.md](simulation.md) | The field sampler, the Monte Carlo contest sim (live), the conditioned closed-form sim (lab), the sim report. |
 | [chooser.md](chooser.md) | greedy, portfolio and slate; the shrinkage; honest ROI by cross-fit; comparing choosers on a slate. |
-| [backtest-and-validation.md](backtest-and-validation.md) | Replay, repeats, as-of models, the Backtest hub and the per-slate builds page, what retention keeps and lets go, validation per component, the models scoreboard, settle and the after-tax report. |
+| [backtest-and-validation.md](backtest-and-validation.md) | Replay, repeats, as-of models, the Backtest hub and the per-slate builds page, what retention keeps and lets go, validation per component, the models scoreboard, settle, the money (what our entries made) and the after-tax report. |
 | [overnight.md](overnight.md) | The nightly timer, the manual overnight reset, settle, the scrapes, model builds, the sync to the server. |
 | [data.md](data.md) | Config keys, tables, the data directory, the models directory. |
 | [notes/](notes/) | Dated plans and findings: the slate chooser plan, the slate book built for NFL and NBA (2026-11-05), the dupe backtest. |
@@ -32,7 +32,7 @@ generate_lineups.py N J ─► lineup pool (correlated samples → ILP, deduped;
 sim.py ─► per contest: sampled field (dupe model), one shared draw per slate, lineup_simulation_results, contest_sim_report, sim artifact
 choose.py ─► DK upload CSV + exposures + lineups + choose json + simroi npz
 after the games: nightly.py (timer) → box scores, DST table, settle (standings scrape, derived fields, slate status)
-                 validate.py, backtest hub, replay.py, backtest_tax.py
+                 results.py (what our entries made), validate.py, backtest hub, replay.py, backtest_tax.py
 ```
 
 ## Where to look when something is wrong

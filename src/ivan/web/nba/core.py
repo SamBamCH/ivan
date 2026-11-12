@@ -306,13 +306,7 @@ def nba_summary(now: datetime) -> dict:
         note += f" · {len(held)} slate{'s' if len(held) != 1 else ''} held"
     ahead = [d for d in days if d.day >= now.date()]
     nxt = min(ahead, key=lambda d: d.day) if ahead else None
-    ledger = None
-    if not CONSUMER:                                              # the money, this machine only (ivan.sports.nba.backtest.results)
-        try:
-            ledger = results.ledger_days(now)["overall"]
-        except Exception:   # noqa: BLE001 - the home page opens without it
-            ledger = None
-    return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else "", "ledger": ledger}
+    return {"loaded": loaded, "job": cur.name if cur else None, "note": note, "n_days": len(days), "next": nxt.label if nxt else ""}
 
 
 def sport_job() -> Optional[dict]:

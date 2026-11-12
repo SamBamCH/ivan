@@ -68,8 +68,8 @@ class Sport:
     days: Callable[[datetime], list[Day]]           # the slate index
     summary: Callable[[datetime], dict]             # the home tile: {"loaded": SlateInfo|None, "job": str|None, "note": str}
     tools: list[tuple[str, str]] = field(default_factory=list)   # (label, path under the sport root) for pages that are not one slate's
-    ledger: Optional[Callable[[datetime], dict]] = None          # the money: {"overall": agg, "days": {iso: agg}} (ivan.sports.nba.backtest.results.ledger_days);
-                                                                  # None on a machine that must not show it (a consumer desk)
+    ledger: Optional[Callable[[datetime], dict]] = None          # the money: {"overall": agg, "days": {iso: agg}, "source"} (ivan.core.pnl.roll_up; NBA backtest.results, NFL results);
+                                                                  # the picker, the home tile and the home total read it; None on a machine that must not show it (a consumer desk)
     day_status: Optional[Callable[[datetime], dict]] = None      # a past day's readiness for the backtest: {iso: {"state": ready|pending|failed, "why"}}
                                                                   # (ivan.sports.nba.backtest.readiness.day_status); the calendar and the picker colour the day by it
     actions: list = field(default_factory=list)                  # [{label, path, title}] sport-level buttons on the picker (POST to <root><path>), e.g. fetch upcoming

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from ivan.sports.nfl.backtest_repeats import slate_matrix, summarize
-from ivan.sports.nfl.tax import TaxConfig
+from ivan.core.tax import TaxConfig
 
 
 def frames(n_rep=40, seed=1):

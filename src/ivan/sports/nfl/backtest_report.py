@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from ivan.sports.nfl import backtest_tax as bt
-from ivan.sports.nfl.tax import GROSS, TaxConfig, breakeven_profit_ratio, compute_tax, scenario_configs
+from ivan.core.tax import GROSS, TaxConfig, breakeven_profit_ratio, compute_tax, scenario_configs
 
 
 def money(x) -> str:

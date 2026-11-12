@@ -1,0 +1,11 @@
+{# One contest's panel under the slate's results table (GET /nfl/results/contest/{id}; ivan.sports.nfl.results.contest_entries;
+   terminal: scripts/nfl/results.py --contest ID): our entries, best first. #}
+{% set c = cd.contest %}
+<h3 style="margin-top:14px">{{ c.name }} <span class="muted small">{{ c.entry_fee|money }} · {{ '{:,}'.format(c.field) }} entries · ours {{ c.found }} · {{ c.net|smoney or '$0.00' }} net</span></h3>
+<div class="wide" style="max-height:420px; overflow-y:auto"><table class="compact res">
+  <tr><th class="num">Rank</th><th class="num" title="entries sharing this rank (they share the payouts of the places they cover)">Tied</th><th class="num">Points</th><th class="num">Payout</th><th class="num">Net</th><th class="num" title="our entries with this same lineup in this contest">Copies</th><th>Lineup</th></tr>
+  {% for e in cd.entries %}<tr>
+    <td class="num">{{ '{:,}'.format(e.rank) }}</td><td class="num">{{ e.tie_size if e.tie_size > 1 else '' }}</td><td class="num">{{ '%.2f'|format(e.points) if e.points is not none else '' }}</td>
+    <td class="num">{{ e.payout|money if e.payout else '' }}</td><td class="num {{ 'lo' if e.net < 0 else ('hi' if e.net > 0 else '') }}">{{ e.net|smoney }}</td>
+    <td class="num">{{ e.copies if e.copies > 1 else '' }}</td><td class="wrap small">{{ e.lineup }}</td></tr>{% endfor %}
+</table></div>

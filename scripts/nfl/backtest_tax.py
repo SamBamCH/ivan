@@ -11,7 +11,7 @@ For each contest, the last choose run before lock says what we would have
 submitted; those entries are settled from the best evidence available (a
 DraftKings contest-history export, our scraped entries, or the lineup's
 actual points placed in the scraped field) and run through the tax engine
-(ivan.sports.nfl.tax) as a running ledger. By default the runs are the live
+(ivan.core.tax) as a running ledger. By default the runs are the live
 ones under data/nfl/output (and output/web); --runs-dir points at other
 directories, e.g. replayed slates. Prints the report and writes the tables
 under data/nfl/output/backtest/<stamp>/ (see ivan.sports.nfl.backtest_report).
@@ -28,7 +28,7 @@ from ivan.database.session import add_missing_columns, get_session, init_db
 from ivan.sports.nfl import backtest_report, backtest_tax as bt
 from ivan.sports.nfl.models import NFLBase
 from ivan.sports.nfl.paths import OUTPUT_DIR
-from ivan.sports.nfl.tax import GROSS, NET, load_tax_config
+from ivan.core.tax import GROSS, NET, load_tax_config
 
 BACKTEST_DIR = OUTPUT_DIR / "backtest"
 

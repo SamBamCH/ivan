@@ -34,6 +34,7 @@ from fastapi.templating import Jinja2Templates
 from ivan.core.utils import PROJECT_ROOT
 from ivan.database.session import add_missing_columns, get_session, init_db
 from ivan.sports.nfl.models import NFLBase
+from ivan.sports.nfl import results
 from ivan.sports.nfl.paths import NFL_DATA_DIR
 from ivan.web.nfl import backtest_view as bv
 from ivan.web.nfl import validate_view as vv
@@ -562,9 +563,45 @@ def backtest_slate_page(request: Request, key: str):
     """One slate's history: every run that replayed it, with the commit, the parameters and the result (scripts/nfl/slate_runs.py)."""
     with _session() as session:
         view = hub.slate_view(session, key)
-    if view is None:
+        res = _slate_results(session, key)
+    if view is None and not (res and res["contests"]):
         return _redirect(request, "/backtest", f"No run has replayed slate {key}.")
-    return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, view=view))
+    return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, view=view, results=res, slate_key=str(key)))
+
+
+# ------------------------------------------------------------------ the money (ivan.sports.nfl.results; scripts/nfl/results.py)
+def _consumer() -> bool:
+    """The server pulling the laptop's data: like the NBA desk there, it shows no money (the results are the laptop's)."""
+    from ivan.core import feed
+    return feed.producer_source() is not None
+
+
+def _slate_results(session, key: str) -> Optional[dict]:
+    """What our entries made on one slate, None on a consumer; an unreadable ledger is an error line, never a failed page."""
+    if _consumer():
+        return None
+    try:
+        return results.slate_results(session, key)
+    except Exception as e:   # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}", "contests": [], "summary": None, "complete": False, "slate_key": str(key)}
+
+
+def nfl_ledger(now: datetime) -> dict:
+    """Sport.ledger: every slate's money per day and overall (results.ledger_days), on the web app's own database."""
+    return _with_db(lambda session: results.ledger_days(now, session))
+
+
+@app.get("/results/contest/{contest_id}", response_class=HTMLResponse)
+def results_contest(request: Request, contest_id: int):
+    """One contest's panel on the slate's backtest page: our entries in it as DraftKings ranked and paid them
+    (scripts/nfl/results.py --contest ID)."""
+    if _consumer():
+        raise HTTPException(404, "the results are shown on the laptop only")
+    with _session() as session:
+        detail = results.contest_entries(session, contest_id)
+    if detail is None:
+        raise HTTPException(404, "no entries of ours recorded for this contest")
+    return templates.TemplateResponse(request, "_nfl_results_contest.html", {"request": request, "cd": detail})
 
 
 @app.post("/backtest/{name}/pin")
@@ -1043,10 +1080,12 @@ def _default_view(slate: SlateInfo, now: datetime) -> str:
 
 
 def _slate_backtest_page(request: Request, slate: SlateInfo):
-    """The slate's builds (ivan.sports.nfl.run_index, scripts/nfl/slate_runs.py) and what the archive holds for it."""
+    """What our entries made on the slate (ivan.sports.nfl.results, scripts/nfl/results.py --slate), its builds (ivan.sports.nfl.run_index,
+    scripts/nfl/slate_runs.py) and what the archive holds for it."""
     with _session() as session:
         view = hub.slate_view(session, slate.key)
-    return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, page="backtest", slate=slate, view=view))
+        res = _slate_results(session, slate.key)
+    return templates.TemplateResponse(request, "backtest_slate.html", _ctx(request, page="backtest", slate=slate, view=view, results=res, slate_key=slate.key))
 
 
 @app.get("/{day}/{key}/", response_class=HTMLResponse)
@@ -1076,6 +1115,7 @@ def slate_page(request: Request, day: str, key: str, view: Optional[str] = None)
 def sport() -> Sport:
     """The description ivan.web.main mounts: the NFL sub-app with the picker at its root."""
     global SPORT
-    SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nfl_days, summary=nfl_summary, tools=TOOLS, default_view=_default_view, app=app)
+    SPORT = Sport(key=KEY, label=LABEL, views=VIEWS, days=nfl_days, summary=nfl_summary, tools=TOOLS, default_view=_default_view, app=app,
+                  ledger=None if _consumer() else nfl_ledger)             # the money per day and over the season; never on the consumer (the server)
     frame.install_picker(app, SPORT)
     return SPORT

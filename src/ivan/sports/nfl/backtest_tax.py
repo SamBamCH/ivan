@@ -23,7 +23,7 @@ would have submitted". Its entries are then settled, in order of preference:
 Winnings and losses per entry (spec section 2), the running tax ledger,
 the scenario table, the per-format breakdown, the sim-vs-actual comparison
 and the volume sweep all build on that list of EntryResult rows. The tax
-rules themselves live in ivan.sports.nfl.tax.
+rules themselves live in ivan.core.tax.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ from ivan.sports.nfl.models import (ContestEntryResult, ContestFieldScores, Hist
                                     ShowdownPlayer)
 from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.sports.nfl.placement import load_payout_tiers, payout_vector, place, places_paid, remove_our_copies
-from ivan.sports.nfl.tax import TaxConfig, compute_tax, scenario_configs
+from ivan.core.tax import TaxConfig, compute_tax, scenario_configs
 
 CPT_SLOT, CPT_MULT = 511, 1.5
 SLOT_CODE = {"CPT": 511, "FLEX": 512, "QB": 66, "RB": 67, "WR": 68, "TE": 69, "DST": 71}

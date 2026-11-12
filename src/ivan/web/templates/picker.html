@@ -22,13 +22,13 @@
   {% if job and job.status in ('running', 'queued') %}<meta http-equiv="refresh" content="5">{% endif %}
   {% endif %}
   {% if ledger %}{% set ov = ledger.overall %}
-  <div class="ledger" title="what our entries made, from DraftKings' final standings exports and the payout tables (ivan.sports.nba.backtest.results); this machine only">
+  <div class="ledger" title="what our entries made, from {{ ledger.source or 'the standings DraftKings published' }}; this machine only">
     {% if ledger.error %}<span class="muted small">results unavailable: {{ ledger.error }}</span>
     {% elif ov and ov.contests %}
     <span class="big {{ 'lo' if ov.net < 0 else 'hi' }}">{{ money(ov.net) }}</span>
     <span class="muted">net · {{ pct(ov.roi) }} ROI on {{ money(ov.fees)|replace('+', '') }} in fees · {{ ov.cashed }} / {{ ov.entries }} entries cashed · {{ ov.contests }} contests · {{ ov.days }} day{{ '' if ov.days == 1 else 's' }}</span>
     {% if ov.incomplete %}<span class="warn small">{{ ov.incomplete }} slate{{ '' if ov.incomplete == 1 else 's' }} with contests not yet scraped final ({{ money(ov.fees_unscored)|replace('+', '') }} in fees out of the numbers)</span>{% endif %}
-    {% else %}<span class="muted small">no results yet: no final standings export of a contest of ours (scripts/nba/standings.py scrape)</span>{% endif %}
+    {% else %}<span class="muted small">no results yet: nothing of ours in {{ ledger.source or 'the standings DraftKings published' }}</span>{% endif %}
   </div>{% endif %}
   <div class="picker">
     <div class="days">
