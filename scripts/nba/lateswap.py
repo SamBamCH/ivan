@@ -28,6 +28,7 @@ import os
 from datetime import datetime
 from multiprocessing import freeze_support
 
+from ivan.core.config import cfg, load_config
 from ivan.sports.nba.paths import CHROME_PROFILE_DIR
 from ivan.sports.nba.lateswap import swap as LS
 from ivan.sports.nba import slates as S
@@ -51,7 +52,9 @@ def main() -> int:
     ap.add_argument("--field", choices=("shared", "each"), default="shared",
                     help="shared: one export (the biggest contest's) completed once, every contest scored against a sample of it; each: every contest's own export")
     ap.add_argument("--headless", action="store_true", help="headless Chrome (DraftKings answers 403 to headless sessions; only for testing)")
-    ap.add_argument("--candidates", type=int, default=10, help="re-optimised lineups per entry")
+    ap.add_argument("--candidates", type=int, default=10, help="distinct re-optimised lineups per entry (fewer only when no more fit the open slots)")
+    ap.add_argument("--unique-seconds", type=float, default=None,
+                    help="give up on an entry's candidates once this long passes without one more distinct lineup (default: config lateswap.unique_seconds, 5)")
     ap.add_argument("--field-cap", type=int, default=5000, help="field entries completed and scored (sampled when the contest is bigger)")
     ap.add_argument("--sims", type=int, default=1000)
     ap.add_argument("--contest", type=int, action="append", default=None, help="only this contest id (repeatable)")
@@ -70,14 +73,17 @@ def main() -> int:
     http = None
     if a.source in ("draftkings", "auto"):
         http = LS.LazyHttp(lambda: dk_session(a.headless), log=lambda m: print(m, flush=True))   # Chrome opens only when an export is downloaded
+    unique_seconds = a.unique_seconds if a.unique_seconds is not None else float(cfg(load_config("nba"), "lateswap.unique_seconds", LS.UNIQUE_SECONDS))
     report = LS.lateswap_entries(session, entries, now=now, source=a.source, http_sess=http, n_candidates=a.candidates,
                                  field_cap=a.field_cap, num_sims=a.sims, only=a.contest, log=lambda m: print(m, flush=True), use_live=a.live,
-                                 shared_field=(a.field == "shared"))
+                                 shared_field=(a.field == "shared"), unique_seconds=unique_seconds)
     paths = LS.write_outputs(session, report, entries, log=lambda m: print(m, flush=True))
     for c in report["contests"]:
         n_imp = sum(1 for e in c["entries"] if e["improved"])
         gain = sum(e["best"]["exp_payout"] - e["original"]["exp_payout"] for e in c["entries"])
         print(f"{c['name']}: {n_imp}/{len(c['entries'])} entries improve, +${gain:.2f} expected in total", flush=True)
+    for cid, ids in (report.get("duplicates") or {}).items():
+        print(f"DUPLICATES in contest {cid}: entries {', '.join(ids)} repeat a lineup of the contest", flush=True)
     if report["failed"]:
         print("failed: " + ", ".join(f"{f['contest_id']} ({f['error']})" for f in report["failed"]), flush=True)
     if report["contests"]:

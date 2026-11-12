@@ -177,7 +177,8 @@ Downloads list serves the CSVs; `/export/lineups.csv` streams the whole generate
 
 After lock the swap plays against the **real** field: the contest's standings export (fetched as a step of
 its own, reused until the next tip), its open slots completed by the optimiser; by default one export,
-the biggest contest's, completed once and sampled at every contest's size. See
+the biggest contest's, completed once and sampled at every contest's size. Each entry gets N distinct
+candidates and the contest's entries are assigned one lineup each, none twice (`assign_unique`). See
 [game-day.md](game-day.md) step 7 and `src/ivan/sports/nba/lateswap/swap.py`.
 
 ## Reading a sim report

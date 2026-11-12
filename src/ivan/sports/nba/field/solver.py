@@ -8,7 +8,7 @@ This module provides:
 - generate_single_classic_lineup for ILP-based lineup optimization
 """
 
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -105,7 +105,8 @@ def generate_single_classic_lineup(
     attempt_tag: Optional[str] = None,
     lock_time: Optional[datetime] = None,
     min_fpts: Optional[float] = None,
-    max_salary_per_team: Optional[int] = 25000
+    max_salary_per_team: Optional[int] = 25000,
+    exclude: Optional[Sequence[Sequence[int]]] = None
 ) -> Optional[List[int]]:
     """
     Generate a single optimal NBA classic lineup given player pool and projected scores.
@@ -119,6 +120,7 @@ def generate_single_classic_lineup(
       - Optional locked player-to-slot assignments
       - Lock time enforcement: players whose games started before lock_time are excluded
       - Optional minimum total projected FPTS (min_fpts)
+      - Optional excluded lineups (exclude): the solution shares at most 7 players with each
       - Objective: maximize total projected fantasy points
 
     Args:
@@ -129,6 +131,7 @@ def generate_single_classic_lineup(
         locked_assignments: Optional Dict[player_id: int, slot_name: str] to lock players to specific slots
         lock_time: Optional datetime; players with gametime <= lock_time are excluded unless locked
         min_fpts: Optional minimum total projected FPTS for the lineup
+        exclude: Optional lineups (8 player ids each) the solution may not equal, whatever the slots
 
     Returns:
         List of 8 player IDs if optimal solution found, None otherwise
@@ -268,6 +271,12 @@ def generate_single_classic_lineup(
             for slot in x[player.id]
         )
         prob += fpts_expr >= min_fpts, "MinFPTS"
+
+    # Excluded lineups: not the same eight players again (a lineup with a player outside this pool cannot come back anyway)
+    for k, ex in enumerate(exclude or ()):
+        ex_ids = {int(pid) for pid in ex}
+        if len(ex_ids) == 8 and all(pid in y for pid in ex_ids):
+            prob += plp.lpSum(y[pid] for pid in ex_ids) <= 7, f"Exclude_{k}"
 
     # Optional per-team salary cap
     if max_salary_per_team_val is not None:

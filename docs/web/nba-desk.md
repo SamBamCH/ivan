@@ -417,12 +417,16 @@ contest table puts on another draft group (an older slate's export) is listed ap
 Two buttons. **Fetch standings** (`/lateswap/fetch`, job `fetch_standings` = `scripts/nba/fetch_standings.py`;
 producer only) downloads every entries contest's standings export through the logged-in Chrome profile
 and keeps it under raw `dk/standings/<contest id>/`: press it a minute after a tip. **Run late swap**
-(`/pipeline/lateswap` = `scripts/nba/lateswap.py`) with: candidates, field cap, sims; **standings**
+(`/pipeline/lateswap` = `scripts/nba/lateswap.py`) with: candidates (distinct lineups per entry; an entry's
+"cands" count is lower only when no more fit its open slots or the time limit `lateswap.unique_seconds` ran
+out), field cap, sims; **standings**
 (`ls_source`: "stored while current" = `--source auto`, the stored export while no game has tipped since it
 was taken, a download otherwise; "DraftKings live"; "stored export"); **field** (`ls_field`: "one for all
 contests" = `--field shared`, the biggest contest's export completed once and sampled per contest; "each
 contest's own"); live scoring (`ls_live`). Each contest's heading shows its export's time, green while
-current, amber "before the last tip" once a game has tipped since.
+current, amber "before the last tip" once a game has tipped since. No lineup is written twice in a contest: an entry
+moved off a lineup another entry holds, without a gain of its own, carries "unique"; one that could not move (its
+original repeats another's and all eight are locked) carries "duplicate" in red.
 
 Below, the report of the newest `lateswap.<stamp>.json`: per contest and entry, the original and the swapped
 lineup with the expected payout of each, and the exposure table before and after. The upload box

@@ -14,11 +14,14 @@ field_export(session, cid, ...)  the contest's standings export: "auto" takes th
 complete_field(...)              each field entry's eight players: the LOCKED names are
                                  known, the open slots are filled by the optimiser in a
                                  sampled world (what that entrant will most likely hold)
-candidates(...)                  for one of our entries: the original plus N re-optimised
-                                 lineups, locked players held in their slots
+candidates(...)                  for one of our entries: the original plus N distinct re-optimised
+                                 lineups, locked players held in their slots; fewer only when no more
+                                 fit the open slots or none came within the time limit (unique_seconds)
 evaluate(...)                    expected payout of every candidate against the field, in
                                  num_sims worlds; ties ignored (the candidate ranks above
                                  the field entries it beats)
+assign_unique(...)               one lineup per entry and no lineup twice in a contest: the assignment of
+                                 entries to distinct lineups with the highest total expected payout
 lateswap_contest / lateswap_entries   the whole thing; write_outputs writes the upload CSV
                                  (the entries export with swapped lineups) and a json report
                                  the desk reads: data/nba/output/lateswap.<stamp>.{csv,json}
@@ -372,33 +375,101 @@ def complete_field(session: Session, export: pd.DataFrame, fps: Dict[int, FieldP
 
 
 # ----------------------------------------------------------------------------- our candidates
+UNIQUE_SECONDS = 5.0      # the wait for one more distinct candidate before the search gives up on an entry (config lateswap.unique_seconds)
+
+
+def lineup_key(ids: Sequence[int]) -> Tuple[int, ...]:
+    """A lineup as DraftKings compares two: its eight players, whatever the slots."""
+    return tuple(sorted(int(p) for p in ids))
+
+
 def candidates(entry: OriginalEntry, fps: Dict[int, FieldPlayer], worlds: np.ndarray, pids: List[int], now: datetime,
-               n: int = 10, jitter: float = 0.25, rng: Optional[np.random.Generator] = None) -> List[List[int]]:
-    """The original lineup first, then up to n distinct re-optimised ones (locked players held in their slots)."""
+               n: int = 10, jitter: float = 0.25, rng: Optional[np.random.Generator] = None,
+               seconds: float = UNIQUE_SECONDS, log: Optional[Log] = None) -> List[List[int]]:
+    """
+    The original lineup first, then n distinct re-optimised ones (locked players held in their slots). Each solve is
+    told the lineups already held (the solver's exclude), so it returns a new one or nothing: nothing means no other
+    lineup fits the open slots (seven locked and one eligible player left, say) and the search ends there with fewer
+    than n. `seconds` is the limit on the wait for the NEXT distinct lineup: once that long has passed without one
+    the search gives up on this entry and says so, so a slow or repeating solver cannot hang the job.
+    """
+    import time
     rng = rng or np.random.default_rng()
     orig = entry.player_ids()
     locked = {pid: slot for slot, pid in entry.slots.items() if pid in set(entry.locked_player_ids) or (pid in fps and is_locked(fps[pid], now))}
     entry.locked_player_ids = set(locked)
-    out, seen = [orig], {tuple(sorted(orig))}
-    if len(locked) == 8:
+    out, seen = [orig], {lineup_key(orig)}
+    if len(locked) == 8 or n <= 0:
         return out
     pool = [fp for fp in fps.values() if fp.id in locked or not is_locked(fp, now)]
     if len(pool) < 8:
         return out
     col = {pid: j for j, pid in enumerate(pids)}
-    for ridx in rng.permutation(worlds.shape[0]):
-        w = worlds[ridx]
-        sc = {fp.id: float(w[col[fp.id]]) + (rng.normal(0.0, jitter) if jitter and fp.id not in locked else 0.0) for fp in pool if fp.id in col}
-        ids = generate_single_classic_lineup(pool, base_scores=sc, locked_assignments=locked or None, max_salary_per_team=50000)
-        if not ids:
-            continue
-        key = tuple(sorted(ids))
-        if key in seen:
-            continue
-        seen.add(key); out.append(ids)
-        if len(out) > n:
-            break
+    last = time.monotonic()
+    while len(out) <= n:
+        for ridx in rng.permutation(worlds.shape[0]):               # every world once, then again with fresh jitter
+            if time.monotonic() - last > float(seconds):
+                if log is not None:
+                    log(f"entry {entry.entry_id}: no new lineup in {float(seconds):g} s; {len(out) - 1} of {n} candidates")
+                return out
+            w = worlds[ridx]
+            sc = {fp.id: float(w[col[fp.id]]) + (rng.normal(0.0, jitter) if jitter and fp.id not in locked else 0.0) for fp in pool if fp.id in col}
+            ids = generate_single_classic_lineup(pool, base_scores=sc, locked_assignments=locked or None, max_salary_per_team=50000,
+                                                 exclude=sorted(seen))
+            if not ids:
+                return out                                          # nothing but the held lineups fits the open slots
+            key = lineup_key(ids)
+            if key in seen:
+                continue                                            # retried in the next world until the limit
+            seen.add(key); out.append(ids); last = time.monotonic()
+            if len(out) > n:
+                break
     return out
+
+
+def assign_unique(options: Dict[str, List[dict]], log: Log = print) -> Tuple[Dict[str, dict], List[str]]:
+    """
+    One lineup per entry, no lineup twice in the contest. `options` is entry id -> the scored lineups that entry may
+    hold (dicts with ids and exp_payout), its original first. The assignment with the highest total expected payout
+    in which every entry holds a different lineup (scipy's linear_sum_assignment over entries x distinct lineups); an
+    entry keeps its original on a tie. Returns (entry id -> its lineup, the entries left on a duplicate): the second
+    list is empty unless the originals themselves repeat and the repeats have no other lineup to move to (all eight
+    locked), in which case those entries keep their original and the fewest possible stay duplicated.
+    """
+    from scipy.optimize import linear_sum_assignment
+    eids = [e for e, rows in options.items() if rows]
+    if not eids:
+        return {}, []
+    keys: Dict[Tuple[int, ...], int] = {}
+    for e in eids:
+        for r in options[e]:
+            keys.setdefault(lineup_key(r["ids"]), len(keys))
+    n, m = len(eids), len(keys)
+    top = max(float(r["exp_payout"]) for e in eids for r in options[e])
+    eps = 1e-9 * max(1.0, top)                                      # the tie-break towards the original
+    stuck_cost = -(n + 1) * (top + 1.0)                             # one entry left duplicated costs more than any re-arrangement gains
+    V = np.full((n, m + n), -np.inf)
+    pick: Dict[Tuple[int, int], dict] = {}
+    for i, e in enumerate(eids):
+        for k, r in enumerate(options[e]):
+            j = keys[lineup_key(r["ids"])]
+            v = float(r["exp_payout"]) + (eps if k == 0 else 0.0)
+            if v > V[i, j]:
+                V[i, j] = v; pick[(i, j)] = r
+        V[i, m + i] = stuck_cost                                    # the entry's own way out: keep the original, duplicated
+    V[np.isneginf(V)] = 10.0 * stuck_cost * (n + 1)                 # not this entry's lineup: never taken (the way out is cheaper)
+    rows_i, cols_j = linear_sum_assignment(V, maximize=True)
+    chosen: Dict[str, dict] = {}; stuck: List[str] = []
+    for i, j in zip(rows_i, cols_j):
+        e = eids[i]
+        if (i, j) in pick:
+            chosen[e] = pick[(i, j)]
+        else:
+            chosen[e] = options[e][0]; stuck.append(e)
+    if stuck:
+        log(f"WARNING: {len(stuck)} entries stay on a lineup another entry of the contest holds (their originals repeat and they have no "
+            f"other lineup to move to): {', '.join(str(e) for e in stuck)}")
+    return chosen, stuck
 
 
 # ----------------------------------------------------------------------------- scoring
@@ -522,7 +593,7 @@ def sample_shared(shared: dict, size: int, seed: Optional[int]) -> List[List[int
 def lateswap_contest(session: Session, contest_id: int, entries: List[OriginalEntry], fps: Dict[int, FieldPlayer], names: Dict[str, int],
                      now: datetime, source: str = "auto", http_sess=None, n_candidates: int = 10, field_cap: int = 5000,
                      num_sims: int = 1000, log: Log = print, live: Optional[pd.DataFrame] = None, shared: Optional[dict] = None,
-                     tips: Optional[Sequence[datetime]] = None) -> Optional[dict]:
+                     tips: Optional[Sequence[datetime]] = None, unique_seconds: float = UNIQUE_SECONDS) -> Optional[dict]:
     contest = C.ensure_contest(session, int(contest_id), log=log)
     if contest is None:
         log(f"{contest_id}: not in the database and DraftKings has nothing for it"); return None
@@ -554,28 +625,37 @@ def lateswap_contest(session: Session, contest_id: int, entries: List[OriginalEn
         v = samples.get(pid)
         worlds[:, j] = v[:worlds_n] if isinstance(v, np.ndarray) and len(v) >= worlds_n else float(fps[pid].fpts_mean or 0.0)
     rng = np.random.default_rng(seed)
-    cands = {e.entry_id: candidates(e, fps, worlds, pids, now, n=n_candidates, rng=rng) for e in entries}
-    log(f"{contest_id} {contest.name}: {len(entries)} entries, {sum(len(v) - 1 for v in cands.values())} candidates, field {len(field):,}, {num_sims} sims")
+    cands = {e.entry_id: candidates(e, fps, worlds, pids, now, n=n_candidates, rng=rng, seconds=unique_seconds, log=log) for e in entries}
+    short = sum(1 for v in cands.values() if len(v) - 1 < n_candidates)
+    log(f"{contest_id} {contest.name}: {len(entries)} entries, {sum(len(v) - 1 for v in cands.values())} candidates, field {len(field):,}, {num_sims} sims"
+        + (f"; {short} entries have fewer than {n_candidates} (no more lineups fit their open slots, or the time limit)" if short else ""))
     samples = live_samples(session, num_sims, live, fps, names, seed=seed, log=log)[0] if live is not None else None
     scored = evaluate(session, contest, field, cands, num_sims, seed=seed, log=log, samples=samples)
+    # every entry's lineups: its original, then the candidates that hold its locked players (one missing a locked player is never chosen)
+    options = {e.entry_id: [r for k, r in enumerate(scored.get(e.entry_id) or []) if k == 0 or set(e.locked_player_ids) <= set(r["ids"])]
+               for e in entries}
+    chosen, stuck = assign_unique(options, log=log)                 # one lineup per entry, none twice in the contest
     rows = []
     for e in entries:
         sc = scored.get(e.entry_id) or []
         if not sc:
             continue
         orig = sc[0]
-        keep = [r for r in sc if set(e.locked_player_ids) <= set(r["ids"])]     # a candidate missing a locked player is never chosen
-        best = max(keep or [orig], key=lambda r: r["exp_payout"])
+        best = chosen.get(e.entry_id, orig)
+        changed = lineup_key(best["ids"]) != lineup_key(orig["ids"])
         swaps = [(o, b) for o, b in zip([p for p in orig["ids"] if p not in best["ids"]], [p for p in best["ids"] if p not in orig["ids"]])]
-        rows.append(dict(entry_id=e.entry_id, original=orig, best=best, improved=best is not orig and best["exp_payout"] > orig["exp_payout"],
+        # improved = the entry's lineup changes (write_outputs writes it); forced = it changes without a gain, to leave a lineup
+        # another entry holds; duplicate = it could not (see assign_unique)
+        rows.append(dict(entry_id=e.entry_id, original=orig, best=best, improved=changed,
+                         forced=bool(changed and best["exp_payout"] <= orig["exp_payout"]), duplicate=e.entry_id in stuck,
                          locked=sorted(e.locked_player_ids), swaps=swaps, candidates=len(sc) - 1))
     return dict(contest_id=int(contest_id), name=contest.name, entry_fee=float(contest.entry_fee), total_entries=int(contest.total_entries),
-                field=fmeta, entries=rows)
+                field=fmeta, entries=rows, duplicates=len(stuck))
 
 
 def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = None, source: str = "auto", http_sess=None,
                      n_candidates: int = 10, field_cap: int = 5000, num_sims: int = 1000, only: Optional[Sequence[int]] = None,
-                     log: Log = print, use_live: bool = False, shared_field: bool = True) -> dict:
+                     log: Log = print, use_live: bool = False, shared_field: bool = True, unique_seconds: float = UNIQUE_SECONDS) -> dict:
     now = now or datetime.now()
     fps = slate_players(session); names = name_map(session)
     by_contest = our_entries(session, entries_csv)
@@ -583,7 +663,8 @@ def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = No
     tips = sorted({fp.gametime for fp in fps.values() if fp.gametime is not None})
     log(f"{status['games_started']} of {status['games_total']} games started at {now:%H:%M}" + (f"; next tip {status['next_tip']:%H:%M}" if status["next_tip"] else ""))
     out = dict(when=now.isoformat(timespec="seconds"), games_started=status["games_started"], games_total=status["games_total"], source=source,
-               settings=dict(candidates=n_candidates, field_cap=field_cap, sims=num_sims, live=use_live, shared_field=shared_field),
+               settings=dict(candidates=n_candidates, field_cap=field_cap, sims=num_sims, live=use_live, shared_field=shared_field,
+                             unique_seconds=unique_seconds),
                contests=[], failed=[], field_source=None)
     wanted = [int(cid) for cid in by_contest if not only or int(cid) in {int(x) for x in only}]
     # the entries belong to the slate: a contest the stored contest table puts on another draft group (an older slate's export
@@ -622,7 +703,8 @@ def lateswap_entries(session: Session, entries_csv, now: Optional[datetime] = No
             continue
         try:
             r = lateswap_contest(session, int(cid), group, fps, names, now, source=source, http_sess=http_sess,
-                                 n_candidates=n_candidates, field_cap=field_cap, num_sims=num_sims, log=log, live=live, shared=shared, tips=tips)
+                                 n_candidates=n_candidates, field_cap=field_cap, num_sims=num_sims, log=log, live=live, shared=shared, tips=tips,
+                                 unique_seconds=unique_seconds)
         except Exception as e:   # noqa: BLE001 - one contest failing must not lose the others
             import traceback
             session.rollback()
@@ -730,6 +812,10 @@ def write_outputs(session: Session, report: dict, entries_csv, out_dir: Optional
         swapped += 1
     csv_path = out_dir / f"lateswap.{stamp}.csv"
     df[BASE_COLS + POSITION_ORDER].to_csv(csv_path, index=False)
+    dupes = duplicate_entries(df)                                  # the file as it will be uploaded: no lineup twice in a contest
+    for cid, ids in dupes.items():
+        log(f"WARNING: contest {cid}: entries {', '.join(ids)} hold a lineup another entry of the contest holds")
+    report["duplicates"] = {str(cid): ids for cid, ids in dupes.items()}
     for c in report["contests"]:                                   # names for the desk
         for e in c["entries"]:
             e["names"] = {str(pid): meta[pid].name for pid in set(e["original"]["ids"]) | set(e["best"]["ids"]) if pid in meta}
@@ -740,6 +826,20 @@ def write_outputs(session: Session, report: dict, entries_csv, out_dir: Optional
     js.write_text(json.dumps(report, default=str))
     log(f"wrote {swapped} swapped entries -> {csv_path} and the report -> {js}")
     return {"upload": str(csv_path), "report": str(js)}
+
+
+def duplicate_entries(df: pd.DataFrame) -> Dict[str, List[str]]:
+    """Contest id -> the entry ids of an entries file that repeat a lineup an earlier entry of that contest holds
+    (the same eight players, by the cells' names: a locked cell carries no id). Empty when every lineup is unique."""
+    out: Dict[str, List[str]] = {}
+    seen = set()
+    for _, row in df.iterrows():
+        cid = str(row["Contest ID"]).strip()
+        key = (cid, tuple(sorted(normalize_name(_cell_name(str(row[slot]))) for slot in POSITION_ORDER)))
+        if key in seen:
+            out.setdefault(cid, []).append(str(row["Entry ID"]).strip())
+        seen.add(key)
+    return out
 
 
 _ID_RX = __import__("re").compile(r"\((\d{5,})\)")

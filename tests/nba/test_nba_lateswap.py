@@ -1,4 +1,5 @@
 """Late swap (ivan.sports.nba.lateswap.swap): lock logic, candidates with locked slots, payout vs the field, slotting."""
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -135,3 +136,98 @@ def test_sample_shared_takes_the_contest_size():
     assert len(s) == 30 and len({tuple(x) for x in s}) == 30 and all(x in field for x in s)
     assert LS.sample_shared(shared, 500, seed=1) == field
     assert LS.sample_shared(shared, 30, seed=1) == s                                           # seeded: the same sample for the same contest
+
+
+# ----------------------------------------------------------------------------- unique candidates, unique entries (2026-11-12)
+def _slate(open_extra=0, open_ids=()):
+    """Eight players (ids 1-8, one per slot; started but for `open_ids`) plus open ones: a C (9) and `open_extra` more."""
+    pos = ["PG", "SG", "SF", "PF", "C", "PG", "SF", "C"]
+    fps = {i + 1: _fp(i + 1, p, 1 if i + 1 in open_ids else -1, team="AAA" if i % 2 else "BBB", salary=5000) for i, p in enumerate(pos)}
+    for j in range(1 + open_extra):
+        fps[9 + j] = replace(_fp(9 + j, "C", 1, team="CCC", salary=5000), game_id="CCC-DDD")     # the solver wants two games
+        fps[1] = replace(fps[1], game_id="CCC-DDD")
+    return fps
+
+
+def test_the_solver_excludes_lineups():
+    from ivan.sports.nba.field.solver import generate_single_classic_lineup
+    fps = _slate(open_extra=1, open_ids=(5, 8))
+    pool = list(fps.values()); sc = {p.id: 30.0 + p.id for p in pool}
+    seen = []
+    while True:
+        ids = generate_single_classic_lineup(pool, base_scores=sc, max_salary_per_team=50000, exclude=seen)
+        if not ids:
+            break
+        assert sorted(ids) not in seen
+        seen.append(sorted(ids))
+        assert len(seen) <= 6
+    assert len(seen) == 6                                         # 2 of the 4 centres in C and UTIL: every pair once, then nothing
+
+
+def test_candidates_are_distinct_and_stop_when_no_more_fit():
+    import time
+    # seven locked, the UTIL slot open with the original's player and two others: two more lineups exist, not ten
+    fps = _slate(open_extra=1, open_ids=(8,))
+    e = OriginalEntry(entry_id="e1", contest_id=1, lineup_id=-1, slots={s: i for s, i in zip(SLOT_NAMES, range(1, 9))})
+    worlds = np.random.default_rng(0).normal(30, 5, size=(50, 10)).astype(np.float32)
+    t0 = time.monotonic()
+    cands = LS.candidates(e, fps, worlds, sorted(fps), NOW, n=10, rng=np.random.default_rng(1), seconds=30.0)
+    assert time.monotonic() - t0 < 10.0                           # ended by the solver finding nothing, not by the limit
+    assert sorted(map(LS.lineup_key, cands)) == [tuple(list(range(1, 8)) + [k]) for k in (8, 9, 10)]
+    # asked for one, given one
+    assert len(LS.candidates(e, fps, worlds, sorted(fps), NOW, n=1, rng=np.random.default_rng(1))) == 2
+
+
+def test_candidates_give_up_after_the_time_limit(monkeypatch):
+    import time
+    fps = _slate(open_extra=1, open_ids=(8,))
+    monkeypatch.setattr(LS, "generate_single_classic_lineup", lambda players, **kw: list(range(1, 8)) + [9])   # the same lineup every time
+    e = OriginalEntry(entry_id="e1", contest_id=1, lineup_id=-1, slots={s: i for s, i in zip(SLOT_NAMES, range(1, 9))})
+    worlds = np.zeros((5, 10), dtype=np.float32); said = []
+    t0 = time.monotonic()
+    cands = LS.candidates(e, fps, worlds, sorted(fps), NOW, n=10, rng=np.random.default_rng(1), seconds=0.2, log=said.append)
+    assert 0.2 <= time.monotonic() - t0 < 5.0
+    assert len(cands) == 2 and "1 of 10 candidates" in said[0]
+
+
+def _row(ids, pay):
+    return dict(ids=list(ids), exp_payout=float(pay))
+
+
+def test_assign_unique_gives_every_entry_its_own_lineup():
+    A, B, X, Y = [1, 2, 3], [1, 2, 4], [1, 2, 9], [1, 2, 8]
+    # both entries' best is X: one takes it, the other its next best, whichever totals more
+    chosen, stuck = LS.assign_unique({"a": [_row(A, 1.0), _row(X, 5.0), _row(Y, 4.0)], "b": [_row(B, 1.0), _row(X, 5.0), _row(Y, 2.0)]})
+    assert not stuck and chosen["a"]["ids"] == Y and chosen["b"]["ids"] == X
+    # a lineup is one whatever the slot order; an entry's best being another's original moves one of them
+    chosen, stuck = LS.assign_unique({"a": [_row(A, 1.0), _row([4, 2, 1], 3.0)], "b": [_row(B, 3.0)]})
+    assert not stuck and chosen["a"]["ids"] == A and chosen["b"]["ids"] == B
+    # nothing gained: every entry keeps its original (ties go to the original)
+    chosen, stuck = LS.assign_unique({"a": [_row(A, 0.0), _row(X, 0.0)], "b": [_row(B, 0.0), _row(Y, 0.0)]})
+    assert chosen["a"]["ids"] == A and chosen["b"]["ids"] == B
+    # originals that repeat: the one with somewhere to go moves, even at a loss
+    chosen, stuck = LS.assign_unique({"a": [_row(A, 2.0)], "b": [_row(A, 2.0), _row(X, 1.0)]})
+    assert not stuck and chosen["a"]["ids"] == A and chosen["b"]["ids"] == X
+    # ... and with nowhere to go it is reported, the rest still unique
+    said = []
+    chosen, stuck = LS.assign_unique({"a": [_row(A, 2.0)], "b": [_row(A, 2.0)], "c": [_row(B, 1.0), _row(A, 9.0)]}, log=said.append)
+    assert len(stuck) == 1 and stuck[0] in ("a", "b") and chosen["c"]["ids"] == B and "WARNING" in said[0]
+    # 150 entries after the same lineups: 150 different lineups, the best ones taken
+    rng = np.random.default_rng(3)
+    shared = [_row([100 + k, 200 + k, 300 + k], p) for k, p in enumerate(rng.uniform(1, 9, size=160))]
+    opts = {f"e{i}": [_row([i, 1000 + i, 2000 + i], 0.5)] + shared for i in range(150)}
+    chosen, stuck = LS.assign_unique(opts)
+    keys = [LS.lineup_key(r["ids"]) for r in chosen.values()]
+    assert not stuck and len(chosen) == 150 and len(set(keys)) == 150
+    assert sorted(r["exp_payout"] for r in chosen.values()) == sorted(r["exp_payout"] for r in shared)[10:]
+
+
+def test_duplicate_entries_in_the_upload():
+    import pandas as pd
+    cells = ["a (11111)", "b (22222)", "c (33333)", "d (44444)", "e (55555)", "f (66666)", "g (77777)", "h (88888)"]
+    rows = [["1", "c", "9", "$1"] + cells,
+            ["2", "c", "9", "$1"] + cells[::-1][:7] + ["A (LOCKED)"],          # the same eight in other slots, one cell locked
+            ["3", "c", "9", "$1"] + cells[:7] + ["z (99999)"],
+            ["4", "d", "8", "$1"] + cells]                                    # another contest: not a duplicate
+    df = pd.DataFrame(rows, columns=["Entry ID", "Contest Name", "Contest ID", "Entry Fee"] + list(SLOT_NAMES))
+    assert LS.duplicate_entries(df) == {"9": ["2"]}

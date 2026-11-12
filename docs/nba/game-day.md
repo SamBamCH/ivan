@@ -206,6 +206,7 @@ venv/bin/python scripts/nba/lateswap.py --source draftkings   # always download 
 venv/bin/python scripts/nba/lateswap.py --source raw       # the newest stored export per contest, never Chrome
 venv/bin/python scripts/nba/lateswap.py --field each       # each contest against its own export (default: one shared)
 venv/bin/python scripts/nba/lateswap.py --contest 197015856 --candidates 20 --sims 2000
+venv/bin/python scripts/nba/lateswap.py --unique-seconds 10   # the wait for one more distinct candidate (config lateswap.unique_seconds)
 ```
 
 **Fetch standings** (the desk's button on the late swap tab, or `fetch_standings.py`) downloads the
@@ -226,7 +227,17 @@ is completed once (its open slots filled by the optimiser in sampled worlds, its
 targets) and every contest is scored against a sample of it at its own size, its payout table scaled
 to that; one fetch of one export is then enough. **Each contest's own** (`--field each`) completes
 every contest's export as before. Then, per contest, our entries' open slots are re-optimised in
-sampled worlds and the candidate with the best expected payout is kept. Output:
+sampled worlds: `--candidates` N **distinct** lineups per entry beside its original (each solve excludes
+the lineups the entry already holds, so an entry has fewer only when no more fit its open slots, seven
+locked and two eligible players left say, or when `lateswap.unique_seconds` of `config/nba.json`, 5,
+`--unique-seconds`, pass without one more: the log names the entry). Every candidate is scored against
+the field, and the entries are then given **one lineup each, no lineup twice in the contest**
+(`swap.assign_unique`: the assignment of entries to distinct lineups with the highest total expected
+payout, an entry keeping its original on a tie). So an entry may take its second-best candidate when
+another entry holds its best, and an entry whose original repeats another entry's moves off it even at
+a loss (the desk marks it "unique"). Only originals that repeat with all eight players locked stay
+duplicated: the log, the script and the desk say which ("duplicate"), and the upload file is checked
+once written (`swap.duplicate_entries`). Output:
 `data/nba/output/lateswap.<stamp>.csv` (the entries export with the swapped lineups, ready to upload)
 and `.json` (the desk's late swap view, which names the export each field came from). The desk's
 late swap tab runs the same script and has an upload box for standings CSVs exported by hand

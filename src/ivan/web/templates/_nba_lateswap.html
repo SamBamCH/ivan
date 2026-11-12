@@ -4,7 +4,7 @@
     <span class="muted">{{ lateswap.games_started }} of {{ lateswap.games_total }} games started{% if lateswap.next_tip %} · next tip {{ lateswap.next_tip.strftime('%H:%M') }}{% endif %} · {{ lateswap.open_players }} players still open</span>
     <span class="spacer"></span>
     <form class="pipe-form" style="width:auto" hx-post="{{ root }}/pipeline/lateswap" hx-target="#pipeline" hx-swap="outerHTML">
-      <label title="re-optimised lineups per entry">candidates <input name="ls_candidates" value="{{ form.ls_candidates }}" size="3"></label>
+      <label title="distinct re-optimised lineups per entry; fewer only when no more fit the entry's open slots">candidates <input name="ls_candidates" value="{{ form.ls_candidates }}" size="3"></label>
       <label title="field entries completed and scored; bigger contests are sampled down to this">field cap <input name="ls_field_cap" value="{{ form.ls_field_cap }}" size="5"></label>
       <label>sims <input name="ls_sims" value="{{ form.ls_sims }}" size="5"></label>
       <label title="auto: the stored export while no game has tipped since it was taken, a download (logged-in Chrome) otherwise; DraftKings: always download; stored: the newest stored export only">standings <select name="ls_source"><option value="auto" {% if form.ls_source == 'auto' %}selected{% endif %}>stored while current</option><option value="draftkings" {% if form.ls_source == 'draftkings' %}selected{% endif %}>DraftKings live</option><option value="raw" {% if form.ls_source == 'raw' %}selected{% endif %}>stored export</option></select></label>
@@ -67,7 +67,7 @@
     {% for e in c.entries %}
     <tr>
       <td>{{ e.entry_id }} <span class="muted small">{{ e.locked|length }} locked · {{ e.candidates }} cands</span></td>
-      <td>{% if e.improved %}{% for o, i in e.swaps %}<span class="ls-out">{{ e.names[o|string] }}</span> → <span class="ls-in">{{ e.names[i|string] }}</span>{% if not loop.last %} · {% endif %}{% endfor %}{% else %}<span class="muted">keep</span>{% endif %}</td>
+      <td>{% if e.duplicate %}<span class="ls-out" title="its original repeats another entry's lineup and it has no other lineup to move to">duplicate</span> {% endif %}{% if e.forced %}<span class="muted small" title="moved off a lineup another entry of the contest holds">unique</span> {% endif %}{% if e.improved %}{% for o, i in e.swaps %}<span class="ls-out">{{ e.names[o|string] }}</span> → <span class="ls-in">{{ e.names[i|string] }}</span>{% if not loop.last %} · {% endif %}{% endfor %}{% else %}<span class="muted">keep</span>{% endif %}</td>
       <td class="n">${{ '%.2f'|format(e.original.exp_payout) }}</td>
       <td class="n">${{ '%.2f'|format(e.best.exp_payout) }}</td>
       <td class="n gain {% if e.delta > 0.005 %}pos{% else %}neg{% endif %}">{{ '%+.2f'|format(e.delta) }}</td>
