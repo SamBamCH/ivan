@@ -83,6 +83,10 @@ the results (a consumer desk, the server, leaves `Sport.ledger` None and shows n
   table is the filing in `config/tax.json`, and its after-tax figure is the headline; the rows under it change one
   thing each. An estimate, not tax advice.
 
+The same ledgers set the bankroll the slate book is chosen from (`ivan.core.bankroll`, `scripts/bankroll.py`:
+`config/bankroll.json`'s start plus every sport's net; [../nfl/chooser.md](../nfl/chooser.md#the-bankroll)). The figure is
+shown in the choose log and the choose page, not on a desk.
+
 The configured filing is a **business** (`reporting_mode: business`, Schedule C): the winnings are gross receipts and
 the losses, with `business_expenses` (the year's data, subscriptions, the server), come off them there, with no
 itemizing and no standard-deduction comparison. The 2026 cap still applies: the deduction is 90% of (losses +

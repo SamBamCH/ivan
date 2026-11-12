@@ -31,9 +31,10 @@
   "cash_pct": 0.5,
   "avg_roi_win": 0.5,
   "diversity_lambda": 0.1,
-  "method": "greedy",
+  "method": "slate",
   "bankroll": 3.0,
-  "bankroll_dollars": 1000.0
+  "bankroll_dollars": null,
+  "_note": "method slate: every contest of the entries file as one book in dollars. bankroll_dollars null = read from our results (config/bankroll.json start + what the entries made, scripts/bankroll.py); a figure here pins it. bankroll is the portfolio method's scale in multiples of fees."
  },
  "projection": {
   "minutes_model": "rotation",

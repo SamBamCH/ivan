@@ -35,9 +35,9 @@ from ivan.core.utils import coerce_player_ids
 from ivan.sports.nba.models import ContestSimReport, LineupSimulationResult, NBAPlayer
 
 METHODS = ("greedy", "portfolio", "slate")
-DEFAULT_METHOD = "greedy"
+DEFAULT_METHOD = "slate"
 DEFAULT_WEIGHTS = {"cash_pct": 0.5, "avg_roi_win": 0.5, "diversity_lambda": 0.1, "method": DEFAULT_METHOD, "bankroll": DEFAULT_BANKROLL,
-                   "bankroll_dollars": DEFAULT_BANKROLL_DOLLARS}
+                   "bankroll_dollars": None}      # None: read from our results (ivan.core.bankroll)
 
 
 def method_of(weights: dict) -> str:

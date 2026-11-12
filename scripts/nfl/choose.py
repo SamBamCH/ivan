@@ -40,10 +40,10 @@ def main() -> int:
     w.add_argument("--avg-roi-win", type=float, default=None, help="Weight on avg_roi_win for every contest")
     w.add_argument("--diversity-lambda", type=float, default=None, help="Diversity lambda for every contest")
     w.add_argument("--method", choices=("greedy", "portfolio", "slate"), default=None,
-                   help="greedy: quality + diversity lineup by lineup (default); portfolio: log utility of one contest's book over the sim worlds; "
-                        "slate: every contest at once as one book in dollars")
+                   help="slate: every contest at once as one book in dollars (default); greedy: quality + diversity lineup by lineup; "
+                        "portfolio: log utility of one contest's book over the sim worlds")
     w.add_argument("--bankroll", type=float, default=None, help="portfolio method: utility scale in multiples of the entries' fees (default 3)")
-    w.add_argument("--bankroll-dollars", type=float, default=None, help="slate method: the real bankroll in dollars (default 1000)")
+    w.add_argument("--bankroll-dollars", type=float, default=None, help="slate method: the bankroll in dollars (default: read from our results, scripts/bankroll.py)")
     w.add_argument("--weights-json", default=None,
                    help='JSON file or literal: {"default": {...}, "<contest id>": {...}} keyed by contest id or name')
     w.add_argument("--no-prompt", action="store_true", help="Use defaults for anything not given; never prompt")

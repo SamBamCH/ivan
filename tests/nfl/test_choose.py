@@ -92,7 +92,7 @@ def test_greedy_pick_matches_quality_then_diversity():
 
 
 def test_method_and_bankroll_parsing():
-    assert C.method_of({}) == "greedy" and C.method_of({"method": "Portfolio"}) == "portfolio"
+    assert C.method_of({}) == "slate" and C.method_of({"method": "greedy"}) == "greedy" and C.method_of({"method": "Portfolio"}) == "portfolio"
     with pytest.raises(ValueError):
         C.method_of({"method": "random"})
     assert C.bankroll_of({}) == C.DEFAULT_BANKROLL and C.bankroll_of({"bankroll": 0.2}) == C.MIN_BANKROLL
@@ -125,7 +125,7 @@ def test_choose_lineup_ids_both_methods(session):
                                            payout=[float(x) for x in np.where(R[i] > -1, 5 * (1 + R[i]), 0.0)], roi=[float(x) for x in R[i]], rank=list(range(100))))
     session.commit()
     stats_g, stats_p = {}, {}
-    greedy = C.choose_lineup_ids(session, {**LE.DEFAULT_WEIGHTS, "cash_pct": 0.0, "avg_roi_win": 1.0, "diversity_lambda": 0.0}, 4, "Showdown A", stats_g)
+    greedy = C.choose_lineup_ids(session, {**LE.DEFAULT_WEIGHTS, "method": "greedy", "cash_pct": 0.0, "avg_roi_win": 1.0, "diversity_lambda": 0.0}, 4, "Showdown A", stats_g)
     port = C.choose_lineup_ids(session, {**LE.DEFAULT_WEIGHTS, "method": "portfolio"}, 4, "Showdown A", stats_p)
     assert len(greedy) == 4 and len(port) == 4
     assert stats_g["book"]["method"] == "greedy" and stats_p["book"]["method"] == "portfolio" and stats_p["book"]["bankroll"] == 3.0

@@ -176,12 +176,13 @@ one at a time in the desk's job runner (`ivan.web.jobs`) with logs under `data/n
 ```bash
 venv/bin/python scripts/nba/generate_lineups.py 10000 8 [--fresh] [--randomness 0.25] [--min-fpts 260]
 venv/bin/python scripts/nba/sim.py --slate DG [-n 1000] [-c 10000] [--entries data/nba/slates/DG/input/entries.csv]
-venv/bin/python scripts/nba/choose.py --no-prompt [--method greedy|portfolio|slate] [--bankroll-dollars 1000] [--weights-json ...]
+venv/bin/python scripts/nba/choose.py --no-prompt [--method slate|greedy|portfolio] [--bankroll-dollars B] [--weights-json ...]
 ```
 
-The desk's **Slate book** button (beside Choose, with the bankroll under it) runs
-`choose.py --method slate --bankroll-dollars B`: the whole slate as one book from the entries file and that
-bankroll alone.
+The slate book is the default method, on the bankroll read from our results (`scripts/bankroll.py`:
+`config/bankroll.json`'s start plus what our entries made in every sport). The desk's **Slate book** button (beside
+Choose, with the bankroll under it: blank = from our results) runs `choose.py --method slate [--bankroll-dollars B]`:
+the whole slate as one book from the entries file alone, whatever the contests' own knobs say.
 
 What they do and write is in [field-and-simulation.md](field-and-simulation.md). The chooser's
 upload file is `data/nba/output/chosen_entries.classic.<stamp>.csv`; the desk's exposures section and

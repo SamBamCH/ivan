@@ -73,7 +73,7 @@ def test_choose_entries_writes_every_file(session, tmp_path):
     session.commit()
 
     entries = pd.DataFrame({"Entry ID": ["11", "12"], "Contest Name": ["Showdown A"] * 2, "Contest ID": [100, 100], "Entry Fee": ["$5"] * 2})
-    run = LE.choose_entries(session, entries, LE.weights_resolver(), log=lambda m: None)
+    run = LE.choose_entries(session, entries, LE.weights_resolver(flags={"method": "greedy"}), log=lambda m: None)
     assert run.total_sd == 2 and len(run.upload_sd) == 2 and list(run.upload_sd.columns) == LE.BASE_COLS + LE.POSITION_ORDER_SD
     assert run.upload_sd.iloc[0]["CPT"] == "p1 (1)" and len(run.lineup_rows) == 12 and run.contests[0]["chosen"] == 2
     sd, cl = run.exposures()

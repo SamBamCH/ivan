@@ -61,7 +61,7 @@ def test_shared_worlds_refuses_two_seeds(session):
         CH.shared_worlds(session, [100, 200])
 
 
-def test_choose_slate_as_one_book_and_the_export(session, tmp_path):
+def test_choose_slate_as_one_book_and_the_export(session, tmp_path, monkeypatch):
     seed_two_contests(session)
     with pytest.raises(ValueError, match="choose_slate"):
         CH.choose_lineup_ids(session, {"method": "slate"}, 2, 100)
@@ -83,7 +83,16 @@ def test_choose_slate_as_one_book_and_the_export(session, tmp_path):
     run, paths = LE.run_choose(session, f, tmp_path / "out" / "chosen_entries.csv",
                                LE.weights_resolver(flags={"method": "slate", "bankroll_dollars": 500.0}), log=logs.append, stamp="S")
     assert run.total == 4 and run.slate_book["entries"] == 4 and set(paths) == {"classic", "exposures", "lineups", "choose", "simroi"}
-    assert any("slate book: 4 entries" in m for m in logs) and any("chosen as one book (bankroll $500)" in m for m in logs)
+    assert any("slate book: 4 entries" in m for m in logs) and any("bankroll $500.00 (given)" in m for m in logs)
+    assert run.slate_book["bankroll_from"] == {"bankroll": 500.0, "source": "given"}
+    # nothing given: the slate method is the default and the bankroll is read from our results (ivan.core.bankroll)
+    from ivan.core import bankroll as BK
+    monkeypatch.setattr(BK, "current", lambda now=None: {"bankroll": 1234.5, "start": 1000.0, "since": None, "net": 234.5, "contests": 7,
+                                                         "sports": {"nba": 234.5}, "errors": {}, "source": "results"})
+    logs2 = []
+    run2, _ = LE.run_choose(session, f, tmp_path / "out2" / "chosen_entries.csv", LE.weights_resolver(no_prompt=True), log=logs2.append, stamp="S")
+    assert run2.total == 4 and run2.slate_book["bankroll_dollars"] == 1234.5 and run2.slate_book["bankroll_from"]["source"] == "results"
+    assert any("bankroll $1,234.50 = $1,000.00 start + $234.50 from 7 scored contest(s) (NBA +$234.50)" in m for m in logs2)
     import json
     js = json.loads((tmp_path / "out" / "chosen_entries.choose.S.json").read_text())
     assert set(js) == {"100", "200"} and js["100"]["slate"]["entries"] == 4 and js["100"]["book"]["method"] == "slate"

@@ -43,7 +43,7 @@ def seed(session, worlds=80, draw="slate"):
     session.commit()
 
 
-def test_choose_slate_runs_on_the_core_and_exports(session):
+def test_choose_slate_runs_on_the_core_and_exports(session, monkeypatch):
     seed(session)
     contests = [{"contest_id": 100, "contest_name": "Showdown Flat", "entries": 3, "fee": 5.0},
                 {"contest_id": 200, "contest_name": "Showdown Top", "entries": 3, "fee": 5.0}]
@@ -62,7 +62,16 @@ def test_choose_slate_runs_on_the_core_and_exports(session):
     lines = []
     run = LE.choose_entries(session, entries, LE.weights_resolver(flags={"method": "slate", "bankroll_dollars": 300.0}), log=lines.append)
     assert run.total_sd == 4 and run.slate_book["entries"] == 4
-    assert any("slate book: 4 entries" in m for m in lines) and any("chosen as one book (bankroll $300)" in m for m in lines)
+    assert any("slate book: 4 entries" in m for m in lines) and any("bankroll $300.00 (given)" in m for m in lines)
+    assert run.slate_book["bankroll_from"] == {"bankroll": 300.0, "source": "given"}
+    # nothing given: the slate method is the default and the bankroll is read from our results (ivan.core.bankroll)
+    from ivan.core import bankroll as BK
+    monkeypatch.setattr(BK, "current", lambda now=None: {"bankroll": 860.0, "start": 1000.0, "since": None, "net": -140.0, "contests": 9,
+                                                         "sports": {"nfl": -140.0}, "errors": {}, "source": "results"})
+    lines = []
+    run = LE.choose_entries(session, entries, LE.weights_resolver(), log=lines.append)
+    assert run.total_sd == 4 and run.slate_book["bankroll_dollars"] == 860.0 and run.slate_book["bankroll_from"]["source"] == "results"
+    assert any("bankroll $860.00 = $1,000.00 start - $140.00 from 9 scored contest(s) (NFL -$140.00)" in m for m in lines)
 
 
 def test_choose_slate_refuses_separate_draws(session):
