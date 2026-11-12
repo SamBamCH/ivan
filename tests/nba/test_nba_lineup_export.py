@@ -84,7 +84,7 @@ def test_choose_lineup_ids_greedy_and_portfolio(session):
     assert len(ids_p) == 3 and stats["book"]["method"] == "portfolio" and stats["book"]["chosen"]["worlds"] == 50
     with pytest.raises(ValueError):
         CH.choose_lineup_ids(session, {"method": "nope"}, 1, 100)
-    assert CH.choose_lineup_ids(session, {}, 1, 999) == []
+    assert CH.choose_lineup_ids(session, {"method": "greedy"}, 1, 999) == []
 
 
 def test_choose_entries_writes_every_file(session, tmp_path):
@@ -93,7 +93,7 @@ def test_choose_entries_writes_every_file(session, tmp_path):
     f.write_text("Entry ID,Contest Name,Contest ID,Entry Fee,PG,SG,SF,PF,C,G,F,UTIL,,Instructions\n"
                  "501,Big,100,$5,,,,,,,,,,1.\n502,Big,100,$5,,,,,,,,,,\n503,Big,100,$5,,,,,,,,,,\n,,,,,,,,,,,,,\n")
     logs = []
-    run, paths = LE.run_choose(session, f, tmp_path / "out" / "chosen_entries.csv", LE.weights_resolver(no_prompt=True), log=logs.append, stamp="S")
+    run, paths = LE.run_choose(session, f, tmp_path / "out" / "chosen_entries.csv", LE.weights_resolver(flags={"method": "greedy"}, no_prompt=True), log=logs.append, stamp="S")
     assert run.total == 3 and set(paths) == {"classic", "exposures", "lineups", "choose", "simroi"}
     up = LE.pd.read_csv(paths["classic"])
     assert list(up.columns) == LE.BASE_COLS + LE.POSITION_ORDER and len(up) == 3 and up["Entry ID"].tolist() == [501, 502, 503]

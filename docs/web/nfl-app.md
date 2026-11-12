@@ -60,10 +60,11 @@ or "locked") and its mode.
    4 **Sim**: simulations, field cap, duplicates in classic (`sim.py -n 1000 -c 10000 --entries data/nfl/input/web/entries.csv`);
    replaces earlier results.
    5 **Choose**: every contest of the entries file with its own knobs from the contests section
-   (`choose.py --weights-json data/nfl/input/web/weights.json`). **Slate book** beside it (resting the pointer opens its
-   one knob, the bankroll in dollars, remembered in `weights.json` as `default.bankroll_dollars`): the whole slate as
-   one book from the entries file and that bankroll alone, the per-contest knobs unused
-   (`choose.py --method slate --bankroll-dollars B`, [../nfl/chooser.md](../nfl/chooser.md)).
+   (`choose.py --weights-json data/nfl/input/web/weights.json`); a contest with no method of its own is chosen by the
+   default, the slate book, on the bankroll read from our results (`scripts/bankroll.py`). **Slate book** beside it
+   (resting the pointer opens its one knob, the bankroll in dollars: blank = read from our results, a figure holds for
+   that run alone): the whole slate as one book from the entries file alone, the per-contest knobs unused
+   (`choose.py --method slate [--bankroll-dollars B]`, [../nfl/chooser.md](../nfl/chooser.md#the-bankroll)).
    **clear sims** / **clear lineups + sims** (`clear_sims.py`, `clear_all.py`; refused while a job runs).
    Under them: when the working slate was last ingested (amber after 3 hours), when the entries file was uploaded, the
    pool's rows and teams, how many players carry ownership, the lineups, the sim rows and contests. Then the job: its
@@ -73,8 +74,8 @@ or "locked") and its mode.
    DraftKings entries export, saved as `data/nfl/input/web/entries.csv`, a stamped copy beside it), then every contest
    of the file: fee and field (`historical_contest_information`, after step 2), our entries, its slate against the working
    one (red: another slate's), the payout tiers on file, the sim (the report's check counts, linking to the sim report, and
-   the sim rows), and the **choose** knobs for that contest alone: method (greedy, portfolio, slate), cash, roi, div,
-   bankroll; blank = the default, shown greyed. They save as they are typed (`/contest/<id>/weights` =
+   the sim rows), and the **choose** knobs for that contest alone: method (slate, greedy, portfolio), cash, roi, div,
+   bankroll; blank = the default (slate), shown greyed. They save as they are typed (`/contest/<id>/weights` =
    `scripts/nfl/contest_weights.py set <id> knob=value`) into `weights.json`, which Choose passes; choose.py fills a
    contest's missing knobs from the file's `default`.
 4. **The game card**: the correlation check of the open game (`ivan.sports.nfl.correlation_check`, terminal

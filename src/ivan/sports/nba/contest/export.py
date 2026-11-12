@@ -29,9 +29,10 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ivan.core import bankroll as BK
 from ivan.core.slate_book import describe_book
 from ivan.core.utils import coerce_player_ids
-from ivan.sports.nba.contest.choose import DEFAULT_WEIGHTS, METHODS, choose_lineup_ids, choose_slate, sim_roi_traces
+from ivan.sports.nba.contest.choose import DEFAULT_METHOD, DEFAULT_WEIGHTS, METHODS, choose_lineup_ids, choose_slate, sim_roi_traces
 from ivan.sports.nba.models import Lineup, NBAPlayer
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.field.solver import SLOT_ELIGIBILITY, SLOT_NAMES
@@ -233,16 +234,17 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
     # the slate method: one pass over every contest that asks for it, as one book in dollars (ivan.core.slate_book)
     slate_contests = [{"contest_id": cid, "contest_name": group["Contest Name"].iloc[0].strip(), "entries": len(group),
                        "fee": parse_money(group["Entry Fee"].iloc[0])}
-                      for cid, group in groups if str(weights_by[cid].get("method") or "greedy") == "slate"]
-    slate = None
+                      for cid, group in groups if str(weights_by[cid].get("method") or DEFAULT_METHOD) == "slate"]
+    slate, bank = None, None
     if slate_contests:
         w0 = weights_by[slate_contests[0]["contest_id"]]
-        banks = {float(weights_by[c["contest_id"]].get("bankroll_dollars") or DEFAULT_WEIGHTS["bankroll_dollars"]) for c in slate_contests}
-        if len(banks) > 1:
-            log(f"  NOTE: the slate contests carry different bankroll_dollars {sorted(banks)}; the slate uses ${max(banks):,.0f}")
-        log(f"\n=== Slate: {len(slate_contests)} contest(s) chosen as one book (bankroll ${max(banks):,.0f}) ===")
-        slate = choose_slate(session, slate_contests, {**w0, "bankroll_dollars": max(banks)}, log=log)
+        log(f"\n=== Slate: {len(slate_contests)} contest(s) chosen as one book ===")
+        # the bankroll: a figure a contest's weights give, else our results (start + what the entries made; ivan.core.bankroll)
+        bank = BK.for_slate([weights_by[c["contest_id"]].get("bankroll_dollars") for c in slate_contests], log=log)
+        slate = choose_slate(session, slate_contests, {**w0, "bankroll_dollars": bank["bankroll"]}, log=log)
         run.slate_book = slate.get("book")
+        if run.slate_book is not None:
+            run.slate_book["bankroll_from"] = bank
         for line in describe_book(run.slate_book):
             log(line)
 
@@ -251,9 +253,9 @@ def choose_entries(session, entries: pd.DataFrame, weights_for, log: Log = print
         cname = group["Contest Name"].iloc[0].strip()
         log(f"\n=== Contest {cid} \"{cname}\" -> {n_entries} entries ===")
         w = weights_by[cid]
-        method = str(w.get("method") or "greedy")
+        method = str(w.get("method") or DEFAULT_METHOD)
         log(f"  method: {method}" + (f" (bankroll {w.get('bankroll', 3.0)}x fees)" if method == "portfolio" else "")
-            + (f" (slate book, bankroll ${float(w.get('bankroll_dollars') or DEFAULT_WEIGHTS['bankroll_dollars']):,.0f})" if method == "slate" else "")
+            + (f" (slate book, bankroll ${bank['bankroll']:,.0f})" if method == "slate" and bank else "")
             + f"  weights: cash_pct={w['cash_pct']} avg_roi_win={w['avg_roi_win']} diversity_lambda={w['diversity_lambda']}")
         stats: dict = {}
         if method == "slate" and slate is not None:

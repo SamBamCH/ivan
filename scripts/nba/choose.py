@@ -10,7 +10,8 @@ this is the command line around it.
     scripts/nba/choose.py                                   prompts for weights per contest
     scripts/nba/choose.py --no-prompt                       config choose.* defaults, no prompts
     scripts/nba/choose.py --method portfolio --bankroll 3
-    scripts/nba/choose.py --method slate --bankroll-dollars 1000     the whole slate as one book from one bankroll (the desk's "Slate book")
+    scripts/nba/choose.py --method slate [--bankroll-dollars 1000]   the whole slate as one book from one bankroll (the default method; the
+                                                            bankroll is read from our results when none is given, scripts/bankroll.py)
     scripts/nba/choose.py --weights-json '{"default": {"cash_pct": 0.3}, "123456": {"method": "portfolio"}}'
 """
 from __future__ import annotations
@@ -47,9 +48,9 @@ def main() -> int:
     w.add_argument("--avg-roi-win", type=float, default=None, help="weight on avg_roi_win for every contest")
     w.add_argument("--diversity-lambda", type=float, default=None, help="diversity lambda for every contest")
     w.add_argument("--method", choices=("greedy", "portfolio", "slate"), default=None,
-                   help="greedy (quality + diversity), portfolio (one contest's book log utility) or slate (every contest at once as one book in dollars)")
+                   help="slate (every contest at once as one book in dollars; the config default), greedy (quality + diversity) or portfolio (one contest's book log utility)")
     w.add_argument("--bankroll", type=float, default=None, help="portfolio method: utility scale in multiples of the entries' fees (default 3)")
-    w.add_argument("--bankroll-dollars", type=float, default=None, help="slate method: the real bankroll in dollars (default config choose.bankroll_dollars, 1000)")
+    w.add_argument("--bankroll-dollars", type=float, default=None, help="slate method: the bankroll in dollars (default config choose.bankroll_dollars; null there = read from our results, scripts/bankroll.py)")
     w.add_argument("--weights-json", default=None, help="file or JSON literal: {\"default\": {...}, \"<contest id or name>\": {...}}")
     w.add_argument("--no-prompt", action="store_true", help="use defaults for anything not given; never prompt")
     a = ap.parse_args()

@@ -14,7 +14,7 @@
         <label title="greedy: weight on mean ROI">roi <input name="avg_roi_win" value="{{ '%g'|format(w.avg_roi_win) if w.avg_roi_win is defined else '' }}" placeholder="{{ form.avg_roi_win }}" size="3"></label>
         <label title="greedy: diversity bonus (0 = jam the best)">div <input name="diversity_lambda" value="{{ '%g'|format(w.diversity_lambda) if w.diversity_lambda is defined else '' }}" placeholder="{{ form.diversity_lambda }}" size="3"></label>
         <label title="portfolio: utility scale in multiples of the entry fees">bankroll <input name="bankroll" value="{{ '%g'|format(w.bankroll) if w.bankroll is defined else '' }}" placeholder="{{ form.bankroll }}" size="3"></label>
-        <label title="slate: the real bankroll in dollars (one figure for the slate; the largest wins when contests differ)">$ <input name="bankroll_dollars" value="{{ '%g'|format(w.bankroll_dollars) if w.bankroll_dollars is defined else '' }}" placeholder="{{ form.bankroll_dollars }}" size="4"></label>
+        <label title="slate: the bankroll in dollars (one figure for the slate; the largest wins when contests differ). Blank everywhere = read from our results (scripts/bankroll.py)">$ <input name="bankroll_dollars" value="{{ '%g'|format(w.bankroll_dollars) if w.bankroll_dollars is defined else '' }}" placeholder="{{ form.bankroll_dollars or 'results' }}" size="4"></label>
         <span class="cw-saved small">{% if w %}<span class="ok">own knobs</span>{% endif %}</span></form></td></tr>{% endfor %}</tbody></table>{% endif %}
   {% with oob=False %}{% include "_nba_pipeline_side.html" %}{% endwith %}
 </details>

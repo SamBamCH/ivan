@@ -20,12 +20,12 @@ def _pipeline_defaults() -> dict:
     c = _config(); g = c.get("generate", {}); ch = c.get("choose", {})
     fmt = lambda v: "" if v is None else ("%g" % v if isinstance(v, (int, float)) else str(v))
     return {"lineups": 25000, "jobs": MAX_JOBS, "sims": fmt(c.get("sim", {}).get("n_sims", 1000)), "field_cap": fmt(c.get("field", {}).get("cap", 10000)),
-            "method": ch.get("method", "greedy"), "min_fpts_frac": fmt(g.get("min_fpts_frac", 0.9)),
+            "method": ch.get("method", "slate"), "min_fpts_frac": fmt(g.get("min_fpts_frac", 0.9)),
             "randomness": fmt(g.get("randomness", 0.25)), "n_samples": fmt(g.get("n_samples", 5000)), "jitter": fmt(g.get("jitter", 0.05)),
             "player_min_fpts": fmt(g.get("player_min_fpts", c.get("player_min_fpts", 15))),
             "max_salary": fmt(c.get("max_salary", 50000)), "min_salary": fmt(c.get("min_salary", 49000)), "max_salary_per_team": fmt(c.get("max_salary_per_team", 30000)),
             "cash_pct": fmt(ch.get("cash_pct", 0.5)), "avg_roi_win": fmt(ch.get("avg_roi_win", 0.5)), "diversity_lambda": fmt(ch.get("diversity_lambda", 0.1)),
-            "bankroll": fmt(ch.get("bankroll", 3.0)), "bankroll_dollars": fmt(ch.get("bankroll_dollars", 1000.0)), "jam": "",
+            "bankroll": fmt(ch.get("bankroll", 3.0)), "bankroll_dollars": fmt(ch.get("bankroll_dollars")), "jam": "",
             "ls_candidates": "10", "ls_field_cap": "5000", "ls_sims": "1000", "ls_source": "auto", "ls_field": "shared", "ls_live": ""}
 
 
@@ -89,15 +89,19 @@ def write_desk_config(form: dict) -> Path:
             g[key] = v
     if str(form.get("player_min_fpts") or "").strip():
         c["player_min_fpts"] = g["player_min_fpts"]
-    for key in ("cash_pct", "avg_roi_win", "diversity_lambda", "bankroll", "bankroll_dollars"):
+    for key in ("cash_pct", "avg_roi_win", "diversity_lambda", "bankroll"):
         v = _field(form.get(key), key)
         if v is not None:
-            if key == "bankroll_dollars" and v <= 0:
-                raise ValueError("the bankroll must be positive")
             ch[key] = v
+    # the slate book's bankroll: a figure typed on the panel, else config/nba.json's (null there = read from our results, ivan.core.bankroll)
+    v = _field(form.get("bankroll_dollars"), "bankroll_dollars")
+    if v is not None:
+        if v <= 0:
+            raise ValueError("the bankroll must be positive")
+        ch["bankroll_dollars"] = v
     if form.get("jam"):
         ch["diversity_lambda"] = 0.0                              # jam: the top lineups by quality, no spread between them
-    ch["method"] = str(form.get("method") or ch.get("method", "greedy"))
+    ch["method"] = str(form.get("method") or ch.get("method", "slate"))
     if int(c["min_salary"]) > int(c["max_salary"]):
         raise ValueError("min salary is above max salary")
     DESK_CONFIG.parent.mkdir(parents=True, exist_ok=True)

@@ -20,6 +20,10 @@ from ivan.sports.nfl.models import NFLBase, ContestPayout, HistoricalContest, NF
 SHOWDOWN_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee", "CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"]
 CLASSIC_COLS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee", "QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"]
 CONTEST_TYPES = {"showdown": ("Showdown Captain Mode",), "classic": ("Classic",)}
+# what a replay chooses with when its menu does not say: the per-contest greedy the scoreboard's runs were made with, and
+# a fixed bankroll for a menu that asks for the slate method, so a past slate's book never reads the results that came
+# after it (the live default is the slate method on the bankroll of ivan.core.bankroll)
+REPLAY_WEIGHTS = {"method": "greedy", "bankroll_dollars": 1000.0}
 
 
 def _dt(v):
@@ -145,5 +149,5 @@ class NFLReplayAdapter:
     def choose(self, session, entries_csv: Path, out_dir: Path, weights: dict, log) -> dict:
         from ivan.sports.nfl import lineup_export as LE
         run, paths = LE.run_choose(session, entries_csv, Path(out_dir) / "chosen_entries.csv",
-                                   LE.weights_resolver(overrides={"default": dict(weights)}), log=log)
+                                   LE.weights_resolver(overrides={"default": {**REPLAY_WEIGHTS, **dict(weights)}}), log=log)
         return {"entries": int(run.total_sd + run.total_classic), "files": sorted(paths)}

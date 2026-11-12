@@ -129,20 +129,22 @@ randomness 1 and no jitter, read before the generate runs.
 
 ```bash
 venv/bin/python scripts/nba/choose.py                                   # prompts for weights per contest
-venv/bin/python scripts/nba/choose.py --no-prompt                       # config choose.* for everything
+venv/bin/python scripts/nba/choose.py --no-prompt                       # config choose.* for everything: the slate book on the bankroll from our results
+venv/bin/python scripts/nba/choose.py --method greedy
 venv/bin/python scripts/nba/choose.py --method portfolio --bankroll 3
-venv/bin/python scripts/nba/choose.py --method slate --bankroll-dollars 1000    # the whole slate as one book (the desk's Slate book)
+venv/bin/python scripts/nba/choose.py --method slate --bankroll-dollars 1000    # the slate book on a given bankroll
+venv/bin/python scripts/bankroll.py                                     # the bankroll a run would read
 venv/bin/python scripts/nba/choose.py --weights-json '{"default": {"cash_pct": 0.3}, "123456": {"method": "portfolio"}}'
 ```
 
 Every candidate's per-world ROI row is first pulled toward the pool by its own standard error
 (`chooser.shrink_rows`, empirical Bayes), so no method ranks on noise. Then:
 
-- **greedy** (default, per contest): quality = `cash_pct` × cash rate + `avg_roi_win` × average ROI, minus
+- **greedy** (per contest): quality = `cash_pct` × cash rate + `avg_roi_win` × average ROI, minus
   `diversity_lambda` × distance between the lineups' simulated point traces, picked one at a time.
 - **portfolio** (per contest): judge the book, not the lineup; each step adds the lineup that most raises the book's
   log utility summed over worlds, with the bankroll as `bankroll` × the entries' fees (default 3).
-- **slate** (every contest at once; `choose.choose_slate` on `ivan.core.slate_book`, shared with NFL): the whole slate
+- **slate** (the default; every contest at once; `choose.choose_slate` on `ivan.core.slate_book`, shared with NFL): the whole slate
   as one book in dollars from one bankroll (`bankroll_dollars`). The candidates are (contest, lineup) pairs carrying
   fee × ROI in every world of the run's shared draw; the greedy adds the pair that most raises the mean over worlds of
   log(1 + book / bankroll), each contest filling the entries file's count, a lineup at most once per contest, then an
@@ -150,13 +152,16 @@ Every candidate's per-world ROI row is first pulled toward the pool by its own s
   payout table), so a steady casher lands in the flat or single-entry contests and a tail lineup in the top-heavy ones,
   and the log spreads the book across worlds instead of stacking one script. It needs every contest's sim report to
   say `contest.draw = "slate"` (one sim run over the entries file) and refuses otherwise. Its only inputs are the
-  entries file and the bankroll; a contest's own knobs are ignored when the desk's **Slate book** runs it, and a
-  contest set to `slate` in the contests section joins the book when plain **Choose** runs (the largest
-  `bankroll_dollars` among them wins). Unbacktested: see
+  entries file and the bankroll. With no `bankroll_dollars` given, the bankroll is read from our results: `config/bankroll.json`'s `start` plus what our entries made (won − fees on the scored contests of every sport's results ledger, on the days from `since` on; `ivan.core.bankroll`, `scripts/bankroll.py` prints it): it
+  grows and shrinks with the results of every sport, a contest not yet scored moves nothing, and the choose log says
+  what the figure is made of ([../nfl/chooser.md](../nfl/chooser.md#the-bankroll)). A contest's own knobs are ignored
+  when the desk's **Slate book** runs it; under plain **Choose** every contest without a method of its own joins the
+  book (a `bankroll_dollars` given on any of them is used, the largest when they differ). Unbacktested: see
   [../nfl/notes/slate_book_2026-11-05.md](../nfl/notes/slate_book_2026-11-05.md).
 
-Config `choose`: `cash_pct` 0.5, `avg_roi_win` 0.5, `diversity_lambda` 0.1, `method` greedy, `bankroll` 3,
-`bankroll_dollars` 1000.
+Config `choose`: `cash_pct` 0.5, `avg_roi_win` 0.5, `diversity_lambda` 0.1, `method` slate, `bankroll` 3,
+`bankroll_dollars` null (read from our results; a figure pins it). `config/bankroll.json`: `start` 1000, `since` null,
+`sports` null.
 
 Outputs under `data/nba/output/`, stamped:
 

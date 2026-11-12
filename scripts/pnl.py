@@ -12,20 +12,13 @@ only 90% of losses are deductible, and only by itemizing). An estimate, not tax 
 import argparse
 from datetime import datetime
 
-from ivan.core import dk_history, pnl
+from ivan.core import bankroll, dk_history, pnl
 from ivan.core.tax import load_tax_config
 
 SPORTS = ("nba", "nfl")
 
 
-def ledger(sport: str, now: datetime) -> dict:
-    if sport == "nba":
-        from ivan.sports.nba.backtest import results
-    elif sport == "nfl":
-        from ivan.sports.nfl import results
-    else:                                           # a sport only DraftKings' entry history knows (scripts/dk_history.py)
-        return dk_history.ledger(sport)
-    return results.ledger_days(now)
+ledger = bankroll.sport_ledger       # nba and nfl from their results code, any other sport from DraftKings' entry history alone
 
 
 def money(x) -> str:

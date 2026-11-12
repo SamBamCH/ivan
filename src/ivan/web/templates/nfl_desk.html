@@ -15,7 +15,7 @@
 </head>
 <body class="desk">
 {% macro knob(f) %}{% if f.kind == 'checkbox' %}<label title="{{ f.help }}"><input type="checkbox" name="{{ f.name }}" {% if f.default %}checked{% endif %}> {{ f.label|lower }}</label>
-{% else %}<label title="{{ f.help }}">{{ f.label|lower }} <input name="{{ f.name }}" value="{{ f.default }}" size="6" type="number" step="{{ f.step }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %}></label>{% endif %}{% endmacro %}
+{% else %}<label title="{{ f.help }}">{{ f.label|lower }} <input name="{{ f.name }}" value="{{ f.default if f.default is not none else '' }}" {% if f.name == 'bankroll_dollars' %}placeholder="results" {% endif %}size="6" type="number" step="{{ f.step }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %}></label>{% endif %}{% endmacro %}
 <header>
 {% call bar(frame) %}<span class="extra">
   {% if lock %}<span class="countdown {% if mins_to_lock is not none and 0 < mins_to_lock < 60 %}soon{% endif %}" title="the working slate locks {{ lock.strftime('%a %H:%M') }} · {{ n_players }} player rows">
@@ -74,7 +74,7 @@
       <form method="post" action="{{ root }}/run/choose" class="step"><i>5</i>
         <button class="primary" {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}pick each contest's lineups and write the DraftKings upload CSV; each contest's knobs are set in the contests section, a blank one is the default (choose.py --weights-json){% elif not entries %}upload the entries export first{% else %}run the sim first{% endif %}">Choose</button></form>
       <form method="post" action="{{ root }}/run/choose_slate" class="step has-knobs">
-        <button {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}the slate as one book: every contest of the entries file chosen at once from this bankroll, in dollars (the per-contest knobs are not used); scripts/nfl/choose.py --method slate --bankroll-dollars B{% elif not entries %}upload the entries export first{% else %}run the sim first{% endif %}">Slate book</button>
+        <button {% if not ready.choose %}disabled{% endif %} title="{% if ready.choose %}the slate as one book: every contest of the entries file chosen at once from this bankroll, in dollars (the per-contest knobs are not used); scripts/nfl/choose.py --method slate [--bankroll-dollars B]{% elif not entries %}upload the entries export first{% else %}run the sim first{% endif %}">Slate book</button>
         <div class="knobs"><div class="knobs-title">slate book</div>{% for f in step_fields.choose_slate %}{{ knob(f) }}{% endfor %}</div></form>
       <span class="spacer"></span>
       <form method="post" action="{{ root }}/reset/sims" onsubmit="return confirm('Clear every simulation result of this slate?')"><button class="danger" title="scripts/nfl/clear_sims.py">clear sims</button></form>

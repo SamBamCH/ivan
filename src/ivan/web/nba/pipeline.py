@@ -452,7 +452,7 @@ def _submit(step: str, form: dict) -> list:
         ch = json.loads(cfg.read_text())["choose"]
         cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", str(ch["method"]),
                "--cash-pct", "%g" % ch["cash_pct"], "--avg-roi-win", "%g" % ch["avg_roi_win"], "--diversity-lambda", "%g" % ch["diversity_lambda"],
-               "--bankroll", "%g" % ch["bankroll"], "--bankroll-dollars", "%g" % ch.get("bankroll_dollars", 1000.0)]
+               "--bankroll", "%g" % ch["bankroll"]] + _bankroll_flag(ch)
         from ivan.sports.nba.contest.export import contest_weights, contest_weights_json
         if contest_weights():                                     # the contests section's knobs win over the panel's for their contest
             cmd += ["--weights-json", str(contest_weights_json())]
@@ -461,10 +461,15 @@ def _submit(step: str, form: dict) -> list:
         # the slate as one book: the two inputs are the entries file and the bankroll (ivan.core.slate_book); every contest is chosen
         # by the slate method whatever its own knobs say, so no --weights-json here
         ch = json.loads(cfg.read_text())["choose"]
-        cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", "slate",
-               "--bankroll-dollars", "%g" % ch.get("bankroll_dollars", 1000.0)]
+        cmd = [py, str(SCRIPTS / "choose.py"), "--config", str(cfg), "--no-prompt", "--method", "slate"] + _bankroll_flag(ch)
         jobs.append(_submit_job("choose", cmd, "choose", meta("choose")))
     return jobs
+
+
+def _bankroll_flag(ch: dict) -> list:
+    """--bankroll-dollars B when the panel or the config names a figure; without it choose.py reads the bankroll from our results."""
+    b = ch.get("bankroll_dollars")
+    return ["--bankroll-dollars", "%g" % float(b)] if b else []
 
 
 POOL_WRITERS = ("field", "sim", "solve")   # jobs that write the pool (every player's ownership) or the optimal file: the desk reloads the pool before the page

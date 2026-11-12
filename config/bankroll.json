@@ -1,0 +1,6 @@
+{
+  "_note": "the bankroll the slate book is chosen from (ivan.core.bankroll; scripts/bankroll.py prints it): start plus what our entries made (won - fees on the scored contests of every sport's results ledger) on the days from `since` on. since null = every result on file. After a deposit or a withdrawal set start to the balance that day and since to that day. sports null = nba, nfl and every other sport the imported DraftKings entry history holds. A choose run that names --bankroll-dollars (or a contest's own knob) uses that figure instead.",
+  "start": 1000.0,
+  "since": null,
+  "sports": null
+}

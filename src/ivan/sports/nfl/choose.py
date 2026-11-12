@@ -45,7 +45,7 @@ from ivan.core.slate_book import DEFAULT_BANKROLL_DOLLARS, ContestCandidates, ba
 from ivan.sports.nfl.models import ContestSimReport, LineupSimulationResult, NFLPlayer
 
 METHODS = ("greedy", "portfolio", "slate")
-DEFAULT_METHOD = "greedy"
+DEFAULT_METHOD = "slate"
 DEFAULT_BANKROLL, MIN_BANKROLL = DEFAULT_BANKROLL, MIN_BANKROLL      # re-exported for callers and tests
 
 
