@@ -10,6 +10,7 @@ scripts/feed_server.py        serve the data feed over HTTP
 scripts/serve.py              the web UI (ivan.web.main): every sport, one password
 scripts/password.py           hash the site's password into .env
 scripts/pnl.py                the money over every sport and the tax on it (the home page's strip)
+scripts/dk_history.py         import DraftKings' entry-history export: the money of every contest it lists
 src/ivan/
 ├── core/                     sport-agnostic infrastructure (below)
 ├── database/                 engine/session factory (init_db, get_session, read_sql, safe_commit, add_missing_columns)
@@ -57,7 +58,8 @@ question answered for one sport usually points at the same file in another.
 | `model_store` | versioned model directories: `data/<sport>/models/` live, `models/asof/<cutoff>/` for as-of sets a replay resolves by the clock so a backtest never uses a model that has seen the slate. |
 | `replay` | restores archived slates into a copy of the sport's database, pins the clock, runs the sport's pipeline through a `SportAdapter` (project → generate → simulate → choose), with repeats per slate under their own seed to measure the pipeline's own noise. Only NFL has an adapter today. |
 | `validation` | sport-agnostic frames for projected vs actual: `player_report`, `field_report`, `lineup_report`, `pool_report`, `build_checks`. A sport's `validation.py` builds the frames from its artifacts and actuals. |
-| `tax` | US federal gambling tax on a year of results as a pure function, `compute_tax(W, L, cfg)`: gross winnings, gross losses, the 90% loss cap, itemize or standard deduction, flat rate or brackets, gross or net reporting; `config/tax.json`. Used by the NFL after-tax backtest and the home page. |
+| `tax` | US federal gambling tax on a year of results as a pure function, `compute_tax(W, L, cfg)`: gross winnings, gross losses (`wagering_totals`: counted per entry, or every payout and every fee, by `wager_basis`), the 90% loss cap, itemize or standard deduction, flat rate or brackets, gross or net reporting; `config/tax.json`. Used by the NFL after-tax backtest and the home page. |
+| `dk_history` | DraftKings' entry-history export of the account (every entry's fee and winnings, every sport): `parse`, `import_file` into `data/dk/entry_history.csv`, `merge` over a sport's ledger slates, `ledger` for a sport with no results code. `scripts/dk_history.py`. |
 | `pnl` | the money across sports: `agg` and `roll_up` (the ledger shape every sport gives the web frame: overall, per day, per slate), `year_totals`, `combined` (every sport's year, the total, the tax on it under each scenario). `scripts/pnl.py`. |
 | `slates` | one status row per slate from the settle job (open / waiting / login_needed / settled / no_contests) for the Backtest page and the nightly loop. |
 | `chooser` | the choosers' numerics shared by the sports: greedy quality, `shrink_rows` (DerSimonian-Laird empirical Bayes on per-world ROI), `cash_feature`, `cross_fit_book` (select on even worlds, score on odd: honest ROI), `quality_features` / `viz_payload` / `fill_stats` (what every choose run reports). |

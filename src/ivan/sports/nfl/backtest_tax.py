@@ -44,6 +44,8 @@ from ivan.sports.nfl.models import (ContestEntryResult, ContestFieldScores, Hist
                                     ShowdownPlayer)
 from ivan.sports.nfl.paths import OUTPUT_DIR
 from ivan.sports.nfl.placement import load_payout_tiers, payout_vector, place, places_paid, remove_our_copies
+from ivan.core import dk_history as dk_export
+from ivan.core.dk_history import parse_money
 from ivan.core.tax import TaxConfig, compute_tax, scenario_configs
 
 CPT_SLOT, CPT_MULT = 511, 1.5
@@ -51,19 +53,6 @@ SLOT_CODE = {"CPT": 511, "FLEX": 512, "QB": 66, "RB": 67, "WR": 68, "TE": 69, "D
 CASH_WORDS = ("double up", "double-up", "doubleup", "50/50", "fifty", "head-to-head", "head to head", "h2h",
               "cash", "satellite", "qualifier", "3-man", "5-man", "beginner")
 SOURCE_RANK = {"dk_history": 0, "scraped_entry": 1, "reconstructed": 2, "points_only": 3, "no_actual": 4}
-
-
-def parse_money(x) -> float:
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return 0.0
-    s = str(x).replace("$", "").replace(",", "").strip()
-    neg = s.startswith("(") and s.endswith(")")
-    s = s.strip("()")
-    try:
-        v = float(s or 0)
-    except ValueError:
-        return 0.0
-    return -v if neg else v
 
 
 def classify_format(name: str, places_paid_frac: Optional[float] = None) -> str:
@@ -307,60 +296,13 @@ def field_scores(session: Session, contest_id: int) -> Optional[np.ndarray]:
 
 
 # --------------------------------------------------------------------------- DK history export
-DK_HISTORY_ALIASES = {
-    "contest_id": ("contest_key", "contestkey", "contest_id", "contestid"),
-    "entry_id": ("entry_key", "entrykey", "entry_id", "entryid"),
-    "contest_name": ("entry", "contest", "contest_name", "contestname"),
-    "game_type": ("game_type", "gametype"),
-    "sport": ("sport",),
-    "date": ("contest_date_est", "contest_date", "date", "contestdate"),
-    "place": ("place", "rank"),
-    "points": ("points", "fpts"),
-    "winnings": ("winnings_non_ticket", "winnings", "winnings_cash"),
-    "winnings_ticket": ("winnings_ticket",),
-    "entry_fee": ("entry_fee", "entryfee", "fee"),
-    "contest_entries": ("contest_entries", "entries", "total_entries"),
-    "places_paid": ("places_paid", "placespaid"),
-}
-
-
 def load_dk_history(path: str | Path, sport: str = "NFL") -> pd.DataFrame:
     """
-    A DraftKings contest-history export (My Contests -> Contest History ->
-    download) as one row per entry with normalized columns. Only `sport`
-    rows are kept; ticket winnings are added to cash winnings.
+    A DraftKings entry-history export (My Contests -> History -> download) as one row per entry with normalized
+    columns (ivan.core.dk_history.parse). Only `sport` rows are kept (and rows of a file with no sport column).
     """
-    raw = pd.read_csv(path, dtype=str, keep_default_na=False)
-    norm = {re.sub(r"[^a-z0-9]+", "_", str(c).strip().lower()).strip("_"): c for c in raw.columns}
-    def col(key):
-        for alias in DK_HISTORY_ALIASES[key]:
-            if alias in norm:
-                return raw[norm[alias]]
-        return None
-    need = {k: col(k) for k in ("contest_id", "entry_id", "entry_fee", "winnings")}
-    missing = [k for k, v in need.items() if v is None]
-    if missing:
-        raise ValueError(f"{path}: cannot find column(s) {missing}; have {list(raw.columns)}")
-    df = pd.DataFrame({
-        "contest_id": pd.to_numeric(need["contest_id"], errors="coerce"),
-        "entry_id": pd.to_numeric(need["entry_id"], errors="coerce"),
-        "contest_name": col("contest_name") if col("contest_name") is not None else "",
-        "game_type": col("game_type") if col("game_type") is not None else "",
-        "sport": col("sport") if col("sport") is not None else sport,
-        "date": pd.to_datetime(col("date"), errors="coerce") if col("date") is not None else pd.NaT,
-        "place": pd.to_numeric(col("place"), errors="coerce") if col("place") is not None else np.nan,
-        "points": pd.to_numeric(col("points"), errors="coerce") if col("points") is not None else np.nan,
-        "entry_fee": need["entry_fee"].map(parse_money),
-        "winnings": need["winnings"].map(parse_money)
-                    + (col("winnings_ticket").map(parse_money) if col("winnings_ticket") is not None else 0.0),
-        "contest_entries": pd.to_numeric(col("contest_entries"), errors="coerce") if col("contest_entries") is not None else np.nan,
-        "places_paid": pd.to_numeric(col("places_paid"), errors="coerce") if col("places_paid") is not None else np.nan,
-    })
-    df = df[df.sport.astype(str).str.upper().str.strip().isin({sport.upper(), ""})]
-    df = df.dropna(subset=["contest_id", "entry_id"]).copy()
-    df["contest_id"] = df.contest_id.astype(int)
-    df["entry_id"] = df.entry_id.astype(int)
-    return df.reset_index(drop=True)
+    df = dk_export.parse(path)
+    return df[df.sport.astype(str).str.upper().str.strip().isin({sport.upper(), ""})].reset_index(drop=True)
 
 
 def _history_lock(row, info: Dict[int, HistoricalContest]) -> Optional[datetime]:

@@ -1,4 +1,5 @@
 {
+  "_note_wager_basis": "how the results ledgers (the home page, scripts/pnl.py) count winnings and losses. 'entry': each entry is one wager; a winning entry's winnings are its payout over its own fee, a losing entry's loss is its fee (no netting between entries). 'fees': every payout is winnings and every entry fee a loss, so the loss cap also bites on the fees of winning entries; the conservative reading. Unsettled for DFS: ask a CPA. The home page shows the other count as its last row. The NFL after-tax backtest counts per entry (its spec).",
   "_note": "2026 federal figures as understood in Oct 2026; VERIFY with a CPA before relying on them. brackets are [lower_bound, rate] rows per filing status. defaults.use_brackets switches the engine from the flat marginal_rate to the bracket table layered on other_taxable_income.",
   "defaults": {
     "tax_year": 2026,
@@ -12,6 +13,7 @@
     "state_allows_loss_deduction": true,
     "reporting_mode": "gross_165d",
     "itemize": "auto",
+    "wager_basis": "entry",
     "tax_reserve_pct": null
   },
   "standard_deduction": {

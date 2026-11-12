@@ -76,7 +76,9 @@ is **complete** and never recomputed (past results do not change); an incomplete
 minutes and recomputed when the exports on disk of any of the slate's contests are not the ones it saw (an export of a
 contest the entries file does not name may carry our user name). The nightly warms the ledgers after the standings
 derive, so the first page after a scrape does not pay the parse (about 2 s a slate). Each contest also carries the
-tax's two sums (`gross_win`, `gross_loss`: per entry, the payout over the fee and what was lost of the fee).
+tax's two sums (`gross_win`, `gross_loss`: per entry, the payout over the fee and what was lost of the fee). Where
+DraftKings' entry history is imported (`scripts/dk_history.py import`, [../web/README.md](../web/README.md#the-money)),
+`ledger_days` takes the money of the contests it lists from it; the slate's own backtest view keeps the exports' numbers.
 
 Where it shows, **on this machine only** (a consumer desk, the server, gets none of it: `Sport.ledger` is None there and
 the backtest view keeps only the model's columns): the Ivan home tile (the season), the home page's strip over every

@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from ivan.core import pnl
+from ivan.core import dk_history, pnl
 from ivan.sports.nfl.backtest_tax import utc_to_local
 from ivan.sports.nfl.paths import OUTPUT_DIR
 
@@ -77,7 +77,7 @@ def contest_rows(session, slate_key: Optional[str] = None) -> List[dict]:
         n, won = int(r.n), float(r.won or 0)
         fees = d["entry_fee"] * n
         at = _dt(r.scraped_at)
-        d.update(ours=n, found=n, final=True, fees=fees, won=won, net=won - fees, roi=(won - fees) / fees if fees else None,
+        d.update(ours=n, found=n, final=True, detail=True, fees=fees, won=won, net=won - fees, roi=(won - fees) / fees if fees else None,
                  best_rank=int(r.best) if r.best is not None else None, best_points=float(r.best_points) if r.best_points is not None else None,
                  cashed=int(r.cashed or 0), min_cash=None, gross_win=float(r.gross_win or 0), gross_loss=float(r.gross_win or 0) - (won - fees),
                  export_at=utc_to_local(at) if at else None, scored="DraftKings' standings" + (f", scraped {utc_to_local(at):%m-%d %H:%M}" if at else ""))
@@ -142,7 +142,21 @@ def unscored_rows(session, slate_key: Optional[str] = None, dirs: Optional[Seque
 def slate_results(session, slate_key: str) -> dict:
     """{"slate_key", "contests" (final first, biggest fees first), "summary" (pnl.agg), "complete"} for the slate's backtest page."""
     rows = contest_rows(session, slate_key) + unscored_rows(session, slate_key)
+    mine = [s for s in _with_history(session, [dict(key=str(slate_key), day=min([r["day"] for r in rows if r["day"]], default=""), complete=False, contests=rows)])
+            if str(s["key"]) == str(slate_key)]
+    rows = sorted(mine[0]["contests"], key=lambda r: (not r["final"], -(r["fees"] or 0))) if mine else []
     return dict(slate_key=str(slate_key), contests=rows, summary=pnl.agg(rows), complete=bool(rows) and all(r["final"] for r in rows))
+
+
+def _with_history(session, slates: List[dict]) -> List[dict]:
+    """The slates with DraftKings' entry history laid over them (ivan.core.dk_history.merge): its money where it has the contest, its
+    contests we have no standings for under their draft group (historical_contest_information), unscored rows it does not list dropped."""
+    ids = [int(c) for c in dk_history.entries(SPORT).contest_id.unique()]
+    slate_of: Dict[int, str] = {}
+    for i in range(0, len(ids), 900):
+        q = f"SELECT contest_id, draft_group_id FROM historical_contest_information WHERE contest_id IN ({','.join(map(str, ids[i:i + 900]))})"
+        slate_of.update({int(c): str(dg) for c, dg in session.execute(text(q)).all()})
+    return dk_history.merge(SPORT, slates, slate_of=slate_of)
 
 
 def contest_entries(session, contest_id: int) -> Optional[dict]:
@@ -177,14 +191,15 @@ def ledger_days(now: Optional[datetime] = None, session=None, dirs: Optional[Seq
         session = get_session(init_db(SPORT))
     try:
         rows = contest_rows(session) + unscored_rows(session, dirs=dirs)
+        by: Dict[str, List[dict]] = {}
+        for r in rows:
+            if r["day"]:
+                by.setdefault(r["draft_group"], []).append(r)
+        slates = [dict(key=k, day=min(r["day"] for r in g), complete=all(r["final"] for r in g), contests=g) for k, g in by.items()]
+        slates = _with_history(session, slates)
     finally:
         if own:
             session.close()
-    by: Dict[str, List[dict]] = {}
-    for r in rows:
-        if r["day"]:
-            by.setdefault(r["draft_group"], []).append(r)
-    slates = [dict(key=k, day=min(r["day"] for r in g), complete=all(r["final"] for r in g), contests=g) for k, g in by.items()]
     out = pnl.roll_up(slates)
     out["source"] = SOURCE
     return out

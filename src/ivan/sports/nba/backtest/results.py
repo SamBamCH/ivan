@@ -34,7 +34,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ivan.core import pnl, raw
+from ivan.core import dk_history, pnl, raw
 from ivan.sports.nba.names import normalize_name
 
 SPORT = "nba"
@@ -327,6 +327,6 @@ def ledger_days(now: Optional[datetime] = None, root: Optional[Path] = None, tod
         except Exception:   # noqa: BLE001 - one broken slate must not take the page down
             continue
         slates.append(dict(key=led["draft_group"], day=day, complete=led["complete"], contests=led["contests"]))
-    out = pnl.roll_up(slates)
+    out = pnl.roll_up(dk_history.merge(SPORT, slates))           # DraftKings' entry history, where imported, is the money of the contests it has
     out["source"] = SOURCE
     return out

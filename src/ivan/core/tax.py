@@ -30,6 +30,8 @@ GROSS = "gross_165d"
 NET = "net_dfs"
 REPORTING_MODES = (GROSS, NET)
 ITEMIZE_CHOICES = ("auto", "always", "never")
+FEES, ENTRY = "fees", "entry"
+WAGER_BASES = (FEES, ENTRY)
 
 # Fallback standard deductions if config/tax.json is missing. Verify.
 STANDARD_DEDUCTION_2026 = {"single": 16100.0, "married_joint": 32200.0, "married_separate": 16100.0,
@@ -50,12 +52,15 @@ class TaxConfig:
     state_allows_loss_deduction: bool = True
     reporting_mode: str = GROSS
     itemize: str = "auto"                      # auto | always | never
+    wager_basis: str = ENTRY                   # how a ledger's entries become W and L (wagering_totals): entry | fees
     tax_reserve_pct: Optional[float] = None    # share of each win swept into a tax reserve (ledger only)
     label: str = ""
 
     def __post_init__(self):
         if self.reporting_mode not in REPORTING_MODES:
             raise ValueError(f"reporting_mode must be one of {REPORTING_MODES}, got {self.reporting_mode!r}")
+        if self.wager_basis not in WAGER_BASES:
+            raise ValueError(f"wager_basis must be one of {WAGER_BASES}, got {self.wager_basis!r}")
         if self.itemize not in ITEMIZE_CHOICES:
             raise ValueError(f"itemize must be one of {ITEMIZE_CHOICES}, got {self.itemize!r}")
         if not 0.0 <= self.loss_cap_pct <= 1.0:
@@ -107,6 +112,19 @@ class TaxResult:
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
+
+
+# --------------------------------------------------------------------------- what counts as winnings and losses
+def wagering_totals(cfg: TaxConfig, *, fees: float, won: float, gross_win: float, gross_loss: float) -> Tuple[float, float]:
+    """
+    (W, L) of a results ledger under the configured count. "entry" (the default): each entry is one wager, and what it
+    won is its payout over its own fee (the stake of a winning wager is not winnings), what it lost is what it did not
+    get back of its fee; nothing is netted between entries. "fees": every payout is winnings and every entry fee a loss
+    (W = won, L = fees), so the loss cap bites on the fees of the winning entries too: the reading that never understates
+    the tax. Both give the same profit W - L; they differ in how much the cap, or the standard deduction, leaves taxed.
+    Which one a return should use is a question for a CPA (docs/web/README.md, the money).
+    """
+    return (float(won), float(fees)) if cfg.wager_basis == FEES else (float(gross_win), float(gross_loss))
 
 
 # --------------------------------------------------------------------------- brackets

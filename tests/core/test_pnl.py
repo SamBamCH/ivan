@@ -36,25 +36,34 @@ def test_roll_up_by_day_and_year_totals():
 
 
 def test_combined_taxes_the_total_over_every_sport():
-    """A losing sport offsets a winning one before tax, but only 90% of the losses count, and only by itemizing."""
-    nba = ledger(("n", "2026-11-01", [row(1000.0, 400.0, 300.0)]))                 # W 300, L 900
-    nfl = ledger(("f", "2026-11-02", [row(2000.0, 3000.0, 2500.0)]))               # W 2500, L 1500
-    cfg = TaxConfig(marginal_rate=0.25, itemize="auto", standard_deduction=16100.0)
+    """A losing sport offsets a winning one before tax, but only 90% of the losses count, and only by itemizing. wager_basis "entry"
+    (the default) nets each entry's fee against its own payout; "fees" counts every payout as winnings and every entry fee as a loss."""
+    nba = ledger(("n", "2026-11-01", [row(1000.0, 400.0, 300.0)]))                 # per entry: W 300, L 900
+    nfl = ledger(("f", "2026-11-02", [row(2000.0, 3000.0, 2500.0)]))               # per entry: W 2500, L 1500
+    assert TaxConfig().wager_basis == "entry"
+    cfg = TaxConfig(marginal_rate=0.25, itemize="auto", standard_deduction=16100.0, wager_basis="fees")
     m = pnl.combined({"nba": nba, "nfl": nfl, "mma": None}, 2026, cfg, labels={"nba": "NBA", "nfl": "NFL"})
-    assert [s["label"] for s in m["sports"]] == ["NBA", "NFL"]
+    assert [s["label"] for s in m["sports"]] == ["NBA", "NFL"] and m["config"]["wager_basis"] == "fees"
     tot = m["total"]
-    assert (tot["net"], tot["fees"], tot["gross_win"], tot["gross_loss"], tot["contests"]) == (400.0, 3000.0, 2800.0, 2400.0, 2)
-    by = {t["label"].split(",")[0].split(" (")[0]: t for t in m["tax"]}
-    own = by["as configured"]                                                      # 0.9 * 2400 = 2160 < the standard deduction: nothing deducted
-    assert not own["itemize"] and own["taxable_gambling"] == 2800.0 and own["est_tax"] == pytest.approx(700.0) and own["after_tax_profit"] == pytest.approx(-300.0)
-    capped = m["tax"][1]                                                           # itemizing under the 90% cap
-    assert capped["deductible"] == pytest.approx(2160.0) and capped["taxable_gambling"] == pytest.approx(640.0)
-    assert capped["phantom"] == pytest.approx(240.0) and capped["est_tax"] == pytest.approx(160.0) and capped["after_tax_profit"] == pytest.approx(240.0)
-    assert capped["after_tax_roi"] == pytest.approx(0.08)
+    assert (tot["net"], tot["fees"], tot["won"], tot["gross_win"], tot["gross_loss"], tot["contests"]) == (400.0, 3000.0, 3400.0, 2800.0, 2400.0, 2)
+    own = m["tax"][0]                                                              # W 3400 (payouts), L 3000 (fees); 0.9 * 3000 < the standard deduction
+    assert (own["W"], own["L"]) == (3400.0, 3000.0) and not own["itemize"]
+    assert own["taxable_gambling"] == 3400.0 and own["est_tax"] == pytest.approx(850.0) and own["after_tax_profit"] == pytest.approx(-450.0)
+    capped = m["tax"][1]                                                           # itemizing under the 90% cap: 10% of all the fees stays taxable
+    assert capped["deductible"] == pytest.approx(2700.0) and capped["taxable_gambling"] == pytest.approx(700.0)
+    assert capped["phantom"] == pytest.approx(300.0) and capped["est_tax"] == pytest.approx(175.0) and capped["after_tax_profit"] == pytest.approx(225.0)
+    assert capped["after_tax_roi"] == pytest.approx(0.075)
     full = m["tax"][2]                                                             # 100%: taxed on the profit
     assert full["taxable_gambling"] == pytest.approx(400.0) and full["phantom"] == 0.0
     assert m["tax"][4]["taxable_gambling"] == pytest.approx(400.0)                 # net DFS
+    other = m["tax"][5]                                                            # the other count: per entry
+    assert other["wager_basis"] == "entry" and (other["W"], other["L"]) == (2800.0, 2400.0)
     assert m["all_time"]["net"] == 400.0 and m["year"] == 2026
+    e = pnl.combined({"nba": nba, "nfl": nfl}, 2026, cfg.with_(wager_basis="entry"))
+    assert e["tax"][1]["deductible"] == pytest.approx(2160.0) and e["tax"][1]["taxable_gambling"] == pytest.approx(640.0)
+    assert e["tax"][1]["after_tax_profit"] == pytest.approx(240.0) and e["tax"][5]["wager_basis"] == "fees"
+    with pytest.raises(ValueError):
+        TaxConfig(wager_basis="sessions")
 
 
 def test_combined_with_no_ledger_is_empty():

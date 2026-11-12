@@ -138,6 +138,11 @@ no standings: it is listed with its fees (the chooser's entry count times the fe
 contest with standings and no entry of ours is one we chose for and did not enter, and is not counted. Read from the
 database on every call (one grouped query); nothing is cached.
 
+DraftKings drops a contest's standings after some weeks, so a slate settle missed cannot be scraped later. For those,
+import the account's entry history (`scripts/dk_history.py import`, [../web/README.md](../web/README.md#the-money)):
+its fees and winnings replace the scraped money contest by contest, the contests it alone has appear under their
+draft group (money only: no lineups, so no contest panel), and unscored contests it does not list are dropped.
+
 Where it shows, on the laptop only (`Sport.ledger` is None on a consumer, the server): the NFL home tile, the NFL
 picker's strip and each day's row and heading, the Results card that leads a past slate's backtest page with a panel
 per contest ([../web/nfl-app.md](../web/nfl-app.md)), and, with every other sport and the tax on the total, the home

@@ -34,7 +34,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from ivan.core import pnl
+from ivan.core import dk_history, feed, pnl
 from ivan.web import auth
 from ivan.web.frame import ctx, templates
 from ivan.web.sports import REGISTRY, Sport
@@ -73,6 +73,15 @@ def sport_ledgers(now: datetime) -> dict:
             out[sport.key] = sport.ledger(now)
         except Exception as e:   # noqa: BLE001 - the home page opens without it
             out[sport.key] = {"error": f"{type(e).__name__}: {e}", "overall": None, "days": {}}
+    if feed.producer_source() is None:                # not on a consumer (the server shows no money)
+        try:                                          # a sport DraftKings' entry history has and no results code covers (MMA, a sport with no workspace)
+            for key in dk_history.sports():
+                if key not in out and (key not in REGISTRY or REGISTRY[key].ledger is None):
+                    led = dk_history.ledger(key)
+                    if led is not None:
+                        out[key] = led
+        except Exception as e:   # noqa: BLE001
+            print(f"entry history unavailable: {type(e).__name__}: {e}", flush=True)
     return out
 
 
@@ -106,7 +115,8 @@ def build_app(sports=None) -> FastAPI:
             except Exception as e:   # noqa: BLE001
                 summary = {"loaded": None, "job": None, "note": f"could not read the state: {type(e).__name__}: {e}", "n_days": 0, "next": ""}
             tiles.append({"sport": sport, "summary": summary, "ledger": ledgers.get(sport.key)})
-        return templates.TemplateResponse(request, "home.html", {"frame": ctx(request, None, now=now), "tiles": tiles, "pnl": money(ledgers, now)})
+        return templates.TemplateResponse(request, "home.html", {"frame": ctx(request, None, now=now), "tiles": tiles, "pnl": money(ledgers, now),
+                                                                 "mounted": list(REGISTRY)})
 
     REGISTRY.clear()
     for key in _wanted(sports):
