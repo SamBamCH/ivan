@@ -79,7 +79,7 @@ contest step to run.
 The slate page reads; a team is worked on its own page (a chip in the games strip, a name in the news table or the
 players table: `/nba/<day>/<slate>/<TEAM>/`). You open a team to map its minutes, when its chip in the games strip is
 not green (grey unmapped, yellow an open question, red changed since mapped, a dot for news), or when news breaks.
-On the team page the past games that are no picture of the usual rotation are shaded (amber not close, red a regular
+On the team page the past games that are no picture of the usual rotation are marked (filled red not close, struck through and greyed a regular
 absent or gone early; `scripts/nba/game_context.py`), so the ones to map from are the unshaded ones.
 What a refresh or a job is doing, and what it found, is on the bar's job strip and in the slate page's terminal.
 

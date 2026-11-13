@@ -302,11 +302,14 @@
   .exp-filters label { font-size:12px; color:var(--muted) }
   /* the terminal's second pane: the desk's messages, newest last */
   pre.log.desk-log { max-height:132px; background:#262626; margin-top:-2px } pre.log.desk-log .at { color:#8a8a8a } .jobstat.idle { color:var(--muted); font-weight:400 }
-  /* games that are no picture of the usual rotation (ivan.sports.nba.projection.rotation.game_context): amber = not close, red = a regular absent
-     or gone early, orange = both. On the played-game picker's lines and on every recent-games hover */
-  table.mini tr.g-blow td, option.g-blow, select.rot-game-pick.g-blow, .gnote.g-blow, i.sw.g-blow { background:#fef3c7 }
-  table.mini tr.g-inj td, option.g-inj, select.rot-game-pick.g-inj, .gnote.g-inj, i.sw.g-inj { background:#fee2e2 }
-  table.mini tr.g-blow.g-inj td, option.g-blow.g-inj, select.rot-game-pick.g-blow.g-inj, .gnote.g-blow.g-inj, i.sw.g-blow.g-inj { background:#fed7aa }
+  /* games that are no picture of the usual rotation (ivan.sports.nba.projection.rotation.game_context), on the played-game picker's lines and
+     on every recent-games hover. A regular out (absent or gone early) = struck through with diagonal lines and greyed: still readable, not
+     something the eye goes to. A blowout = the whole line filled red. Both = red under the lines. A select's options take a colour but no
+     pattern, so there the struck game is greyed and its line starts with a slash */
+  table.mini tr.g-blow td, option.g-blow, select.rot-game-pick.g-blow, .gnote.g-blow, i.sw.g-blow { background-color:#fca5a5 }
+  table.mini tr.g-inj td, .gnote.g-inj, i.sw.g-inj, select.rot-game-pick.g-inj { background-image:repeating-linear-gradient(135deg, rgba(0,0,0,0) 0 5px, rgba(0,0,0,.28) 5px 6.2px); background-attachment:fixed }
+  table.mini tr.g-inj td.gwhy { background-image:none }      /* the reason stays plain to read */
+  table.mini tr.g-inj td, table.mini tr.g-inj td.fshort, table.mini tr.g-inj td.pfhi, .gnote.g-inj, option.g-inj, select.rot-game-pick.g-inj { color:#8a8a8a; font-weight:400 }
   table.mini.recent td.gwhy { color:#555; white-space:normal; min-width:150px; max-width:260px; font-size:10px } table.mini.recent i.sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin:0 3px 0 8px; border:1px solid #ddd }
   .gnote { font-size:12px; padding:1px 8px; border-radius:4px; margin-right:6px; color:#333 }
   .players-head { margin:6px 0 } .game .gh .spacer { flex:1 } .minfpts-lab { font-size:12px; color:var(--muted) } .minfpts-lab select { font:inherit; font-size:12px; padding:1px 4px }
