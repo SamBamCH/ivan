@@ -350,6 +350,8 @@ def write_teams(seg: pd.DataFrame, events: pd.DataFrame, params: Optional[dict] 
                p_stl=float(tg.stl.sum() / max(tg.tov.sum(), 1.0)),
                p_blk=float(tg.blk.sum() / max(miss, 1.0)),
                ft_miss_live=0.5,          # the share of missed free throws that are live (the last of a trip): about half of all misses
+               # of the misses the offence did not rebound, the share a defender is credited with (the rest: team and dead-ball rebounds)
+               p_dreb=float(tg.p_dreb.sum() / max(miss + 0.5 * float((tg.fta - tg.ftm).sum()) - float(tg.p_oreb.sum()), 1.0)),
                paces=team_paces(seg, params), written_at=str(date.today()), commit=_git_commit())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=1))

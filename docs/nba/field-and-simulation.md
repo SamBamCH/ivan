@@ -95,7 +95,7 @@ while the lead holds) and overtime for the five at the buzzer; each minute the t
 two-point attempts, three-point attempts, free-throw trips and turnovers at the roster's pie, split among the five on
 the floor by the pool's per-minute rates times coverage (so a priced player's props drive his share), makes by each
 player's trailing shooting percentages (`gamesim.profiles`) with the attempts scaled by one team factor so the expected
-points are what the lines say; the misses are rebounded at the team's share and by the other five, the turnovers become
+points are what the lines say; the misses are rebounded at the team's share and, at the defence's share of the rest (`p_dreb`, about 0.84: the others are team rebounds), by the other five, the turnovers become
 the other team's steals, the missed shots its blocks, the makes carry assists. Garbage time (the closers out while the
 lead holds) is **off** by default (`config/nba.json → gamesim.garbage`): the grid's minutes already discount the blowout
 nights ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md)). Four game-level knobs (a team's pull toward

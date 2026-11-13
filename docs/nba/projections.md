@@ -160,7 +160,10 @@ on the floor from the grid, each minute's possessions ending as attempts, trips 
 split among the five by their per-minute rates, the makes by each player's shooting profile with the attempts scaled
 by **one team factor** so the expected points are what the line says (the card's World line shows it: `attempts ×
 0.95` means the plan's rates added up to more points than the books allow and every scorer came down), the misses
-rebounded, the turnovers the other side's steals, the makes carrying assists. DraftKings' weights and bonuses are
+rebounded (the offence's share first; of the rest a defender is credited with the defence's share, `p_dreb`: the five
+defenders' own rebound rates over the misses the opponent is expected to leave, held between 0.6 and 0.97, league 0.84;
+the remainder are team and dead-ball rebounds nobody is credited with), the turnovers the other side's steals, the
+makes carrying assists. DraftKings' weights and bonuses are
 scored on the joint draw (`scoring.py`, the one copy the live feed and the box scores use too). `fpts_mean` is the
 mean over the worlds, `fpts_std` the sd, the 101 quantiles the marginal (`nba_player.fpts_quantiles`); the store
 record keeps each stat's drawn mean (`sim_<stat>`: the **drawn** column of the stat cell's hover against the **plan**)
@@ -232,8 +235,8 @@ team projected after the solve marks it stale (grey) until the next Solve.
 4. The card's World line: the factor on the team's attempts says how far the plan's rates added up from the
    points the line allows (0.95 = every scorer came down 5%); a drawn total far from the line means the
    pace or the lines on file are off. The stat hover's **drawn** column against **plan** says which stat
-   the simulation moved (2026-11-09: rebounds run high, the World hands every opponent miss to the five on
-   the floor; the rerun's makes-and-outcomes layer is where that is measured).
+   the simulation moved; the rerun's makes-and-outcomes layer is where that is measured (rebounds ran 0.43 a
+   player high until the defence's share went in on 2026-11-13: [notes/rebounds_2026-11-13.md](notes/rebounds_2026-11-13.md)).
 5. Known gaps, in the order they matter: a priced bench player promoted to 34 minutes keeps the per-minute
    rate the books priced at 18 (the usage bump touches unpriced players only); trailing production lags
    trades early in the season. The 2026-10-22 explainer with the older allocator is in

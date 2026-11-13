@@ -66,6 +66,16 @@ def test_world_draws_a_game_that_adds_up():
     reb_total = sum((d["accs"][t].oreb + d["accs"][t].dreb).sum(axis=1) for t in ("AAA", "BBB"))
     assert (reb_total <= miss["AAA"] + miss["BBB"] + (d["accs"]["AAA"].fta - d["accs"]["AAA"].ftm).sum(axis=1) + (d["accs"]["BBB"].fta - d["accs"]["BBB"].ftm).sum(axis=1) + 1e-9).all()
     assert (d["accs"]["BBB"].stl.sum(axis=1) <= d["accs"]["AAA"].tov.sum(axis=1)).all() and (d["accs"]["AAA"].blk.sum(axis=1) <= miss["BBB"]).all()
+    # a miss the offence does not rebound is a defender's at the defence's share, never all of them: the rest are team rebounds
+    for off, de in (("AAA", "BBB"), ("BBB", "AAA")):
+        p = d["setups"][de].pie["p_dreb"]
+        assert W.P_DREB_LO <= p <= W.P_DREB_HI
+        left = miss[off] + (d["accs"][off].fta - d["accs"][off].ftm).sum(axis=1) - d["accs"][off].oreb.sum(axis=1)       # every missed free throw: an upper bound
+        got = d["accs"][de].dreb.sum(axis=1)
+        assert (got <= left).all() and got.mean() < p * left.mean() + 0.5
+        plan = float((d["setups"][de].w_dreb * d["setups"][de].base).sum())
+        if W.P_DREB_LO < p < W.P_DREB_HI:                                                           # unclipped: the draw's mean is the plan's
+            assert abs(got.mean() - plan) < 0.08 * plan + 1.0
     assert 0.0 <= (d["garbage_at"] >= 0).mean() <= 1.0
 
 

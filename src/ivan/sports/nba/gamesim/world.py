@@ -19,8 +19,9 @@ For each game:
      their per-minute rates times their coverage (multinomial); the pie is the roster's own expected totals per
      possession, with the attempts scaled by one team factor so the expected points are what the lines say the team
      scores (World.reconcile reports the factor);
-  D  the outcomes: makes by each player's percentages; the misses become offensive rebounds at the team's share and
-     defensive rebounds for the other five; the turnovers become the other team's steals; the missed field goals the
+  D  the outcomes: makes by each player's percentages; the misses become offensive rebounds at the team's share and,
+     of the rest, defensive rebounds for the other five at the defence's share (p_dreb: a miss nobody is credited with, a
+     team or dead-ball rebound, is about one in six of them); the turnovers become the other team's steals; the missed field goals the
      other team's blocks; the makes carry assists at the team's assisted share. The score accumulates, the lead decides
      garbage time (the closers out while it holds, back if it does not), a tie at the buzzer plays overtime with the five
      on the floor.
@@ -59,7 +60,10 @@ SEG_MIN = 6
 OT_MIN = 5
 STATS = ("pts", "fg3m", "reb", "ast", "stl", "blk", "tov")
 SCORING_KEYS = {"pts": "points", "fg3m": "fg3m", "reb": "rebounds", "ast": "assists", "stl": "steals", "blk": "blocks", "tov": "turnovers"}
-LEAGUE_DEFAULTS = dict(league_pace=98.5, oreb_share=0.26, ast_share=0.60, p_stl=0.55, p_blk=0.11, ft_miss_live=0.5, paces={})
+LEAGUE_DEFAULTS = dict(league_pace=98.5, oreb_share=0.26, ast_share=0.60, p_stl=0.55, p_blk=0.11, ft_miss_live=0.5, p_dreb=0.84, paces={})
+P_DREB_LO, P_DREB_HI = 0.6, 0.97    # the defence's share of the misses the offence did not rebound that a player is credited with (league 0.83-0.84 in
+                                    # the box scores: the rest are team and dead-ball rebounds). Until 2026-11-13 every one of them went to a player
+                                    # and the drawn rebounds ran about 5 a team-game over the plan
 FACTOR_LO, FACTOR_HI = 0.7, 1.4         # the team reconciliation factor on attempts
 
 
@@ -217,7 +221,7 @@ class TeamSetup:
     w_fg2: np.ndarray; w_fg3: np.ndarray; w_ft: np.ndarray; w_tov: np.ndarray; w_oreb: np.ndarray; w_dreb: np.ndarray
     w_ast: np.ndarray; w_stl: np.ndarray; w_blk: np.ndarray                                    # (k,) per-minute rates: the multinomial weights
     pct2: np.ndarray; pct3: np.ndarray; pctft: np.ndarray                                         # (k,)
-    pie: Dict[str, float]         # per possession: fg2a, fg3a, fta, tov; shares: oreb_share, ast_share, p_stl, p_blk
+    pie: Dict[str, float]         # per possession: fg2a, fg3a, fta, tov; shares: oreb_share, ast_share, p_stl, p_blk, p_dreb
     factor: float                 # the reconciliation factor on attempts
     exp_points: float             # the roster's expected points before reconciliation
     target_points: Optional[float]
@@ -236,7 +240,8 @@ def _grid_from(players: Sequence[PlayerIn]) -> pd.DataFrame:
 
 
 def setup_team(players: Sequence[PlayerIn], opp_players: Sequence[PlayerIn], n: int, rng: np.random.Generator, P: float, target_points: Optional[float],
-               prof_state: pd.DataFrame, profiles: PR.ShootingProfiles, foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], teams: dict) -> TeamSetup:
+               prof_state: pd.DataFrame, profiles: PR.ShootingProfiles, foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], teams: dict,
+               opp_target: Optional[float] = None) -> TeamSetup:
     players = [p for p in players if p.minutes > 0 or p.cells or p.fringe_p > 0]
     names = [p.name for p in players]; k = len(names)
     grid = _grid_from(players)
@@ -270,13 +275,22 @@ def setup_team(players: Sequence[PlayerIn], opp_players: Sequence[PlayerIn], n: 
     omins = np.array([p.minutes for p in opp_players if p.minutes > 0], dtype=float)
     o_fga = float(sum(q["fga_pm"] * m for q, m in zip(oprof, omins))); o_fgm = float(sum(((q["fga_pm"] - q["fg3a_pm"]) * q["fg2_pct"] + q["fg3a_pm"] * q["fg3_pct"]) * m for q, m in zip(oprof, omins)))
     o_tov = float(sum(p.rates.get("turnovers", 0.0) * p.minutes for p in opp_players if p.minutes > 0))
+    # the misses the opponent leaves for this defence, as its own offence will draw them (its attempts scaled to its points, less its
+    # own offensive rebounds): what this team's defensive rebounds are a share of
+    live = teams.get("ft_miss_live", 0.5)
+    o_points = float(sum(((q["fga_pm"] - q["fg3a_pm"]) * q["fg2_pct"] * 2.0 + q["fg3a_pm"] * q["fg3_pct"] * 3.0 + q["fta_pm"] * q["ft_pct"]) * m for q, m in zip(oprof, omins)))
+    o_factor = float(np.clip(opp_target / o_points, FACTOR_LO, FACTOR_HI)) if opp_target and o_points > 0 else 1.0
+    o_miss = ((o_fga - o_fgm) + live * float(sum(q["fta_pm"] * (1 - q["ft_pct"]) * m for q, m in zip(oprof, omins)))) * o_factor
+    o_oreb = float(sum(p.rates.get("rebounds", 0.0) * q["oreb_frac"] * m for p, q, m in zip([p for p in opp_players if p.minutes > 0], oprof, omins)))
+    handed = o_miss - min(o_oreb, 0.6 * o_miss)
     own_miss = exp(w_fg2 * (1 - pct2) + w_fg3 * (1 - pct3)) * factor + exp(w_ft * (1 - pctft)) * factor * teams.get("ft_miss_live", 0.5)
     own_fgm = exp(w_fg2 * pct2 + w_fg3 * pct3) * factor
     pie = dict(fg2a=exp(w_fg2) * factor / P, fg3a=exp(w_fg3) * factor / P, fta=exp(w_ft) * factor / P, tov=exp(w_tov) / P,
                oreb_share=float(np.clip(exp(w_oreb) / own_miss, 0.05, 0.6)) if own_miss > 0 else teams["oreb_share"],
                ast_share=float(np.clip(exp(w_ast) / own_fgm, 0.3, 0.85)) if own_fgm > 0 else teams["ast_share"],
                p_stl=float(np.clip(exp(w_stl) / o_tov, 0.2, 0.9)) if o_tov > 0 else teams["p_stl"],
-               p_blk=float(np.clip(exp(w_blk) / max(o_fga - o_fgm, 1e-6), 0.02, 0.3)) if o_fga > 0 else teams["p_blk"])
+               p_blk=float(np.clip(exp(w_blk) / max(o_fga - o_fgm, 1e-6), 0.02, 0.3)) if o_fga > 0 else teams["p_blk"],
+               p_dreb=float(np.clip(exp(w_dreb) / handed, P_DREB_LO, P_DREB_HI)) if handed > 0 else teams.get("p_dreb", LEAGUE_DEFAULTS["p_dreb"]))
     return TeamSetup(names=names, pids=[p.pid for p in players], F=F, fouls=fouls, base=base, avail=avail, w_fg2=w_fg2, w_fg3=w_fg3, w_ft=w_ft, w_tov=w_tov,
                      w_oreb=w_oreb, w_dreb=w_dreb, w_ast=w_ast, w_stl=w_stl, w_blk=w_blk, pct2=pct2, pct3=pct3, pctft=pctft, pie=pie, factor=factor,
                      exp_points=exp_points, target_points=target_points)
@@ -341,10 +355,11 @@ def _minute(rng, N: np.ndarray, cov: np.ndarray, T: TeamSetup, acc: _Acc, teams:
 
 
 def _defence(rng, off: dict, T_off: TeamSetup, cov_off: np.ndarray, acc_off: _Acc, T_def: TeamSetup, cov_def: np.ndarray, acc_def: _Acc) -> None:
-    """The offence's misses and turnovers land on both sides: offensive rebounds and the defence's rebounds, steals and blocks."""
+    """The offence's misses and turnovers land on both sides: offensive rebounds and the defence's rebounds, steals and blocks. A
+    miss the offence does not rebound is a defender's at the defence's share (pie p_dreb); the rest are nobody's (team rebounds)."""
     oreb = rng.binomial(off["miss"], T_off.pie["oreb_share"])
     acc_off.oreb += _split(rng, oreb, T_off.w_oreb[None, :] * cov_off)
-    acc_def.dreb += _split(rng, off["miss"] - oreb, T_def.w_dreb[None, :] * cov_def)
+    acc_def.dreb += _split(rng, rng.binomial(off["miss"] - oreb, T_def.pie["p_dreb"]), T_def.w_dreb[None, :] * cov_def)
     acc_def.stl += _split(rng, rng.binomial(off["tov"], T_def.pie["p_stl"]), T_def.w_stl[None, :] * cov_def)
     acc_def.blk += _split(rng, rng.binomial(off["fg_miss"], T_def.pie["p_blk"]), T_def.w_blk[None, :] * cov_def)
 
@@ -362,8 +377,10 @@ def draw_game(game: GameIn, n: int, rng: np.random.Generator, params: dict, team
     script = SC.draw(n, P, e_h, e_a, params, rng)
     poss_min = np.repeat(script["poss"], SEG_MIN, axis=1) / SEG_MIN                      # (n, 48) expected possessions per minute
     home_players = game.players.get(game.home, []); away_players = game.players.get(game.away, [])
-    setups = {game.home: setup_team(home_players, away_players, n, rng, P, targets[game.home], prof_state, profiles, foul_state, foul_rates, groups, teams),
-              game.away: setup_team(away_players, home_players, n, rng, P, targets[game.away], prof_state, profiles, foul_state, foul_rates, groups, teams)}
+    setups = {game.home: setup_team(home_players, away_players, n, rng, P, targets[game.home], prof_state, profiles, foul_state, foul_rates, groups, teams,
+                                    opp_target=targets[game.away]),
+              game.away: setup_team(away_players, home_players, n, rng, P, targets[game.away], prof_state, profiles, foul_state, foul_rates, groups, teams,
+                                    opp_target=targets[game.home])}
     accs = {t: _Acc(n, len(s.names)) for t, s in setups.items()}
     cov_plan = {t: s.F for t, s in setups.items()}
     garbage = {t: None for t in setups}                 # team -> (n, k, 48) coverage once the closers are pulled, or None
