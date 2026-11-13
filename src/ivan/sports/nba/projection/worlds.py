@@ -106,6 +106,15 @@ def game_inputs(session: Session, ctx: W.WorldContext) -> Dict[frozenset, W.Game
     return {frozenset((g.home, g.away)): g for g in W.slate_inputs(session, ctx.teams)}
 
 
+def stat_shares(values) -> list:
+    """A drawn stat as the share of the worlds at each whole value: [P(0), P(1), ..., P(max)], rounded to 4 places. What the
+    desk's stat hover draws as our distribution; a record of the draw, the draw itself is untouched."""
+    v = np.rint(np.asarray(values, dtype=float)).astype(int).clip(min=0)
+    if not len(v):
+        return []
+    return [round(float(x), 4) for x in np.bincount(v) / float(len(v))]
+
+
 def _frame(setup: W.TeamSetup, acc, n: int) -> Tuple[pd.DataFrame, dict]:
     stats = {"pts": acc.pts(), "fg3m": acc.fg3m, "reb": acc.oreb + acc.dreb, "ast": acc.ast, "stl": acc.stl, "blk": acc.blk, "tov": acc.tov}
     fpts = W.dk_points(stats)
@@ -117,8 +126,12 @@ def _frame(setup: W.TeamSetup, acc, n: int) -> Tuple[pd.DataFrame, dict]:
         rec = dict(player_name=nm, pid=int(setup.pids[j]), fpts_mean=float(x.mean()), fpts_std=float(x.std()),
                    quantiles=np.quantile(x, qs).round(2).tolist(), minutes_plan=float(setup.base[j]), minutes_sim=float(m.mean()),
                    minutes_p10=float(np.percentile(m, 10)), minutes_p90=float(np.percentile(m, 90)), p_zero=float((m <= 0).mean()))
+        dist = {}
         for short, long in STAT_COLS.items():
-            rec[f"sim_{long}"] = float(stats[short][:, j].mean())
+            v = stats[short][:, j]
+            rec[f"sim_{long}"] = float(v.mean())
+            dist[long] = stat_shares(v)
+        rec["stat_dist"] = dist
         rows.append(rec)
     frame = pd.DataFrame(rows).set_index("player_name") if rows else pd.DataFrame(columns=["pid", "fpts_mean", "fpts_std", "quantiles"]).rename_axis("player_name")
     samples = dict(names=list(setup.names), pids=[int(x) for x in setup.pids], fpts=fpts.astype(np.float32), minutes=minutes.astype(np.float32))

@@ -225,13 +225,19 @@ the solved worlds whose optimal lineup holds him, bold when the mean-projection 
 projected after the solve, a dash before the first Solve), **pub** and its **val**, **own**. The foot row adds each
 column up for the team (fpts: the World's, the plan's in the hover; opt: the worlds solved).
 
-Every stat cell is a pin box and a hover. **Hover**: the books' lines for this game, one row per book and main line, the lowest line first
-(when the book posted it, the line, the over and under prices) and the alternates condensed to one row per book (the
-lines within 3 of the consensus line with the over price; alternates price overs only), headed by ours, the books' mean
-and the minutes it was priced over. The lines are fetched the first time the cell is hovered (`GET
-/team/<TEAM>/props/<player>/<stat>`, `_nba_props.html`; about a second the first time after the odds moved, then at once),
+Every stat cell is a pin box and a hover. **Hover**: a chart of that stat, **his games** (blue: the share of the games he
+played this season at each value; last season's are added when he has under five) against **ours tonight** (orange: the
+share of the World's worlds at each value) as side-by-side bars over the same bins on one axis, the books' consensus
+line dashed across it. Whole values, binned in equal steps once the range passes 16 bars (points in twos or threes); the
+last 1% of our worlds is left off so a far tail does not squeeze the bars. The hover takes no pointer, so the numbers are
+in the legend: how many games, each side's mean and the minutes it came in. Above it ours, the books' mean and the
+minutes it was priced over, the line and its prices; under it each book's main line with its over / under in one row
+(`Desk.stat_hover` → `desk.rows.stat_chart`). Our distribution is recorded when the game is drawn
+(`projection.worlds.stat_shares`, the store record's `stat_dist`); a team projected before this was recorded shows his
+games alone and says so until any edit or refresh projects it again. The hover is fetched the first time the cell is
+hovered (`GET /team/<TEAM>/props/<player>/<stat>`, `_nba_props.html`; about a second the first time after the odds moved, then at once),
 so the card itself and Refigure stay quick. A line the book posted before the player was last downgraded (to an out status, or out
-of the starting five) is struck through and the header says how many are set aside and when he moved: those lines priced his
+of the starting five) is struck through in the books' row and the header says how many are set aside and when he moved: those lines priced his
 old role and the projection does not read them; an upgrade never sets lines aside and one back out of a downgrade counts them
 again (`changes.mark_status_changes` at the refresh, `touch_status` on a hand starter call; [../nba/projections.md](../nba/projections.md),
 Market rates). **Type a total** (9 rebounds) and that stat is his for the game: its per-minute rate

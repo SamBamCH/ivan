@@ -503,7 +503,8 @@ def test_nba_grid_stat_columns_pin_a_total(open_site):
     assert 'hx-trigger="mouseenter once"' in r.text and "loading the books' lines" in r.text  # the hover is fetched when hovered
     key = d.proj[team].index[0]
     h = open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/points")
-    assert h.status_code == 200 and ("<th>book</th>" in h.text or "not priced for this game: history" in h.text)   # the books' lines, or why not
+    assert h.status_code == 200 and 'class="statchart"' in h.text and "<svg" in h.text and "his games" in h.text and "ours tonight" in h.text   # the chart
+    assert "books: " in h.text or "not priced for this game: history" in h.text                                    # the books' lines, or why not
     assert open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/nope").status_code == 404
     old = override_of(d.overrides, key)
     before_pts, before_reb = float(d.proj[team].loc[key, "proj_points"]), float(d.proj[team].loc[key, "proj_rebounds"])

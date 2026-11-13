@@ -17,6 +17,38 @@ ALT_SPAN = 3.0                                                                  
 STAT_GAP = 0.15                                                                              # a stat cell is amber when our projection sits this far (share) from the books' mean, at least 1
 
 
+CHART_BINS = 16            # the stat chart's bars: a stat whose range is wider is binned (points in twos or threes)
+CHART_MIN_GAMES = 5        # fewer games than this in the season and last season's are added to the history
+
+
+def stat_chart(history: list, shares: Optional[list], line: Optional[float] = None) -> dict:
+    """
+    The stat hover's chart: the player's own games and our drawn distribution over the same bins. `history` = the stat in each
+    game he played, `shares` = the World's share of worlds at each whole value (projection.worlds.stat_shares; None when the
+    record has none). Whole values, binned in equal steps when the range passes CHART_BINS. Returns {bins: [{lo, hi, label,
+    hist, ours}] (shares of games / of worlds), step, ymax, n_hist, hist_mean, ours_mean, line_at (the books' line as a
+    position in bins from the left edge, None when off the chart), has_ours}.
+    """
+    h = [int(round(float(x))) for x in history if x is not None and not pd.isna(x)]
+    p = [float(x) for x in (shares or [])]
+    tail = 0.0
+    while len(p) > 1 and tail + p[-1] < 0.01:                 # the last 1% of the worlds: a tail the eye cannot see that only widens the bins
+        tail += p.pop()
+    top = max([max(h) if h else 0, len(p) - 1, int(np.ceil(line)) if line is not None else 0, 1])
+    step = int(np.ceil((top + 1) / CHART_BINS))
+    n_bins = int(np.ceil((top + 1) / step))
+    bins = []
+    for k in range(n_bins):
+        lo, hi = k * step, (k + 1) * step - 1
+        bins.append(dict(lo=lo, hi=hi, label=str(lo) if step == 1 else f"{lo}-{hi}",
+                         hist=(sum(1 for x in h if lo <= x <= hi) / len(h)) if h else 0.0, ours=float(sum(p[lo:hi + 1]))))
+    ymax = max([b["hist"] for b in bins] + [b["ours"] for b in bins] + [0.05])
+    tot = sum(p)
+    return dict(bins=bins, step=step, ymax=ymax, n_hist=len(h), hist_mean=(sum(h) / len(h)) if h else None,
+                ours_mean=(sum(i * x for i, x in enumerate(p)) / tot) if tot > 0 else None, has_ours=tot > 0,
+                line_at=None if line is None else (float(line) + 0.5) / step)
+
+
 def _split_props(rows: list, line) -> tuple[list, list, int]:
     """The hover's two parts from every (book, line) on file: the main lines by line, lowest first (one row each: posted, book, line,
     over, under; a row posted before the player's status moved is kept and flagged `stale`) and the alternates condensed to one row per
@@ -222,15 +254,27 @@ class RowsMixin:
         return rows
 
     def stat_hover(self, team: str, name: str, stat: str) -> dict:
-        """The stat cell's hover (fetched when the cell is hovered): ours, the books' mean over the minutes it was priced at, the
-        consensus line and prices, every book's main line (posted, line, over, under; set-aside lines flagged stale) and the
-        alternates condensed per book, with how many lines are set aside and when the player was last downgraded."""
+        """The stat cell's hover (fetched when the cell is hovered): a chart of the player's own games against our drawn distribution
+        (stat_chart: his games played this season, last season's added when there are under CHART_MIN_GAMES; ours from the World's
+        record), the books' line on it; beside it ours, the books' mean over the minutes it was priced at, the consensus line and
+        prices, each book's main line (set-aside lines flagged stale), how many lines are set aside and when he was last downgraded."""
         m = self.market_rows.get(name, {}).get(stat, {})
         r = self.proj.get(team)
         pv = None if r is None or name not in r.index else float(r.loc[name, f"proj_{stat}"])
         p = next((x for x in self.players(team) if normalize_name(x.name) == name), None)
         main, alts, n_stale = _split_props(self.prop_rows_for(name, stat), m.get("line"))
-        return dict(stat=stat, label=STAT_LABELS.get(stat, stat), proj=pv, mean=m.get("mean"), basis=m.get("basis"), line=m.get("line"), odds=m.get("odds"),
+        box = self.slate.box
+        mine = box[(box.player_name == name) & box.played]
+        today = datetime.now().date(); start = datetime(today.year if today.month >= 10 else today.year - 1, 10, 1).date()
+        season = mine[mine.game_date >= start]
+        span = "this season"
+        if len(season) < CHART_MIN_GAMES and len(mine) > len(season):
+            season = mine[mine.game_date >= datetime(start.year - 1, 10, 1).date()]; span = "this season and last"
+        dist = None if r is None or name not in r.index or "stat_dist" not in r.columns else r.loc[name, "stat_dist"]
+        chart = stat_chart(list(season[stat]) if stat in season.columns else [], dist.get(stat) if isinstance(dist, dict) else None, m.get("line"))
+        chart.update(span=span, hist_min=float(season.minutes.mean()) if len(season) else None,
+                     ours_min=None if r is None or name not in r.index else float(r.loc[name, "minutes"]))
+        return dict(stat=stat, label=STAT_LABELS.get(stat, stat), proj=pv, mean=m.get("mean"), basis=m.get("basis"), line=m.get("line"), odds=m.get("odds"), chart=chart,
                     rows=main, alts=alts, stale=n_stale,
                     status_at=None if p is None or p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"))
 
