@@ -3,11 +3,11 @@ The NBA desk: the slate page, the team page, the pipeline, the late swap, the ex
 One module per concern; the routes register on the shared app when the package is imported:
 
     core.py       the FastAPI app, one Desk per slate bound per request (desk, LOCK), the job runner, consumer / limits, render helpers, sport()
-    pages.py      the shell, the slate page (read only), the players view, the team page, the board
+    pages.py      the shell, the slate page (read only), the team page, the board
     team.py       the team page's edit routes (pins, starters, the grid, scenarios, notes, late news)
     pipeline.py   Refresh, Snapshot, the chain, generate / sim / choose / field jobs, news + autopilot switches, entries, slate switch
     lateswap.py   the post-lock view
-    exposures.py  the exposures views
+    exposures.py  the players table of pre-lock and post-lock (every player's row and his exposure in a set of lineups)
     exports.py    CSV exports and downloads
     rerun.py      the backtest view's "current code" block: the game simulation rerun from a past slate's tip record (a job), scored per layer
     backtest.py   the backtest view's panels (a team, a contest), its readiness strip and the fetch jobs for what a past slate is missing

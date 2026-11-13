@@ -45,7 +45,7 @@ survive a refresh; statuses and props change underneath them. Fetch props once t
 most of the slate (early evening for a 7pm lock) and again if the news moved. Each held slate is refreshed on its own:
 a day with a main slate and a Turbo or Night slate needs each one refreshed (the autopilot tick does every held slate
 that has not locked). When a sibling slate of the day has been refreshed more recently and its pool carries statuses this
-one does not, **needs you** says so first, names the players and offers the refresh, and the players carry the flag on
+one does not, a line under the actions says so, names the players and offers the refresh, and the players carry the flag on
 their cards (2026-11-06: the Turbo slate, last refreshed at 13:10, kept Barnes questionable at 31 minutes while the main
 slate refreshed at 18:40 had him OUT).
 
@@ -77,9 +77,11 @@ contest step to run.
 ## 3. Work the teams
 
 The slate page reads; a team is worked on its own page (a chip in the games strip, a name in the news table or the
-players view: `/nba/<day>/<slate>/<TEAM>/`). You open a team to map its minutes, when the slate page's **needs you**
-list names it (changed since mapped, an open question or no lineup near the tip, a new headline), or when news breaks.
-Everything else stays green and unopened.
+players table: `/nba/<day>/<slate>/<TEAM>/`). You open a team to map its minutes, when its chip in the games strip is
+not green (grey unmapped, yellow an open question, red changed since mapped, a dot for news), or when news breaks.
+On the team page the past games that are no picture of the usual rotation are shaded (amber not close, red a regular
+absent or gone early; `scripts/nba/game_context.py`), so the ones to map from are the unshaded ones.
+What a refresh or a job is doing, and what it found, is on the bar's job strip and in the slate page's terminal.
 
 **Every edit on a team page writes the team into the slate's pool at once** (`Desk.reproject` = `ingest.project_team`: the
 team's `nba_player` rows and its record in the slate's projection store, `data/nba/slates/<dg>/projection/<TEAM>.pkl`,
@@ -157,7 +159,7 @@ log stays in the pipeline panel. The bar's job strip shows the running job on ev
 **How long will it take?** Before a job starts the desk estimates it from this machine's past runs
 (`ivan.sports.nba.slate.job_time`, shown under the Generate and Sim knobs and in the job's status line) and checks the end against
 the slate's lock less 5 minutes: a run that would end inside that margin is flagged red and starts with a **heads up** in
-the flash; nothing is refused (2026-11-03: a sim too big for the time left missed lock; the refusal that followed was
+the terminal; nothing is refused (2026-11-03: a sim too big for the time left missed lock; the refusal that followed was
 dropped on 2026-11-05 when it held a 56 s sim two minutes before lock). From a terminal:
 
 ```bash

@@ -2,10 +2,10 @@
    The pipeline routes re-render this partial (#pipeline). Generate's and sim's knobs open when the pointer rests on their
    button (_nba_knobs.html); choose's knobs are per contest (the contests section), the slate book's one knob (the bankroll)
    sits under its button. Generate and Sim take the snapshot (the
-   capture rows + the projections CSV, ingest.capture_pool) themselves; there is no button for it. #}
+   capture rows + the projections CSV, ingest.capture_pool) themselves; there is no button for it. What a press answers (queued,
+   a heads up, a refusal) is a line of the terminal under the bar (_nba_pipeline_status.html), never a banner. #}
 {% from "_nba_knobs.html" import generate_knobs, sim_knobs %}
 <div id="pipeline" class="actions">
-  {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
   <div class="act-row">
     <span class="brand-sm">Actions</span>
     <span class="step"><i>1</i>

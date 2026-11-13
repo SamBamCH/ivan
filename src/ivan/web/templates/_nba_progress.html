@@ -1,9 +1,0 @@
-{# the banner while a slate's refresh, load, restore or pull runs in the background (ivan.web.nba.pipeline._begin): what it is,
-   how long so far, the last lines it logged; polls itself every 2 s (the board's after=busy) and the page reloads when it is done #}
-<div id="refresh-banner" class="progress" hx-get="{{ root }}/board?view={{ view }}&after=busy" hx-trigger="every 2s" hx-swap="outerHTML">
-  {% if progress %}
-  <div class="head"><span class="spin"></span> <b>{{ progress.what }}…</b> <span class="muted">{{ progress.elapsed }} s</span>
-    <span class="muted small">the page keeps reading; edits wait; it reloads on the new pool when this is done</span></div>
-  {% if progress.lines %}<div class="lines">{% for l in progress.lines[-4:] %}<div>{{ l }}</div>{% endfor %}</div>{% endif %}
-  {% endif %}
-</div>

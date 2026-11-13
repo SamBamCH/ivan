@@ -11,6 +11,7 @@ holds the message its page shows.
 from __future__ import annotations
 
 import contextvars
+import html
 import os
 import re
 import threading
@@ -44,7 +45,7 @@ templates = Jinja2Templates(directory=HERE / "templates")
 slate = APIRouter(prefix="/{day}/{key}")                         # every action of one slate; ivan.web.nba includes it once the route modules are loaded
 
 KEY, LABEL = "nba", "NBA"
-VIEWS = [("games", "pre-lock"), ("players", "players"), ("lateswap", "post-lock"), ("backtest", "backtest")]
+VIEWS = [("games", "pre-lock"), ("lateswap", "post-lock"), ("backtest", "backtest")]       # the players table is a section of pre-lock and post-lock
 SPORT: Optional[Sport] = None                                 # set by sport(); the frame reads it
 NOT_AN_EDIT = ("/refresh", "/reload", "/news", "/autopilot", "/login", "/publish", "/slate", "/board", "/pipeline", "/export", "/download")
 
@@ -53,11 +54,12 @@ NOT_AN_EDIT = ("/refresh", "/reload", "/news", "/autopilot", "/login", "/publish
 DESKS: dict[int, Desk] = {}
 _DESKS_LOCK = threading.Lock()
 LOADING: dict[int, str] = {}                                  # a slate being fetched that has no desk yet: draft group -> what is happening
-PROGRESS: dict[int, dict] = {}                                # every slate with a refresh, load, restore or pull running: {what, started, lines}
+PROGRESS: dict[int, dict] = {}                                # every slate with a refresh, load, restore or pull running: {what, started, lines, job}
 
 
 def progress_of(dg: Optional[int]) -> Optional[dict]:
-    """The running background work on a slate, with elapsed seconds, for the banner; None when nothing runs."""
+    """The running background work on a slate, with elapsed seconds, for the page of a slate being loaded for the first time
+    (a held slate's refresh is read from its job: the bar's strip and the slate page's terminal); None when nothing runs."""
     if dg is None or int(dg) not in PROGRESS:
         return None
     pr = PROGRESS[int(dg)]
@@ -200,7 +202,9 @@ def _busy(request: Request):
     return None
 
 
-SHOWS_FLASH = {"_nba_board.html", "_nba_side.html", "_nba_rotation.html", "_nba_pipeline.html"}   # the templates that display the flash: only they consume it
+SHOWS_FLASH = {"_nba_side.html", "_nba_rotation.html"}                    # the team card shows the desk's pending messages once, next to the edit
+READS_LOG = {"_nba_board.html", "_nba_pipeline.html", "_nba_pipeline_status.html"}   # the slate page shows them in its terminal (desk_log): no banner
+DESK_LOG_LINES = 8
 
 
 def sport_root(request: Request) -> str:
@@ -224,7 +228,10 @@ def _render(request: Request, template: str, **ctx):
         d.flash.clear()
     elif template not in SHOWS_FLASH:
         flash = []
-    return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "root": slate_root(request), "sport_root": sport_root(request),
+        if d is not None and template in READS_LOG:
+            d.flash.clear()                                           # read in the terminal: a team card opened later does not repeat them
+    desk_log = list(getattr(d.flash, "log", []))[-DESK_LOG_LINES:] if d is not None else []
+    return templates.TemplateResponse(request, template, {"now": datetime.now(), "flash": flash, "desk_log": desk_log, "root": slate_root(request), "sport_root": sport_root(request),
                                                           "here": _here(request), "consumer": CONSUMER, "limited": LIMITED, "limits": LIMITS,
                                                           "job_max_minutes": JOB_MAX_MINUTES, "refreshing": (d.busy if d is not None else None),
                                                           "progress": progress_of(getattr(request.state, "dg", None)), **ctx})
@@ -325,7 +332,8 @@ JOB_STRIP_DONE_SECONDS = 90        # a finished job stays on the bar's strip thi
 
 def job_strip(now: Optional[float] = None) -> Optional[dict]:
     """The bar's one-line read of the sport's jobs (any slate's): the running or queued job, else the one that ended within
-    JOB_STRIP_DONE_SECONDS; None when there is nothing to say. {name, status, slate, label, duration, estimate, active, failed}."""
+    JOB_STRIP_DONE_SECONDS; None when there is nothing to say. {name, status, slate, label, duration, estimate, active, failed, what, line}:
+    `what` is an in-process job's own description (refreshing the pool and the props), `line` the last line a running job logged."""
     now = now if now is not None else time.time()
     jobs = runner.all()
     j = next((x for x in jobs if x.status == "running"), None) or next((x for x in jobs if x.status == "queued"), None)
@@ -339,14 +347,20 @@ def job_strip(now: Optional[float] = None) -> Optional[dict]:
         lock = S.meta_time(S.read_meta(int(dg)), "lock")
         label = f"{lock:%m-%d %H:%M}" if lock else f"slate {dg}"
     est = (j.meta or {}).get("estimate")
+    line = ""
+    if j.status == "running":
+        tail = [x.strip() for x in runner.read_log(j, tail_lines=6).split("\n") if x.strip() and not x.startswith("$ ")]
+        line = tail[-1] if tail else ""
     return dict(id=j.id, name=j.name, status=j.status, slate=dg, label=label, duration=j.duration, estimate=est,
-                active=j.is_active, failed=j.status in ("failed", "cancelled"))
+                active=j.is_active, failed=j.status in ("failed", "cancelled"), what=(j.meta or {}).get("what") or "", line=line)
 
 
 @app.get("/jobstrip", response_class=HTMLResponse)
 def jobstrip(request: Request):
-    """The frame's job strip (ivan.web.sports.Sport.job_strip): one line on the sport's running job, with its slate as a link; empty
-    when nothing runs and nothing just ended. data-active="1" tells the bar to poll faster."""
+    """The frame's job strip (ivan.web.sports.Sport.job_strip), on every page of the sport: one line on the running job (a
+    pipeline step, a fetch, or a slate's refresh / pull / restore / first load, which are jobs too), its slate as a link to the
+    page whose terminal has the log, the seconds so far and the last line it logged; empty when nothing runs and nothing just
+    ended. data-active="1" tells the bar to poll faster."""
     j = job_strip()
     if j is None:
         return HTMLResponse('<span class="jobstrip-in" data-active="0"></span>')
@@ -357,8 +371,10 @@ def jobstrip(request: Request):
         left = f" · ≈{max(0, int(j['estimate'] - j['duration']))}s left"
     cls = "running" if j["active"] else ("failed" if j["failed"] else "done")
     label = f'<a href="{href}">{j["label"]}</a> · ' if j["label"] else ""
-    return HTMLResponse(f'<span class="jobstrip-in" data-active="{1 if j["active"] else 0}" title="the sport\'s job: it runs on in the background while you move between pages; the slate\'s pipeline panel has its log">'
-                        f'<i class="dot {cls}"></i> {label}<b class="{cls}">{j["name"]}</b> {j["status"]}{dur}{left}</span>')
+    what = html.escape(j["what"]); line = html.escape(j["line"][-70:])
+    tail = f' <span class="jobline">{line}</span>' if line else ""
+    return HTMLResponse(f'<span class="jobstrip-in" data-active="{1 if j["active"] else 0}" title="{what + ": " if what else ""}the sport\'s job: it runs on in the background while you move between pages; the slate page\'s terminal has its log">'
+                        f'<i class="dot {cls}"></i> {label}<b class="{cls}">{html.escape(j["name"])}</b> {j["status"]}{dur}{left}{tail}</span>')
 
 
 ACTIONS = [dict(label="Fetch upcoming slates", path="/fetch-upcoming",

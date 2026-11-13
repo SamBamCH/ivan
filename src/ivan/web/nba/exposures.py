@@ -1,5 +1,6 @@
 """
-The exposures views: the candidate pool, a simmed contest's field or the chosen entries as histograms and per-player exposure (GET /exposures), and the contests side panel.
+The players table of pre-lock and post-lock (GET /players): every player of the slate with his row and his exposure in one set of
+lineups (the candidate pool, a simmed contest's field or the chosen entries), and that set's histogram.
 """
 from __future__ import annotations
 
@@ -8,116 +9,29 @@ from datetime import datetime
 from typing import Optional
 import numpy as np
 import pandas as pd
-from fastapi import Form, Request
+from fastapi import Request
 from fastapi.responses import HTMLResponse
 from ivan.sports.nba.models import HistoricalContest, Lineup, NBAPlayer
 from ivan.sports.nba import slates as S
 from .core import _render, desk, LOCK, slate
 from .outputs import _slate_contest_ids
-from ivan.sports.nba.desk import QUESTION_STATUSES
 
 
-@slate.get("/exposures", response_class=HTMLResponse)
-def exposures_section(request: Request, set: str = "pool", metric: str = "proj", bins: str = ""):
-    """The exposures section of pre-lock and post-lock (loaded when opened; its switches reload only the section)."""
+@slate.get("/players", response_class=HTMLResponse)
+@slate.get("/exposures", response_class=HTMLResponse)                    # the section's address before the two tables were one
+def players_section(request: Request, set: str = "", metric: str = "proj", bins: str = "", hist: str = ""):
+    """The players section of pre-lock and post-lock (loaded after the board; its switches reload only the section). `set` picks
+    whose exposure the table counts and is remembered on the slate's desk; blank = the last one picked, else the chosen entries
+    when there are picks, else the candidate pool. hist=1 keeps the histogram open across a switch."""
+    from .core import _team_url
     with LOCK:
         if desk.busy:
-            return HTMLResponse('<div class="loading">the slate is loading</div>')
-        ex = _exposures_view(set, metric, int(bins) if str(bins).strip().isdigit() else None)
-        return _render(request, "_nba_exposures.html", exposures=ex)
-
-
-def _exposures_full(mine: Optional[set] = None) -> Optional[dict]:
-    """
-    The exposures view: every player in the newest choose run that covered this slate's contests, joined to the pool as it
-    stands now. Per player: entries holding him, exposure, the field's ownership and the leverage against it, the
-    projection he was chosen on and ours now (the delta is what the news did to him since), minutes now, the public
-    number, status (a chosen player now OUT is the first thing to see), value. Per team: the entries' exposure summed.
-    """
-    mine = _slate_contest_ids() if mine is None else mine
-    for classic in sorted(S.output_dir().glob("chosen_entries.classic.*.csv"), reverse=True):
-        stamp = classic.name.split(".")[2]
-        lu = S.output_dir() / f"chosen_entries.lineups.{stamp}.csv"
-        if not lu.exists():
-            continue
-        try:
-            L = pd.read_csv(lu)
-        except Exception:   # noqa: BLE001
-            continue
-        L = L[L["contest_id"].astype(int).isin(mine)]
-        if not len(L):
-            continue
-        n_entries = int(L["entry_id"].nunique())
-        e = (L.groupby(["player_id"]).agg(name=("name", "first"), team=("team", "first"), position=("position", "first"), salary=("salary", "first"),
-                                           n=("entry_id", "nunique"), proj_then=("projection", "first")).reset_index())
-        now = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
-        rows = []
-        for r in e.itertuples():
-            p = now.get(int(r.player_id))
-            proj_now = None if p is None or p.fpts_mean is None else float(p.fpts_mean)
-            own = None if p is None or p.ownership in (None, 0) else float(p.ownership)
-            exp = float(r.n) / max(1, n_entries)
-            rows.append(dict(player_id=int(r.player_id), name=r.name, team=r.team, position=r.position, salary=int(r.salary or 0), n=int(r.n), exposure=exp,
-                             own=own, leverage=None if own is None else exp * 100 - own, status=((p.status or "").upper() if p and p.status and p.status != "None" else ""),
-                             in_pool=p is not None, proj_then=None if pd.isna(r.proj_then) else float(r.proj_then), proj_now=proj_now,
-                             delta=None if proj_now is None or pd.isna(r.proj_then) else proj_now - float(r.proj_then),
-                             minutes=None if p is None or p.minutes_proj is None else float(p.minutes_proj),
-                             pub=None if p is None or getattr(p, "pub_fpts", None) is None else float(p.pub_fpts),
-                             value=None if proj_now is None or not r.salary else proj_now / (float(r.salary) / 1000.0)))
-        rows.sort(key=lambda x: (-x["exposure"], -(x["proj_now"] or 0)))
-        teams = {}
-        for x in rows:
-            t = teams.setdefault(x["team"], dict(team=x["team"], exposure=0.0, players=0, out=0))
-            t["exposure"] += x["exposure"]; t["players"] += 1; t["out"] += 1 if x["status"] in ("OUT", "O", "IR", "SUSP") else 0
-        return dict(stamp=stamp, when=datetime.strptime(stamp, "%Y%m%d-%H%M%S"), entries=n_entries, contests=int(L["contest_id"].nunique()), rows=rows,
-                    teams=sorted(teams.values(), key=lambda t: -t["exposure"]), out=[x for x in rows if x["status"] in ("OUT", "O", "IR", "SUSP")],
-                    questionable=[x for x in rows if x["status"] in QUESTION_STATUSES])
-    return None
-
-
-def _pool_exposures(top: int = 24) -> Optional[dict]:
-    """The candidate pool's exposures: how many of the generated lineups hold each player, joined to the pool as it stands."""
-    from ivan.core.utils import coerce_player_ids
-    dg = next((p.draft_group_id for p in desk.slate.players if p.draft_group_id), None)
-    q = desk.session.query(Lineup.player_ids_list)
-    if dg is not None:
-        q = q.filter((Lineup.draft_group_id == int(dg)) | (Lineup.draft_group_id.is_(None)))
-    counts: dict = {}; n = 0
-    for (ids,) in q.all():
-        n += 1
-        for pid in coerce_player_ids(ids):
-            counts[int(pid)] = counts.get(int(pid), 0) + 1
-    if not n:
-        return None
-    now = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
-    rows = []
-    for pid, k in counts.items():
-        p = now.get(pid)
-        if p is None:
-            continue
-        rows.append(dict(name=p.name, team=p.team, position=p.position, n=k, exposure=k / n, own=None if p.ownership in (None, 0) else float(p.ownership),
-                         proj=None if p.fpts_mean is None else float(p.fpts_mean), status=((p.status or "").upper() if p.status and p.status != "None" else "")))
-    rows.sort(key=lambda x: (-x["exposure"], -(x["proj"] or 0)))
-    return dict(lineups=n, players=len(rows), rows=rows[:top])
-
-
-def _side_ctx() -> dict:
-    """The dashboard's side panel: the exposures of the candidate pool or of the chosen entries (desk.exp_mode), compact."""
-    mode = getattr(desk, "exp_mode", "entries")
-    if mode == "pool":
-        return dict(mode=mode, pool=_pool_exposures(), entries=None)
-    ex = _exposures_full()
-    if ex:
-        ex = dict(ex, rows=ex["rows"][:24])
-    return dict(mode=mode, pool=None, entries=ex)
-
-
-@slate.post("/pipeline/exposures", response_class=HTMLResponse)
-def pipeline_exposures(request: Request, mode: str = Form("entries")):
-    """Flip the side panel between the candidate pool's exposures and the chosen entries'."""
-    with LOCK:
-        desk.exp_mode = "pool" if mode == "pool" else "entries"
-        return _render(request, "_nba_pipeline_side.html", side=_side_ctx(), oob=False)
+            return HTMLResponse(f'<div class="loading"><span class="spin"></span> {desk.busy}: the table comes back when it is done</div>')
+        if set:
+            desk.exp_set = set
+        ex = _exposures_view(getattr(desk, "exp_set", "") or "", metric, int(bins) if str(bins).strip().isdigit() else None)
+        ex["hist_open"] = bool(hist)
+        return _render(request, "_nba_players.html", exposures=ex, team_url=lambda t: _team_url(request, t))
 
 
 HIST_COLORS = {"field": "#2a78d6", "pool": "#eb6834", "entries": "#1baf7a"}   # the reference palette's first three slots (validated together)
@@ -293,12 +207,14 @@ def _target_line(target: dict, edges: list, scale: float = 1.0) -> Optional[dict
     return dict(shares=[float(x) / tot for x in c], contests=target["contests"], span=target["span"], inside=float(c.sum() / tot))
 
 
-def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[int] = None) -> dict:
+def _exposures_view(set_key: str = "", metric: str = "proj", bins: Optional[int] = None) -> dict:
     """
-    The exposures screen: one set of lineups in view (the candidate pool, a simmed contest's sampled field, or the chosen
-    entries of one contest or all), one histogram of a per-lineup metric over it (projected total under our projection,
-    ownership sum under the field's ownership, or salary used), and every player in the set with the team card's full row
-    plus his exposure in the set, ownership and leverage (and for entries the projection at pick with the delta).
+    The players table: every player of the slate with the team card's full row, plus his exposure in one set of lineups (the
+    candidate pool, a simmed contest's sampled field, or the chosen entries of one contest or all), his leverage against the
+    field's ownership (and for entries the projection at pick with the delta). A player the set does not hold has exposure 0
+    (in_set False). With it one histogram of a per-lineup metric over the set (projected total under our projection, ownership
+    sum under the field's ownership, or salary used). An unknown or blank set = the chosen entries when there are picks, else
+    the pool. Rows: the set's players by exposure, then the rest by ownership.
     """
     players = {int(p.id): p for p in desk.session.query(NBAPlayer).all()}
     means = {i: float(p.fpts_mean or 0.0) for i, p in players.items()}
@@ -317,7 +233,7 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[
             options.append(dict(key=f"entries:{cid}", label=f"chosen entries · {name[:46]} · {k} entries", group="entries"))
     keys = {o["key"] for o in options}
     if set_key not in keys:
-        set_key = "pool"
+        set_key = "entries" if "entries" in keys else "pool"
     weights = None; label = next(o["label"] for o in options if o["key"] == set_key); then = {}
     if set_key == "pool":
         lineups = [np.asarray(x, dtype=int) for x in _pool_lineups()]
@@ -366,16 +282,15 @@ def _exposures_view(set_key: str = "pool", metric: str = "proj", bins: Optional[
         for r in desk.team_rows(t):
             by_id[int(r["id"])] = r
     rows = []
-    for pid, k in counts.items():
-        r = by_id.get(pid)
-        if r is None:
-            continue
-        exp = k / tot
-        x = dict(r); x.update(n_in=int(round(k)), exposure=exp, leverage=None if r.get("own") is None else exp * 100 - r["own"],
+    for pid, r in by_id.items():
+        k = counts.get(pid, 0.0)
+        exp = k / tot if n else 0.0
+        x = dict(r); x.update(n_in=int(round(k)), exposure=exp, in_set=k > 0, leverage=None if (not n or r.get("own") is None) else exp * 100 - r["own"],
                              proj_then=None if pid not in then or pd.isna(then[pid]) else float(then[pid]))
         x["delta"] = None if x["proj_then"] is None or r.get("fpts") is None else r["fpts"] - x["proj_then"]
         rows.append(x)
-    rows.sort(key=lambda x: (-x["exposure"], -(x["fpts"] or 0)))
-    return dict(set=set_key, metric=metric, bins=bins, options=options, label=label, n=int(round(tot)) if n else 0, rows=rows, hist=hist, title=title, unit=unit, target=target,
+    rows.sort(key=lambda x: (-x["exposure"], -(x["own"] or 0), -(x["fpts"] or 0)))
+    return dict(set=set_key, metric=metric, bins=bins, options=options, label=label, n=int(round(tot)) if n else 0, n_in=sum(1 for x in rows if x["in_set"]),
+                rows=rows, hist=hist, title=title, unit=unit, target=target,
                 is_entries=set_key.startswith("entries"), teams=sorted({x["team"] for x in rows}),
                 color=HIST_COLORS["entries" if set_key.startswith("entries") else ("field" if set_key.startswith("field") else "pool")])

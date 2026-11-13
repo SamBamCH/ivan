@@ -240,7 +240,7 @@
   table.bt-grid td.c.both { background:var(--accent) } table.bt-grid td.c.act { background:#34a853 } table.bt-grid td.c.ours { background:#f3b2ad }
   .bt-rot .sw { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:-1px; margin:0 2px 0 6px } .bt-rot .sw.both { background:var(--accent) } .bt-rot .sw.act { background:#34a853 } .bt-rot .sw.ours { background:#f3b2ad }
   .bt tr.final td { font-weight:700; border-top:2px solid var(--line) }
-  .needs .sib { font-size:13px; margin:4px 0 6px; padding:6px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:6px } .needs .sib form { display:inline; margin-left:8px } .needs .sib .warn { color:var(--warn) }
+  .sib { font-size:13px; margin:0 0 12px; padding:6px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:6px } .sib form { display:inline; margin-left:8px } .sib .warn { color:var(--warn) }
   .bt tr.pick { cursor:pointer } .bt tr.pick:hover td { background:#eef4ff } .bt tr.pick.on td { background:#e3ecfb }
   .bt-panel { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; padding:8px 12px; margin:8px 0 12px }
   .bt-panel .ph { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap } .bt-panel .ph h3 { margin:0 } .bt-panel .ph .x { margin-left:auto; font:inherit; font-size:16px; line-height:1; border:0; background:none; cursor:pointer; color:var(--muted) }
@@ -296,6 +296,19 @@
   .actions .step .knobs input, .actions .step .knobs select { font:inherit; font-size:12px; padding:2px 5px; border:1px solid #cfcfcf; border-radius:4px }
   .actions .step .knobs .estimate { flex-basis:100%; font-size:12px } .est { padding:2px 8px; border-radius:6px; background:#f1f1f1; color:#555 }
   .est.ok { background:#dcfce7; color:#166534 } .est.tight { background:#fef3c7; color:#92400e } .est.late { background:#fee2e2; color:#991b1b } .est .force { margin-left:8px; font-weight:700 }
+  /* the players table (pre-lock and post-lock): a section of its own under the news / the late swap */
+  .players-sec { margin-top:14px } .players-sec > h3 { font-size:14px; margin:10px 0 6px } .players-sec > h3 .muted { font-weight:400; font-size:12px }
+  .exp-head .spacer { flex:1 } details.exp-hist { margin:0 0 8px } details.exp-hist > summary { cursor:pointer; font-size:12px; font-weight:600 } details.exp-hist > summary .muted { font-weight:400 } details.exp-hist[open] > summary { margin-bottom:6px }
+  .exp-filters label { font-size:12px; color:var(--muted) }
+  /* the terminal's second pane: the desk's messages, newest last */
+  pre.log.desk-log { max-height:132px; background:#262626; margin-top:-2px } pre.log.desk-log .at { color:#8a8a8a } .jobstat.idle { color:var(--muted); font-weight:400 }
+  /* games that are no picture of the usual rotation (ivan.sports.nba.projection.rotation.game_context): amber = not close, red = a regular absent
+     or gone early, orange = both. On the played-game picker's lines and on every recent-games hover */
+  table.mini tr.g-blow td, option.g-blow, select.rot-game-pick.g-blow, .gnote.g-blow, i.sw.g-blow { background:#fef3c7 }
+  table.mini tr.g-inj td, option.g-inj, select.rot-game-pick.g-inj, .gnote.g-inj, i.sw.g-inj { background:#fee2e2 }
+  table.mini tr.g-blow.g-inj td, option.g-blow.g-inj, select.rot-game-pick.g-blow.g-inj, .gnote.g-blow.g-inj, i.sw.g-blow.g-inj { background:#fed7aa }
+  table.mini.recent td.gwhy { color:#555; white-space:normal; min-width:150px; max-width:260px; font-size:10px } table.mini.recent i.sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin:0 3px 0 8px; border:1px solid #ddd }
+  .gnote { font-size:12px; padding:1px 8px; border-radius:4px; margin-right:6px; color:#333 }
   .players-head { margin:6px 0 } .game .gh .spacer { flex:1 } .minfpts-lab { font-size:12px; color:var(--muted) } .minfpts-lab select { font:inherit; font-size:12px; padding:1px 4px }
   .contests-box td.cw { white-space:nowrap } .contests-box td.cw input, .contests-box td.cw select { font:inherit; font-size:12px; padding:1px 3px } .contests-box td.cw label { margin-right:6px; font-size:12px }
   .view-pick { font:inherit; font-size:13px; padding:5px 8px; font-weight:600 } .zoom button { font:inherit; font-size:12px; padding:3px 7px; border:1px solid #cfcfcf; background:#fff; cursor:pointer } .zoom button:first-child { border-radius:5px 0 0 5px } .zoom button:last-child { border-radius:0 5px 5px 0 } .zoom button.on { background:#eef4ff; color:var(--accent) }
@@ -305,13 +318,6 @@
   .newsbox tr.qrow td:first-child { color:#92400e } .newsbox tr.qrow.answered td:first-child { color:var(--ink) } .newsbox .nocall { color:#b45309 }
   .newsbox tr.out td { color:var(--ink); text-decoration:none } .newsbox tr.out td:first-child a { text-decoration:line-through; text-decoration-color:var(--bad) }   /* the page-wide tr.out strikes the whole row; here only the name */
   .newsbox b.warn { color:#b45309 } details.news-out > summary { font-size:13px }
-  /* needs you: the teams to open, nearest tip first; green and empty when the slate reads clean */
-  .progress { margin:0 0 12px; padding:8px 12px; border:1px solid #fde68a; border-left:3px solid #d97706; border-radius:8px; background:#fffbeb; font-size:13px }
-  .progress .head { display:flex; gap:10px; align-items:center; flex-wrap:wrap } .progress .lines { margin-top:6px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:#555 } .progress .lines div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-  .needs { margin:0 0 12px; padding:8px 12px; border:1px solid #fecaca; border-left:3px solid var(--bad); border-radius:8px; background:#fff7f7; font-size:13px }
-  .needs.ok { border-color:#bbf7d0; border-left-color:var(--ok); background:#f0fdf4 } .needs ul { list-style:none; margin:4px 0 0; padding:0 } .needs li { padding:2px 0 }
-  .needs a.chip { text-decoration:none; font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px; background:#ececec; color:#555; border:1px solid #ddd; margin-right:4px }
-  .needs a.chip.ready { background:#dcfce7; color:#166534; border-color:#bbf7d0 } .needs a.chip.open { background:#fef3c7; color:#92400e; border-color:#fde68a } .needs a.chip.changed { background:#fee2e2; color:#991b1b; border-color:#fecaca }
   /* the chain: pool › snapshot › field › lineups › sim › picks, each stage current (green), stale (amber / red) or not run (grey) */
   .chain { display:inline-flex; gap:4px; align-items:center; font-size:12px; color:var(--muted); flex-wrap:wrap } .chain .arrow { color:#bbb } .chain .stage { padding:1px 7px; border-radius:10px; background:#f1f1f1; white-space:nowrap }
   .chain .stage.proj { background:#eef4ff; color:var(--accent); font-weight:600 } .chain .stage.cur { background:#dcfce7; color:#166534 } .chain .stage.stale.amber { background:#fef3c7; color:#92400e; font-weight:600 } .chain .stage.stale.red { background:var(--bad); color:#fff; font-weight:600 }
@@ -414,6 +420,7 @@
     const t = parseFloat(minFpts) || 0;
     document.querySelectorAll("select.minfpts").forEach(s => { s.value = minFpts; });
     document.querySelectorAll("tr[data-fpts]").forEach(tr => { tr.style.display = (parseFloat(tr.dataset.fpts) < t) ? "none" : ""; });
+    if (window.expFilter) window.expFilter();              // the players table: the same floor, with its own filters
   }
   document.body.addEventListener("change", e => {
     if (!e.target.matches("select.minfpts")) return;
@@ -545,14 +552,17 @@
   document.documentElement.addEventListener("mouseleave", () => { popPend = null; popHide(); });
   document.body.addEventListener("htmx:afterSwap", e => { const td = e.detail.target && e.detail.target.closest ? e.detail.target.closest("td.hover") : null; if (td && td === popCell) popShow(td); });   // the hover's lines arrived: size it again
   window.addEventListener("scroll", popHide, true);
-  // the exposures table's filters: text (player / team / pos), team, status, a minimum exposure
+  // the players table's filters: text (player / team / pos), team, status, a minimum exposure, in the set only, and the page's
+  // fpts floor (select.minfpts). A player the set holds is shown whatever his projection: a pick now projected low is the one to see
   window.expFilter = function () {
     const t = document.getElementById("exposures-table"); if (!t) return;
     const q = (document.getElementById("exp-q").value || "").toLowerCase().trim(), team = document.getElementById("exp-team").value, st = document.getElementById("exp-st").value;
-    const mn = parseFloat(document.getElementById("exp-min").value); let shown = 0, total = 0;
+    const mn = parseFloat(document.getElementById("exp-min").value), only = document.getElementById("exp-in").checked, floor = parseFloat(minFpts) || 0; let shown = 0, total = 0;
     t.querySelectorAll(":scope > tbody > tr").forEach(tr => {
       total++;
-      let ok = (!q || tr.dataset.q.toLowerCase().includes(q)) && (!team || tr.dataset.team === team) && (isNaN(mn) || parseFloat(tr.dataset.exp) >= mn);
+      const held = tr.dataset.in === "1";
+      let ok = (!q || tr.dataset.q.toLowerCase().includes(q)) && (!team || tr.dataset.team === team) && (isNaN(mn) || parseFloat(tr.dataset.exp) >= mn)
+               && (!only || held) && (held || parseFloat(tr.dataset.proj) >= floor);
       if (st === "q" || st === "out") ok = ok && tr.dataset.st === st; else if (st) ok = ok && tr.dataset.starter === st;
       tr.style.display = ok ? "" : "none"; if (ok) shown++;
     });

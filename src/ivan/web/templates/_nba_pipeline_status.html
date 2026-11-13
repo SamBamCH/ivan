@@ -1,18 +1,20 @@
-{# the part of the pipeline panel that changes while a job runs: it polls itself, the form above it is never re-rendered. A job of this
-   slate that ends well has the poll reload the whole page (pipeline_status answers HX-Refresh); the re-render below is for the ones that fail #}
+{# the terminal: the one place the slate page reports what runs and what happened. Top: the running job (a pipeline step, or the
+   slate's refresh / pull / restore: all jobs of the one runner) with its log. Under it the desk's messages, newest last (what a
+   refresh found, a heads up before a run, a refusal: Desk.flash.log; there is no banner). It polls itself while a job of this slate
+   runs; the form above it is never re-rendered. A job that ends well has the poll reload the whole page (pipeline_status answers
+   HX-Refresh); the re-render below is for the ones that fail. The bar's strip shows the same job on every other page. #}
 <div id="pipe-status" class="dash-status" {% if active %}hx-get="{{ root }}/pipeline/status" hx-trigger="load delay:2s" hx-swap="outerHTML"{% endif %}>
-  {% if (poll is not defined or poll) and side is defined and side %}{% with oob=True %}{% include "_nba_pipeline_side.html" %}{% endwith %}{% endif %}
   {% if (poll is not defined or poll) and just_finished %}<div hx-get="{{ root }}/pipeline" hx-target="#pipeline" hx-swap="outerHTML" hx-trigger="load delay:300ms"></div>{% endif %}
-  {% if current or log %}
   <div class="pipe-row">
     {% if current %}
-      <span class="jobstat {{ current.status }}">{{ current.name }} · {{ current.status }}{% if current.duration %} · {{ '%.0f'|format(current.duration) }}s{% endif %}{% if current.is_active and current.meta and current.meta.estimate %} · <span class="muted" title="the desk's estimate when it started, from this machine's past runs (up to {{ current.meta.upto }} s)">≈ {{ current.meta.estimate }} s expected{% if current.duration %}, {{ [0, (current.meta.estimate - current.duration)|int]|max }} s left{% endif %}</span>{% endif %}</span>
-      {% if current.is_active %}<button hx-post="{{ root }}/pipeline/cancel/{{ current.id }}" hx-target="#pipeline" hx-swap="outerHTML">cancel</button>{% endif %}
-    {% endif %}
+      <span class="jobstat {{ current.status }}">{{ current.name }} · {{ current.status }}{% if current.duration %} · {{ '%.0f'|format(current.duration) }}s{% endif %}{% if current.meta and current.meta.what %} · <span class="muted">{{ current.meta.what }}</span>{% endif %}{% if current.is_active and current.meta and current.meta.estimate %} · <span class="muted" title="the desk's estimate when it started, from this machine's past runs (up to {{ current.meta.upto }} s)">≈ {{ current.meta.estimate }} s expected{% if current.duration %}, {{ [0, (current.meta.estimate - current.duration)|int]|max }} s left{% endif %}</span>{% endif %}</span>
+      {% if current.is_active and not (current.meta and current.meta.inproc) %}<button hx-post="{{ root }}/pipeline/cancel/{{ current.id }}" hx-target="#pipeline" hx-swap="outerHTML">cancel</button>{% endif %}
+    {% else %}<span class="jobstat idle">no job running</span>{% endif %}
     {% if jobs %}<span class="muted small">recent: {% for j in jobs[:5] %}<span class="jobstat {{ j.status }}">{{ j.name }} {{ j.status }}{% if j.duration %} {{ '%.0f'|format(j.duration) }}s{% endif %}</span>{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}
   </div>
-  {% if log %}<pre class="log">{{ log }}</pre>{% endif %}
-  {% else %}<pre class="log muted">no job yet · Field, Generate, Sim and Choose report here</pre>{% endif %}
+  {% if log %}<pre class="log">{{ log }}</pre>{% else %}<pre class="log muted">no job yet · Refresh, Field, Generate, Sim and Choose report here</pre>{% endif %}
+  {% if desk_log %}<pre class="log desk-log" title="the desk's messages, newest last: what a refresh found, a heads up before a run, what was refused">{% for at, m in desk_log %}<span class="at">{{ at.strftime('%H:%M:%S') }}</span> {{ m }}
+{% endfor %}</pre>{% endif %}
   <div class="pipe-row">
     <span class="muted small"><b>export</b> · <a href="{{ root }}/export/projections.csv" title="every player in the pool: our projection after the desk's edits (minutes, band, fpts, sd, fppm), the public projection, ownership, pins and locks">projections CSV</a>
       · generated lineups, players in roster order only:

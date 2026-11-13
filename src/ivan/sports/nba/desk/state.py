@@ -3,6 +3,7 @@ The Desk's state: the session, the LiveSlate, the projection store's frames, the
 """
 from __future__ import annotations
 
+import collections
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -69,6 +70,30 @@ ODDS_CHECK_S = 20.0                                           # how often the de
 CONSUMER = feed.producer_source() is not None                 # a consumer pulls the laptop's pool on Refresh and never fetches DK, props or news itself
 engine = init_db("nba")                                    # the history database (IVAN_NBA_DB_URL or data/nba/nba_history.sqlite); a slate's own is slates.engine(dg)
 ensure_schema(engine)
+
+
+class Messages(list):
+    """
+    The desk's messages (what a refresh found, a heads up before a run, a refusal). The list holds the ones not shown yet: a
+    team's card shows them once, next to the edit that caused them. `log` keeps the last KEEP with their time for the slate
+    page's terminal, where every message is read (the slate page has no banner). `note` writes the log only: background work
+    (a refresh done, the news check) that no edit is waiting on.
+    """
+    KEEP = 60
+
+    def __init__(self):
+        super().__init__()
+        self.log: collections.deque = collections.deque(maxlen=self.KEEP)
+
+    def note(self, m) -> None:
+        self.log.append((datetime.now(), str(m)))
+
+    def append(self, m) -> None:
+        super().append(m); self.note(m)
+
+    def extend(self, ms) -> None:
+        for m in ms:
+            self.append(m)
 
 
 class Lobby:
@@ -214,7 +239,7 @@ class DeskBase:
         self.proj: dict[str, pd.DataFrame] = {}
         self.rot: dict[str, dict] = {}
         self.hist_only: dict[str, pd.DataFrame] = {}
-        self.flash: list[str] = []
+        self.flash: Messages = Messages()
         self.busy: Optional[str] = None                     # "loading slate 155581" while a background refresh runs; the board polls
         self._lobby: tuple = (0.0, {})
         with S.using(self.dg):
@@ -416,7 +441,7 @@ class DeskBase:
 
     @staticmethod
     def recent_games(box: pd.DataFrame, n: int = 10, fouls: Optional[dict] = None) -> dict:
-        """player -> his last n games in a box score, played or not (a DNP row shows the risk), newest first: (date, team, played,
+        """player -> his last n games in a box score, played or not (a DNP row shows the risk), newest first: (game_id, date, team, played,
         started, minutes, fppm, pf, foul_short). foul_short marks a game with FOUL_SHORT_PF fouls or more and minutes under
         FOUL_SHORT_SHARE of his average over the games he played: the minutes were probably cut by fouls, not by the coach's plan."""
         out = {}; fouls = fouls or {}
@@ -428,7 +453,7 @@ class DeskBase:
             rows = []
             for r in tail.itertuples():
                 pf = fouls.get((str(r.game_id), name))
-                rows.append(dict(date=str(r.game_date), team=r.team, played=bool(r.played), started=bool(float(getattr(r, "starter", 0) or 0) > 0),
+                rows.append(dict(game_id=str(r.game_id), date=str(r.game_date), team=r.team, played=bool(r.played), started=bool(float(getattr(r, "starter", 0) or 0) > 0),
                                  minutes=float(r.minutes), fpts=float(r.dk_fpts),
                                  fpm=float(r.dk_fpts) / float(r.minutes) if r.minutes > 0 else None, pf=pf,
                                  foul_short=bool(pf is not None and pf >= FOUL_SHORT_PF and avg > 0 and float(r.minutes) < FOUL_SHORT_SHARE * avg)))

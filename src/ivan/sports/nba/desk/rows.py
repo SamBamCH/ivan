@@ -82,6 +82,18 @@ class RowsMixin:
             self._recent = recent_minutes(self.slate.box); self._recent_stamp = self.pool_stamp
         return review_team(self.slate, team, self.proj[team], self._recent, market_points(self.session), self.pins())
 
+    def recent_shaded(self, name: str) -> list[dict]:
+        """The player's recent games (Desk.recent) with each game's context from his team's side that night (game_context): margin,
+        shade ("g-blow" a blowout, "g-inj" a regular absent or a rotation player gone early, his own absence not counted) and why."""
+        out = []
+        for g in self.recent.get(name, []):
+            c = self.game_context(g["team"]).get(g.get("game_id")) or {}
+            others = [n for n in (c.get("absent") or []) if normalize_name(n) != normalize_name(name)]
+            inj = bool(others or [n for n in (c.get("left_early") or []) if normalize_name(n) != normalize_name(name)])
+            shade = " ".join(x for x, on in (("g-blow", c.get("not_close")), ("g-inj", inj)) if on)
+            out.append(dict(g, margin=c.get("margin"), shade=shade, why=c.get("why", "") if shade else ""))
+        return out
+
     def team_rows(self, team: str) -> list[dict]:
         proj, hist = self.proj[team], self.hist_only[team]
         review_flags = {r["name"]: r["flags"] for r in self.review(team)["rows"]}
@@ -201,7 +213,7 @@ class RowsMixin:
                              value=None if fpts is None or not p.salary else fpts / (p.salary / 1000.0),
                              own=None if p.ownership in (None, 0) else float(p.ownership), pub=getattr(p, "pub_fpts", None),
                              hist_fpts=None if h is None else float(h["fpts_mean"]), market=market,
-                             dk_avg=p.dk_avg_fpts, priced=bool(r is not None and r.get("priced")), recent=self.recent.get(name, []),
+                             dk_avg=p.dk_avg_fpts, priced=bool(r is not None and r.get("priced")), recent=self.recent_shaded(name),
                              team=p.team, opp=p.opponent,
                              usage=None if r is None else float(r["usage_mult"]), flags=flags,
                              cells={k: " · ".join(v) for k, v in cells.items()}, loud=loud))

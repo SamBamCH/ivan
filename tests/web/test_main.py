@@ -111,7 +111,7 @@ def test_nba_slate_page_loads_the_slate_it_names(open_site, monkeypatch, tmp_pat
     monkeypatch.setattr(PG, "_days_of", lambda rows, now: [Day(day=d, label="Fri 01-02", tag="", slates=[lobby])])
     started = []
 
-    def fake_refresh(what, dg, update_odds, lines=None):
+    def fake_refresh(what, dg, update_odds, lines=None, name="refresh"):
         started.append((what, dg)); D.LOADING[int(dg)] = what
     monkeypatch.setattr(P, "_start_refresh", fake_refresh)
     monkeypatch.setattr(P, "_active", lambda dg=None: [])
@@ -282,7 +282,7 @@ def test_every_address_the_nba_pages_carry_answers(open_site):
     team = d.slate.teams()[0] if d.slate.teams() else None
     pages = [f"/nba/{day}/{dg}/", f"/nba/{day}/{dg}/?view=players", f"/nba/{day}/{dg}/?view=lateswap", f"/nba/{day}/{dg}/?view=backtest",
              f"/nba/{day}/{dg}/board?view=games", f"/nba/{day}/{dg}/board?view=players", f"/nba/{day}/{dg}/board?view=lateswap",
-             f"/nba/{day}/{dg}/board?view=backtest&dg={dg}", f"/nba/{day}/{dg}/pipeline", f"/nba/{day}/{dg}/pipeline/status", f"/nba/{day}/{dg}/exposures"]
+             f"/nba/{day}/{dg}/board?view=backtest&dg={dg}", f"/nba/{day}/{dg}/pipeline", f"/nba/{day}/{dg}/pipeline/status", f"/nba/{day}/{dg}/exposures", f"/nba/{day}/{dg}/players"]
     if team:
         pages += [f"/nba/{day}/{dg}/{team}/", f"/nba/{day}/{dg}/team/{team}", f"/nba/{day}/{dg}/team/{team}/rotation"]
     gets, posts = set(), set()
@@ -305,34 +305,88 @@ def test_every_address_the_nba_pages_carry_answers(open_site):
         assert f'href="/nba/{day}/{dg}/"' in page                              # ‹ slate goes back to the slate page
 
 
-def test_nba_refresh_shows_a_progress_banner_with_its_log(open_site):
-    """While a held slate refreshes in the background its board carries a banner with what runs, the seconds so far and the last
-    lines the refresh logged, polled every 2 s; the poll answers the banner while it runs and a reload when it is done."""
-    from datetime import datetime
+def _drop_jobs(D, before):
+    """Forget the job records a test made (the runner is the live one; its log directory was pointed at a temporary one)."""
+    for jid in [j for j in D.runner._order if j not in before]:
+        D.runner._order.remove(jid); D.runner._jobs.pop(jid, None)
+
+
+def test_nba_refresh_is_a_job_in_the_terminal_and_on_the_strip(open_site, monkeypatch, tmp_path):
+    """A held slate's refresh is a job of the one runner, like the scripts: while it runs the board renders as usual with no banner,
+    the terminal under the actions shows it running with the lines it logged and polls, the bar's strip shows it on every page
+    with its last line, a second refresh is refused (said in the terminal, not flashed); when it is done the poll reloads the
+    page and what it found is a line of the terminal."""
     from ivan.web import nba as D
+    from ivan.web.nba import pipeline as P
     dg, day = _held(open_site)
     d = D.desk_for(dg)
-    D.PROGRESS[dg] = dict(what="refreshing the pool", started=datetime.now(), lines=["fetching DK draftables for draft group %d" % dg, "stored 382 players"])
-    d.busy = "refreshing the pool"
+    monkeypatch.setattr(D.runner, "log_dir", tmp_path)
+    monkeypatch.setattr(d, "rebuild", lambda: None)                                          # the pool is not touched here
+    before = list(D.runner._order)
     try:
+        log = P._begin(dg, "refreshing the pool")
+        log.append("fetching DK draftables for draft group %d" % dg); log.append("stored 382 players")
         r = open_site.get(f"/nba/{day}/{dg}/board?view=games")
-        assert r.status_code == 200 and 'id="refresh-banner"' in r.text and "stored 382 players" in r.text and "refreshing the pool" in r.text
-        assert "team-row" in r.text or "games" in r.text                                    # the board itself still renders beneath the banner
-        r = open_site.get(f"/nba/{day}/{dg}/board?view=games&after=busy")
-        assert r.status_code == 200 and 'id="refresh-banner"' in r.text and "HX-Refresh" not in r.headers
+        assert r.status_code == 200 and 'id="refresh-banner"' not in r.text and 'class="flash"' not in r.text
+        assert "refresh · running" in r.text and "stored 382 players" in r.text and "refreshing the pool" in r.text
+        assert f'hx-get="/nba/{day}/{dg}/pipeline/status"' in r.text                        # the terminal polls while it runs
+        assert "/pipeline/cancel/" not in r.text                                             # work in the server has no process to cancel
+        assert "games" in r.text                                                             # the board itself still renders
+        strip = open_site.get("/nba/jobstrip").text
+        assert 'data-active="1"' in strip and "refresh" in strip and "stored 382 players" in strip
         page = open_site.get(f"/nba/{day}/{dg}/")
         assert "refreshing the pool…" in page.text                                           # the bar says so too
         edit = open_site.post(f"/nba/{day}/{dg}/refresh", data={"what": "dk"}, follow_redirects=False)
         assert edit.status_code == 303                                                       # a second refresh is refused while one runs
+        r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
+        assert "already refreshing the pool" in r.text and "HX-Refresh" not in r.headers     # ...and the terminal says so
+        P._finish(dg, ["refreshing the pool: done; news: 0 new"])
+        assert d.busy is None and dg not in D.PROGRESS
+        r = open_site.get(f"/nba/{day}/{dg}/pipeline/status")
+        assert r.headers.get("HX-Refresh") == "true"                                         # done: the page reloads on the new pool
+        r = open_site.get(f"/nba/{day}/{dg}/board?view=games")
+        assert "refreshing the pool: done; news: 0 new" in r.text and 'class="flash"' not in r.text and "refresh done" in r.text
+        assert not d.flash                                                                   # nothing left to pop up on a team card
     finally:
-        d.busy = None; D.PROGRESS.pop(dg, None)
-    r = open_site.get(f"/nba/{day}/{dg}/board?view=games&after=busy")
-    assert r.headers.get("HX-Refresh") == "true"
+        d.busy = None; D.PROGRESS.pop(dg, None); _drop_jobs(D, before)
+
+
+def test_nba_slate_page_order_and_the_players_table(open_site):
+    """The slate page has no "needs you" box and no banner; the contests sit above the news and carry no exposures table; the
+    players table (pre-lock and post-lock) lists every player of the slate with his exposure in the set picked, and the set
+    is remembered; the old players view's address lands on pre-lock."""
+    from ivan.web import nba as D
+    dg, day = _held(open_site)
+    d = D.desk_for(dg)
+    for view in ("games", "lateswap"):
+        r = open_site.get(f"/nba/{day}/{dg}/board?view={view}")
+        assert r.status_code == 200 and "needs you" not in r.text and 'id="needs"' not in r.text and 'class="flash"' not in r.text
+        assert 'id="pipe-side"' not in r.text and f'hx-get="/nba/{day}/{dg}/players"' in r.text
+    r = open_site.get(f"/nba/{day}/{dg}/board?view=games")
+    if 'id="news"' in r.text:
+        assert r.text.index('id="contests"') < r.text.index('id="news"') < r.text.index('id="players"')
+    assert 'id="players"' in open_site.get(f"/nba/{day}/{dg}/board?view=players").text       # the old view: pre-lock's board
+    assert "?view=players" not in open_site.get(f"/nba/{day}/{dg}/").text                    # no tab for it any more
+    had = getattr(d, "exp_set", None)
+    try:
+        r = open_site.get(f"/nba/{day}/{dg}/players?set=pool")
+        assert r.status_code == 200
+        with d.lock, __import__("ivan.sports.nba.slates", fromlist=["x"]).using(dg):
+            n = sum(len(d.team_rows(t)) for t in d.slate.teams())
+        assert r.text.count('data-team="') == n                                              # every player, held by the set or not
+        assert "flags" in r.text and "exp-in" in r.text and "opp" in r.text
+        assert '<option value="pool" selected>' in open_site.get(f"/nba/{day}/{dg}/players").text       # the set is remembered
+        assert open_site.get(f"/nba/{day}/{dg}/exposures").status_code == 200                # the section's old address
+    finally:
+        if had is None:
+            d.__dict__.pop("exp_set", None)
+        else:
+            d.exp_set = had
 
 
 def test_nba_run_estimate_warns_but_never_refuses(open_site, monkeypatch):
     """The knobs popover's estimate answers for the step's knobs; a run the estimate puts inside the margin before lock starts
-    anyway with a "heads up" flash (no run-anyway box, nothing refused); the job's record carries the estimate."""
+    anyway with a "heads up" line in the terminal (no run-anyway box, nothing refused, no banner); the job's record carries the estimate."""
     from ivan.web import nba as D
     from ivan.web.nba import pipeline as P
     from ivan.sports.nba.slate import job_time as JT
@@ -352,7 +406,7 @@ def test_nba_run_estimate_warns_but_never_refuses(open_site, monkeypatch):
     assert len(submitted) == 1 and submitted[0][0] == "sim" and submitted[0][1]["estimate"] == 360000
     assert "not started:" not in r.text and "run anyway" not in r.text                                 # the refusal flash is gone
     if has_lock and min(p.gametime for p in d.slate.players if p.gametime) > __import__("datetime").datetime.now():
-        assert "heads up" in r.text                                                                     # inside the margin: warned, started
+        assert "heads up" in r.text and 'class="flash"' not in r.text                                    # inside the margin: warned in the terminal, started
 
 
 def test_nba_field_job_done_reloads_the_page_and_the_export_sees_the_ownership(open_site, monkeypatch):

@@ -30,17 +30,18 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
     button of its own since opening the slate is the load).
   - a **held slate** opens on the view its lock picks: **pre-lock** before its first lock, **post-lock** (the late
     swap) after it, **backtest** once its day has passed (`backtest.slate.mode_for`). A refresh of the slate running
-    meanwhile shows as "refreshing the pool…" in the bar and as an amber **progress banner** at the top of the board (what
-    runs, the seconds so far, the last log lines, updated every 2 s; `_nba_progress.html`); its pages keep reading, its
-    edits answer "wait", and the page reloads when the refresh is done.
+    meanwhile is a job like any other: "refreshing the pool…" in the bar, a line on the job strip, and its log in the
+    slate page's terminal (below); its pages keep reading, its edits answer "wait", and the page reloads when the
+    refresh is done.
   - a slate of an **earlier day** not held opens its backtest (below), read only: nothing is loaded or deleted. Its
     **Restore into the desk** button loads it from its archive capture into its own directory when it is to be re-worked.
   Every action of a slate hangs off its address (`/nba/<day>/<dg>/refresh`, `.../team/<TEAM>/pin`, `.../pipeline/sim`,
   ...), so two slates' pages serve side by side and a job on one never refuses a refresh of another; `/nba/desk/` goes
   to today's main held slate.
-- **View** dropdown: **pre-lock** (the slate view below, `view=games`), **players** (every player of the slate,
-  `view=players`), **post-lock** (the late swap, `view=lateswap`), **backtest**. With no view in the address the
-  slate's lock picks one (above). The old `view=exposures` links open pre-lock, where the exposures are a section.
+- **View** dropdown: **pre-lock** (the slate view below, `view=games`), **post-lock** (the late swap,
+  `view=lateswap`), **backtest**. With no view in the address the slate's lock picks one (above). The old
+  `view=players` and `view=exposures` links open pre-lock: the players table, with the exposures in it, is a section of
+  pre-lock and post-lock.
   A team's page (below) sits one level under the slate: **Ivan › NBA › day › slate › TEAM**.
 - **locks in / locked**: the slate's countdown. Next to it, **refreshed HH:MM (desk | autopilot | script)**: when this
   slate's pool was last refreshed and by what (`slate.json`); on a consumer one stamp, **projections HH:MM**: when the slate's
@@ -52,9 +53,15 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
   [../nba/game-day.md](../nba/game-day.md#2-refresh-through-the-day). On a consumer the same spot shows
   the laptop's state instead: autopilot on/off, who published last (desk, autopilot, nightly) and when.
 - **The job strip** (the frame's bar, every page of the sport: `GET /nba/jobstrip`, `Sport.job_strip`): one thin line on
-  the sport's running job, any slate's (its slate as a link, the job's name, status, seconds so far and the estimate's
-  seconds left), read every 4 s while one runs and every 20 s otherwise, so a job started on one page stays in sight on
-  the next; a job that ended stays on the strip for 90 s (green done, red failed). The slate's pipeline panel has the log.
+  the sport's running job, any slate's (its slate as a link, the job's name, status, seconds so far, the estimate's
+  seconds left and the last line it logged), read every 4 s while one runs and every 20 s otherwise, so a job started
+  on one page stays in sight on the next; a job that ended stays on the strip for 90 s (green done, red failed). The
+  slate page's terminal has the log. **Everything this server runs is a job of the one runner**
+  (`ivan.web.jobs.JobRunner`, records and logs under `data/nba/jobs/`): the scripts as subprocesses, queued one at a
+  time, and a slate's refresh, pull from the laptop, restore and first load as in-process jobs (`refresh`, `pull`,
+  `restore`, `load`: `JobRunner.begin` / `log` / `end`, started by `pipeline._begin`, closed by `_finish`), which run
+  at once in their own thread and have no cancel. So the strip and the terminal are the two places a job is read, and
+  there is no other progress display on a held slate.
 - **A− fit A+**: the page size. **fit** (the default) scales the whole page so the team grid with its columns fills
   the window's width; A− / A+ set a size by hand. Remembered in this browser only.
 
@@ -62,10 +69,16 @@ The frame's bar (**Ivan › NBA › day › slate › view**, [README.md](README
 
 The slate page **reads**. Nothing on it edits a projection: a team's minutes, pins, starter calls and late news are on
 its own page (below), and every edit there writes the team into the pool at once, so this page, the sim, the chooser
-and the other desk all show the same numbers. You open a team only to map its minutes, when **needs you** sends you,
-or when news breaks.
+and the other desk all show the same numbers. You open a team only to map its minutes (the games strip's chips say
+which: grey unmapped, yellow an open question, red changed since mapped) or when news breaks.
 
-**Needs you** leads, when it applies, with **this pool is from HH:MM**: another held slate of the same day was refreshed
+**The page has no banners.** What runs and what happened is read in two places: the job strip on the bar and the
+**terminal** under the actions (`_nba_pipeline_status.html`): the running job's status and log on top, and under it
+the desk's messages, newest last, each with its time (what a refresh found, the news it read, a **heads up** before a
+run, a refusal such as "already refreshing the pool"; `Desk.flash.log`, the last 8 of 60 kept). The team page still
+shows the answer to an edit next to the edit (the card's own line).
+
+Under the actions, when it applies, a line reads **this pool is from HH:MM**: another held slate of the same day was refreshed
 after this one and its pool carries DraftKings statuses this one does not (`Desk.sibling_changes`: the players of this slate
 whose status differs on the most recently refreshed sibling, downgrades first, with a **Refresh DK** button). 2026-11-06:
 the Turbo slate was last refreshed at 13:10 and kept Barnes questionable with 31 minutes while the main slate, refreshed at
@@ -100,7 +113,7 @@ card ("OUT on the 18:00 slate's pool, refreshed 18:40 (here Q): refresh this sla
    past runs of that step (seconds per unit of work: lineups per worker for generate, contests × sims × field cap for the
    sim and the late swap; a conservative default until a step has 4 runs), green when even a slow run leaves 5 minutes
    before lock, amber when only the expected run does, red when the run would end inside those 5 minutes or after lock.
-   A red or amber run still starts; the flash says **heads up** and why (nothing is refused). The late swap's deadline is
+   A red or amber run still starts; the terminal says **heads up** and why (nothing is refused). The late swap's deadline is
    the next tip. While a job runs its status line shows the estimate and the seconds left; the record it leaves carries
    the estimate and the work units, so the next fit learns from it (`scripts/nba/job_time.py fit` prints the model).
    **Knobs**: resting the pointer on Generate or Sim opens its knobs under the button (`_nba_knobs.html`; they stay open
@@ -115,13 +128,9 @@ card ("OUT on the 18:00 slate's pool, refreshed 18:40 (here Q): refresh this sla
    [--bankroll-dollars B]`, [../nba/field-and-simulation.md](../nba/field-and-simulation.md#choose-contestchoosepy-contestexportpy)).
    6 **Late swap** opens the late swap view.
    Under the steps (the producer only; a consumer has the header's one stamp): when each input was last fetched (props, DraftKings, starters, projected; amber when old), when
-   the news was read, the slate's lineups and sim rows; then the job status, its log, the exports and the latest picks.
-3. **Needs you** (`_needs_you`): the teams to open, nearest tip first, each with why: mapped but the inputs moved since
-   (a status, the lineup, an out), an open question (a questionable rotation player with no call) within 90 minutes of
-   the tip, a new headline on a questionable player, no Rotowire lineup within 75 minutes of the tip, unmapped within
-   90 minutes. Green and empty when none of that holds: nothing to do until the next refresh.
-4. **News** (below): the slate's questions and outs; a name opens the team's page, where the call is made.
-5. **Contests** (folded once the entries are on file): **Upload entries CSV** (the DraftKings entries export, saved as
+   the news was read, the slate's lineups and sim rows; then **the terminal** (the job's status and log, the desk's
+   messages), the exports and the latest picks.
+3. **Contests** (folded once the entries are on file): **Upload entries CSV** (the DraftKings entries export, saved as
    `data/nba/input/entries.csv`; the page reloads), every contest of the file with its fee, field and our entries,
    checked against the loaded slate (`historical_contest_information`): green the loaded slate, red another slate's
    (the sim skips those contests and says so in its log, `contest.simulate.simulate_entries`), grey not stored yet
@@ -129,8 +138,9 @@ card ("OUT on the 18:00 slate's pool, refreshed 18:40 (here Q): refresh this sla
    that contest alone (method slate / greedy / portfolio, cash, roi, diversity, bankroll, the slate's bankroll in dollars; blank = the desk default from `config/nba.json`, shown greyed, the bankroll's blank = read from our results). They save
    as they are typed (`/contest/<id>/weights` = `scripts/nba/contest_weights.py set <id> knob=value`) into
    `data/nba/input/contest_weights.json`, and Choose passes that file as `--weights-json`, so a contest's own knobs
-   win over the defaults. Then the exposures panel: the candidate pool or the chosen entries.
-6. **Exposures** (folded; loaded when opened, below).
+   win over the defaults.
+4. **News** (below): the slate's questions and outs; a name opens the team's page, where the call is made.
+5. **Players** (below): every player of the slate with his row and his exposure; loads after the board.
 
 Hover popups (a projection's stat lines, a player's last ten box-score games with an `S` in the `st` column for a game he started and a red `DNP` row for a game he dressed and did not play) open after a short pause on the cell, beside it
 rather than over the rows below, and close as soon as the pointer leaves the cell; the cell and its row are marked
@@ -139,7 +149,7 @@ while one is open.
 ## The team page (`/nba/<day>/<slate>/<TEAM>/`)
 
 A held slate's team on a page of its own, reached from a chip in the games strip, a name in the news table or
-the players view, or an old `/desk/?open=TEAM` link. The bar reads **Ivan › NBA › day › slate › TEAM**; **‹ slate** and
+the players table, or an old `/desk/?open=TEAM` link. The bar reads **Ivan › NBA › day › slate › TEAM**; **‹ slate** and
 the bar's slate go back; **the other side** opens the opponent's page; the **games strip** heads the page as on the
 slate page, the page's own chip outlined, so any other team is one click away. The page shell renders at once and the card
 (`GET /team/<TEAM>`, `_nba_side.html`) loads into it, as the board does on the slate page. Tonight's game heads the
@@ -169,7 +179,7 @@ The flags come from `ivan.sports.nba.backtest.validation.review_team`, the same 
 
 ### The news table
 
-On the slate page under needs-you (`_nba_news.html`, `Desk.news_table` =
+On the slate page under the contests (`_nba_news.html`, `Desk.news_table` =
 `ivan.sports.nba.data_fetch.newsfeed.slate_news`; terminal: `scripts/nba/newsfeed.py slate`). Its heading carries the counts, the
 **auto every 5 min** box (reads Rotowire's news every 5 minutes while the desk runs; every Refresh reads it too) and
 when the news was last read. One table, one row per player whose night is news, in three groups:
@@ -282,7 +292,8 @@ tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a play
 in nba_api's all-players list (`ivan.sports.nba.data_fetch.experience`, fetched by the nightly or `scripts/nba/experience.py
 fetch`), matched by name without suffixes, then by last name on his team; a name the list lacks is a rookie when no
 NBA game is on file before this season.
-The past-game dropdown lists the team's games with stints, this season then last: each option reads the date, the opponent, the final from the team's side (`W 112-105`) and how many of that night's five had not started the team's previous game (`2 new starters`; the oldest game in the list is compared with the game before it; blank when either five is unknown) (`projection.rotation.game_scores` / `starter_changes`). The default is the latest game. On the game's grid those starters carry a blue **NEW** badge (`new_starters`). The panel has no header line: the dropdown names the game.
+The past-game dropdown lists the team's games with stints, this season then last: each option reads the date, the opponent, the final from the team's side (`W 112-105`) and how many of that night's five had not started the team's previous game (`2 new starters`; the oldest game in the list is compared with the game before it; blank when either five is unknown) (`projection.rotation.game_scores` / `starter_changes`). The default is the latest game.
+**Shaded games** are the ones that are no picture of the usual rotation, so the games worth reading for tonight stand out as the unshaded ones (`Desk.game_context` = `projection.rotation.game_context`; terminal `scripts/nba/game_context.py [--team XXX] [--last N]`): **amber = not close** (six or more minutes of garbage time by the stints, or a final margin of 20 or more), **red = an injury** (a regular did not play: he had averaged 24+ minutes over at least three of the team's five games before it, `absent_regulars`; or a regular left early and played under half his season's minutes), **orange = both**. The option's line says which ("blowout +33", "no Cunningham, Duren", "Duren left early"), the picked game's reason is written beside the dropdown, and the same shading is on every player's recent-games hover (the minutes cell here, the hist cell of the players table; `_nba_recent.html`), each line with the team's final margin and the reason; a player's own absence does not shade his own line. Overtime is named and not shaded. The thresholds are constants in `projection/rotation.py` (`BLOWOUT_MARGIN`, `GARBAGE_SHADE_MIN`, `REGULAR_MIN`, `REGULAR_LOOKBACK`, `REGULAR_PLAYED`, `GONE_EARLY_SHARE`). On the game's grid those starters carry a blue **NEW** badge (`new_starters`). The panel has no header line: the dropdown names the game.
 **vs our grid** (a box in the past game's bar) lays what we projected for that game over what was played, as the backtest
 view does under each team: our grid for that day is the one drawn on the desk that day (`data/nba/days/<day>/edits/rotations/`),
 else the archive's grid rows at that day's lock (`backtest.slate.grid_for_day`); blue cells were on the floor in both,
@@ -393,19 +404,37 @@ Generate writes no ownership; the sim builds the public field once, at the large
 needs, every contest slices it, and the largest contest's field becomes the ownership column.
 **Field + ownership** (`/pipeline/field` = `scripts/nba/field_ownership.py`, about 45s) builds the field on
 the stored public projection and writes ownership from it, on demand; nothing else does on a slate day. The desk warns
-when a team's mapping is incomplete. Jobs run one at a time in `ivan.web.jobs.JobRunner`; status at
+(a line in the terminal) when a team's mapping is incomplete. The scripts run one at a time in `ivan.web.jobs.JobRunner`
+(a slate's refresh is a job of the same runner, in the server's own process); status at
 `/pipeline/status` (polled every 2 s while a job runs; the poll that finds the job done reloads the whole page, whatever
 the job was, so every section shows what it wrote; a pool-writing job, field, sim or solve, has the desk reload the pool
 first; a failed job leaves its log on the screen), cancel at `/pipeline/cancel/<job id>`, logs
 under `data/nba/jobs/`. The entries upload (`/entries`, the contests section) replaces the slate's
 `data/nba/slates/<dg>/input/entries.csv`.
 
-## Exposures (a section of pre-lock and post-lock: `GET /exposures`, `_nba_exposures.html`; `/pipeline/exposures` toggles the contests side panel's entries vs pool)
+## Players (a section of pre-lock and post-lock: `GET /players`, `_nba_players.html`, `exposures._exposures_view`)
 
-Folded at the bottom of both views and loaded when first opened; its set / metric / bins switches reload only the
-section. The newest choose run covering the loaded slate's contests, every chosen player joined to the pool
-now: entries, exposure, the field's ownership and leverage, projection at pick vs ours now, minutes,
-pub, status (OUT struck in red), value; team totals; sortable.
+One table: every player's row and his exposure. Every player of the slate, held by a lineup or
+not, with his row (team, opponent, position, salary, starter call, projected minutes with the books' implied minutes,
+history with the recent-games hover, fppm, projection ± sd with the stat lines on hover, the public projection, value,
+ownership, opt, the review's flags) and his **exposure** in one set of lineups: **in** (lineups holding him), **exp**
+(share of the set), **lev** (exposure less ownership) and, for the chosen entries, **@pick** and **Δ** (our projection
+when he was chosen and what moved since). The **exposure in** switch picks the set: the candidate pool, the sampled
+field of every simmed contest or of one, the chosen entries of every contest or of one. A player the set does not hold
+reads 0. The set is remembered on the slate's desk (until the server restarts); with none picked it is the chosen
+entries when there are picks, else the pool. Rows: the set's players by exposure, then the rest by ownership; a header
+click sorts; a name opens his team's page.
+
+Filters: text, team, status, a minimum exposure, **in the set only**, and the page's **show ≥ N fpts** floor (the same
+one the team cards use, remembered in the browser). A player the set holds is shown whatever his projection: a pick
+now projected low or OUT (struck in red) is the one to see.
+
+**histogram** (folded under the switch; its line carries the mean, p10, median and p90): the set's lineups by projected
+total, ownership sum or salary used, with the bins knob, and over a sampled field the dotted shape of the real fields.
+
+The section loads after the board and its switches reload only the section; a job that ends reloads the page, so it
+shows what the job wrote. While the slate refreshes it says so and comes back with the page. `GET /exposures` is the
+same section (its address before the two tables were one).
 
 ## Late swap (post-lock, view `lateswap`, `_nba_lateswap.html`)
 

@@ -150,6 +150,36 @@ class JobRunner:
         self._queue.put(job.id)
         return job
 
+    # work the server does in its own thread (a slate's refresh, a pull, a restore): a job like the rest, so the strip and the
+    # terminal show it, but never queued (the caller's thread is already running it) and with no process to cancel
+    def begin(self, name: str, meta: Optional[dict] = None, title: str = "") -> Job:
+        """Record an in-process job as running now; the caller logs with `log` and closes it with `end`."""
+        now = time.time()
+        job = Job(id=datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6], name=name, cmd=[], status="running",
+                  created=now, started=now, meta={**(meta or {}), "inproc": True})
+        with self._lock:
+            self._jobs[job.id] = job
+            self._order.append(job.id)
+        self.log_path(job).write_text(f"$ {title or name} (in the server)\n\n")
+        self._save_meta(job)
+        return job
+
+    def log(self, job: Job, line: str) -> None:
+        """One line into an in-process job's log, stamped with the clock."""
+        try:
+            with open(self.log_path(job), "a") as f:
+                f.write(f"[{datetime.now():%H:%M:%S}] {str(line).rstrip()}\n")
+        except OSError:
+            pass
+
+    def end(self, job: Job, ok: bool = True) -> None:
+        if job.finished is not None:
+            return
+        job.finished = time.time()
+        job.returncode = 0 if ok else 1
+        job.status = "done" if ok else "failed"
+        self._save_meta(job)
+
     def get(self, job_id: str) -> Optional[Job]:
         return self._jobs.get(job_id)
 

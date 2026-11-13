@@ -1,8 +1,9 @@
-{# the slate's board, read only: the games strip (each chip a link to the team's page), what needs a look, the actions bar with
-   the chain, the news table, the contests, the exposures; the players view is every team's rows. Loaded into #board after the
-   page shell, so the page is up at once and shows "loading" while the pool is fetched or projected (ivan.web.nba.pages.index / board /
-   the background refresh). Nothing here edits a projection: that is the team page (/<day>/<slate>/<TEAM>/). #}
-{% if refreshing and not busy %}{% include "_nba_progress.html" %}{% endif %}
+{# the slate's board, read only, in the order it is worked: the games strip (each chip a link to the team's page), the actions bar
+   with the chain and the terminal, the contests, the news table, the players table (every player's row and his exposure in the
+   pool, a field or the picks). Post-lock: the late swap in place of the news. Loaded into #board after the page shell, so the page
+   is up at once and shows "loading" while a slate is fetched for the first time (ivan.web.nba.pages.index / board). Nothing here
+   edits a projection: that is the team page (/<day>/<slate>/<TEAM>/). Nothing here is a banner: what runs and what happened is
+   read in the terminal (_nba_pipeline_status.html) and on the bar's strip. #}
 {% if busy %}
 <div id="board-poll" hx-get="{{ root }}/board?view={{ view }}{% if dg %}&dg={{ dg }}{% endif %}&after=busy" hx-trigger="every 2s" hx-target="#board" hx-swap="innerHTML">
   <div class="loading"><span class="spin"></span> {{ busy }}…{% if progress %} <span class="muted">{{ progress.elapsed }} s</span>{% endif %}
@@ -10,57 +11,28 @@
 </div>
 {% else %}
 
-
-  {% for f in flash %}<div class="flash">{{ f }}</div>{% endfor %}
-{% if view in ('games', 'lateswap', 'players') %}
+{% if view in ('games', 'lateswap') %}
   <div class="top-row">
 {% include "_nba_games.html" %}
   </div>
-  {% if view != 'players' %}{% include "_nba_pipeline.html" %}{% endif %}
-{% endif %}
-{% if view == 'games' %}
-  <div class="needs {% if not needs and not siblings %}ok{% endif %}" id="needs">
-    <b>needs you</b>
-    {% if siblings %}<div class="sib" title="another held slate of today was refreshed after this one and its pool carries DraftKings statuses this pool does not: this slate's lineups are built on what it last saw">
+  {% include "_nba_pipeline.html" %}
+  {% if siblings %}<div class="sib" title="another held slate of today was refreshed after this one and its pool carries DraftKings statuses this pool does not: this slate's lineups are built on what it last saw">
       <b class="warn">this pool is from {{ siblings.here_at.strftime('%H:%M') }}</b>: the {{ siblings.label }} slate's pool, refreshed {{ siblings.refreshed_at.strftime('%H:%M') }}, has {{ siblings.changes|length }} status change{{ '' if siblings.changes|length == 1 else 's' }} this one does not know:
       {% for c in siblings.changes[:8] %}<b>{{ c.name }}</b> {{ c.team }} <span class="{% if c.down %}bad{% else %}muted{% endif %}">{{ c.there }}</span> <span class="muted small">(here {{ c.here }})</span>{% if not loop.last %} · {% endif %}{% endfor %}{% if siblings.changes|length > 8 %} · <span class="muted small">+{{ siblings.changes|length - 8 }} more</span>{% endif %}
       <form method="post" action="{{ root }}/refresh" class="inline"><input type="hidden" name="what" value="dk"><button title="DraftKings pool + statuses + Rotowire lineups + news for this slate (free)">Refresh DK</button></form></div>{% endif %}
-    {% if needs %}<span class="muted small">{{ needs|length }} team{{ '' if needs|length == 1 else 's' }} · nearest tip first · open the team to map or call it</span>
-      <ul>{% for n in needs %}<li><a class="chip {{ n.colour or 'unmapped' }}" href="{{ team_url(n.team) }}">{{ n.team }}</a> <span class="muted small">{% if n.tip %}{{ n.tip.strftime('%H:%M') }}{% if n.mins_to_tip is not none and n.mins_to_tip > 0 %} · in {{ (n.mins_to_tip // 60)|int }}h {{ (n.mins_to_tip % 60)|int }}m{% endif %}{% endif %}</span> {{ n.why|join(' · ') }}</li>{% endfor %}</ul>
-    {% elif not siblings %}<span class="muted small">nothing: every team is mapped and unchanged, no open question near a tip, no lineup missing. The next refresh may change that.</span>{% endif %}
-  </div>
-  {% if news_table %}{% with nt = news_table %}{% include "_nba_news.html" %}{% endwith %}{% endif %}
-  {% include "_nba_contests.html" %}
 {% endif %}
-{% if view == 'players' %}
-  <div class="players-head"><span class="muted small">{{ players|length }} players on the slate · sorted by ownership, click a header to sort · a name opens his team's page, where the rows are edited</span> {% include "_nba_minfpts.html" %}</div>
-    <table class="players sortable">
-      <thead><tr><th>player</th><th>team</th><th>opp</th><th>pos</th><th class="n">sal</th><th>st</th><th class="n">min</th><th class="n">hist min</th><th class="n">fppm</th><th class="n">proj</th><th class="n">value</th><th class="n" title="projected ownership: the field sampler's exposure (the sim's largest contest, else the generate step's generic field)">own</th><th class="n" title="share of the World's worlds whose optimal lineup holds him (Solve); bold = in the mean-projection optimal">opt</th><th>flags</th></tr></thead>
-      <tbody>
-      {% for r in players %}
-        <tr class="{% if r.out %}out{% elif r.priced %}priced{% else %}unpriced{% endif %}" data-fpts="{{ '%.1f'|format(r.fpts) if r.fpts is not none else '0' }}">
-          <td><a class="plink" href="{{ team_url(r.team) }}" style="color:inherit;text-decoration:none">{{ r.name }}</a>{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}</td>
-          <td><a class="plink" href="{{ team_url(r.team) }}">{{ r.team }}</a></td><td class="muted">{{ r.opp }}</td><td class="pos">{{ r.pos }}</td><td class="n">{{ r.salary }}</td><td><span class="st">{{ r.starter }}</span></td>
-          <td class="n">{% if r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% if r.pinned %} <span class="pill">pin</span>{% endif %}{% endif %}</td>
-          <td class="n">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% endif %}</td>
-          <td class="n {% if r.priced %}mkt{% endif %}">{{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}</td>
-          <td class="n"><b>{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</b>{% if r.sd is not none %}<span class="muted small"> ±{{ '%.0f'|format(r.sd) }}</span>{% endif %}</td>
-          <td class="n">{{ '%.2f'|format(r.value) if r.value is not none else '' }}</td>
-          <td class="n"><b>{{ '%.1f%%'|format(r.own) if r.own is not none else '—' }}</b></td>
-          <td class="n">{% if r.opt is not none %}{% if r.opt_mean %}<b>{{ '%.0f%%'|format(r.opt) }}</b>{% else %}{{ '%.0f%%'|format(r.opt) }}{% endif %}{% else %}—{% endif %}</td>
-          <td class="flags">{{ r.flags|join(' · ') }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+{% if view == 'games' %}
+  {% include "_nba_contests.html" %}
+  {% if news_table %}{% with nt = news_table %}{% include "_nba_news.html" %}{% endwith %}{% endif %}
 {% endif %}
 {% if view == 'lateswap' %}{% include "_nba_lateswap.html" %}{% include "_nba_contests.html" %}{% endif %}
 {% if view in ('games', 'lateswap') %}
-  <details class="hist-box exposures-box" id="exposures-sec" hx-get="{{ root }}/exposures" hx-trigger="toggle once" hx-target="#exposures-body" hx-swap="innerHTML"><summary>Exposures <span class="muted">the candidate pool, a simmed contest's field or our chosen entries: the histogram and every player's exposure</span></summary>
-    <div id="exposures-body"><div class="loading"><span class="spin"></span> loading…</div></div>
-  </details>
+  <div class="players-sec" id="players">
+    <h3>Players <span class="muted">every player on the slate: his row and his exposure in the candidate pool, a simmed contest's field or our chosen entries</span></h3>
+    <div id="exposures-body" hx-get="{{ root }}/players" hx-trigger="load" hx-swap="innerHTML"><div class="loading"><span class="spin"></span> loading the players…</div></div>
+  </div>
 {% endif %}
 {% if view == 'backtest' %}{% include "_nba_backtest.html" %}{% endif %}
-  {% if view in ('games', 'players') %}<p class="muted" style="font-size:12px;margin-top:14px">This page reads the slate. A team's minutes, pins, starter calls and late news are edited on its page (a chip in the games strip, a name in the news table or the players view): every edit there writes the team's projection into the pool at once, so what the sim, the chooser and the other desk read is what you see. Green rows have book odds behind them; grey rows are history-only and are the ones to question. Italic history = last season's.</p>{% endif %}
+  {% if view == 'games' %}<p class="muted" style="font-size:12px;margin-top:14px">This page reads the slate. A team's minutes, pins, starter calls and late news are edited on its page (a chip in the games strip, a name in the news table or the players table): every edit there writes the team's projection into the pool at once, so what the sim, the chooser and the other desk read is what you see. Green rows have book odds behind them; grey rows are history-only and are the ones to question. Italic history = last season's.</p>{% endif %}
 
 {% endif %}

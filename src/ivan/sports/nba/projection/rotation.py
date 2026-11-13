@@ -502,6 +502,111 @@ def game_oddities(session: Session, team: str, game_ids: Iterable[str], usual: O
     return out
 
 
+REGULAR_MIN = 24.0           # a regular: averaged this many minutes (a starter's share) over the games he played among...
+REGULAR_LOOKBACK = 5         # ...the team's previous games of the season (this many)...
+REGULAR_PLAYED = 3           # ...having played at least this many of them
+GARBAGE_SHADE_MIN = 6        # a game is "not close" when garbage time ran this many minutes or more (it began by minute 42)...
+                             # ...or the final margin reached BLOWOUT_MARGIN; a lead that only opened in the last minutes left the rotation alone
+GONE_EARLY_SHARE = 0.5       # a regular who left early counts when he played under this share of his season's minutes
+
+
+def _season_of(d) -> int:
+    return d.year if d.month >= 10 else d.year - 1
+
+
+def absent_regulars(box: pd.DataFrame, team: str) -> Dict[str, List[str]]:
+    """
+    {game_id: the team's regulars who did not play it}, from the box scores alone, as things stood on the day: a regular is a
+    player who played REGULAR_PLAYED or more of the team's previous REGULAR_LOOKBACK games of that season at REGULAR_MIN or
+    more minutes a game. Out injured, resting, suspended or just traded away: either way the minutes that night were handed
+    out without him. The first games of a season (fewer than REGULAR_PLAYED before them) say nothing. Heaviest minutes first.
+    """
+    b = box[(box.team == team) & box.played]
+    out: Dict[str, List[str]] = {}
+    if b.empty:
+        return out
+    seasons = b.game_date.map(_season_of)
+    for _, sb in b.groupby(seasons):
+        order = [str(g) for g in sb[["game_date", "game_id"]].drop_duplicates().sort_values(["game_date", "game_id"]).game_id]
+        mins = {str(gid): dict(zip(g.player_name, g.minutes.astype(float))) for gid, g in sb.groupby("game_id")}
+        for i, gid in enumerate(order):
+            prior = order[max(0, i - REGULAR_LOOKBACK):i]
+            out[gid] = []
+            if len(prior) < REGULAR_PLAYED:
+                continue
+            tally: Dict[str, List[float]] = {}
+            for pg in prior:
+                for n, m in mins[pg].items():
+                    tally.setdefault(str(n), []).append(m)
+            usual = {n: sum(ms) / len(ms) for n, ms in tally.items() if len(ms) >= REGULAR_PLAYED and sum(ms) / len(ms) >= REGULAR_MIN}
+            out[gid] = sorted((n for n in usual if n not in mins[gid]), key=lambda n: -usual[n])
+    return out
+
+
+def game_context(session: Session, box: pd.DataFrame, team: str) -> Dict[str, dict]:
+    """
+    Which of the team's played games are a picture of its usual rotation, for reading its history (the desk shades the rest:
+    the played-game picker and every player's recent games). {game_id: {margin, not_close, garbage_from, ot, absent,
+    left_early, injury, shade, tag, why}}:
+      not_close   a blowout: garbage time ran GARBAGE_SHADE_MIN minutes or more (the stints, game_oddities) or the final
+                  margin is BLOWOUT_MARGIN or more (the box score's points, so a game with no stints is still judged)
+      injury      a regular did not play (absent_regulars) or a regular left early (game_oddities: his last exit
+                  LEFT_EARLY_SEC before the end and before garbage time; here only a REGULAR_MIN player of the season
+                  who played under GONE_EARLY_SHARE of his minutes: a bench player who sat the fourth is not an injury)
+      shade       the css classes ("g-blow", "g-inj", both or ""), tag a few words for a list, why the full sentence
+    Overtime is said in `why` and does not shade.
+    """
+    b = box[box.team == team]
+    ids = [str(g) for g in b.game_id.unique()]
+    if not ids:
+        return {}
+    pts = box[box.game_id.isin(set(b.game_id))].groupby(["game_id", "team"]).points.sum()
+    margin: Dict[str, Optional[int]] = {}
+    for gid, g in pts.groupby(level=0):
+        us = g.get((gid, team)); them = [v for (_, t), v in g.items() if t != team]
+        margin[str(gid)] = int(us - them[0]) if us is not None and len(them) == 1 and not pd.isna(us) and not pd.isna(them[0]) else None
+    played = b[b.played]
+    # each game is read against its own season's minutes (a player's role last season is not this season's)
+    odd: Dict[str, dict] = {}; usual_of: Dict[str, Dict[str, float]] = {}
+    for _, sb in played.groupby(played.game_date.map(_season_of)):
+        usual = {str(n): float(m) for n, m in sb.groupby("player_name").minutes.mean().items()}
+        gids = [str(g) for g in sb.game_id.unique()]
+        usual_of.update({g: usual for g in gids})
+        try:
+            odd.update(game_oddities(session, team, gids, usual))
+        except Exception:   # noqa: BLE001 - no stints or fouls table: the box score still says who was absent and by how much it ended
+            pass
+    absent = absent_regulars(box, team)
+    game_min = {(str(g), str(n)): float(m) for g, n, m in zip(played.game_id, played.player_name, played.minutes)}
+    last = lambda n: str(n).split()[-1].title()   # noqa: E731
+    out: Dict[str, dict] = {}
+    for gid in ids:
+        o = odd.get(gid) or {}
+        m = margin.get(gid) if margin.get(gid) is not None else o.get("margin")
+        garbage = o.get("garbage_from")
+        long_garbage = garbage is not None and (48 - int(garbage)) >= GARBAGE_SHADE_MIN
+        not_close = bool(long_garbage or (m is not None and abs(m) >= BLOWOUT_MARGIN))
+        gone = list(absent.get(gid) or [])
+        usual = usual_of.get(gid) or {}
+        left = [n for n in (o.get("left_early") or []) if usual.get(n, 0.0) >= REGULAR_MIN and game_min.get((gid, n), 0.0) < GONE_EARLY_SHARE * usual[n]]
+        why, tag = [], []
+        if not_close:
+            why.append("not close: " + (f"{m:+d}" if m is not None else "a blowout") + (f", garbage time from minute {garbage}" if long_garbage else ""))
+            tag.append("blowout" + (f" {m:+d}" if m is not None else ""))
+        if gone:
+            why.append("without " + ", ".join(last(n) for n in gone) + " (regular" + ("s" if len(gone) != 1 else "") + " who did not play)")
+            tag.append("no " + ", ".join(last(n) for n in gone[:2]) + (f" +{len(gone) - 2}" if len(gone) > 2 else ""))
+        if left:
+            why.append(", ".join(last(n) for n in left) + " left early")
+            tag.append(", ".join(last(n) for n in left[:2]) + " left early")
+        if o.get("ot"):
+            why.append("overtime")
+        injury = bool(gone or left)
+        out[gid] = dict(margin=m, not_close=not_close, garbage_from=garbage, ot=bool(o.get("ot")), absent=gone, left_early=left, injury=injury,
+                        shade=" ".join(c for c, on in (("g-blow", not_close), ("g-inj", injury)) if on), tag=" · ".join(tag), why=" · ".join(why))
+    return out
+
+
 POOL_USUAL_MIN = 15.0        # a returner (available, not in the matched game) joins the pool when his usual minutes reach this
 POOL_PLAYED_MIN = 5.0        # minutes in the matched game that put a player in its rotation
 

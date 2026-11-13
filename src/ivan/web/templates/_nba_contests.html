@@ -1,5 +1,6 @@
-{# the contests section: the entries file (upload), its contests against the slate loaded at the top, our latest picks and
-   their exposures. Built with the board (ivan.web.nba.pipeline._contests_ctx); an upload reloads the page. #}
+{# the contests section: the entries file (upload) and its contests against the slate loaded at the top, each with its chooser
+   knobs. Built with the board (ivan.web.nba.pipeline._contests_ctx); an upload reloads the page. Exposures are a column of the
+   players table (_nba_players.html). #}
 {% set cx = contests_ctx %}
 <details class="hist-box contests-box" id="contests" {% if not cx.entries.exists or cx.other %}open{% endif %}><summary>Contests <span class="muted">{% if cx.entries.exists %}{{ cx.entries.entries or 0 }} entries in {{ cx.contests|length }} contest{{ '' if cx.contests|length == 1 else 's' }}{% if cx.other %} · <b class="bad">{{ cx.other }} of another slate</b>{% endif %}{% else %}no entries file yet{% endif %}</span></summary>
   <div class="pipe-row">
@@ -16,5 +17,4 @@
         <label title="portfolio: utility scale in multiples of the entry fees">bankroll <input name="bankroll" value="{{ '%g'|format(w.bankroll) if w.bankroll is defined else '' }}" placeholder="{{ form.bankroll }}" size="3"></label>
         <label title="slate: the bankroll in dollars (one figure for the slate; the largest wins when contests differ). Blank everywhere = read from our results (scripts/bankroll.py)">$ <input name="bankroll_dollars" value="{{ '%g'|format(w.bankroll_dollars) if w.bankroll_dollars is defined else '' }}" placeholder="{{ form.bankroll_dollars or 'results' }}" size="4"></label>
         <span class="cw-saved small">{% if w %}<span class="ok">own knobs</span>{% endif %}</span></form></td></tr>{% endfor %}</tbody></table>{% endif %}
-  {% with oob=False %}{% include "_nba_pipeline_side.html" %}{% endwith %}
 </details>

@@ -12,6 +12,7 @@ nav.frame .spacer { flex:1 }
 nav.frame a.tool { color:var(--accent); text-decoration:none; font-size:13px; padding:3px 8px; border-radius:10px } nav.frame a.tool:hover { background:#eef4ff }
 nav.frame .extra { display:inline-flex; gap:14px; align-items:center }
 nav.frame .jobstrip { font-size:12px; color:var(--muted); white-space:nowrap; display:none } nav.frame .jobstrip.on { display:inline }
+nav.frame .jobstrip .jobline { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:#888; margin-left:6px; max-width:36ch; display:inline-block; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom }
 nav.frame .jobstrip a { color:var(--accent); text-decoration:none } nav.frame .jobstrip b.running { color:var(--warn) } nav.frame .jobstrip b.failed { color:var(--bad) } nav.frame .jobstrip b.done { color:var(--ok) }
 nav.frame .jobstrip .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#bbb; vertical-align:1px; margin-right:2px }
 nav.frame .jobstrip .dot.running { background:var(--warn); animation:jobpulse 1.2s ease-in-out infinite } nav.frame .jobstrip .dot.failed { background:var(--bad) } nav.frame .jobstrip .dot.done { background:var(--ok) }

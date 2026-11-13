@@ -42,6 +42,22 @@ class RotationMixin:
         return dict(team=team, opp=opp, step=step, cells=cells, final=(sc[team][-1], sc[opp][-1]), overtime=sc["overtime"],
                     home=sc["home"] == team)
 
+    def game_context(self, team: str) -> dict:
+        """
+        {game_id: its context} for the team's played games (ivan.sports.nba.projection.rotation.game_context; terminal:
+        scripts/nba/game_context.py): not close (a blowout), a regular absent, a regular who left early. What the
+        played-game picker and the recent-games hovers shade, so the games that are no picture of the usual rotation are
+        told apart at a glance. Cached until the box scores grow.
+        """
+        cache = self.__dict__.setdefault("_game_ctx", {})
+        key = (team, getattr(self, "_season_key", None))
+        if key not in cache:
+            try:
+                cache[key] = ROT.game_context(self.session, self.slate.box, team)
+            except Exception:   # noqa: BLE001 - shading only: the lists stand without it
+                cache[key] = {}
+        return cache[key]
+
     def rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None, overlay: bool = False) -> dict:
         """The rotation grid (_rotation) with each row's rookie mark (rookie_of): the same on tonight's grid and a past game's.
         `overlay` (a past game only): what we projected for that game over what was played (overlay_ours)."""
@@ -82,13 +98,15 @@ class RotationMixin:
         games += [dict(g, season="last") for g in ROT.team_games(self.session, team, before=season_start, since=last_start, limit=100)]   # has barely played)
         rot = self.rot.get(team) or {}
         curve = rot.get("curve")
-        # the dropdown: date, opponent, the final from the team's side and how many of the five had not started the game
-        # before
+        # the dropdown: date, opponent, the final from the team's side, how many of the five had not started the game
+        # before, and what makes the game a poor picture of the usual rotation (game_context: a blowout, a regular absent,
+        # a player who left early), which also shades its line
         try:
             scores = ROT.game_scores(self.session, [g["game_id"] for g in games])
             new_starters = ROT.starter_changes(self.session, team, games)
         except Exception:   # noqa: BLE001 - labels only; the list stands without them
             scores, new_starters = {}, {}
+        ctx = self.game_context(team)
         for i, g in enumerate(games):
             try:
                 d = date.fromisoformat(str(g["game_date"])[:10])
@@ -99,11 +117,14 @@ class RotationMixin:
             us, them = sc.get(team), (sc.get(g["opp"]) if g.get("opp") else next((v for t, v in sc.items() if t != team), None))
             g["final"] = f"{'W' if us > them else 'L' if us < them else 'T'} {us}-{them}" if us is not None and them is not None else ""
             g["new_starters"] = new_starters.get(str(g["game_id"]))
+            c = ctx.get(str(g["game_id"])) or {}
+            g["shade"], g["why"] = c.get("shade", ""), c.get("why", "")
             g["short"] = " · ".join(x for x in [day + (f" vs {g['opp']}" if g.get("opp") else ""), g["final"],
-                                                 f"{g['new_starters']} new starter{'s' if g['new_starters'] != 1 else ''}" if g["new_starters"] is not None else ""] if x)
+                                                 f"{g['new_starters']} new starter{'s' if g['new_starters'] != 1 else ''}" if g["new_starters"] is not None else "",
+                                                 c.get("tag", "")] if x)
             g["long"] = " · ".join(x for x in [str(g.get("game_date", "")), f"vs {g['opp']}" if g.get("opp") else "", g["final"],
                                                 f"{g['new_starters']} of the five had not started the game before" if g["new_starters"] is not None else "",
-                                                ("the last game" if i == 0 and g.get("season") == "this" else "")] if x)
+                                                c.get("why", ""), ("the last game" if i == 0 and g.get("season") == "this" else "")] if x)
         proj = self.proj.get(team)
         targets = rot.get("targets") or {}
         base = dict(team=team, games=games, kind="none", drawn=False, locked=[], rows=[], counts=[], benched=[], game_id=None, last_game=None,
@@ -165,7 +186,9 @@ class RotationMixin:
                                  hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips,
                                  group=SK_group(names[n].position) if n in names else "wing", rank=ROT._spot_rank(names[n].position if n in names else None, None),
                                  foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
+            shown = ctx.get(str(last["game_id"])) or {}
             return {**base, "kind": "last", "rows": rows, "counts": ROT.column_counts(grid), "game_id": last["game_id"], "last_game": last["game_date"], "fouls": True,
+                    "shade": shown.get("shade", ""), "why": shown.get("why", ""),
                     "score": self.score_strip(team, last["game_id"]), "owners": owners, "games": games}
 
         grid = rot.get("grid")

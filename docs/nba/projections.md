@@ -216,7 +216,7 @@ give the same projection. The worlds count is one number, `config/nba.json → p
 The store's samples are every player's fantasy points in every world; world *i* of every game together is one
 night. **Solve** solves the salary-capped optimal lineup in each of 100 of them (the generator's solver, four worker
 processes, about a second) and writes each player's share of those optimals to `slates/<dg>/projection/optimal.json`:
-the **opt** column on the card, the players view and the exposures, read beside the field's ownership. It is what the
+the **opt** column on the card and the players table, read beside the field's ownership and the exposure. It is what the
 generator's exposures tend to before a generate runs, so the loop is map, look at opt against own, tweak the map. A
 team projected after the solve marks it stale (grey) until the next Solve.
 

@@ -1,5 +1,9 @@
 """
 The actions bar and the jobs: Refresh (the producer fetches, a consumer pulls the laptop), the chain, generate / sim / choose / field as jobs, the news and autopilot switches, the entries upload, the slate switch.
+
+Everything this server runs is a job of the one runner (ivan.web.jobs): the scripts as subprocesses, and a slate's refresh, pull,
+restore or first load as in-process jobs (_begin / _finish). So the bar's strip shows whatever runs on every page and the slate
+page's terminal (_nba_pipeline_status.html) has its log; the desk's messages are lines of that terminal too (Desk.flash.log).
 """
 from __future__ import annotations
 
@@ -26,40 +30,60 @@ from ivan.web import auth
 from .core import CONSUMER, LIMITED, LOADING, LOBBY, LOCK, PROGRESS, MAX_JOBS, NEWS_AUTO_SECONDS, SCRIPTS, _active, _busy, _here, _render, _submit as _submit_job, app, desk, desk_for, runner, slate, slate_jobs
 from ivan.sports.nba import slates as S
 from .edits import _apply_typed_pins
-from .exposures import _side_ctx
 from .knobs import MAX_UPLOAD, PIPELINE_DEFAULTS, _field, clamp_form, pipeline_form, write_desk_config
 from .outputs import _entries_info, _entries_path, _latest_outputs
 from ivan.sports.nba.desk import lineup_slates
 
 
-def _begin(dg: int, what: str) -> list:
-    """Mark the slate busy: on its desk when it has one, else in LOADING (a slate being fetched for the first time). Returns the
-    progress record's lines: the thread logs into it and the page's banner shows the last few until the work is done."""
+class _JobLog:
+    """What a slate's background work logs into: its job's log (the terminal, the strip's last line) and the loading page's lines."""
+    def __init__(self, job, lines: list):
+        self.job, self.lines = job, lines
+
+    def append(self, m) -> None:
+        self.lines.append(str(m)); runner.log(self.job, m)
+
+
+def _begin(dg: int, what: str, name: str = "refresh") -> _JobLog:
+    """Mark the slate busy: on its desk when it has one, else in LOADING (a slate being fetched for the first time), and record
+    the work as a running job of this slate (runner.begin: in this process, no queue), so the strip on every page and the slate
+    page's terminal show it like any other job. Returns the log the thread writes into."""
     d = desk_for(dg, create=False)
     if d is not None:
         d.busy = what
     else:
         LOADING[int(dg)] = what
-    PROGRESS[int(dg)] = dict(what=what, started=datetime.now(), lines=[])
-    return PROGRESS[int(dg)]["lines"]
+    job = runner.begin(name, meta=dict(step=name, slate=int(dg), what=what), title=what)
+    PROGRESS[int(dg)] = dict(what=what, started=datetime.now(), lines=[], job=job)
+    return _JobLog(job, PROGRESS[int(dg)]["lines"])
 
 
-def _finish(dg: int, msgs: list, changes: Optional[dict] = None, news_checked: bool = False) -> None:
-    """The slate's work is done: its desk (made now when the slate is new) rebuilds and shows the messages."""
+def _finish(dg: int, msgs: list, changes: Optional[dict] = None, news_checked: bool = False, ok: bool = True) -> None:
+    """The slate's work is done: its desk (made now when the slate is new) rebuilds, the messages go into the job's log and the
+    desk's (the terminal: nothing is flashed), and the job ends last, so the page that reloads on it reads the new pool."""
+    job = (PROGRESS.get(int(dg)) or {}).get("job")
     LOADING.pop(int(dg), None); PROGRESS.pop(int(dg), None)
-    d = desk_for(dg)
-    if d is None:
-        return
-    with d.lock, S.using(dg):
-        try:
-            d.rebuild()
-        except Exception as e:   # noqa: BLE001
-            msgs.append(f"rebuild failed: {type(e).__name__}: {e}")
-        if changes is not None:
-            d.changes = changes
-        if news_checked:
-            d.news_checked_at = datetime.now()
-        d.busy = None; d.flash.extend(msgs)
+    try:
+        d = desk_for(dg)
+        if d is None:
+            return
+        with d.lock, S.using(dg):
+            try:
+                d.rebuild()
+            except Exception as e:   # noqa: BLE001
+                msgs.append(f"rebuild failed: {type(e).__name__}: {e}"); ok = False
+            if changes is not None:
+                d.changes = changes
+            if news_checked:
+                d.news_checked_at = datetime.now()
+            d.busy = None
+            for m in msgs:
+                d.flash.note(m)
+    finally:
+        if job is not None:
+            for m in msgs:
+                runner.log(job, m)
+            runner.end(job, ok)
 
 
 def _start_restore(draft_group: int) -> None:
@@ -67,30 +91,31 @@ def _start_restore(draft_group: int) -> None:
     dg = int(draft_group)
 
     def run():
+        ok = True
         with S.using(dg):
             sess = S.session(dg)
             try:
                 info = restore_from_archive(sess, dg, log=log.append)
                 msg = f"slate {dg} restored from its {info['source']} capture of {info['captured_at']:%m-%d %H:%M} ({info['players']} players, {info['odds']} prop rows)"
             except IngestError as e:
-                msg = f"restore failed: {e}"
+                msg = f"restore failed: {e}"; ok = False
             except Exception as e:   # noqa: BLE001
-                msg = f"restore failed, the slate is unchanged: {type(e).__name__}: {e}"
+                msg = f"restore failed, the slate is unchanged: {type(e).__name__}: {e}"; ok = False
             finally:
                 sess.close()
-        _finish(dg, [msg])
-    log = _begin(dg, f"restoring slate {dg} from the archive")
+        _finish(dg, [msg], ok=ok)
+    log = _begin(dg, f"restoring slate {dg} from the archive", "restore")
     threading.Thread(target=run, name=f"ivan-restore-{dg}", daemon=True).start()
 
 
-def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Optional[bool] = None) -> None:
+def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Optional[bool] = None, name: str = "refresh") -> None:
     """Fetch, store, project and write the public projection of one slate in a background thread with the slate's own session (one
     transaction); the slate's pages keep reading meanwhile (its edits wait), then its desk rebuilds from the new pool. No field
     build: the sim builds the field it needs, the Field + ownership button builds it on demand."""
     dg = int(draft_group)
 
     def run():
-        changes = None
+        changes = None; ok = True
         with S.using(dg):
             sess = S.session(dg)
             try:
@@ -98,13 +123,13 @@ def _start_refresh(what: str, draft_group: int, update_odds: bool, lines: Option
                 changes = dict(at=datetime.now(), teams=moved or {})
                 msg = f"{what}: done" + (_news_note(news, sess) if news else "; the news check failed (see the auto box, or scripts/nba/newsfeed.py check)")
             except IngestError as e:
-                msg = f"{what} failed: {e}"
+                msg = f"{what} failed: {e}"; ok = False
             except Exception as e:   # noqa: BLE001 - the transaction rolled back: the old pool stands
-                msg = f"{what} failed, the previous pool is unchanged: {type(e).__name__}: {e}"
+                msg = f"{what} failed, the previous pool is unchanged: {type(e).__name__}: {e}"; ok = False
             finally:
                 sess.close()
-        _finish(dg, [msg], changes=changes, news_checked=True)
-    log = _begin(dg, what)
+        _finish(dg, [msg], changes=changes, news_checked=True, ok=ok)
+    log = _begin(dg, what, name)
     threading.Thread(target=run, name=f"ivan-refresh-{dg}", daemon=True).start()
 
 
@@ -116,7 +141,7 @@ def _start_pull(what: str, draft_group: int, ask: bool = False) -> None:
 
     def run():
         from ivan.sports.nba.slate import changes as CH
-        msgs = []; changes = None
+        msgs = []; changes = None; ok = True
         with S.using(dg):
             try:
                 changed = feed.pull_from_producer("nba", NBA_DATA_DIR.parent / "feed-state", log=log.append, slate=dg)
@@ -140,9 +165,9 @@ def _start_pull(what: str, draft_group: int, ask: bool = False) -> None:
                     msgs.append("nothing new: the laptop's copy of this slate has not changed since the last pull"
                                 + (f" (autopilot {'on' if prod.get('autopilot') else 'off'} there)" if prod else ""))
             except Exception as e:   # noqa: BLE001
-                msgs.append(f"{what} failed: {type(e).__name__}: {e}")
-        _finish(dg, msgs, changes=changes, news_checked=True)
-    log = _begin(dg, what)
+                msgs.append(f"{what} failed: {type(e).__name__}: {e}"); ok = False
+        _finish(dg, msgs, changes=changes, news_checked=True, ok=ok)
+    log = _begin(dg, what, "pull")
     threading.Thread(target=run, name=f"ivan-pull-{dg}", daemon=True).start()
 
 
@@ -166,7 +191,7 @@ def begin_switch(draft_group: int, source: str = "lobby") -> Optional[str]:
         title = (LOBBY.lobby_slates().get(str(dg)) or {}).get("title")
         if title:
             S.write_meta(dg, title=title)                     # DK's slate title ("Early Only") stays with the slate once the lobby drops it
-        _start_refresh(f"loading slate {dg}", dg, update_odds=False)
+        _start_refresh(f"loading slate {dg}", dg, update_odds=False, name="load")
     return None
 
 
@@ -224,7 +249,7 @@ def _news_loop():
                 with d.lock:
                     r = _news_check(lambda m: None)
                     if r["on_slate"]:
-                        d.flash.append(f"news: {len(r['on_slate'])} new on this slate: " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]))
+                        d.flash.note(f"news: {len(r['on_slate'])} new on this slate: " + "; ".join(f"{x.player_raw} · {x.headline}" for x in r["on_slate"][:6]))
             except Exception:   # noqa: BLE001 - the next tick tries again
                 pass
             finally:
@@ -286,7 +311,7 @@ def _pipeline_ctx() -> dict:
     now = datetime.now()
     return dict(form=pipeline_form, jobs=jobs, current=cur, log=log, active=bool(_active()), entries=ent,
                 outputs=_latest_outputs(), lineups_in_db=n_lineups, sims_in_db=n_sims, lineup_slates=slates, current_draft_group=current,
-                side=_side_ctx(), ready=ready, projected=projected, just_finished=just_finished,
+                ready=ready, projected=projected, just_finished=just_finished,
                 fresh=desk.freshness(now), chain=_chain_info(now), news=desk.news_status(now), now=now)
 
 
@@ -477,10 +502,11 @@ POOL_WRITERS = ("field", "sim", "solve")   # jobs that write the pool (every pla
 
 @slate.get("/pipeline/status", response_class=HTMLResponse)
 def pipeline_status(request: Request):
-    """Only the job status, log and results: what polls while a job runs, so nobody's typing in the form is overwritten. The poll
-    that finds a job of this slate just done answers HX-Refresh instead, so the whole page (the board, the exposures, the picks, the
-    export) shows what the job wrote; a pool-writing job (POOL_WRITERS) has the desk reload the pool first (the stamp sees the new
-    ownership, Desk.maybe_reload). A failed or cancelled job leaves the page as it is, with its log in this panel."""
+    """The terminal: the running job's status and log, the desk's messages, the results. It polls while a job of this slate runs (a
+    pipeline step, or the slate's refresh / pull / restore, which are jobs too), so nobody's typing in the form is overwritten. The
+    poll that finds a job of this slate just done answers HX-Refresh instead, so the whole page (the board, the players table, the
+    picks, the export) shows what the job wrote; a pool-writing job (POOL_WRITERS) has the desk reload the pool first (the stamp
+    sees the new ownership, Desk.maybe_reload). A failed or cancelled job leaves the page as it is, with its log in this panel."""
     with LOCK:
         ctx = _pipeline_ctx()
         if ctx["just_finished"] and ctx["jobs"][0].status == "done":

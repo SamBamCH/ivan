@@ -1,5 +1,5 @@
 """
-The pages: the shell, the slate page (read only: games strip, needs-you, actions, news, contests, exposures), the players view, the team page, the board partial, a past slate's backtest.
+The pages: the shell, the slate page (read only: games strip, actions + terminal, contests, news, the players table), the team page, the board partial, a past slate's backtest.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from ivan.sports.nba import slates as S
 from ivan.sports.nba.desk import LOBBY, CONSUMER
 from .lateswap import _lateswap_ctx
 from .pipeline import _contests_ctx, _pipeline_ctx, begin_switch
-from ivan.sports.nba.desk import NEAR_TIP_MIN
 
 
 def games_menu(now: datetime) -> list[dict]:
@@ -101,7 +100,8 @@ def _shell(request: Request, view: Optional[str], team: Optional[str], page: Opt
     """
     The page shell for a slate: held (its desk is bound: the board, or the team's card when `team` is set) or not (its backtest
     when its day has passed, else the loading state while it is fetched, else the load card). A held slate being refreshed
-    renders as usual with a banner (its edits wait); only a slate with no desk yet shows the spinner alone.
+    renders as usual (its edits wait; the refresh is a job in the terminal and on the bar's strip); only a slate with no desk yet
+    shows the spinner alone.
     `note` is why a load did not start (the load card says so).
     """
     from ivan.sports.nba.backtest.slate import mode_for
@@ -226,19 +226,20 @@ def _backtest_board(request: Request, dg: Optional[int]):
                    actuals=not CONSUMER, **fetch_ctx(int(dg)), **rr)   # the money (our entries, the contests) is this machine's only
 
 
-VIEW_ALIAS = {"exposures": "games"}                           # the exposures are a section of pre-lock
+VIEW_ALIAS = {"exposures": "games", "players": "games"}      # old addresses: the players table (with the exposures) is a section of pre-lock and post-lock
 
 
 @slate.get("/board", response_class=HTMLResponse)
 def board(request: Request, view: str = "games", after: str = "", dg: Optional[int] = None):
-    """The slate's board (the heavy part): the games menu, the pipeline panel and the cards / players / late swap view.
-    after=busy is the loading poll's request: once the slate's first load is done the whole page reloads (HX-Refresh), because
-    the header (the slate picker, the counts) was built before it. A held slate being refreshed renders its board as usual."""
+    """The slate's board (the heavy part): the games menu, the actions bar with the terminal, the contests, the news or the late
+    swap; the players table loads after it (GET /players). after=busy is the loading poll's request (a slate fetched for the
+    first time): once the load is done the whole page reloads (HX-Refresh), because the header (the slate picker, the counts)
+    was built before it. A held slate being refreshed renders its board as usual: the refresh is a job in the terminal."""
     key = getattr(request.state, "dg", None)
     from fastapi.responses import Response
     if after == "busy" and bound() is not None:
-        if desk.busy:
-            return _render(request, "_nba_progress.html", view=view)      # still refreshing: the banner with the latest lines
+        if desk.busy:                                                 # the first load made the desk before it finished: keep the spinner
+            return _render(request, "_nba_board.html", busy=desk.busy, view=view, games=[], menu=[], players=[], lateswap=None, exposures=None)
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     if after == "busy" and bound() is None and key is not None and not LOADING.get(key) and S.holds(key):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
@@ -252,49 +253,9 @@ def board(request: Request, view: str = "games", after: str = "", dg: Optional[i
         for t in desk.slate.teams():
             desk.slate.spread(t)                            # loads the lines once
         menu = games_menu(now)                               # the games strip: tip, line, one chip per team (its state, the questions on hover)
-        teams = desk.slate.teams()
         news_table = desk.news_table(now) if view == "games" else None
-        players = []; lateswap = None; exposures = None
-        if view == "lateswap":
-            lateswap = _lateswap_ctx(now)
-        if view == "players":                                # every team's rows, read only (the team page is where a row is edited)
-            players = [r for t in teams for r in desk.team_rows(t)]
-            players.sort(key=lambda r: (-(r["own"] or 0), -(r["fpts"] or 0)))
-        return _render(request, "_nba_board.html", busy=None, menu=menu, view=view, players=players, lateswap=lateswap, exposures=exposures,
-                       news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(), needs=_needs_you(menu, now),
+        lateswap = _lateswap_ctx(now) if view == "lateswap" else None
+        return _render(request, "_nba_board.html", busy=None, menu=menu, view=view, players=[], lateswap=lateswap, exposures=None,
+                       news_table=news_table, contests_ctx=_contests_ctx(), mapped=desk.mapped_summary(),
                        siblings=desk.sibling_changes(now) if view in ("games", "lateswap") else None,
                        questions_sum=desk.questions_summary(now), team_url=lambda t: _team_url(request, t), **_pipeline_ctx())
-
-
-NEAR_TIP_LOOK_MIN = 90      # a team with an open question or no lineup this close to its tip needs a look
-
-
-def _needs_you(menu: list, now: datetime) -> list[dict]:
-    """
-    The teams that want a look, and why: mapped but the inputs moved since (a status, the lineup, an out), an open question
-    (a questionable rotation player with no call) inside NEAR_TIP_LOOK_MIN of the tip, no Rotowire lineup inside NEAR_TIP_MIN,
-    a headline newer than the mapping. Everything else is green: the slate page is for reading, the team page for the rest.
-    Order: the nearest tip first. Empty = nothing to do until the next refresh.
-    """
-    out = []
-    for grp in menu:
-        for g in grp["games"]:
-            for c in g["teams"]:
-                if c.get("locked"):
-                    continue
-                why = []
-                mtt = c.get("mins_to_tip")
-                if c.get("colour") == "changed":
-                    why.append(c.get("why") or "changed since mapped")
-                if c.get("open") and (mtt is None or mtt <= NEAR_TIP_LOOK_MIN):
-                    why.append(f"{c['open']} open question{'s' if c['open'] != 1 else ''}: {c.get('qtext') or ''}".rstrip(": "))
-                if c.get("new"):
-                    why.append("new headline on a questionable player")
-                if c.get("starters") == "none" and mtt is not None and mtt <= NEAR_TIP_MIN:
-                    why.append("no lineup from Rotowire this close to the tip")
-                if c.get("state") == "unmapped" and mtt is not None and mtt <= NEAR_TIP_LOOK_MIN:
-                    why.append("unmapped")
-                if why:
-                    out.append(dict(team=c["team"], tip=c.get("tip"), mins_to_tip=mtt, why=why, colour=c.get("colour")))
-    out.sort(key=lambda x: (x["mins_to_tip"] if x["mins_to_tip"] is not None else 1e9, x["team"]))
-    return out
