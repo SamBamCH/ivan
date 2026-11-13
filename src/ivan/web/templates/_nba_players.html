@@ -64,8 +64,8 @@
           <td class="n" data-v="{{ r.opt or 0 }}">{% if r.opt is not none %}{% if r.opt_mean %}<b>{{ '%.0f%%'|format(r.opt) }}</b>{% else %}{{ '%.0f%%'|format(r.opt) }}{% endif %}{% else %}—{% endif %}</td>
           <td class="n {{ r.loud.min }}" data-v="{{ r.minutes or 0 }}" title="{{ r.cells.min }}">{% if r.pinned %}<b>{{ '%g'|format(r.pin) }}</b>{% elif r.minutes is not none %}{{ '%.1f'|format(r.minutes) }}{% endif %}</td>
           <td class="n" data-v="{{ r.book_min or 0 }}">{{ '%.1f'|format(r.book_min) if r.book_min is not none else '' }}</td>
-          <td class="n hover {{ r.loud.hist }}" data-v="{{ r.season_min or r.last_min or 0 }}" title="{{ r.cells.hist }}">{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}<span class="muted small"> ({{ r.season_games }}g)</span>{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% else %}—{% endif %}
-            {% if r.recent %}{% with recent = r.recent %}{% include "_nba_recent.html" %}{% endwith %}{% endif %}</td>
+          <td class="n hover {{ r.loud.hist }}" data-v="{{ r.season_min or r.last_min or 0 }}"{% if not r.recent %} title="{{ r.cells.hist }}"{% endif %}>{% if r.season_games %}{{ '%.1f'|format(r.season_min) }}<span class="muted small"> ({{ r.season_games }}g)</span>{% elif r.last_games %}<i>{{ '%.1f'|format(r.last_min) }}</i>{% else %}—{% endif %}
+            {% if r.recent %}{% with recent = r.recent, note = r.cells.hist %}{% include "_nba_recent.html" %}{% endwith %}{% endif %}</td>
           <td class="n {{ r.loud.fpm }} {% if r.priced %}mkt{% endif %}" data-v="{{ r.fpm or 0 }}" title="{{ r.cells.fpm }}">{{ '%.2f'|format(r.fpm) if r.fpm is not none else '' }}</td>
           <td class="n hover" data-v="{{ r.fpts or 0 }}"><b>{{ '%.1f'|format(r.fpts) if r.fpts is not none else '' }}</b>{% if r.sd is not none %}<span class="muted small"> ±{{ '%.0f'|format(r.sd) }}</span>{% endif %}
             {% if r.stats %}<div class="pop"><table class="mini"><tr><th>stat</th><th class="n">proj</th><th class="n">line</th><th class="n" title="consensus over / under prices at the line">odds</th><th class="n">mkt mean</th><th class="n">books</th></tr>

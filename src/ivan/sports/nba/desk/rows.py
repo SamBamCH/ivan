@@ -275,6 +275,7 @@ class RowsMixin:
         chart.update(span=span, hist_min=float(season.minutes.mean()) if len(season) else None,
                      ours_min=None if r is None or name not in r.index else float(r.loc[name, "minutes"]))
         return dict(stat=stat, label=STAT_LABELS.get(stat, stat), proj=pv, mean=m.get("mean"), basis=m.get("basis"), line=m.get("line"), odds=m.get("odds"), chart=chart,
+                    pin=self.local_overrides.get(name, {}).get(stat), published=(self._published_of(name) or {}).get(stat) if self._layer_of(name).get(stat) == "published" else None,
                     rows=main, alts=alts, stale=n_stale,
                     status_at=None if p is None or p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"))
 

@@ -230,7 +230,9 @@ played this season at each value; last season's are added when he has under five
 share of the World's worlds at each value) as side-by-side bars over the same bins on one axis, the books' consensus
 line dashed across it. Whole values, binned in equal steps once the range passes 16 bars (points in twos or threes); the
 last 1% of our worlds is left off so a far tail does not squeeze the bars. The hover takes no pointer, so the numbers are
-in the legend: how many games, each side's mean and the minutes it came in. Above it ours, the books' mean and the
+in the legend: how many games, each side's mean and the minutes it came in. A box with a hover carries no tooltip of its
+own (it sat on top of the hover): what the box holds and what typing in it does is the hover's last line, on the
+minutes box (under the recent games) and the stat boxes (under the chart) alike. Above it ours, the books' mean and the
 minutes it was priced over, the line and its prices; under it each book's main line with its over / under in one row
 (`Desk.stat_hover` → `desk.rows.stat_chart`). Our distribution is recorded when the game is drawn
 (`projection.worlds.stat_shares`, the store record's `stat_dist`); a team projected before this was recorded shows his
