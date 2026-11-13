@@ -228,7 +228,9 @@ column up for the team (fpts: the World's, the plan's in the hover; opt: the wor
 Every stat cell is a pin box and a hover. **Hover**: a chart of that stat, **his games** (blue: the share of the games he
 played this season at each value; last season's are added when he has under five) against **ours tonight** (orange: the
 share of the World's worlds at each value) as side-by-side bars over the same bins on one axis, the books' consensus
-line dashed across it. Whole values, binned in equal steps once the range passes 16 bars (points in twos or threes); the
+line dashed across it. **The y axis is the same on every chart**, 0 to 50% (`rows.CHART_YMAX`), so a bar's
+height means the same from one player or stat to the next; a taller bar (blocks at 0 for a guard) stops at the top with
+its share written above it. Whole values, binned in equal steps once the range passes 16 bars (points in twos or threes); the
 last 1% of our worlds is left off so a far tail does not squeeze the bars. The hover takes no pointer, so the numbers are
 in the legend: how many games, each side's mean and the minutes it came in. A box with a hover carries no tooltip of its
 own (it sat on top of the hover): what the box holds and what typing in it does is the hover's last line, on the

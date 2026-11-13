@@ -19,6 +19,8 @@ STAT_GAP = 0.15                                                                 
 
 CHART_BINS = 16            # the stat chart's bars: a stat whose range is wider is binned (points in twos or threes)
 CHART_MIN_GAMES = 5        # fewer games than this in the season and last season's are added to the history
+CHART_YMAX = 0.5           # the y axis of every stat chart, whatever the stat or the player: 0 to this share, so heights compare from one
+                           # hover to the next. A taller bar (blocks at 0 for a guard) is drawn to the top with its share written on it
 
 
 def stat_chart(history: list, shares: Optional[list], line: Optional[float] = None) -> dict:
@@ -26,7 +28,7 @@ def stat_chart(history: list, shares: Optional[list], line: Optional[float] = No
     The stat hover's chart: the player's own games and our drawn distribution over the same bins. `history` = the stat in each
     game he played, `shares` = the World's share of worlds at each whole value (projection.worlds.stat_shares; None when the
     record has none). Whole values, binned in equal steps when the range passes CHART_BINS. Returns {bins: [{lo, hi, label,
-    hist, ours}] (shares of games / of worlds), step, ymax, n_hist, hist_mean, ours_mean, line_at (the books' line as a
+    hist, ours}] (shares of games / of worlds), step, ymax (always CHART_YMAX: one fixed axis), n_hist, hist_mean, ours_mean, line_at (the books' line as a
     position in bins from the left edge, None when off the chart), has_ours}.
     """
     h = [int(round(float(x))) for x in history if x is not None and not pd.isna(x)]
@@ -42,7 +44,7 @@ def stat_chart(history: list, shares: Optional[list], line: Optional[float] = No
         lo, hi = k * step, (k + 1) * step - 1
         bins.append(dict(lo=lo, hi=hi, label=str(lo) if step == 1 else f"{lo}-{hi}",
                          hist=(sum(1 for x in h if lo <= x <= hi) / len(h)) if h else 0.0, ours=float(sum(p[lo:hi + 1]))))
-    ymax = max([b["hist"] for b in bins] + [b["ours"] for b in bins] + [0.05])
+    ymax = CHART_YMAX
     tot = sum(p)
     return dict(bins=bins, step=step, ymax=ymax, n_hist=len(h), hist_mean=(sum(h) / len(h)) if h else None,
                 ours_mean=(sum(i * x for i, x in enumerate(p)) / tot) if tot > 0 else None, has_ours=tot > 0,

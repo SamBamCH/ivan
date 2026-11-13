@@ -1,5 +1,6 @@
 {# the stat cell's hover, fetched on the first hover (ivan.web.nba.team.props_hover -> Desk.stat_hover): a chart of the player's own
-   games (blue) against our drawn distribution for tonight (orange) over the same bins, the books' line dashed on it; under it each
+   games (blue) against our drawn distribution for tonight (orange) over the same bins, the books' line dashed on it. The y axis is
+   the same on every chart (0 to rows.CHART_YMAX; a taller bar stops at the top with its share written above it); under it each
    book's main line in one row, the set-aside lines struck. The hover takes no pointer, so the numbers are in the legend. #}
 {% set c = s.chart %}{% set HIST = '#2a78d6' %}{% set OURS = '#eb6834' %}
 <div class="statchart">
@@ -10,9 +11,11 @@
   <svg viewBox="0 0 {{ W }} {{ H }}" width="{{ W }}" height="{{ H }}" role="img" aria-label="{{ s.label }}: his games against our distribution">
     {% for t in (0.5, 1.0) %}{% set y = top + ph * (1 - t) %}<line x1="{{ left }}" x2="{{ W - right }}" y1="{{ y }}" y2="{{ y }}" stroke="#ececec" stroke-width="1"/><text x="{{ left - 4 }}" y="{{ y }}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#888">{{ '%.0f%%'|format(100 * c.ymax * t) }}</text>{% endfor %}
     <line x1="{{ left }}" x2="{{ W - right }}" y1="{{ top + ph }}" y2="{{ top + ph }}" stroke="#cfcfcf" stroke-width="1"/>
-    {% for b in c.bins %}{% set cx = left + (loop.index0 + 0.5) * bw %}{% set hh = ph * b.hist / c.ymax %}{% set ho = ph * b.ours / c.ymax %}
+    {% for b in c.bins %}{% set cx = left + (loop.index0 + 0.5) * bw %}{% set hh = ph * ([b.hist, c.ymax]|min) / c.ymax %}{% set ho = ph * ([b.ours, c.ymax]|min) / c.ymax %}
     {% if b.hist > 0 %}<rect x="{{ cx - bar - 1 }}" y="{{ top + ph - hh }}" width="{{ bar }}" height="{{ hh }}" rx="{{ [2, bar / 2]|min }}" fill="{{ HIST }}"/>{% endif %}
     {% if b.ours > 0 %}<rect x="{{ cx + 1 }}" y="{{ top + ph - ho }}" width="{{ bar }}" height="{{ ho }}" rx="{{ [2, bar / 2]|min }}" fill="{{ OURS }}"/>{% endif %}
+    {% if b.hist > c.ymax %}<text x="{{ cx - 1 - bar / 2 }}" y="{{ top - 2 }}" text-anchor="end" font-size="8" fill="#333">{{ '%.0f%%'|format(100 * b.hist) }}</text>{% endif %}
+    {% if b.ours > c.ymax %}<text x="{{ cx + 1 + bar / 2 }}" y="{{ top - 2 }}" text-anchor="start" font-size="8" fill="#333">{{ '%.0f%%'|format(100 * b.ours) }}</text>{% endif %}
     {% if nb <= 9 or loop.index0 % 2 == 0 %}<text x="{{ cx }}" y="{{ H - 6 }}" text-anchor="middle" font-size="9" fill="#666">{{ b.label }}</text>{% endif %}{% endfor %}
     {% if c.line_at is not none and c.line_at <= nb %}{% set lx = left + c.line_at * bw %}<line x1="{{ lx }}" x2="{{ lx }}" y1="{{ top - 4 }}" y2="{{ top + ph }}" stroke="#333" stroke-width="1.5" stroke-dasharray="4 3"/><text x="{{ lx + 3 if c.line_at < nb * 0.8 else lx - 3 }}" y="{{ top + 2 }}" text-anchor="{{ 'start' if c.line_at < nb * 0.8 else 'end' }}" font-size="9" fill="#333">line {{ '%g'|format(s.line) }}</text>{% endif %}
   </svg>
