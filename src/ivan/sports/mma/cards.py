@@ -57,3 +57,15 @@ def unpack(payload: dict) -> dict:
 def stored_cards() -> list[int]:
     """Draft groups with a card record."""
     return sorted({int(a.key) for a in raw.index("mma") if a.kind == KIND})
+
+
+def card_of_pool(fighter_ids: Iterable[int]) -> Optional[int]:
+    """The draft group whose newest card record holds exactly these fighters (the pool on file), or None."""
+    ids = {int(i) for i in fighter_ids}
+    if not ids:
+        return None
+    for dg in reversed(stored_cards()):
+        card = load_card(dg)
+        if card is not None and {f["id"] for f in card["pool"]} == ids:
+            return dg
+    return None

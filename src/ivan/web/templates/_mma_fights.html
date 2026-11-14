@@ -1,0 +1,62 @@
+{# The card's fights as the model simulates them (ivan.web.mma.fights.view over ivan.sports.mma.fight_report.card_report;
+   scripts/mma/fights.py prints the same). Needs `fights` (the report). #}
+{% macro odds(v) %}{% if v is none %}<span class="blank">—</span>{% else %}{{ '%+d'|format(v|int) }}{% endif %}{% endmacro %}
+{% macro line(v) %}{% if v is none %}<span class="blank">—</span>{% else %}{{ '%g'|format(v) }}{% endif %}{% endmacro %}
+{% macro pct(v) %}{{ '%.0f'|format(v * 100) }}%{% endmacro %}
+{% macro pts(v) %}{% if v is none %}—{% else %}{{ '%.1f'|format(v) }}{% endif %}{% endmacro %}
+{% if fights.alerts %}
+<div class="card alerts">
+  <h2>Check the inputs</h2>
+  <ul>{% for a in fights.alerts %}<li class="{{ a.level }}"><span class="ck">{{ 'wrong' if a.level == 'bad' else 'check' }}</span>{{ a.text }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<div class="card">
+  <h2>The card <span class="muted small">{{ fights.fights|length }} fights · {{ '{:,}'.format(fights.n_sims) }} worlds each · fight model {{ fights.model }}{% if fights.timeline.ingested %} · ingested {{ fights.timeline.ingested.strftime('%a %H:%M') }}{% endif %}</span></h2>
+  <div class="scroll"><table class="fighters">
+    <tr><th>Fighter</th><th>Opponent</th><th class="num">Salary</th><th class="num" title="the moneyline">ML</th>
+      <th class="num" title="share of worlds this fighter wins">Win</th><th class="num" title="wins by a finish">Finish</th>
+      <th class="num" title="mean fantasy points over every world">Mean</th><th class="num" title="the median world">Median</th><th class="num" title="one world in ten is above this">90th</th>
+      <th class="num" title="mean fantasy points in the worlds this fighter wins">If wins</th><th class="num" title="share of worlds at 100 points or more">100+</th>
+      <th class="num" title="mean points per $1,000 of salary">Per $1k</th></tr>
+    {% for s in fights.fighters %}<tr>
+      <td><a href="#fight-{{ s.fight }}">{{ s.name|title }}</a>{% if s.blank %} <span class="blank" title="blank in the pool: {{ s.blank|join(', ') }}">●</span>{% endif %}</td>
+      <td class="muted">{{ s.opponent|title }}</td><td class="num">${{ '{:,}'.format(s.salary) }}</td><td class="num">{{ odds(s.win_odds) }}</td>
+      <td class="num">{{ pct(s.win) }}</td><td class="num">{{ pct(s.win_finish) }}</td><td class="num"><b>{{ pts(s.mean) }}</b></td><td class="num">{{ pts(s.p50) }}</td>
+      <td class="num">{{ pts(s.p90) }}</td><td class="num">{{ pts(s.mean_win) }}</td><td class="num">{{ pct(s.big) }}</td><td class="num">{{ '%.2f'|format(s.value) if s.value is not none else '—' }}</td></tr>{% endfor %}
+  </table></div>
+  {% if fights.timeline.sims %}<p class="small muted">Contest sims on file: {% for s in fights.timeline.sims %}<span class="{{ 'blank' if s.stale else '' }}" title="{{ '{:,}'.format(s.lineups) }} lineups in its field{% if s.stale %} · older than the pool{% endif %}">{{ s.contest }} {{ s.at.strftime('%H:%M') if s.at else '' }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+</div>
+{% for f in fights.fights %}{% set a = f.fighters[0] %}{% set b = f.fighters[1] %}
+<div class="card fight" id="fight-{{ f.id }}">
+  <div class="fh"><h2>{{ f.title }}</h2>
+    <span class="pill">{{ f.rounds }} rounds</span>{% if f.gametime %}<span class="pill">{{ f.gametime.strftime('%H:%M') }}</span>{% endif %}
+    <span class="pill {{ 'bad' if f.finish_source == 'default' else '' }}" title="{% if f.finish_source == 'fight' %}from the fight's ITD price {{ '%+d'|format(f.itd_odds|int) }}{% elif f.finish_source == 'fighters' %}from the two fighters' ITD prices{% else %}no finish price in the pool: the default finish chance{% endif %} · {{ '%.1f'|format(f.p_u60 * 100) }}% end inside the first minute">finish {{ pct(f.p_finish) }}{% if f.finish_source == 'default' %} · no price{% endif %}</span>
+    <span class="pill" title="mean time fought">{{ '%.1f'|format(f.minutes) }} of {{ f.rounds * 5 }} min</span></div>
+  <div class="fgrid">
+    <div>
+      <div class="scroll"><table class="side">
+        <tr><th></th><th class="num">Salary</th><th class="num" title="the moneyline">ML</th><th class="num" title="this fighter's price to win inside the distance">ITD</th>
+          <th class="num" title="significant strikes line (full fight) · landed on average in the sim">Strikes</th><th class="num" title="takedowns line (full fight) · landed on average in the sim">TDs</th>
+          <th class="num" title="share of worlds this fighter wins">Win</th><th class="num" title="wins by a finish · by decision">Fin · Dec</th></tr>
+        {% for s in f.fighters %}<tr><td><i class="sw {{ 'a' if loop.first else 'b' }}"></i><b>{{ s.name|title }}</b></td><td class="num">${{ '{:,}'.format(s.salary) }}</td>
+          <td class="num">{{ odds(s.win_odds) }}</td><td class="num">{{ odds(s.itd_odds) }}</td>
+          <td class="num">{{ line(s.sig_line) }} <span class="muted">· {{ '%.1f'|format(s.sig) }}</span></td><td class="num">{{ line(s.td_line) }} <span class="muted">· {{ '%.1f'|format(s.td) }}</span></td>
+          <td class="num"><b>{{ pct(s.win) }}</b></td><td class="num">{{ pct(s.win_finish) }} · {{ pct(s.win_decision) }}</td></tr>{% endfor %}
+      </table></div>
+      <div class="scroll"><table class="side">
+        <tr><th>Points</th><th class="num">Mean</th><th class="num">25th</th><th class="num">Median</th><th class="num">75th</th><th class="num" title="one world in ten is above this">90th</th>
+          <th class="num" title="mean in the worlds this fighter wins">If wins</th><th class="num" title="mean in the worlds this fighter loses">If loses</th><th class="num" title="share of worlds at 100 points or more">100+</th><th class="num" title="mean points per $1,000 of salary">Per $1k</th></tr>
+        {% for s in f.fighters %}<tr><td><i class="sw {{ 'a' if loop.first else 'b' }}"></i>{{ s.name|title }}</td><td class="num"><b>{{ pts(s.mean) }}</b></td><td class="num">{{ pts(s.p25) }}</td>
+          <td class="num">{{ pts(s.p50) }}</td><td class="num">{{ pts(s.p75) }}</td><td class="num">{{ pts(s.p90) }}</td><td class="num">{{ pts(s.mean_win) }}</td><td class="num">{{ pts(s.mean_loss) }}</td>
+          <td class="num">{{ pct(s.big) }}</td><td class="num">{{ '%.2f'|format(s.value) if s.value is not none else '—' }}</td></tr>{% endfor %}
+      </table></div>
+    </div>
+    <div>
+      <p class="small muted cap">How it ends: each fighter's wins by round, the decision lighter. Hover a piece for its share.</p>
+      {{ f.ends_svg|safe }}
+      <p class="small muted cap">Fantasy points, share of worlds per {{ fights.axis.bin }} points: {{ a.name|title }} up, {{ b.name|title }} down; dashes mark the means. Every fight is drawn on the same scale.</p>
+      {{ f.dist_svg|safe }}
+    </div>
+  </div>
+</div>
+{% endfor %}

@@ -156,7 +156,8 @@ class HazardFight:
         wt = max(self._weighted_time(f1_side), 1e-9)
         return float(f.sig_strikes or 0.0) / wt, float(f.takedowns or 0.0) / wt
 
-    def _production(self, f1_side: bool, t: np.ndarray, wins: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def _counts(self, f1_side: bool, t: np.ndarray, wins: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+        """(significant strikes, takedowns) landed, one whole count per simulation."""
         r_sig, r_td = self.rates(f1_side)
         h = float(self.scoring.get("loser_production_share", 0.5))
         cv = self._param("rate_cv")
@@ -166,7 +167,7 @@ class HazardFight:
             weight = weight * rng.gamma(shape, 1.0 / shape, size=t.shape[0])
         sig = rng.poisson(np.maximum(r_sig * weight, 0.0)) if r_sig > 0 else np.zeros(t.shape[0])
         td = rng.poisson(np.maximum(r_td * weight, 0.0)) if r_td > 0 else np.zeros(t.shape[0])
-        return sig * float(self.scoring["sig_strike"]) + td * float(self.scoring["takedown"])
+        return sig, td
 
     def _bonus(self, t: np.ndarray, finished: np.ndarray) -> np.ndarray:
         b = self.scoring["bonus"]
@@ -176,8 +177,13 @@ class HazardFight:
         return np.where(finished, by_round[idx], float(b[DECISION]))
 
     # ------------------------------------------------------------------ simulate
-    def simulate(self, n: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-        """Fantasy points for (fighter1, fighter2) in each of n simulated fights."""
+    def simulate_detail(self, n: int, rng: np.random.Generator) -> dict:
+        """
+        n simulated fights, one array per key: t (seconds fought), finished
+        (stopped before the final bell), f1_wins, bonus (the winner's), sig1 /
+        td1 / sig2 / td2 (counts landed), fpts1 / fpts2. simulate() is this
+        with the points alone, on the same draws.
+        """
         T = self.total_time
         tau = self.inverse_cumulative_hazard(-np.log(rng.random(n)))
         finished = tau < T
@@ -186,9 +192,17 @@ class HazardFight:
         u = rng.random(n)
         f1_wins = np.where(finished, u < s1, u < d1)
         bonus = self._bonus(t, finished)
-        prod1 = self._production(True, t, f1_wins, rng)
-        prod2 = self._production(False, t, ~f1_wins, rng)
-        return prod1 + np.where(f1_wins, bonus, 0.0), prod2 + np.where(f1_wins, 0.0, bonus)
+        w_sig, w_td = float(self.scoring["sig_strike"]), float(self.scoring["takedown"])
+        sig1, td1 = self._counts(True, t, f1_wins, rng)
+        sig2, td2 = self._counts(False, t, ~f1_wins, rng)
+        return {"t": t, "finished": finished, "f1_wins": f1_wins, "bonus": bonus, "sig1": sig1, "td1": td1, "sig2": sig2, "td2": td2,
+                "fpts1": sig1 * w_sig + td1 * w_td + np.where(f1_wins, bonus, 0.0),
+                "fpts2": sig2 * w_sig + td2 * w_td + np.where(f1_wins, 0.0, bonus)}
+
+    def simulate(self, n: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+        """Fantasy points for (fighter1, fighter2) in each of n simulated fights."""
+        d = self.simulate_detail(n, rng)
+        return d["fpts1"], d["fpts2"]
 
     # ------------------------------------------------------------------ expectations
     def expected_bonus(self, f1_side: bool) -> float:

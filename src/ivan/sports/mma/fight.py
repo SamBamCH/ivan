@@ -166,8 +166,13 @@ class Fight:
 
         return draw(fighter.sig_strikes), draw(fighter.takedowns)
 
-    def simulate(self, n: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-        """Fantasy points for (fighter1, fighter2) in each of n simulated fights."""
+    def simulate_detail(self, n: int, rng: np.random.Generator) -> dict:
+        """
+        n simulated fights, one array per key: t (seconds fought), finished
+        (stopped before the final bell), f1_wins, bonus (the winner's), sig1 /
+        td1 / sig2 / td2 (landed; this model's are not whole numbers), fpts1 /
+        fpts2. simulate() is this with the points alone, on the same draws.
+        """
         nodes = self.nodes()
         probs = np.array([nd.prob for nd in nodes], dtype=float)
         idx = rng.choice(len(nodes), size=n, p=probs)
@@ -180,17 +185,22 @@ class Fight:
         t1 = np.array([nd.t1 for nd in nodes])[idx]
         finish_time = t0 + rng.random(n) * (t1 - t0)
         bonus = np.array([nd.bonus for nd in nodes])[idx]
+        finished = np.array([nd.round != DECISION for nd in nodes])[idx]
 
         w_sig, w_td = float(self.scoring["sig_strike"]), float(self.scoring["takedown"])
         loser_share = float(self.scoring["loser_production_share"])
         sig1, td1 = self._production(self.f1, finish_time, rng)
         sig2, td2 = self._production(self.f2, finish_time, rng)
-        prod1 = sig1 * w_sig + td1 * w_td
-        prod2 = sig2 * w_sig + td2 * w_td
+        sig1, td1 = np.where(f1_wins, sig1, sig1 * loser_share), np.where(f1_wins, td1, td1 * loser_share)
+        sig2, td2 = np.where(f1_wins, sig2 * loser_share, sig2), np.where(f1_wins, td2 * loser_share, td2)
+        return {"t": finish_time, "finished": finished, "f1_wins": f1_wins, "bonus": bonus, "sig1": sig1, "td1": td1, "sig2": sig2, "td2": td2,
+                "fpts1": sig1 * w_sig + td1 * w_td + np.where(f1_wins, bonus, 0.0),
+                "fpts2": sig2 * w_sig + td2 * w_td + np.where(f1_wins, 0.0, bonus)}
 
-        fpts1 = np.where(f1_wins, prod1 + bonus, prod1 * loser_share)
-        fpts2 = np.where(f1_wins, prod2 * loser_share, prod2 + bonus)
-        return fpts1, fpts2
+    def simulate(self, n: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+        """Fantasy points for (fighter1, fighter2) in each of n simulated fights."""
+        d = self.simulate_detail(n, rng)
+        return d["fpts1"], d["fpts2"]
 
 
 def project_fighter(fighter: Fighter, fight_itd_odds: Optional[float], scoring: dict = DEFAULT_SCORING) -> tuple[float, float]:

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ivan.sports.mma.fight import Fight, Fighter
+from ivan.sports.mma.fight import DEFAULT_SCORING, Fight, Fighter
 from ivan.sports.mma.hazard import DEFAULTS, HazardFight, build_fight
 from ivan.sports.mma.odds import american_to_prob
 
@@ -105,3 +105,14 @@ def test_build_fight_picks_the_model_by_config():
     assert isinstance(h, HazardFight)
     h2 = build_fight("x", f1, f2, 3, itd_odds=-120, scoring=h.scoring, fight_cfg={"rate_cv": 0.0})
     assert h2.params["rate_cv"] == 0.0 and h2.params["first_minute_mult"] == 1.0
+
+
+def test_simulate_detail_is_the_same_draw_as_simulate():
+    for model in ("hazard", "tree"):
+        f1, f2 = fighters()
+        fight = build_fight("x", f1, f2, 3, itd_odds=-120, u60_odds=1500, r1_odds=200, scoring=DEFAULT_SCORING, fight_cfg={"model": model})
+        a, b = fight.simulate(4000, np.random.default_rng(5))
+        d = fight.simulate_detail(4000, np.random.default_rng(5))
+        assert np.array_equal(a, d["fpts1"]) and np.array_equal(b, d["fpts2"])
+        assert ((d["fpts1"] > d["fpts2"]) == d["f1_wins"]).mean() > 0.9          # the winner takes the bonus
+        assert d["t"].max() <= fight.total_time and (d["t"][~d["finished"]] == fight.total_time).all()

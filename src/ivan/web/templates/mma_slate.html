@@ -6,7 +6,18 @@
 <title>Ivan · MMA · {{ slate.label }}</title>
 <link rel="icon" type="image/svg+xml" href="{{ frame.site }}/static/favicon.svg">
 <link rel="stylesheet" href="{{ frame.site }}/static/ivan.css?v={{ frame.v }}">
-<style> table { border-collapse:collapse; width:100%; background:#fff } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px } th { color:var(--muted); font-size:13px } td.num, th.num { text-align:right } .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px } </style>
+<style> table { border-collapse:collapse; width:100%; background:#fff } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:14px } th { color:var(--muted); font-size:13px } td.num, th.num { text-align:right } .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px }
+  /* the fights (_mma_fights.html): a fight is a card, its tables left and its points distribution right */
+  .scroll { overflow-x:auto } .fight .fh { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px } .fight .fh h2 { margin:0 6px 0 0 }
+  .pill { font-size:12px; padding:2px 9px; border-radius:10px; background:#f0f0ee; color:var(--ink); white-space:nowrap } .pill.bad { background:#fde8e6; color:var(--bad) }
+  .fgrid { display:grid; grid-template-columns:minmax(0,11fr) minmax(0,9fr); gap:22px; align-items:start } @media (max-width:1100px) { .fgrid { grid-template-columns:minmax(0,1fr) } }
+  table.side { margin-bottom:10px } table.side td, table.side th { padding:4px 6px; font-size:13px; white-space:nowrap; font-variant-numeric:tabular-nums } table.fighters td, table.fighters th { padding:4px 8px; font-size:13px; white-space:nowrap; font-variant-numeric:tabular-nums }
+  table.fighters a { color:var(--ink); text-decoration:none; font-weight:600 } table.fighters a:hover { color:var(--accent) }
+  i.sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px } i.sw.a { background:#1f5fbf } i.sw.b { background:#d97706 }
+  .blank { color:var(--bad) } p.cap { margin:8px 0 4px }
+  .alerts { border-left:3px solid var(--bad) } .alerts ul { list-style:none; margin:0; padding:0 } .alerts li, .alerts li.bad, .alerts li.warn { font-size:14px; margin:6px 0; color:var(--ink) }
+  .alerts .ck { display:inline-block; min-width:44px; font-size:11px; font-weight:700; text-transform:uppercase; margin-right:8px } .alerts li.bad .ck { color:var(--bad) } .alerts li.warn .ck { color:var(--warn) }
+  .fight:target { border-color:var(--accent) } </style>
 </head>
 <body class="plain">
 <header>{{ bar(frame) }}</header>
@@ -30,9 +41,11 @@
   <div class="card">
     <h2>The slate</h2>
     <p>{{ slate.detail or 'nothing on file for this slate' }}{% if slate.loaded %} · the fighter pool on file holds {{ fighters }} fighters{% endif %}.</p>
-    <p class="small muted">The MMA pipeline has no buttons here yet. From the repository root: <code>scripts/mma/ingest.py{% if slate.source == 'lobby' %} --draft-group {{ slate.key }}{% endif %}</code>,
+    <p class="small muted">The pipeline has no buttons here yet; the fights below are what <code>scripts/mma/fights.py</code> prints. From the repository root: <code>scripts/mma/ingest.py{% if slate.source == 'lobby' %} --draft-group {{ slate.key }}{% endif %}</code>,
       then <code>generate_lineups.py --universe</code>, <code>sim.py</code>, <code>choose.py</code> (docs/mma/README.md).</p>
   </div>
+  {% if fights_error %}<div class="card alerts"><p class="small">The fights could not be simulated: {{ fights_error }}</p></div>{% endif %}
+  {% if fights and fights.fights %}{% include "_mma_fights.html" %}{% endif %}
   {% if contests %}
   <div class="card">
     <h2>Contests stored <span class="muted small">{{ contests|length }}</span></h2>

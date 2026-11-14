@@ -1,9 +1,10 @@
 # src/ivan/web/mma/core.py
 """
-MMA in the one UI: the slot only. The picker lists the cards (the DraftKings lobby's MMA slates and
-every draft group whose contests ingest.py stored), a slate page says what is on file for it, and
-the backtest view says what settle has not built yet. The pipeline (scripts/mma/*) has no buttons
-here yet; docs/mma/README.md is the flow.
+MMA in the one UI. The picker lists the cards (the DraftKings lobby's MMA slates and every draft
+group whose contests ingest.py stored), a slate page says what is on file for it and, for the card
+in the pool, shows every fight as the model simulates it (fights.py; scripts/mma/fights.py prints
+the same), and the backtest view says what settle has not built yet. The rest of the pipeline
+(scripts/mma/*) has no buttons here yet; docs/mma/README.md is the flow.
 """
 from __future__ import annotations
 
@@ -44,7 +45,7 @@ def days(now: datetime) -> list[Day]:
     try:
         stored = session.query(HistoricalContest.draft_group_id, func.min(HistoricalContest.date), func.count(HistoricalContest.contest_id),
                                func.max(HistoricalContest.total_entries)).group_by(HistoricalContest.draft_group_id).all()
-        n_pool = session.query(func.count(MMAPlayer.id)).scalar() or 0
+        pool_ids = [i for (i,) in session.query(MMAPlayer.id).all()]
     finally:
         session.close()
     slates: dict[str, SlateInfo] = {}
@@ -53,8 +54,13 @@ def days(now: datetime) -> list[Day]:
         slates[key] = SlateInfo(key=key, day=lobby_day(s.get("start"), s.get("start_utc"), now), lock=lock,
                                 label=f"{s.get('game_type') or ''} · {str(s.get('name') or '')[:40]}".strip(" ·"), source="lobby",
                                 mode=str(s.get("game_type") or "").lower(), detail=f"{s.get('contests') or 0} contests in the lobby")
-    # the working pool: the newest stored card when fighters are on file (mma_player carries no draft group)
-    working = max(stored, key=lambda r: (r[1] or datetime.min)) if (stored and n_pool) else None
+    # the working pool: the card whose record (cards.py, written by every ingest) holds the pool's fighters; a pool ingested
+    # before card records existed falls back to the newest stored card (mma_player carries no draft group)
+    working = None
+    if stored and pool_ids:
+        from ivan.sports.mma.cards import card_of_pool
+        dg_pool = card_of_pool(pool_ids)
+        working = next((r for r in stored if r[0] == dg_pool), None) or max(stored, key=lambda r: (r[1] or datetime.min))
     for dg, first, n, biggest in stored:
         key = str(dg)
         when = first or now
@@ -98,11 +104,20 @@ def sport() -> Sport:
         try:
             contests = session.query(HistoricalContest).filter(HistoricalContest.draft_group_id == int(key)).order_by(HistoricalContest.entry_fee.desc()).all() if str(key).isdigit() else []
             fighters = session.query(func.count(MMAPlayer.id)).scalar() if s.loaded else 0
+            fights, fights_error = None, None
+            if s.loaded and view == "slate":                    # the pool on file is this card: its fights as the model draws them
+                try:
+                    from ivan.core.config import load_config
+                    from ivan.sports.mma.fight_report import card_report
+                    from ivan.web.mma.fights import view as fights_view
+                    fights = fights_view(card_report(session, load_config("mma")))
+                except Exception as e:   # noqa: BLE001 - the slate card must open whatever the pool holds
+                    fights_error = f"{type(e).__name__}: {e}"
         finally:
             session.close()
         from ivan.core import feed
         return frame.templates.TemplateResponse(request, "mma_slate.html", {"frame": frame.ctx(request, sp, ds, None, s, view, now), "slate": s, "view": view,
-                                                                            "contests": contests, "fighters": fighters, "consumer": feed.producer_source() is not None,
+                                                                            "contests": contests, "fighters": fighters, "fights": fights, "fights_error": fights_error, "consumer": feed.producer_source() is not None,
                                                                             "msg": request.query_params.get("msg")})
 
     @app.post("/pull")
