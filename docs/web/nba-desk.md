@@ -255,6 +255,10 @@ Inputs on the row:
   assists, fg3m, steals, blocks, turnovers`); the team re-projects and is written to the pool (`/team/<TEAM>/pin`;
   **Refigure** and the pipeline buttons send every typed box the same way). The older **fppm** pin (every rate scaled
   together) is still read from the file and noted in the fpts hover; the stat boxes override it stat by stat.
+  A player has one row in the file, under his NBA name key (`ivan.sports.nba.names.normalize_name`: no Jr / III):
+  the desk's routes, `Desk.set_override` and `write_overrides` all take a name to that key and fold any other spelling
+  into it, so clearing a call clears the player (2026-11-13: `jaime jaquez` and `jaime jaquez jr` were both on file
+  and his starter call could not be cleared).
 - **starter** toggle (`/starter`): the hand call; a call that benches him sets his props posted before the click aside, one
   that starts him counts them again (the market rates are rebuilt before the team re-projects; `ingest.refresh_market_rates`).
 - **Refigure** (`/refigure`): re-run the team's projection now with the current pins (the mapping, then the game).

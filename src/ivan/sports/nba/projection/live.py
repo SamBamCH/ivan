@@ -71,15 +71,19 @@ def write_overrides(overrides: dict, path: Path | None = None) -> Path:
     path = Path(path) if path else S.overrides_csv()
     path.parent.mkdir(parents=True, exist_ok=True)
     old = read_overrides_full(path, layered=False) if path.exists() else {}     # this machine's own file only: the published layer is never copied in
-    rows = []
+    # one row per player, under his NBA key: a name handed in under two spellings ("jaime jaquez" and "jaime jaquez jr") is one
+    # player, the later one's values on top. 2026-11-13: the file held both, a click cleared one, and the other put the starter
+    # call straight back on the next read
+    by_key: dict[str, dict] = {}
     for name, v in overrides.items():
-        rec = dict(old.get(name, {}))
-        if isinstance(v, dict):
-            rec.update({k: v.get(k) for k in OVERRIDE_KEYS})
+        key = normalize_name(str(name))
+        first = key not in by_key
+        rec = by_key.setdefault(key, dict(old.get(key, {})))
+        if isinstance(v, dict):                                 # the first spelling sets every field (a None clears the file's); another only adds
+            rec.update({k: v.get(k) for k in OVERRIDE_KEYS if first or v.get(k) is not None})
         else:
             rec["minutes"] = None if v is None else float(v)
-        if any(rec.get(k) is not None for k in OVERRIDE_KEYS):
-            rows.append({"player": name, **{k: rec.get(k) for k in OVERRIDE_KEYS}})
+    rows = [{"player": key, **{k: rec.get(k) for k in OVERRIDE_KEYS}} for key, rec in by_key.items() if any(rec.get(k) is not None for k in OVERRIDE_KEYS)]
     pd.DataFrame(rows, columns=["player", *OVERRIDE_KEYS]).to_csv(path, index=False)
     return path
 

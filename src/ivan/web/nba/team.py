@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name      # the NBA key (no Jr / III): the one the pool, the pins file and the desk use
 from ivan.sports.nba.slate import changes as CH
 from ivan.sports.nba.ingest import refresh_market_rates, refresh_public_projection
 from ivan.sports.nba.projection.live import override_of
