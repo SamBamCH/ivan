@@ -21,8 +21,8 @@ from ivan.sports.mma.paths import MMA_DATA_DIR
 DEFAULTS = {"size": 5000, "dupes_at_zero_remaining": 200.0, "salary_threshold": 1500,
             "win_boost_slope": 0.2, "win_boost_center": 3.0, "win_boost_min": 0.8, "win_boost_max": 1.5,
             "model": "original", "dupe_model_path": str(MMA_DATA_DIR / "models" / "dupe_model.json")}
-# model: "original" = the hand-set exponential + win boost above; "fitted" = the Poisson log-linear model
-# scripts/mma/build_dupe_model.py fits on real fields (exp(b_left x min(left, cap)/100 + b_zero x [left = 0] + b_win x sum win)).
+# model: "original" = the hand-set exponential + win boost above; "fitted" = the copies model scripts/mma/build_dupe_model.py
+# fits on real fields (ivan.sports.mma.dupe_model): the lineup's pull depends on the contest's entries-per-user cap.
 
 
 def load_dupe_model(path: str | Path) -> Optional[dict]:
@@ -37,16 +37,20 @@ def load_dupe_model(path: str | Path) -> Optional[dict]:
 
 def fitted_weights(lineups: list[list[int]], salary: dict[int, int], win_prob: dict[int, float], model: dict,
                    fights: Optional[dict[int, str]] = None, salary_cap: int = 50000, rng: Optional[np.random.Generator] = None,
-                   main_event: Optional[set] = None) -> np.ndarray:
+                   main_event: Optional[set] = None, entry_cap: Optional[float] = None) -> np.ndarray:
     """
     exp(linear predictor) of the fitted model per candidate; the field size
-    and intercept cancel in the sampling. A version-2 (universe) model adds
-    the lineup's rank by summed win probability among the candidates and,
-    with rng, a Gamma(alpha, 1/alpha) multiplier per lineup: the fitted
-    lumpiness of the top (which of several near-identical builds becomes the
-    chalk). Without rng the weights are the expectation.
+    and intercept cancel in the sampling. The model (dupe_model.py) has the
+    lineup's rank by summed win probability among the candidates, the
+    main-event count and, per coefficient, a slope in the contest's
+    entries-per-user cap (`entry_cap`; unknown = a 20-max contest). With rng
+    each lineup also gets a Gamma(alpha, 1/alpha) multiplier: the lumpiness
+    of the top (which of several near-identical builds becomes the chalk).
+    Without rng the weights are the expectation. Older model files (no
+    entry-cap slopes, a same-fight flag) read the same way.
     """
-    c = model["coef"]
+    from ivan.sports.mma.dupe_model import contest_coef
+    c = contest_coef(model, entry_cap)
     cap = float(model.get("left_cap", 2000.0))
     w = np.empty(len(lineups), dtype=float)
     for i, ids in enumerate(lineups):
@@ -69,22 +73,23 @@ def fitted_weights(lineups: list[list[int]], salary: dict[int, int], win_prob: d
 
 
 def expected_copies(lineups: list[list[int]], salary: dict[int, int], win_prob: dict[int, float], model: dict, field_size: int,
-                    fights: Optional[dict[int, str]] = None, salary_cap: int = 50000, main_event: Optional[set] = None) -> np.ndarray:
-    """Each candidate's expected copies in a real field of field_size entries (the model without the Gamma noise)."""
-    w = fitted_weights(lineups, salary, win_prob, model, fights, salary_cap, rng=None, main_event=main_event)
+                    fights: Optional[dict[int, str]] = None, salary_cap: int = 50000, main_event: Optional[set] = None,
+                    entry_cap: Optional[float] = None) -> np.ndarray:
+    """Each candidate's expected copies in a real field of field_size entries of a contest with this entry cap (no Gamma noise)."""
+    w = fitted_weights(lineups, salary, win_prob, model, fights, salary_cap, rng=None, main_event=main_event, entry_cap=entry_cap)
     return field_size * w / w.sum()
 
 
 def dupe_weights(lineups: list[list[int]], salary: dict[int, int], win_prob: dict[int, float], cfg: dict,
                  salary_cap: int = 50000, fights: Optional[dict[int, str]] = None, rng: Optional[np.random.Generator] = None,
-                 main_event: Optional[set] = None) -> np.ndarray:
-    """Relative frequency of each candidate in the field, by the configured model."""
+                 main_event: Optional[set] = None, entry_cap: Optional[float] = None) -> np.ndarray:
+    """Relative frequency of each candidate in one contest's field, by the configured model (entry_cap = its entries per user)."""
     f = {**DEFAULTS, **cfg}
     if str(f.get("model", "original")).lower() == "fitted":
         model = load_dupe_model(f["dupe_model_path"])
         if model is None:
             raise FileNotFoundError(f"field.model is 'fitted' but {f['dupe_model_path']} does not exist; run scripts/mma/build_dupe_model.py")
-        return fitted_weights(lineups, salary, win_prob, model, fights, salary_cap, rng=rng, main_event=main_event)
+        return fitted_weights(lineups, salary, win_prob, model, fights, salary_cap, rng=rng, main_event=main_event, entry_cap=entry_cap)
     thr = float(f["salary_threshold"])
     k = np.log(float(f["dupes_at_zero_remaining"])) / thr if thr > 0 else 0.0
     w = np.empty(len(lineups), dtype=float)
@@ -99,28 +104,40 @@ def dupe_weights(lineups: list[list[int]], salary: dict[int, int], win_prob: dic
 
 def sample_field(lineups: list[list[int]], salary: dict[int, int], win_prob: dict[int, float], field_size: int,
                  cfg: dict, rng: np.random.Generator, salary_cap: int = 50000, fights: Optional[dict[int, str]] = None,
-                 main_event: Optional[set] = None) -> tuple[np.ndarray, dict]:
+                 main_event: Optional[set] = None, entry_cap: Optional[float] = None) -> tuple[np.ndarray, dict]:
     """
-    Copies of each candidate in a field of `field_size` entries (array
-    aligned with `lineups`), plus diagnostics: the duplication histogram and
-    the number of unique lineups in the field.
+    Copies of each candidate in one contest's field of `field_size` entries
+    (array aligned with `lineups`), plus diagnostics: the duplication
+    histogram and the number of unique lineups in the field. entry_cap is
+    the contest's entries per user, which the fitted model reads.
     """
     if not lineups:
         raise ValueError("no candidate lineups to sample the field from")
-    w = dupe_weights(lineups, salary, win_prob, cfg, salary_cap, fights, rng=rng, main_event=main_event)
+    w = dupe_weights(lineups, salary, win_prob, cfg, salary_cap, fights, rng=rng, main_event=main_event, entry_cap=entry_cap)
     probs = w / w.sum()
     draws = rng.choice(len(lineups), size=int(field_size), replace=True, p=probs)
     counts = np.bincount(draws, minlength=len(lineups))
     hist = Counter(int(c) for c in counts if c > 0)
     return counts, {"field_size": int(field_size), "unique": int((counts > 0).sum()), "model": str({**DEFAULTS, **cfg}.get("model", "original")),
+                    "entry_cap": (int(entry_cap) if entry_cap else None),
+                    "top100_share": float(np.sort(counts)[-100:].sum() / max(1, int(field_size))),
                     "dupe_hist": [{"copies": c, "lineups": n, "entries": c * n} for c, n in sorted(hist.items())],
                     "max_dupes": int(counts.max())}
 
 
-def format_field_diagnostics(meta: dict, exposures: list[dict]) -> str:
-    """The duplication table and fighter exposures as the original printed them."""
-    lines = [f"field: {meta['field_size']:,} entries, {meta['unique']:,} unique lineups, max copies {meta['max_dupes']}",
-             f"{'copies':>7} {'lineups':>8} {'entries':>8} {'% field':>8}"]
+def format_field_line(meta: dict) -> str:
+    """One line on a sampled field: its size, the contest's entry cap, how concentrated it is."""
+    cap = f"{meta['entry_cap']} per user" if meta.get("entry_cap") else "entry cap unknown (read as 20)"
+    return (f"field: {meta['field_size']:,} entries ({cap}), {meta['unique']:,} unique lineups, "
+            f"top 100 lineups hold {100 * meta.get('top100_share', 0):.1f}%, max copies {meta['max_dupes']}")
+
+
+def format_field_diagnostics(meta: dict, exposures: list[dict], top: Optional[int] = None) -> str:
+    """The duplication table and fighter exposures as the original printed them (top = only the most exposed fighters, no table)."""
+    lines = [format_field_line(meta)]
+    if top:
+        return "\n".join(lines + ["  most exposed: " + ", ".join(f"{e['name']} {100 * e['exposure']:.0f}%" for e in exposures[:top])])
+    lines.append(f"{'copies':>7} {'lineups':>8} {'entries':>8} {'% field':>8}")
     for h in meta["dupe_hist"]:
         lines.append(f"{h['copies']:>7} {h['lineups']:>8} {h['entries']:>8} {100 * h['entries'] / meta['field_size']:>7.1f}%")
     lines.append(f"\n{'fighter':<24} {'salary':>7} {'win%':>6} {'exposure':>9}")

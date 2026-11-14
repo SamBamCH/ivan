@@ -188,3 +188,79 @@ def test_fitted_dupe_weights_follow_the_model(tmp_path):
     with pytest.raises(FileNotFoundError):
         dupe_weights([full], salary, win, {"model": "fitted", "dupe_model_path": str(tmp_path / "nope.json")})
     assert dupe_weights([full, light], salary, win, {"model": "original"})[0] > dupe_weights([full, light], salary, win, {"model": "original"})[1]
+
+
+def test_dupe_model_fit_recovers_the_entry_cap_slopes(tmp_path):
+    """Fields drawn from known coefficients on a small card: the fit returns them, and the sampler reads the file per contest."""
+    from ivan.sports.mma import dupe_model as DM
+    from ivan.sports.mma.sample_field import expected_copies, fitted_weights
+    rng = np.random.default_rng(11)
+    pool = [{"id": 100 + i, "name": f"f{i}", "salary": int(s), "fight_id": f"fight{i // 2}"}
+            for i, s in enumerate([9400, 6800, 9000, 7200, 8800, 7400, 8600, 7600, 8400, 7800, 8300, 7900, 8200, 8000, 8100, 8100])]
+    win = {r["id"]: float(np.clip((r["salary"] - 6000) / 4000 + rng.normal(0, 0.05), 0.1, 0.9)) for r in pool}
+    card = {"draft_group": 7, "pool": pool, "win_prob": win, "main_event": {100, 101}}
+    U = DM.card_frame(card)
+    assert len(U) > 500 and list(U.columns) == ["key", *DM.COEF]
+    base = np.array([-0.3, 0.4, 1.5, -0.2, 1.2])
+    slope = np.array([0.03, -0.05, 0.3, 0.03, -0.08])
+    X = U[list(DM.COEF)].to_numpy()
+    contests = []
+    for cid, cap in ((1, 1), (2, 3), (3, 20), (4, 20), (5, 150), (6, 150)):
+        eta = X @ (base + DM.entry_cap_z(cap) * slope)
+        copies = rng.multinomial(60000, np.exp(eta - eta.max()) / np.exp(eta - eta.max()).sum())
+        keep = copies > 0
+        d = tmp_path / str(cid)
+        d.mkdir()
+        g = pd.DataFrame([list(k) for k in U.key[keep]], columns=[f"f{j}" for j in range(1, 7)])
+        g["copies"] = copies[keep]
+        g.to_parquet(d / "lineups.parquet", index=False)
+        contests.append({"contest_id": cid, "draft_group_id": 7, "entry_cap": cap})
+    model = DM.build(contests, {7: card}, tmp_path, log=lambda s: None)
+    assert model["version"] == DM.VERSION and model["contests"] == [1, 2, 3, 4, 5, 6] and model["alpha_source"].startswith("in-card")
+    assert np.allclose([model["coef"][k] for k in DM.COEF], base, atol=0.08)
+    assert np.allclose([model["coef_entry_cap"][k] for k in DM.COEF], slope, atol=0.04)
+    assert model["alpha"] > 5                                  # multinomial fields: no lumpiness beyond the expectation
+    assert "single entry" in DM.format_model(model)
+    # the sampler: the same lineups weigh differently in a single-entry and a 150-max contest, by the file's slopes
+    ids = [list(k) for k in U.key]
+    salary = {r["id"]: r["salary"] for r in pool}
+    w1 = fitted_weights(ids, salary, win, model, main_event={100, 101}, entry_cap=1)
+    w150 = fitted_weights(ids, salary, win, model, main_event={100, 101}, entry_cap=150)
+    got = np.log(w150 / w1) - np.log(w150 / w1)[0]
+    g = np.array([model["coef_entry_cap"][k] for k in DM.COEF])
+    want = (X - X[0]) @ g * (DM.entry_cap_z(150) - DM.entry_cap_z(1))
+    assert np.allclose(got, want, atol=1e-6)
+    assert np.allclose(fitted_weights(ids, salary, win, model, main_event={100, 101}), fitted_weights(ids, salary, win, model, main_event={100, 101}, entry_cap=20))
+    assert expected_copies(ids, salary, win, model, 1000, main_event={100, 101}, entry_cap=1).sum() == pytest.approx(1000)
+    assert DM.entry_cap_z(None) == 0 and DM.entry_cap_z(0) == 0 and DM.entry_cap_z(500) == DM.entry_cap_z(150)
+
+
+def test_each_contest_is_simulated_at_its_own_size_and_cap(session, cfg, ingest, monkeypatch):
+    monkeypatch.setenv("IVAN_SEED", "4")
+    ingest(session, cfg)
+    generate_candidates(session, cfg, n_candidates=40, n_jobs=1)
+    pay = parse_payout_csv(DATA / "payouts.csv")
+    small = {"contest_id": None, "name": "small single", "total_entries": 120, "entry_fee": 5.0, "entry_cap": 1, "payouts": pay}
+    big = {"contest_id": None, "name": "big max", "total_entries": 47500, "entry_fee": 0.5, "entry_cap": 150, "payouts": pay}
+    a = simulate_contest(session, cfg, small, field_size=300, n_sims=20)
+    b = simulate_contest(session, cfg, big, field_size=300, n_sims=20)
+    assert a["field"]["field_size"] == 120 and a["field"]["entry_cap"] == 1 and a["pool_max_abs_error"] < 1e-6
+    assert b["field"]["field_size"] == 300 and b["field"]["entry_cap"] == 150
+    assert session.query(LineupSimulationResult).filter_by(contest_name="small single").with_entities(LineupSimulationResult.dupes).all()
+    assert sum(r.dupes for r in session.query(LineupSimulationResult).filter_by(contest_name="small single")) == 120
+    hand = resolve_contest(session, {**cfg, "contest": {"name": "m", "total_entries": 900, "entry_fee": 1.0, "entry_cap": 20}}, payouts_csv=DATA / "payouts.csv")
+    assert hand["entry_cap"] == 20 and resolve_contest(session, cfg, payouts_csv=DATA / "payouts.csv", entry_cap=3)["entry_cap"] == 3
+
+
+def test_card_record_round_trips_and_derives_a_field(tmp_path, monkeypatch):
+    from ivan.core import raw
+    from ivan.sports.mma import cards
+    monkeypatch.setattr(raw, "raw_dir", lambda sport: tmp_path / sport / "raw")
+    (tmp_path / "mma" / "raw").mkdir(parents=True)
+    rows = [{"id": 1, "name": "ann a", "salary": 9000, "fight_id": "a-b", "gametime": None, "win_prob": 0.7},
+            {"id": 2, "name": "bea b", "salary": 7000, "fight_id": "a-b", "gametime": None, "win_prob": None}]
+    assert cards.load_card(5) is None
+    cards.save_card(5, rows, [2])
+    c = cards.load_card(5)
+    assert c["win_prob"] == {1: 0.7, 2: 0.5} and c["main_event"] == {2} and cards.stored_cards() == [5]
+    assert [r["salary"] for r in c["pool"]] == [9000, 7000]

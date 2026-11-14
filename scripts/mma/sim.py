@@ -7,15 +7,19 @@ Sample the field and simulate contests against it.
     scripts/mma/sim.py --entries my_entries.csv             (the DraftKings entries export)
     scripts/mma/sim.py --contest "mini-MAX"                 the upcoming DK contest whose name contains the text
     scripts/mma/sim.py --contest-id 123456789
-    scripts/mma/sim.py --payouts payouts.csv --total-entries 47500 --fee 0.5 --name "UFC Sat"
+    scripts/mma/sim.py --payouts payouts.csv --total-entries 47500 --fee 0.5 --entry-cap 150 --name "UFC Sat"
 
-Options for every form: --field <simulated field size>, -n <sims>, --no-field-csv.
+Options for every form: --field <largest simulated field>, -n <sims>, --no-field-csv.
 
 With no contest named, every contest in the entries file is simulated, as
 the NFL sim does; contests the ingest listing missed are fetched from
-DraftKings by id. The DK forms use the contest and payout tables ingest
-stored; the last form describes the contest by hand, as the original
-mma_dfs did (payouts CSV, real entry count and fee; defaults from
+DraftKings by id. Each contest gets its own field: as many entries as the
+contest holds, up to --field (config field.size), weighted by the
+duplication model for that contest's entries-per-user cap, so a
+single-entry contest, a 20-max and a 150-max are not simulated against the
+same crowd. The DK forms use the contest and payout tables ingest stored;
+the last form describes the contest by hand, as the original mma_dfs did
+(payouts CSV, real entry count, fee and entries per user; defaults from
 config/mma.json -> contest and paths). Results for a contest name replace
 any earlier ones; each sampled field is written to
 data/mma/output/field.<name>.<stamp>.csv.
@@ -52,11 +56,13 @@ def write_field(session, contest_name: str) -> Path:
 
 
 def run_one(session, cfg, contest: dict, args, show_field: bool = True) -> dict:
-    print(f"contest {contest['name']!r}: {contest['total_entries']:,} entries @ ${contest['entry_fee']:.2f}, "
+    cap = f"{contest['entry_cap']} per user" if contest.get("entry_cap") else "entries per user unknown"
+    print(f"contest {contest['name']!r}: {contest['total_entries']:,} entries @ ${contest['entry_fee']:.2f}, {cap}, "
           f"{len(contest['payouts'])} payout tiers")
     report = simulate_contest(session, cfg, contest, field_size=args.field, n_sims=args.n)
+    # every contest has its own field: the whole table for the first, the line and the most exposed fighters for the rest
+    print(format_field_diagnostics(report["field"], report["exposures"], top=None if show_field else 6))
     if show_field:
-        print(format_field_diagnostics(report["field"], report["exposures"]))
         print()
     print(summary_line(report))
     if not args.no_field_csv:
@@ -100,8 +106,9 @@ def main() -> int:
     p.add_argument("--payouts", default=None, help="payouts CSV for a hand-described contest (default: paths.payouts_csv)")
     p.add_argument("--total-entries", type=int, default=None, help="hand-described: real entry count (default: contest.total_entries)")
     p.add_argument("--fee", type=float, default=None, help="hand-described: entry fee (default: contest.entry_fee)")
+    p.add_argument("--entry-cap", type=int, default=None, help="hand-described: entries per user (default: contest.entry_cap)")
     p.add_argument("--name", default=None, help="hand-described: contest name the results are stored under")
-    p.add_argument("--field", type=int, default=None, help="simulated field size (default: field.size)")
+    p.add_argument("--field", type=int, default=None, help="largest simulated field; a smaller contest is simulated at its own size (default: field.size)")
     p.add_argument("-n", type=int, default=None, help="simulations (default: simulation.n_sims)")
     p.add_argument("--no-field-csv", action="store_true", help="do not write the sampled field to data/mma/output")
     args = p.parse_args()
@@ -111,7 +118,7 @@ def main() -> int:
     MMABase.metadata.create_all(engine)
     session = get_session(engine)
 
-    one_contest = any(v is not None for v in (args.contest_id, args.contest, args.payouts, args.total_entries, args.fee, args.name))
+    one_contest = any(v is not None for v in (args.contest_id, args.contest, args.payouts, args.total_entries, args.fee, args.name, args.entry_cap))
     if not one_contest:
         entries_csv = args.entries or cfg.get("paths", {}).get("entries_csv")
         if args.entries or (entries_csv and Path(entries_csv).exists()):
@@ -122,7 +129,7 @@ def main() -> int:
     if contest_id is None and args.contest:
         contest_id = find_contest_id(session, args.contest)
     contest = resolve_contest(session, cfg, contest_id=contest_id, payouts_csv=args.payouts,
-                              total_entries=args.total_entries, entry_fee=args.fee, contest_name=args.name)
+                              total_entries=args.total_entries, entry_fee=args.fee, contest_name=args.name, entry_cap=args.entry_cap)
     run_one(session, cfg, contest, args)
     return 0
 

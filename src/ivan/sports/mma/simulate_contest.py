@@ -7,9 +7,14 @@ result row per unique lineup in the field.
 
 The contest is either a DraftKings contest in the database (contest id,
 after get_contest_ids.py / get_payouts.py) or a hand-described one: a
-payouts CSV plus the real entry count and fee. The real field is far bigger
-than the simulated one, so the payout table is scaled to `field_size`
-entries with the same prize share and shape (common.payouts).
+payouts CSV plus the real entry count, fee and entries per user.
+
+Each contest gets its own field: its size is the contest's own entry count
+up to `field.size` (the cap; a bigger contest is simulated at the cap with
+the payout table scaled to it, same prize share and shape, common.payouts),
+and the lineups are weighted by the duplication model for that contest's
+entries-per-user cap (dupe_model.py), which also predicts the copies each
+candidate has in the real field.
 """
 from __future__ import annotations
 
@@ -84,8 +89,12 @@ def find_contest_id(session: Session, text: str, days: int = 2) -> int:
 
 def resolve_contest(session: Session, cfg: dict, *, contest_id: Optional[int] = None, payouts_csv: str | Path | None = None,
                     total_entries: Optional[int] = None, entry_fee: Optional[float] = None,
-                    contest_name: Optional[str] = None) -> dict:
-    """What the sim needs about the contest, from the DB row or from the manual description."""
+                    contest_name: Optional[str] = None, entry_cap: Optional[int] = None) -> dict:
+    """
+    What the sim needs about the contest, from the DB row or from the manual
+    description: name, real entry count, fee, entries per user (`entry_cap`,
+    the DK row's multi_entry; None = unknown, read as a 20-max) and payouts.
+    """
     c = cfg.get("contest", {})
     if contest_id is not None:
         row = session.query(HistoricalContest).filter_by(contest_id=int(contest_id)).one_or_none()
@@ -95,22 +104,31 @@ def resolve_contest(session: Session, cfg: dict, *, contest_id: Optional[int] = 
         if table.empty:
             raise SystemExit(f"contest {contest_id} has no payout table; run scripts/mma/get_payouts.py")
         return {"contest_id": int(contest_id), "name": contest_name or row.name or str(contest_id),
-                "total_entries": int(row.total_entries), "entry_fee": float(row.entry_fee), "payouts": table}
+                "total_entries": int(row.total_entries), "entry_fee": float(row.entry_fee),
+                "entry_cap": (int(row.multi_entry) if row.multi_entry else None), "payouts": table}
     path = payouts_csv or cfg.get("paths", {}).get("payouts_csv")
     table = parse_payout_csv(path)
     if table.empty:
         raise SystemExit(f"no payout rows parsed from {path}")
     return {"contest_id": None, "name": contest_name or c.get("name") or Path(path).stem,
             "total_entries": int(total_entries or c.get("total_entries", 10000)),
-            "entry_fee": float(entry_fee if entry_fee is not None else c.get("entry_fee", 0.5)), "payouts": table}
+            "entry_fee": float(entry_fee if entry_fee is not None else c.get("entry_fee", 0.5)),
+            "entry_cap": (int(entry_cap or c.get("entry_cap") or 0) or None), "payouts": table}
 
 
 def simulate_contest(session: Session, cfg: dict, contest: dict, *, field_size: Optional[int] = None,
                      n_sims: Optional[int] = None, store: bool = True) -> dict:
-    """Run it. Returns a report: contest, field diagnostics, exposures, invariants, timing."""
+    """
+    Run it. The field is this contest's: min(field_size or field.size, the
+    contest's entries) entries, weighted for its entries-per-user cap.
+    Returns a report: contest, field diagnostics, exposures, invariants, timing.
+    """
     t0 = time.time()
     field_cfg = cfg.get("field", {})
     field_size = int(field_size or field_cfg.get("size", 5000))
+    if int(contest.get("total_entries") or 0) > 0:
+        field_size = min(field_size, int(contest["total_entries"]))
+    entry_cap = contest.get("entry_cap")
     n_sims = int(n_sims or cfg.get("simulation", {}).get("n_sims", 2000))
     cap = int(cfg.get("lineup_generation", {}).get("salary_cap", 50000))
 
@@ -124,19 +142,22 @@ def simulate_contest(session: Session, cfg: dict, contest: dict, *, field_size: 
     if missing:
         raise SystemExit(f"{len(missing)} fighter id(s) in the lineup pool are not in the slate; regenerate lineups")
 
-    rng = np.random.default_rng(seed_for("mma.simulate"))
+    rng = np.random.default_rng(seed_for("mma.simulate"))                      # the fights: one set of worlds per IVAN_SEED
+    field_rng = np.random.default_rng(seed_for(f"mma.field.{contest.get('contest_id') or contest['name']}"))   # the field: this contest's own draw
     salary = {pid: p.salary for pid, p in players.items()}
     win_prob = {pid: (p.win_prob if p.win_prob is not None else 0.5) for pid, p in players.items()}
     fight_of = {pid: p.fight_id for pid, p in players.items()}
     main_event = {pid for f in fights if f.rounds == 5 for pid in (f.f1.id, f.f2.id)}
-    counts, field_meta = sample_field(ids, salary, win_prob, field_size, field_cfg, rng, cap, fights=fight_of, main_event=main_event)
+    counts, field_meta = sample_field(ids, salary, win_prob, field_size, field_cfg, field_rng, cap, fights=fight_of, main_event=main_event,
+                                      entry_cap=entry_cap)
     in_field = np.nonzero(counts)[0]
     predicted = None                                                             # expected copies in the real field, per candidate
     if str(field_cfg.get("model", "original")).lower() == "fitted":
         from ivan.sports.mma.sample_field import expected_copies, load_dupe_model
         model = load_dupe_model(field_cfg.get("dupe_model_path", DEFAULT_MODEL_PATH))
         if model is not None:
-            predicted = expected_copies(ids, salary, win_prob, model, contest["total_entries"], fight_of, cap, main_event=main_event)
+            predicted = expected_copies(ids, salary, win_prob, model, contest["total_entries"], fight_of, cap, main_event=main_event,
+                                        entry_cap=entry_cap)
 
     # payout table scaled to the simulated field
     scaled = scale_payouts_correctly(field_size, contest["payouts"], contest["total_entries"], contest["entry_fee"])

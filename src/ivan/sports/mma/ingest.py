@@ -368,6 +368,9 @@ def ingest_slate(session: Session, cfg: dict, *, players_csv: str | Path | None 
                               sig_strikes=r.get("sig_strikes"), takedowns=r.get("takedowns"),
                               win_prob=r["win_prob"], projection=r["projection"]))
     session.commit()
+    if draft_group_id is not None:                              # the card as the model saw it, for the fields scraped after it
+        from ivan.sports.mma.cards import save_card
+        save_card(int(draft_group_id), rows, [r["id"] for fid in five for r in fights[fid]["fighters"]])
 
     # 4. the slate's contests and their payout tables
     contests: list[dict] = []

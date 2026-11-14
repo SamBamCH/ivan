@@ -9,7 +9,9 @@ validation scores the sampled field against.
 
 Derived files: data/mma/derived/contests/<contest id>/lineups.parquet
 (one row per unique lineup) and players.csv (the side table joined to the
-pool). Rebuildable from raw at any time.
+pool). Rebuildable from raw at any time: the pool and win probabilities of
+a past card come from the card record ingest stored (cards.py);
+derive_contests puts every scraped contest of the stored cards on disk.
 """
 from __future__ import annotations
 
@@ -109,6 +111,40 @@ def derive_contest(contest_id: int, pool: Iterable[dict], win_prob: dict[int, fl
     return {"contest_id": contest_id, "entries": len(ent), "entries_matched": n_entries, "unique": len(g),
             "unmatched_names": sorted(unmatched), "same_fight_entries": int(g.loc[g.same_fight, "copies"].sum()),
             "max_copies": int(g.copies.max()) if len(g) else 0, "dir": str(d)}
+
+
+def derive_contests(session, contest_ids: Optional[Iterable[int]] = None, out_dir: Path = DERIVED_DIR, log=print) -> dict:
+    """
+    Derive every scraped contest (or the given ids) whose card has a record
+    (cards.load_card): the newest standings export of each, laid on the card
+    it was played on. Returns {"derived": [summaries], "no_card": {draft
+    group: [contest ids]}, "unknown": [ids with no contest row]}.
+    """
+    from ivan.sports.mma.cards import load_card
+    from ivan.sports.mma.models import HistoricalContest
+    scraped = sorted({int(a.key) for a in raw.index("mma") if a.kind == "dk/standings"})
+    ids = sorted({int(c) for c in contest_ids}) if contest_ids is not None else scraped
+    rows = {int(r.contest_id): r for r in session.query(HistoricalContest).filter(HistoricalContest.contest_id.in_(ids)).all()}
+    out = {"derived": [], "no_card": {}, "unknown": [c for c in ids if c not in rows]}
+    cards: dict[int, Optional[dict]] = {}
+    for cid in ids:
+        r = rows.get(cid)
+        if r is None or r.draft_group_id is None:
+            continue
+        dg = int(r.draft_group_id)
+        if dg not in cards:
+            cards[dg] = load_card(dg)
+        if cards[dg] is None:
+            out["no_card"].setdefault(dg, []).append(cid)
+            continue
+        s = derive_contest(cid, cards[dg]["pool"], cards[dg]["win_prob"], out_dir=out_dir)
+        if s is None:
+            continue
+        s["draft_group"] = dg
+        out["derived"].append(s)
+        if s["entries_matched"] < 0.9 * s["entries"]:                  # the export is another game type or another card's names
+            log(f"  {cid}: only {s['entries_matched']:,} of {s['entries']:,} entries matched the card {dg}")
+    return out
 
 
 def load_derived(contest_id: int, out_dir: Path = DERIVED_DIR) -> Optional[pd.DataFrame]:
