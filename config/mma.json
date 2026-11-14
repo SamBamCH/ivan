@@ -25,9 +25,10 @@
     "rate_cv": 0.25
   },
   "_fight_note": "model hazard (hazard.py, 2026-11-07): one risk of finish per fighter. The fight's ITD price (or the two fighters' ITD prices summed) sets a constant hazard, each fighter's ITD price their share of the stoppages, the moneyline minus that share who wins a decision; finish time is exponential, cut at the final bell; strikes and takedowns are Gamma-Poisson counts at a rate that holds the posted line as the mean. Inputs: fighter ITD + Win + sig strikes + takedowns (u60 / round-1 prices are not read; on 2026-10-24 a flat hazard reproduced the R1 prices within 5%, see docs/mma/notes/hazard_2026-11-07.md). first_minute_mult > 1 front-loads the first 60 s; rate_cv is the between-simulation pace noise. model tree = the round-node model in fight.py (u60 / R1 / ITD per fight, R1 / ITD / Win per fighter).",
+  "_scoring_note": "sig_strike and takedown are proxies fitted on real fights (scripts/mma/scoring_weights.py, 2026-11-14: 393 fighters' career averages, 1,500 fights): DraftKings pays 0.4 a significant strike and 5 a takedown, and also every other strike, control time, knockdowns and reversals, which have no line. The strike weight carries the other strikes and the knockdowns; the takedown weight carries the control time that comes with takedowns. The bonuses are DraftKings' own.",
   "scoring": {
-    "sig_strike": 0.8,
-    "takedown": 5.0,
+    "sig_strike": 0.5,
+    "takedown": 9.0,
     "loser_production_share": 0.5,
     "bonus": {
       "u60": 115,

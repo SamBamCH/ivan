@@ -69,3 +69,23 @@ def test_fights_section_renders(session, cfg, ingest):
     f = rep["fights"][0]
     assert html.count('class="card fight"') == len(rep["fights"]) and f'id="fight-{f["id"]}"' in html and f["title"] in html
     assert html.count("<svg") == 2 * len(rep["fights"]) and "by a finish in round 1" in html and "Check the inputs" not in html
+
+
+def test_scoring_fit_recovers_the_weights():
+    import numpy as np
+    import pandas as pd
+    from ivan.sports.mma.scoring_fit import fit, format_fit, production
+    rng = np.random.default_rng(0)
+    rows = []
+    for fighter in range(60):
+        rate, tds = rng.uniform(20, 80), rng.uniform(0, 4)
+        for k in range(5):
+            sig, td = rng.poisson(rate), rng.poisson(tds)
+            rows.append({"fighter_id": fighter, "result": "W" if k % 2 else "L", "won": bool(k % 2), "event_date": "2026-01-01", "sig_landed": sig,
+                         "total_landed": int(sig * 1.5), "td_landed": td, "rev": 0, "kd": 0, "ctrl_s": 100 * td})
+    df = pd.DataFrame(rows)
+    assert production(df).iloc[0] == pytest.approx(0.2 * df.total_landed[0] + 0.2 * df.sig_landed[0] + 5 * df.td_landed[0] + 3 * df.td_landed[0])
+    r = fit(df, compare=((0.8, 5.0),))
+    # a strike is worth 0.2 + 0.2 x 1.5 = 0.5, a takedown 5 + 100 s of control = 8
+    assert r["sig_strike"] == pytest.approx(0.5, abs=0.02) and r["takedown"] == pytest.approx(8.0, abs=0.3) and r["fighters"] == 60
+    assert all(abs(b["miss"]["fitted"]) < 1.5 for b in r["buckets"] if b["fighters"]) and "0.8 / 5" in format_fit(r)
