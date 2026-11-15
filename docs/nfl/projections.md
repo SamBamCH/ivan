@@ -15,6 +15,15 @@ joint stat draws. Players with nothing priced for a stat go to the volume models
 `volume_source` (market / environment / salary / lines) and `unpriced_stats` are recorded so the
 validation splits the error by source.
 
+A player is looked up in the odds and in the game logs under the spelling each source uses
+(`actuals.resolve_name`): the pool's name, else the name without its generational suffix, else the
+one name that is it plus a suffix (DraftKings lists `deebo samuel sr`, the books `deebo samuel`); the
+fit prints each such match. A player with no odds at all gets no distribution and is removed from the
+pool, so he is in neither the field, the sim nor our lineups. The fit's last lines are a `WARNING`
+naming every removed player priced above the cheapest fitted player at his position: DraftKings
+expects him to play, so his name is probably spelled another way by the books (add it to
+`_NAME_OVERRIDES` in `ivan/core/utils.py`).
+
 ## Unpriced volume (`config/nfl.json → projection.unpriced_volume`)
 
 - **`salary`** (`refactor/volume.py`): the absence of a yards market is itself the signal. A per

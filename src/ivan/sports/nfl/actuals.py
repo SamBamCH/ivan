@@ -124,6 +124,32 @@ def name_variants(name: str) -> list[str]:
     return out
 
 
+def bare_name(name: str) -> str:
+    """The normalized name without its generational suffix ('deebo samuel sr' -> 'deebo samuel')."""
+    nm = normalize_name(name)
+    for s in SUFFIXES:
+        if nm.endswith(s):
+            return nm[: -len(s)].strip()
+    return nm
+
+
+def resolve_name(name: str, known) -> Optional[str]:
+    """
+    The spelling of `name` among `known` names, or None. Sources disagree on generational suffixes (DraftKings lists
+    'deebo samuel sr', the books 'deebo samuel'), so: the name itself; else the name without its suffix; else, for a
+    name that carries none, the one known name that is it plus a suffix. A different suffix ('x jr' for 'x sr') is
+    another man and never matches.
+    """
+    nm = normalize_name(name)
+    if nm in known:
+        return nm
+    bare = bare_name(nm)
+    if bare != nm:
+        return bare if bare in known else None
+    suffixed = [k for k in (nm + s for s in SUFFIXES) if k in known]
+    return suffixed[0] if len(suffixed) == 1 else None
+
+
 def lookup_points(table: Dict[Tuple[str, str], float], name: str, team: str, position: str) -> Optional[float]:
     """A player's actual points, by (name, team) first, then by name alone (trades, code drift)."""
     if position.upper() in ("DST", "D/ST", "DEF"):

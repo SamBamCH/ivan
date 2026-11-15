@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
 from ivan.sports.nfl.models import NFLPlayer, NFLStat, NFLOdds
-from ivan.sports.nfl.actuals import history_cutoff
+from ivan.sports.nfl.actuals import history_cutoff, resolve_name
 from ivan.core.seed import seed_for
 from ivan.sports.nfl.refactor.stat import (
     MARKET_TO_STAT, StatDistribution, _get_anytime_td_prob_from_odds,
@@ -337,6 +337,12 @@ def fit_fpts_distributions(session, config: dict | None = None):
     # salary model, and where each K/DST projection came from
     tally = {"priced": 0, "unpriced": 0, "unpriced_env": 0, "by_pos": {}, "dst_lines": 0, "dst_salary": 0, "k_market": 0, "k_salary": 0}
 
+    # The pool, the books and the game logs each spell a name their own way (suffixes: resolve_name), so a player is
+    # looked up under the spelling each source uses, not under the pool's.
+    odds_names = {n for (n,) in session.query(NFLOdds.player).distinct()}
+    stat_names = {n for (n,) in session.query(NFLStat.player_display_name).distinct()}
+    renamed: dict[tuple[str, str], str] = {}
+
     # ---- pass 1: market-priced stats -------------------------------------
     for player in players:
         # A captain row is the FLEX row at 1.5x salary; it is copied from the
@@ -371,8 +377,11 @@ def fit_fpts_distributions(session, config: dict | None = None):
             continue
 
         # Get player odds (only Over/Yes sides)
+        odds_name = resolve_name(player.name, odds_names) or player.name
+        if odds_name != player.name:
+            renamed[(player.name, "odds")] = odds_name
         odds = session.query(NFLOdds).filter(
-            NFLOdds.player == player.name,
+            NFLOdds.player == odds_name,
             NFLOdds.side.in_(['Over', 'Yes'])
         ).all()
 
@@ -388,8 +397,11 @@ def fit_fpts_distributions(session, config: dict | None = None):
             for o in odds
         ])
 
+        stat_name = resolve_name(player.name, stat_names) or player.name
+        if stat_name != player.name:
+            renamed[(player.name, "game logs")] = stat_name
         history = session.query(NFLStat).filter(
-            NFLStat.player_display_name == player.name
+            NFLStat.player_display_name == stat_name
         ).all()
         if cutoff is not None:                      # replay: only games played before the slate
             history = [h for h in history if (h.season, h.week) < cutoff]
@@ -516,10 +528,12 @@ def fit_fpts_distributions(session, config: dict | None = None):
         NFLPlayer.fpts_dist_params.is_(None)
     ).all()
 
+    removed = sorted({(p.name, p.position, int(p.salary or 0)) for p in players_without_fpts if p.roster_slot_id != 511},
+                     key=lambda r: -r[2])
     if players_without_fpts:
         print(f"\nRemoving {len(players_without_fpts)} players with no fpts distribution:")
         for p in players_without_fpts:
-            print(f"  - {p.name} ({p.position})")
+            print(f"  - {p.name} ({p.position}) ${int(p.salary or 0):,}")
             session.delete(p)
         session.commit()
 
@@ -535,7 +549,22 @@ def fit_fpts_distributions(session, config: dict | None = None):
           f"K: {tally['k_market']} on the kicking-points market, {tally['k_salary']} salary | "
           f"DST: {tally['dst_lines']} from game lines, {tally['dst_salary']} salary fallback | "
           f"predictive sd factors " + " ".join(f"{p} x{spread_factor(cal, p):.2f}" for p in ("QB", "RB", "WR", "TE", "K", "DST")))
-    return {"unpriced_volume": mode, "usage": usage.team_rows(), "fitted": fitted, "tally": tally}
+    for (name, source), other in sorted(renamed.items()):
+        print(f"name: {name} is '{other}' in the {source}")
+    # last lines of the log, where they are read: a removed player is out of the field, the sim and our lineups, and
+    # a salary above his position's cheapest fitted player says DraftKings expects him to play
+    floor = {}
+    for p in session.query(NFLPlayer).filter(NFLPlayer.roster_slot_id != 511).all():
+        floor[p.position] = min(floor.get(p.position, 10 ** 9), int(p.salary or 0))
+    suspect = [r for r in removed if r[2] > floor.get(r[1], 0)]
+    if suspect:
+        print(f"\nWARNING: {len(suspect)} removed players are priced above the cheapest fitted player at their position "
+              "(no odds under their name; check the spelling against the books):")
+        for name, pos, salary in suspect:
+            print(f"  ! {name} ({pos}) ${salary:,}")
+    return {"unpriced_volume": mode, "usage": usage.team_rows(), "fitted": fitted, "tally": tally,
+            "removed": [{"name": n, "position": pos, "salary": sal} for n, pos, sal in removed],
+            "renamed": [{"name": n, "source": src, "as": o} for (n, src), o in sorted(renamed.items())]}
 
 
 def _sync_captain_rows(session) -> int:
