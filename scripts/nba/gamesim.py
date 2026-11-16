@@ -27,6 +27,13 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
         layer C with the truth plugged in: the shares over the real fives and possessions against the per-minute rate x true
         minutes, per stat (attempts, threes, trips, turnovers, assists, rebounds, steals, blocks), overall / starters / bench /
         nights a 25-minute teammate sat
+    scripts/nba/gamesim.py stints-study [--only decay,replace,context,teams,star] [--rebuild-timeline]
+        the measurements under the stint-by-stint rotation model (gamesim/stints.py, docs/nba/notes/stint_model_2026-11-16.md):
+        held-out log loss of the sub-out and the return chance as terms are added (time on the floor, period clock, role,
+        player, game state, fouls), the raw rates by state, who comes in for whom (recorded pairs, EM over swap sets,
+        position flow, rest) scored on the bench that was there, minutes from context-matched games, whether the two teams
+        substitute together, and where a sitting regular's minutes and points went. Reads the raw feeds once into
+        data/nba/derived/gamesim/timeline_*.parquet
 """
 from __future__ import annotations
 
@@ -164,6 +171,90 @@ def cmd_fit_cuts(args) -> None:
         print("written " + str(CUTS.save_table(t)))
 
 
+def cmd_stints_study(args) -> None:
+    import warnings
+    from ivan.sports.nba.gamesim import stints as T
+    from ivan.sports.nba.projection.groups import group_of, position_map
+    warnings.filterwarnings("ignore")
+    pd.set_option("display.width", 240); pd.set_option("display.max_rows", 200)
+    only = set(args.only.split(",")) if args.only else {"decay", "replace", "context", "teams", "star"}
+    s = get_session(init_db("nba"))
+    st = T.load_stints(s); box = T.load_box(s); usual = T.usual_minutes(box)
+    groups = {n: group_of(p) for n, p in position_map(s).items()}
+    print(f"{st.game_id.nunique()} games with stints, {st.game_date.min().date()}..{st.game_date.max().date()}; held out: {T.TEST_SPANS}")
+    stops, scores = T.timeline(st.game_id.unique(), rebuild=args.rebuild_timeline, log=print)
+    bench = None
+    if only & {"decay", "replace"}:
+        fouls = T.load_fouls(s)
+        bench = T.bench_panel(st, fouls, scores, usual, groups)
+    if "decay" in only:
+        on = T.on_panel(st, fouls, scores, usual, groups)
+        r = T.regularity(st)
+        print(f"\nfirst stints of {r['players']} starters ({r['games']} games): mean {r['mean']:.1f} min, sd {r['sd_all']:.2f}; between players {r['sd_between']:.2f}, "
+              f"night to night for one player {r['sd_within']:.2f} (median player {r['within_median']:.2f}); the player explains {100 * r['share_player']:.0f}% of the variance; "
+              f"{100 * r['full_quarter']:.0f}% run the whole first quarter")
+        print("\nsub-out, held-out log loss per 1,000 steps as terms are added ('=' rungs stand alone):")
+        print(T.ladder(on, "out", [("break", [["brk"]]), ("=period clock alone", [["brk"], ["period", "clock", "starter"]]), ("time on floor x starter", [["tbin", "starter"]]),
+                                   ("period clock x starter", [["period", "clock", "starter"]]), ("role (minutes band x group)", [["band", "group"]]),
+                                   ("player", [["player_name"]]), ("player's own curve", [["player_name", "t3"]]), ("stint number", [["sno", "starter"]]),
+                                   ("game state (phase x margin x starter)", [["phase", "mbin", "starter"]]), ("foul trouble", [["trouble", "period"]])]).round(2).to_string(index=False))
+        print("\nreturn, the same:")
+        print(T.ladder(bench, "enter", [("break", [["brk"]]), ("rest x starter x not yet used", [["rbin", "starter", "fresh"]]), ("period clock x starter", [["period", "clock", "starter"]]),
+                                        ("role (minutes band x group)", [["band", "group"]]), ("player", [["player_name"]]),
+                                        ("game state (phase x margin x starter)", [["phase", "mbin", "starter"]]), ("foul trouble", [["trouble", "period"]])]).round(2).to_string(index=False))
+        nb, bb = on[on.brk == 0], bench[bench.brk == 0]
+        piv = lambda d, y, by, idx, col: T.rate_table(d, y, by).pivot(index=idx, columns=col, values="per_min").round(3)   # noqa: E731
+        print("\nchance per minute of coming out by minutes on the floor (rows: bench 0, starter 1):"); print(piv(nb, "out", ["starter", "tbin"], "starter", "tbin").to_string())
+        print("\nchance per minute of coming in by two-minute bins of rest (starter, not yet used):"); print(piv(bb, "enter", ["starter", "fresh", "rbin"], ["starter", "fresh"], "rbin").to_string())
+        for who, flag in (("starters", 1), ("bench", 0)):
+            print(f"\n{who}: out per minute by phase x margin"); print(piv(nb[nb.starter == flag], "out", ["phase", "mbin"], "phase", "mbin")[T.MARGIN_LABELS].to_string())
+            print(f"{who}: in per minute by phase x margin"); print(piv(bb[bb.starter == flag], "enter", ["phase", "mbin"], "phase", "mbin")[T.MARGIN_LABELS].to_string())
+        print("\nfoul trouble (fouls >= period + 1, five in the fourth): out per minute, then in per minute")
+        print(piv(nb, "out", ["period", "trouble"], "period", "trouble").to_string()); print(piv(bb, "enter", ["period", "trouble"], "period", "trouble").to_string())
+        print("\nat a period break: share who come out (by starter), share of the bench who come in")
+        print(on[on.brk == 1].groupby(["period", "starter"]).out.mean().unstack().round(3).to_string()); print(bench[bench.brk == 1].groupby(["period", "starter"]).enter.mean().unstack().round(3).to_string())
+    if "replace" in only:
+        bb = bench[(bench.brk == 0) & T.is_train(bench.game_date)]
+        rt = bb.groupby(["rbin", "starter", "fresh"]).enter.mean().to_dict(); base = float(bb.enter.mean())
+        rest_rate = lambda rest, starter, fresh: rt.get((int(min((rest - 1e-6) // 120, 10)), int(starter), int(fresh)), base) + 1e-4   # noqa: E731
+        mo = T.swap_moments(st)
+        print(f"\n{len(mo)} moments a team changed players: {100 * (mo.outs.map(len) == 1).mean():.0f}% one out, {100 * mo.brk.mean():.0f}% at a period break")
+        print("position flow (how much likelier than his share of the bench): " + "; ".join(f"{o} -> " + ", ".join(f"{i} {v:.2f}" for i, v in d.items()) for o, d in T.group_flow(mo[T.is_train(mo.game_date)], groups).items()))
+        rp = T.replacement_test(mo, T.load_subs(s), usual, groups, rest_rate)
+        print("who came in, per rule: n moments, mean log chance of the real man, share of the real men in the rule's top picks")
+        print(rp.groupby(["kind", "rule"]).agg(n=("ll", "size"), ll=("ll", "mean"), hit=("hit", "mean"), bench=("bench", "mean")).round(3).unstack(0).to_string())
+    if "context" in only:
+        c = T.context_test(box, st)
+        for name, d in (("all", c), ("a 24-minute regular sat", c[c.absent]), ("none sat", c[~c.absent]), ("a regular sat, player under 20 usual", c[c.absent & c.band.isin(["0-12", "12-20"])])):
+            print(f"\nminutes from his own past games, {name} ({d.game_id.nunique()} games):")
+            print(d.groupby("weights").agg(n=("err", "size"), mae=("err", "mean"), mae_first_stint=("err_first", "mean"), n_eff=("n_eff", "mean")).round(3).to_string())
+    if "teams" in only:
+        _, sm = T.cross_team(st, stops, scores)
+        print(f"\n{sm['stops']} dead balls marked by a whistle, timeout or violation ({100 * sm['subs_on_marked_stop']:.0f}% of substitution moments fall on one)")
+        print(f"away team substitutes at {100 * sm['away_given_home']:.0f}% of those where the home team does, {100 * sm['away_given_no_home']:.0f}% where it does not; "
+              f"odds ratio within kind x period x clock {sm['odds_ratio_same_stop']:.2f}; at the next dead ball {sm['odds_ratio_next_stop']:.2f}")
+        print(sm["by_kind"].round(3).to_string(index=False))
+    if "star" in only:
+        ni, he = T.star_out(box, groups); q = T.quiet_nights(box)
+        cols = ["top_gain", "gainers", "ftop_gain", "fgainers"]
+        print(f"\n{len(ni)} nights one {T.STAR_MIN:.0f}-minute regular sat and the other regulars played ({ni.star.nunique()} players, {ni.team.nunique()} teams); {len(q)} nights nobody sat")
+        print("nobody sat:"); print(q[cols].describe().loc[["mean", "25%", "50%", "75%"]].round(2).to_string())
+        print("one sat:"); print(ni[cols + ["freed", "top_share", "new_starter_gain"]].describe().loc[["mean", "25%", "50%", "75%"]].round(2).to_string())
+        he = he.merge(ni[["game_id", "team", "freed"]], on=["game_id", "team"])
+        he["role"] = ["usual starter" if a >= 0.5 else ("rotation bench" if u >= 12 else "deep bench") for a, u in zip(he.starts, he.usual)]
+        he["rank"] = he.groupby(["game_id", "team"]).gain.rank(ascending=False, method="first"); he["frank"] = he.groupby(["game_id", "team"]).fgain.rank(ascending=False, method="first")
+        print("share of his minutes by the teammates' role: " + _fmt(he.groupby(["game_id", "team", "role"]).gain.sum().unstack().fillna(0).div(ni.set_index(["game_id", "team"]).freed, axis=0).mean().to_dict()))
+        print("fantasy points gained by role: " + _fmt(he.groupby(["game_id", "team", "role"]).fgain.sum().unstack().fillna(0).mean().to_dict()))
+        print("share of his minutes by gain rank: " + _fmt({int(k): v for k, v in he[he["rank"] <= 5].assign(sh=lambda d: d.gain / d.freed).groupby("rank").sh.mean().items()}))
+        print("fantasy points gained by rank: " + _fmt({int(k): v for k, v in he[he.frank <= 5].groupby("frank").fgain.mean().items()}))
+        print("the top minutes gainer was a: " + _fmt(he[he["rank"] == 1].role.value_counts(normalize=True).to_dict()) + "; the top points gainer: " + _fmt(he[he.frank == 1].role.value_counts(normalize=True).to_dict()))
+        ns = he[he.started & (he.starts < 0.5)].groupby(["game_id", "team"])
+        print(f"a new starter on {100 * ni.has_new_starter.mean():.0f}% of the nights; his rank among minutes gainers: " + _fmt({int(k): v for k, v in ns["rank"].min().value_counts(normalize=True).sort_index().head(3).items()})
+              + "; among points gainers: " + _fmt({int(k): v for k, v in ns["frank"].min().value_counts(normalize=True).sort_index().head(3).items()}))
+        print(f"top points gainer is the top minutes gainer: {100 * ni.ftop_is_top.mean():.0f}% (nobody sat: {100 * q.ftop_is_top.mean():.0f}%)")
+        print("next night of the same absence: " + _fmt(T.repeat_heirs(ni)))
+
+
 def cmd_draw_world(args) -> None:
     import time
     from ivan.sports.nba import slates
@@ -211,6 +302,7 @@ def main() -> None:
     d.add_argument("--top", type=int, default=15); d.set_defaults(fn=cmd_draw_world)
     cw = sub.add_parser("calibrate-world"); cw.add_argument("--slate", type=int, required=True); cw.add_argument("-n", type=int, default=400); cw.add_argument("--rounds", type=int, default=2)
     cw.set_defaults(fn=cmd_calibrate_world)
+    ss = sub.add_parser("stints-study"); ss.add_argument("--only"); ss.add_argument("--rebuild-timeline", action="store_true"); ss.set_defaults(fn=cmd_stints_study)
     args = ap.parse_args()
     args.fn(args)
 

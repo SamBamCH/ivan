@@ -179,6 +179,7 @@ venv/bin/python scripts/nba/gamesim.py fit-script [--no-write]                  
 venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                      # layer A: PIT coverage of totals and margins, pace, overtime, garbage time
 venv/bin/python scripts/nba/gamesim.py check-usage [--start --end]                 # layer C: shares over the real fives vs per-minute rates, true minutes plugged in
 venv/bin/python scripts/nba/gamesim.py check-rotation [--start --end] [-n 300]     # layer B: the rotation draw vs the current sampler, the real margin path plugged in
+venv/bin/python scripts/nba/gamesim.py stints-study [--only decay,replace,context,teams,star]   # substitutions measured: when a player comes out and returns, who comes in, which games count, a regular sitting
 venv/bin/python scripts/nba/gamesim.py draw-world --slate DG [-n 1000]             # the World on a slate: moments vs the lines, every player's line vs the pool
 venv/bin/python scripts/nba/gamesim.py calibrate-world --slate DG [-n 400]         # the World's four game-level knobs against the real spread of totals, margins, team points, overtime
 ```
@@ -198,6 +199,17 @@ matrix, nobody). Finding 2026-11-07: single exits are noise, the aggregate flow 
 40% to bigs, the backup big 22% himself, a fifth lost), and the sampler's slot rule is the worst
 ([notes/midgame_exits_2026-11-07.md](notes/midgame_exits_2026-11-07.md)). `--team` adds the team's own exits and who
 gained; `--csv` writes `data/nba/diagnostics/gamesim/exits.csv` (+ `_heirs.csv`).
+
+`stints-study` measures substitutions as events (`gamesim.stints`), the ground for a rotation the sim draws stint by
+stint: one row per player per 20 seconds on the floor and on the bench, the held-out log loss of the out-chance and
+the return as terms are added, the raw rates by game state and fouls, who comes in for whom scored on the bench that
+was there (recorded pairs, EM over the multi-player swap sets, position flow, rest), minutes from context-matched
+games, the two teams at the same dead balls, and the nights a regular sat. It reads every raw feed once into
+`data/nba/derived/gamesim/timeline_stops.parquet` and `timeline_scores.parquet` (`--rebuild-timeline`). It changes
+nothing in the sim. Findings 2026-11-16: the period clock predicts a substitution as well as time on the floor, the
+best replacement rule names the man 47% of the time, and a sitting regular's minutes are spread over several
+teammates with the new starter the top gainer on 28% of nights
+([notes/stint_model_2026-11-16.md](notes/stint_model_2026-11-16.md)).
 
 `fit-script` / `check-script` are layer A, the game script (`gamesim.script`): each team's trailing pace and the books'
 total and spread give the game's expected possessions and each team's points per possession; a world draws the pace,

@@ -118,6 +118,8 @@ data/nba/
 │   │                               (a slate's reruns by the current code live with the slate: slates/<dg>/rerun/<stamp>-<commit>/ with meta.json
 │   │                               (the scorecard, the games), players.json (published, actual) and arrays.npz (every stat x world x player))
 │   │                               (ivan.sports.nba.gamesim.possessions; scripts/nba/gamesim.py events, incremental): the game sim's fitting data
+│   ├── gamesim/timeline_*.parquet  every dead ball (timeout, whistle, other) and the home margin after every score, from the raw feeds
+│   │                               (ivan.sports.nba.gamesim.stints.timeline; scripts/nba/gamesim.py stints-study, incremental)
 │   ├── players/experience.json     each player's first NBA season (nba_api), the rookie marks; nightly
 │   └── props_hist/                 parquet of the historical props
 ├── output/                         cross-slate outputs only (a slate's are under slates/<dg>/output)
