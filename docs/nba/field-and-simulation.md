@@ -98,7 +98,18 @@ player's trailing shooting percentages (`gamesim.profiles`) with the attempts sc
 points are what the lines say; the misses are rebounded at the team's share and by the other five, the turnovers become
 the other team's steals, the missed shots its blocks, the makes carry assists. Garbage time (the closers out while the
 lead holds) is **off** by default (`config/nba.json → gamesim.garbage`): the grid's minutes already discount the blowout
-nights ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md)). Four game-level knobs (a team's pull toward
+nights ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md)). **The rotation draw is a switch**
+(`config/nba.json → gamesim.rotation`). `plan` (the default) is the mapped grid with its substitution times jittered.
+`stints` draws the rotation stint by stint inside the minute loop (`gamesim.stints`): each team's players are steered
+to the pool's minutes (one tilt per player, solved once per team and kept for the process), the mapped grid only names
+the starters, and every 20 seconds each man on the floor may come out and is replaced by a draw from the bench that is
+in uniform in that world (pair history, position flow, rest). The chances read the World's own score and fouls, so
+starters sit a blowout and a man in foul trouble sits; there is no separate garbage-time pull on this path. A scratched
+player (`p_out`) is out of uniform in that world and his minutes land on whoever is drawn; a cut night (`p_cut`) would be a
+DNP or a night he is barely used, and is off on this path unless the World's parameters set `stint_cuts` (on top of
+the stint draw it puts the bench low). Rerun of 25 slates, 2026-11-16: minutes MAE 4.97 against 5.31 published and
+fantasy points 7.60 against 7.92 ([notes/stint_model_2026-11-16.md](notes/stint_model_2026-11-16.md)). The tables are `data/nba/models/gamesim/stints.json` (`gamesim.py fit-stints`).
+Four game-level knobs (a team's pull toward
 its own expected scoring, the lead's pull-back, the pace-efficiency coupling, the endgame tie bump) are calibrated on the
 World against the real spread of totals, margins, team points and the overtime rate (`scripts/nba/gamesim.py
 calibrate-world --slate DG`, stored as `world_*` in `data/nba/models/gamesim/script.json`). `scripts/nba/gamesim.py

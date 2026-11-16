@@ -74,3 +74,32 @@ def test_dk_points_and_bonuses():
     stats["pts"][0, 0] = 20; stats["reb"][0, 0] = 10; stats["ast"][0, 0] = 10; stats["fg3m"][0, 0] = 2; stats["tov"][0, 0] = 2
     fp = W.dk_points(stats)
     assert abs(fp[0, 0] - (20 + 1 + 12.5 + 15 - 1 + 1.5 + 3.0)) < 1e-9 and fp[1, 0] == 0.0
+
+
+def _stint_params():
+    from ivan.sports.nba.gamesim import stints as ST
+    zeros = lambda terms: {"|".join(t): np.zeros([len(ST.DOMAINS[c]) for c in t]).tolist() for t in terms}   # noqa: E731
+    return {"out": {"intercept": -2.6, "terms": zeros(ST.OUT_TERMS)}, "in": {"intercept": -1.5, "terms": zeros(ST.IN_TERMS)},
+            "brk": {"intercept": 0.0, "terms": zeros(ST.BRK_TERMS)}, "flow": {g: {h: 1.0 for h in ST.DOMAINS["group"]} for g in ST.DOMAINS["group"]}}
+
+
+def test_world_with_the_rotation_drawn_stint_by_stint():
+    """gamesim.rotation = stints: the coverage is filled minute by minute by the stint draw, steered to each man's minutes; the game still adds up."""
+    from ivan.sports.nba.gamesim import stints as ST
+    home = _players("AAA", 1, True); away = _players("BBB", 100, False)
+    home[0].p_out = 1.0                                                    # a starter scratched in every world: his minutes go to teammates
+    game = W.GameIn(home="AAA", away="BBB", spread_home=-5.0, total=230.0, pace_home=100.0, pace_away=100.0, players={"AAA": home, "BBB": away})
+    pr = PR.ShootingProfiles.build(_box()); st = pr.latest()
+    fr = RO.FoulRates(pd.DataFrame(columns=["player", "game_date", "game_id", "f_num", "m_den"])); fs = pd.DataFrame(columns=["f_num", "m_den"])
+    params = dict(SC.DEFAULTS, pace_a=0.0, pace_b=1.0, kappa=0.0, lambda_pace=0.0, q_tie=0.0, rotation="stints")
+    ctx = ST.Context(_stint_params(), {}, {})
+    d = W.draw_game(game, 300, np.random.default_rng(0), params, W.LEAGUE_DEFAULTS, st, pr, fs, fr, {}, None, ctx)
+    for t in ("AAA", "BBB"):
+        a = d["accs"][t]; s = d["setups"][t]
+        assert np.allclose(a.minutes.sum(axis=1), 240.0 + 25.0 * d["overtime"], atol=1e-6)        # five on the floor every minute, plus overtime
+        assert np.allclose(s.F.sum(axis=1), 5.0)
+    b = d["accs"]["BBB"].minutes
+    assert abs(np.median(b[:, :5], axis=0) - 36.0).max() < 3.0 and abs(np.median(b[:, 5:], axis=0) - 12.0).max() < 3.0   # steered to the pool's minutes
+    a = d["accs"]["AAA"].minutes
+    assert a[:, 0].max() == 0.0 and a[:, 5:].mean() > b[:, 5:].mean() + 3.0                        # the scratched man never plays; the bench takes his minutes
+    assert (d["garbage_at"] < 0).all()                                                             # no separate garbage pull on this path

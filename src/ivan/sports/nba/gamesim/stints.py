@@ -793,16 +793,29 @@ def draw(team: TeamIn, p: dict, n: int, rng: np.random.Generator, margin: Option
 
 class Stepper:
     """The draw one step at a time: step(j, margin) returns who is on the floor during step j in each world, then makes the step's substitutions."""
-    def __init__(self, team: TeamIn, p: dict, n: int, rng: np.random.Generator, tables: Optional[_Tables] = None):
+    def __init__(self, team: TeamIn, p: dict, n: int, rng: np.random.Generator, tables: Optional[_Tables] = None, avail: Optional[np.ndarray] = None,
+                 tilt_world: Optional[np.ndarray] = None):
+        """avail (n, k): who is in uniform in each world (a scratched starter's place at the tip goes to a draw from his usual replacements);
+        tilt_world (n, k): added to the team's tilt in that world (a night the coach does not use a man)."""
         self.t = team; self.T = tables or _Tables(p); self.n = n; self.rng = rng
         k = len(team.names); self.k = k
-        self.on = np.broadcast_to(team.starter.astype(bool), (n, k)).copy()
-        self.tis = np.zeros((n, k)); self.rest = np.zeros((n, k)); self.used = self.on.copy(); self.sno = self.on.astype(int)
-        self.fouls = np.zeros((n, k), dtype=int)
+        self.avail = np.ones((n, k), dtype=bool) if avail is None else np.asarray(avail, dtype=bool)
+        self.tilt = team.tilt[None, :] + (0.0 if tilt_world is None else np.asarray(tilt_world, dtype=float))
         f = np.array([[p["flow"].get(DOMAINS["group"][a], {}).get(DOMAINS["group"][b], 1.0) for b in team.group] for a in team.group])
         np.fill_diagonal(f, 0.0)
         self.w = PAIR_MIX * team.pairs + (1 - PAIR_MIX) * f / np.maximum(f.sum(axis=1, keepdims=True), 1e-9) + 0.01      # out -> in
         np.fill_diagonal(self.w, 0.0)
+        self.on = np.broadcast_to(team.starter.astype(bool), (n, k)) & self.avail
+        for i in np.nonzero(team.starter)[0]:                                # a starter not in uniform: his place goes to a draw
+            rows = np.nonzero(~self.avail[:, i])[0]
+            if not len(rows):
+                continue
+            sc = np.where(self.avail[rows] & ~self.on[rows], self.w[i][None, :] * np.exp(self.tilt[rows]), 0.0)
+            ok = sc.sum(axis=1) > 0
+            pick = np.argmax(np.log(sc[ok] + 1e-300) + rng.gumbel(size=sc[ok].shape), axis=1)
+            self.on[rows[ok], pick] = True
+        self.tis = np.zeros((n, k)); self.rest = np.zeros((n, k)); self.used = self.on.copy(); self.sno = self.on.astype(int)
+        self.fouls = np.zeros((n, k), dtype=int)
         self.role_o = self.T.o_r[team.band, team.group]; self.role_i = self.T.i_b[team.band, team.group]; self.role_b = self.T.b_b[team.band, team.group]
 
     def step(self, j: int, margin: np.ndarray) -> np.ndarray:
@@ -812,7 +825,7 @@ class Stepper:
         phase = 0 if per < 3 else (2 if j >= N_STEPS - 18 else 1)
         mb = np.digitize(margin, MARGIN_EDGES[1:-1])[:, None]                  # (n, 1)
         st = t.starter[None, :]
-        can = self.fouls < 6
+        can = (self.fouls < 6) & self.avail
         tis_end = self.tis + STEP; rest_end = self.rest + STEP
         last = j == N_STEPS - 1
         brk = (j + 1) % PER_STEPS == 0 and not last
@@ -821,7 +834,7 @@ class Stepper:
             trouble = (self.fouls >= min(per + 3, 5)).astype(int)
             rb = np.where(self.on, 0, np.minimum((rest_end - 1e-6) // 120, 10)).astype(int)
             z = (T.b0 + T.b_p[bp, st, self.on.astype(int)] + self.role_b[None, :] + T.b_s[bp, mb, st] + T.b_f[trouble, bp] + T.b_r[rb, self.on.astype(int)]
-                 + BREAK_TILT * t.tilt[None, :])
+                 + BREAK_TILT * self.tilt)
             z = np.where(can, z, -1e9) + rng.gumbel(size=(n, k))
             top = np.argsort(-z, axis=1)[:, :5]
             new = np.zeros((n, k), dtype=bool); np.put_along_axis(new, top, True, axis=1)
@@ -831,11 +844,11 @@ class Stepper:
             trouble = (self.fouls >= min(per + 2, 5)).astype(int)
             tb = np.minimum((tis_end - 1e-6) // 60, 15).astype(int)
             zo = (T.o0 + T.o_t[tb, st] + T.o_c[per, clock, st] + self.role_o[None, :] + T.o_n[np.clip(self.sno, 1, 4) - 1, st] + T.o_s[phase, mb, st]
-                  + T.o_f[trouble, per] - t.tilt[None, :])
+                  + T.o_f[trouble, per] - self.tilt)
             out = self.on & (rng.random((n, k)) < _sig(zo))
             rb = np.minimum((rest_end - 1e-6) // 120, 10).astype(int)
             zi = (T.i0 + T.i_r[rb, st, (~self.used).astype(int)] + T.i_c[per, clock, st] + self.role_i[None, :] + T.i_s[phase, mb, st] + T.i_f[trouble, per]
-                  + t.tilt[None, :])
+                  + self.tilt)
             ready = np.where(~self.on & can, _sig(zi), 0.0)
             new = self.on.copy()
             for i in rng.permutation(k):
@@ -843,7 +856,6 @@ class Stepper:
                 if not len(rows):
                     continue
                 sc = ready[rows] * self.w[i][None, :]
-                sc[np.arange(len(rows))[:, None], np.nonzero(np.ones((len(rows), k)))[1].reshape(len(rows), k)] *= ~new[rows]      # men already brought in this step are gone
                 ok = sc.sum(axis=1) > 0
                 rows, sc = rows[ok], sc[ok]
                 if not len(rows):
@@ -857,7 +869,7 @@ class Stepper:
         if gone.any():
             for i in np.nonzero(gone.any(axis=0))[0]:
                 rows = np.nonzero(gone[:, i])[0]
-                sc = np.where(~new[rows] & (self.fouls[rows] < 6), self.w[i][None, :] + 1e-6, 0.0)
+                sc = np.where(~new[rows] & (self.fouls[rows] < 6) & self.avail[rows], self.w[i][None, :] + 1e-6, 0.0)
                 rows2 = rows[sc.sum(axis=1) > 0]; sc = sc[sc.sum(axis=1) > 0]
                 if len(rows2):
                     pick = np.argmax(np.log(sc + 1e-300) + rng.gumbel(size=sc.shape), axis=1)
@@ -1001,3 +1013,72 @@ def _season_start(order: List[str], per_game: Dict[str, pd.DataFrame], gi: int) 
     """How many of the team's games of the same season came before game gi."""
     season = season_of(per_game[order[gi]].game_date.iloc[0])
     return sum(1 for x in order[:gi] if season_of(per_game[x].game_date.iloc[0]) == season)
+
+
+# ----------------------------------------------------------------------------- inside the World
+CUT_TILT = 3.0               # a night the rotation does not hold for a man (projection.cuts) and he still dresses: his tilt drops by this
+TIP_GAMES = 15               # a team's pair history: its last this many games
+
+
+def margin_paths(n: int, expected: float, sd: float, rng: np.random.Generator) -> np.ndarray:
+    """(n, N_STEPS) a team's margin at each step's start for steering: a random walk that ends at N(expected, sd), no player detail."""
+    inc = rng.normal(expected / N_STEPS, sd / np.sqrt(N_STEPS), size=(n, N_STEPS))
+    return np.concatenate([np.zeros((n, 1)), np.cumsum(inc, axis=1)[:, :-1]], axis=1)
+
+
+class Context:
+    """What the World needs of the stint model for a slate: the tables, every team's recent swap moments (cut at as_of), the tilts solved so far."""
+    def __init__(self, p: dict, moments: Dict[str, pd.DataFrame], groups: Dict[str, str]):
+        self.p = p; self.tables = _Tables(p); self.moments = moments; self.groups = groups; self._tilts: Dict[tuple, np.ndarray] = {}
+
+    @classmethod
+    def build(cls, session: Session, groups: Dict[str, str], as_of=None, p: Optional[dict] = None) -> "Context":
+        end = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
+        q = ("select game_id, game_date, team, player_name, stint_no, start_sec, end_sec, to_buzzer, starter from nba_stint "
+             "where game_date < :end and game_date >= :start")
+        st = pd.read_sql(text(q), session.get_bind(), params={"end": str(end.date()), "start": str((end - pd.Timedelta(days=75)).date())})
+        st["game_date"] = pd.to_datetime(st.game_date)
+        moments: Dict[str, pd.DataFrame] = {}
+        for team, ts in st.groupby("team"):
+            last = list(dict.fromkeys(ts.sort_values(["game_date", "game_id"]).game_id))[-TIP_GAMES:]
+            moments[team] = swap_moments(ts[ts.game_id.isin(last)])
+        return cls(p or load(), moments, groups)
+
+    def side(self, team: str, players: Sequence, n: int, rng: np.random.Generator, expected_margin: float, sd_margin: float, foul_rate: Dict[str, float],
+             dnp_share: Optional[Dict[str, float]] = None, cuts: bool = False) -> "Side":
+        """players: the World's PlayerIn rows for the team, in the order of its TeamSetup. cuts: also draw the soft pool's cut nights (off: the
+        stint draw already spreads a bench man's minutes, and the cut nights on top put the bench 1.2 and the deep bench 3.3 minutes low on the
+        rerun of 25 slates, 2026-11-16)."""
+        names = [q.name for q in players]
+        target = np.array([q.minutes if q.minutes > 0 else q.fringe_p * q.fringe_minutes for q in players], dtype=float)
+        first = np.array([bool(q.cells[0]) if q.cells else False for q in players])
+        order = np.lexsort((-target, ~first))                                  # the mapped starters first, then by minutes
+        starter = np.zeros(len(players), dtype=bool); starter[order[:5]] = True
+        tin = TeamIn(names, starter, target, [self.groups.get(nm, "wing") for nm in names],
+                     team_pairs(self.moments.get(team, pd.DataFrame(columns=["outs", "ins"])), names, self.groups, self.p["flow"]),
+                     [foul_rate.get(nm, LEAGUE_FOULS_36 / 36.0) for nm in names])
+        key = (team, tuple(names), tuple(np.round(target, 1)), tuple(starter), round(float(expected_margin), 1))
+        if key not in self._tilts:
+            cal = calibrate(tin, self.p, target, margin_paths(300, expected_margin, sd_margin, np.random.default_rng(5)), tables=self.tables)
+            self._tilts[key] = cal["tilt"]
+        tin.tilt = self._tilts[key]
+        avail = rng.random((n, len(players))) >= np.array([q.p_out for q in players])[None, :]
+        tilt_w = np.zeros((n, len(players)))
+        if cuts:
+            cut = rng.random((n, len(players))) < np.array([q.p_cut for q in players])[None, :]
+            dnp = cut & (rng.random((n, len(players))) < np.array([(dnp_share or {}).get(q.name, 0.0) for q in players])[None, :])
+            avail &= ~dnp; tilt_w = np.where(cut & ~dnp, -CUT_TILT, 0.0)
+        short = avail.sum(axis=1) < 5                                          # never fewer than five in uniform
+        avail[short] = True
+        return Side(tin, Stepper(tin, self.p, n, rng, self.tables, avail, tilt_w), avail)
+
+
+class Side:
+    """One team inside the World's minute loop."""
+    def __init__(self, team: TeamIn, stepper: Stepper, avail: np.ndarray):
+        self.team = team; self.stepper = stepper; self.avail = avail
+
+    def minute(self, m: int, lead: np.ndarray) -> np.ndarray:
+        """(n, k) the share of minute m each man is on the floor; the lead (n,) is the team's margin at the minute's start."""
+        per = int(round(60.0 / STEP))
+        return np.mean([self.stepper.step(m * per + i, lead) for i in range(per)], axis=0)

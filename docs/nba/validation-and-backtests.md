@@ -266,6 +266,8 @@ game-level knobs on a slate's games so the drawn totals, margins, team points an
 ```bash
 venv/bin/python scripts/nba/rerun_slate.py --slate 156184 [-n 1000] [--seed 0] [--tip 1800]      # the first tip record unless --tip
 venv/bin/python scripts/nba/rerun_slate.py --slate 156184 --list
+venv/bin/python scripts/nba/rerun_slate.py --slate 156184 --rotation stints --no-write          # the slate under the other rotation draw, nothing left on file
+venv/bin/python scripts/nba/rerun_slate.py --compare plan,stints [--since 2026-11-01] [-n 400]  # every slate with a tip record under each rotation, scorecards pooled
 ```
 
 The World drawn from the slate's **tip record** ([data.md](data.md): the pool with its minutes, grid rows and scratch

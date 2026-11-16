@@ -115,6 +115,16 @@ def garbage_setting() -> bool:
         return False
 
 
+def rotation_setting() -> str:
+    """config/nba.json gamesim.rotation: 'plan' (the mapped grid with jittered substitutions, gamesim.rotation.draw) or 'stints'
+    (the rotation drawn stint by stint from each man's minutes, gamesim.stints)."""
+    try:
+        from ivan.core.config import cfg, load_config
+        return str(cfg(load_config("nba"), "gamesim.rotation", "plan"))
+    except Exception:   # noqa: BLE001 - no config file: the default
+        return "plan"
+
+
 @dataclass
 class WorldContext:
     """
@@ -131,6 +141,7 @@ class WorldContext:
     foul_rates: RO.FoulRates
     foul_state: pd.DataFrame
     as_of: Optional[date] = None
+    stints: Optional[object] = None      # gamesim.stints.Context when params["rotation"] == "stints"
 
     @classmethod
     def build(cls, session: Session, as_of: Optional[date] = None, params: Optional[dict] = None, teams: Optional[dict] = None) -> "WorldContext":
@@ -144,14 +155,20 @@ class WorldContext:
         prof_state = profiles.before(as_of) if as_of else profiles.latest()
         fr = RO.FoulRates.load(session)
         foul_state = fr.before(as_of) if as_of else fr.rows.groupby("player").tail(1).set_index("player")
-        return cls(params=params, teams=teams, groups=groups, profiles=profiles, prof_state=prof_state, foul_rates=fr, foul_state=foul_state, as_of=as_of)
+        if "rotation" not in params:
+            params["rotation"] = rotation_setting()
+        st = None
+        if params["rotation"] == "stints":
+            from ivan.sports.nba.gamesim import stints as ST
+            st = ST.Context.build(session, groups, as_of=as_of, p=ST.load(Path(params["stints_path"])) if params.get("stints_path") else None)
+        return cls(params=params, teams=teams, groups=groups, profiles=profiles, prof_state=prof_state, foul_rates=fr, foul_state=foul_state, as_of=as_of, stints=st)
 
     def with_params(self, params: dict) -> "WorldContext":
         from dataclasses import replace
         return replace(self, params=dict(params))
 
     def draw_game(self, game: "GameIn", n: int, rng: np.random.Generator, state: Optional[dict] = None) -> dict:
-        return draw_game(game, n, rng, self.params, self.teams, self.prof_state, self.profiles, self.foul_state, self.foul_rates, self.groups, state)
+        return draw_game(game, n, rng, self.params, self.teams, self.prof_state, self.profiles, self.foul_state, self.foul_rates, self.groups, state, self.stints)
 
 
 def _rates_of(p, league_rates: Dict[str, float]) -> Dict[str, float]:
@@ -221,6 +238,7 @@ class TeamSetup:
     factor: float                 # the reconciliation factor on attempts
     exp_points: float             # the roster's expected points before reconciliation
     target_points: Optional[float]
+    side: Optional[object] = None  # gamesim.stints.Side when the rotation is drawn stint by stint: F is filled as the game is played
 
 
 def _grid_from(players: Sequence[PlayerIn]) -> pd.DataFrame:
@@ -236,9 +254,18 @@ def _grid_from(players: Sequence[PlayerIn]) -> pd.DataFrame:
 
 
 def setup_team(players: Sequence[PlayerIn], opp_players: Sequence[PlayerIn], n: int, rng: np.random.Generator, P: float, target_points: Optional[float],
-               prof_state: pd.DataFrame, profiles: PR.ShootingProfiles, foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], teams: dict) -> TeamSetup:
+               prof_state: pd.DataFrame, profiles: PR.ShootingProfiles, foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], teams: dict,
+               stints=None, expected_margin: float = 0.0, params: Optional[dict] = None) -> TeamSetup:
     players = [p for p in players if p.minutes > 0 or p.cells or p.fringe_p > 0]
     names = [p.name for p in players]; k = len(names)
+    if stints is not None:
+        return _setup_stints(players, opp_players, n, rng, P, target_points, prof_state, profiles, foul_state, foul_rates, teams, stints, expected_margin, params or {})
+    return _finish_setup(players, opp_players, P, target_points, prof_state, profiles, teams, *_plan_coverage(players, n, rng, foul_state, foul_rates, groups))
+
+
+def _plan_coverage(players, n, rng, foul_state, foul_rates, groups):
+    """The mapped grid's draw: coverage (n, k, 48), fouls, who is available at the end."""
+    names = [p.name for p in players]
     grid = _grid_from(players)
     spreads = {p.name: RO.spread_for(p.boundary_sd, p.minutes, p.minutes_sd, grid.loc[p.name].values if p.name in grid.index else None) for p in players}
     rates = {p.name: foul_rates.rate(foul_state, p.name, p.minutes) for p in players}
@@ -252,6 +279,22 @@ def setup_team(players: Sequence[PlayerIn], opp_players: Sequence[PlayerIn], n: 
     order = [d["names"].index(nm) for nm in names]
     F = d["onfloor"][:, order, :]; fouls = d["fouls"][:, order]
     avail = ~d["fouled_out"][:, order] & (F.sum(axis=2) > 0)
+    return F, fouls, avail, None
+
+
+def _setup_stints(players, opp_players, n, rng, P, target_points, prof_state, profiles, foul_state, foul_rates, teams, stints, expected_margin, params) -> TeamSetup:
+    """The stint draw: the coverage is filled minute by minute inside draw_game (the substitutions read the score); the setup carries the side that draws it."""
+    from ivan.sports.nba.projection import cuts as CUTS
+    ct = CUTS.load_table()
+    side = stints.side(players[0].team if players else "", players, n, rng, expected_margin, float(params.get("real_sd_margin", 13.0)),
+                       {p.name: foul_rates.rate(foul_state, p.name, p.minutes) for p in players},
+                       dnp_share={p.name: CUTS.dnp_share(ct, p.minutes, None) for p in players if p.p_cut > 0}, cuts=bool(params.get("stint_cuts", False)))
+    k = len(players)
+    return _finish_setup(players, opp_players, P, target_points, prof_state, profiles, teams, np.zeros((n, k, MINUTES)), np.zeros((n, k), dtype=int), side.avail.copy(), side)
+
+
+def _finish_setup(players, opp_players, P, target_points, prof_state, profiles, teams, F, fouls, avail, side) -> TeamSetup:
+    names = [p.name for p in players]
     base = np.array([p.minutes for p in players], dtype=float)
     # each player's attempts and percentages, scaled to the pool's points and threes
     prof = [PR.fit_to_rates(profiles.profile(prof_state, p.name), p.rates.get("points"), p.rates.get("fg3m")) for p in players]
@@ -279,7 +322,7 @@ def setup_team(players: Sequence[PlayerIn], opp_players: Sequence[PlayerIn], n: 
                p_blk=float(np.clip(exp(w_blk) / max(o_fga - o_fgm, 1e-6), 0.02, 0.3)) if o_fga > 0 else teams["p_blk"])
     return TeamSetup(names=names, pids=[p.pid for p in players], F=F, fouls=fouls, base=base, avail=avail, w_fg2=w_fg2, w_fg3=w_fg3, w_ft=w_ft, w_tov=w_tov,
                      w_oreb=w_oreb, w_dreb=w_dreb, w_ast=w_ast, w_stl=w_stl, w_blk=w_blk, pct2=pct2, pct3=pct3, pctft=pctft, pie=pie, factor=factor,
-                     exp_points=exp_points, target_points=target_points)
+                     exp_points=exp_points, target_points=target_points, side=side)
 
 
 # ----------------------------------------------------------------------------- the minute loop
@@ -350,7 +393,7 @@ def _defence(rng, off: dict, T_off: TeamSetup, cov_off: np.ndarray, acc_off: _Ac
 
 
 def draw_game(game: GameIn, n: int, rng: np.random.Generator, params: dict, teams: dict, prof_state: pd.DataFrame, profiles: PR.ShootingProfiles,
-              foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], state: Optional[dict] = None) -> dict:
+              foul_state: pd.DataFrame, foul_rates: RO.FoulRates, groups: Dict[str, str], state: Optional[dict] = None, stints=None) -> dict:
     """One game, n worlds. Returns per team the TeamSetup and accumulators, plus the game's margin, totals, possessions, overtime, garbage onsets."""
     P = SC.expected_possessions(game.pace_home, game.pace_away, params)
     if game.total is not None and game.spread_home is not None:
@@ -362,8 +405,9 @@ def draw_game(game: GameIn, n: int, rng: np.random.Generator, params: dict, team
     script = SC.draw(n, P, e_h, e_a, params, rng)
     poss_min = np.repeat(script["poss"], SEG_MIN, axis=1) / SEG_MIN                      # (n, 48) expected possessions per minute
     home_players = game.players.get(game.home, []); away_players = game.players.get(game.away, [])
-    setups = {game.home: setup_team(home_players, away_players, n, rng, P, targets[game.home], prof_state, profiles, foul_state, foul_rates, groups, teams),
-              game.away: setup_team(away_players, home_players, n, rng, P, targets[game.away], prof_state, profiles, foul_state, foul_rates, groups, teams)}
+    exp_home = -float(game.spread_home) if game.spread_home is not None else 0.0          # the home side's expected margin, for steering the stint draw
+    setups = {game.home: setup_team(home_players, away_players, n, rng, P, targets[game.home], prof_state, profiles, foul_state, foul_rates, groups, teams, stints, exp_home, params),
+              game.away: setup_team(away_players, home_players, n, rng, P, targets[game.away], prof_state, profiles, foul_state, foul_rates, groups, teams, stints, -exp_home, params)}
     accs = {t: _Acc(n, len(s.names)) for t, s in setups.items()}
     cov_plan = {t: s.F for t, s in setups.items()}
     garbage = {t: None for t in setups}                 # team -> (n, k, 48) coverage once the closers are pulled, or None
@@ -385,6 +429,8 @@ def draw_game(game: GameIn, n: int, rng: np.random.Generator, params: dict, team
         covs = {}
         for t in teams_order:
             s = setups[t]
+            if s.side is not None:                       # the stint draw: this minute's substitutions read the score so far
+                s.F[:, :, m] = s.side.minute(m, margin if t == game.home else -margin)
             c = cov_plan[t][:, :, m].copy()
             if in_garbage.any() and garbage[t] is not None:
                 c[in_garbage] = garbage[t][in_garbage, :, m]
@@ -402,7 +448,7 @@ def draw_game(game: GameIn, n: int, rng: np.random.Generator, params: dict, team
             _defence(rng, offs[t], setups[t], covs[t], accs[t], setups[o], covs[o], accs[o])
         margin += offs[game.home]["pts"] - offs[game.away]["pts"]
         # garbage time off the emergent score: pull while the lead beats the threshold, return when it falls back
-        if params.get("garbage", True) and m + 1 >= RO.GARBAGE_FROM and m + 1 < MINUTES:
+        if stints is None and params.get("garbage", True) and m + 1 >= RO.GARBAGE_FROM and m + 1 < MINUTES:   # the stint draw pulls its own closers (game state)
             left = (MINUTES - (m + 1)) * 60.0
             thr = RO.garbage_threshold(left)
             enter = (~in_garbage) & (np.abs(margin) >= thr)
@@ -416,6 +462,9 @@ def draw_game(game: GameIn, n: int, rng: np.random.Generator, params: dict, team
                 in_garbage |= enter
             if leave.any():
                 in_garbage &= ~leave
+    for s in setups.values():
+        if s.side is not None:
+            s.fouls = s.side.stepper.fouls; s.avail = s.side.avail & (s.fouls < 6)
     # the endgame tie bump and overtime
     q_tie = float(params.get("world_q_tie", params.get("q_tie", 0.0)))
     if q_tie > 0:

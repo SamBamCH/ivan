@@ -276,19 +276,27 @@ def scorecard(world: W.World, act: pd.DataFrame, games_act: Dict[tuple, Optional
 
 
 # ----------------------------------------------------------------------------- run and store
-def rerun(session: Session, dg: int, n: int = 1000, seed: Optional[int] = 0, tip: Optional[datetime] = None, root: Optional[Path] = None, log=print) -> dict:
+def rerun(session: Session, dg: int, n: int = 1000, seed: Optional[int] = 0, tip: Optional[datetime] = None, root: Optional[Path] = None, log=print,
+          params: Optional[dict] = None, write: bool = True) -> dict:
+    """params: overrides on the World's parameters (e.g. {"rotation": "stints"}); write False scores without leaving a rerun on file."""
     tips = T.tips_of(dg, root)
     if not tips:
         raise FileNotFoundError(f"slate {dg} has no tip records (data/nba/slates/{dg}/tips/)")
     tip = tip or tips[0]
     games, day, meta = inputs_from_tip(session, dg, tip, root)
     log(f"slate {dg}: tip {tip:%m-%d %H:%M}, {meta['players']} players, {meta['games']} games ({meta['lined']} lined); drawing {n} worlds as of {day}")
-    world = W.World.draw(session, n=n, seed=seed, as_of=day, games=games, log=log)
+    if params:
+        from ivan.sports.nba.gamesim import script as SC
+        params = {**SC.load_params(), **params}
+    world = W.World.draw(session, n=n, seed=seed, as_of=day, games=games, log=log, params=params)
     act = actuals(session, day)
     games_act = {(g["home"], g["away"]): game_actuals(day, g["home"], g["away"]) for g in world.games}
     rec = T.read_tip(dg, tip, root)
     published = {int(p["id"]): dict(minutes=p.get("minutes_proj"), fpts=p.get("fpts_mean"), fpts_std=p.get("fpts_std"), own=p.get("ownership")) for p in rec["players"]}
     card = scorecard(world, act, games_act, published)
+    if not write:
+        return dict(meta=dict(draft_group=int(dg), tip=tip.isoformat(timespec="minutes"), day=day.isoformat(), n=int(n), seed=seed, inputs=meta, scorecard=card,
+                              games=[dict(home=g["home"], away=g["away"]) for g in world.games]), world=world, dir=None)
     from ivan.core.gitinfo import git_state
     gs = git_state()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

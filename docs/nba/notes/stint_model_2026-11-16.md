@@ -174,6 +174,35 @@ played, who started, the real margin path, and each man's real regulation minute
 - **Cost**: 1,000 worlds of one team in 0.14 seconds, the same order as the current rotation draw; steering a team
   takes about 0.6 seconds.
 
+## 9. The gate: the World with the stint draw, 25 slates rerun
+
+`rerun_slate.py --compare plan,stints,stints-cuts -n 300`: every slate with a tip record (2026-10-23 to 11-15, 2,709
+player-games), the World drawn from the tip record under each rotation, tables fitted on the games before 2026-10-23.
+The minutes steered to are the tip record's projected minutes; the mapped grid only names the starters.
+
+| | published at the tip | grid draw (plan) | stint draw | stint draw + cut nights |
+|---|---|---|---|---|
+| minutes MAE | 5.31 | 6.62 | **4.97** | 5.12 |
+| minutes inside the drawn 10-90 band (80% if calibrated) | | 64% | 77% | 79% |
+| fantasy points MAE | 7.92 | 8.93 | **7.60** | 7.66 |
+| fantasy points inside the band | | 68% | 77% | 80% |
+| minutes bias, deep (12 or fewer planned) | | -3.2 | -0.3 | -3.3 |
+| bench (12-22) | | -3.0 | +0.5 | -1.2 |
+| starter (22-30) | | +1.0 | -0.1 | +0.2 |
+| star (30+) | | +2.9 | +0.2 | +1.0 |
+| game margin MAE (71 games) | 10.56 | 10.53 | 10.66 | 10.29 |
+
+- **The stint draw passes.** No row is worse than the published projection or the grid draw beyond noise; minutes
+  and fantasy points are better than both, the role biases are gone, and the bands hold 77% where the grid draw's
+  held 64-68%. Points, rebounds, assists and attempts all improve with the minutes.
+- **The soft pool's cut nights are left off on this path** (`stint_cuts`). The stint draw already spreads a bench
+  man's minutes; cut nights on top put the bench 1.2 and the deep bench 3.3 minutes low.
+- The grid draw scores worse here than what was published because the older tip records predate the current
+  mapping; the fair baseline is the published column.
+- Not in the gate yet: a row for how a sitting regular's minutes spread over his teammates.
+- Tonight's slate (156745, 7 games): the first draw takes 17 seconds (steering 14 teams), later draws 5 seconds
+  against 7 for the grid draw.
+
 ## What this changes in the model
 
 1. The out-chance is the decay curve **and** the period clock, pooled by role, with one shift per player. The
