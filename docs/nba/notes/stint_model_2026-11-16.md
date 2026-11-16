@@ -144,6 +144,36 @@ average is noisy, which is why every figure sits beside the ordinary-night one.
 attempts are 0.08 low on 8.65 (against 0.32 low for a per-minute rate). The split among the five on the floor
 moves the usage to whoever is out there, so no separate star-off usage term is planned.
 
+## 8. The draw against played games
+
+The model built from the above (`gamesim.stints`: `fit`, `Stepper` / `draw`, `calibrate`; fitted on the 690 regular
+season games before 2026-11-01) was run on the 216 team-games of 2026-11-01 to 11-15 with the truth plugged in: who
+played, who started, the real margin path, and each man's real regulation minutes as the number steered to
+(`gamesim.py check-stints`, 200 worlds a team).
+
+| | real | drawn |
+|---|---|---|
+| steering: minutes off the target (mean absolute) | | 0.40 |
+| stints per player | 3.48 | 3.17 |
+| a starter's first stint, minutes | 7.16 | 7.23 |
+| real first stint inside the drawn 10-90 band | 80% if calibrated | 84% |
+| on the floor by minute, Brier (lower is better) | | 0.138 |
+| the same for his own ten-game curve scaled to tonight's minutes | | 0.162 |
+| the same for a flat share of the game | | 0.185 |
+
+- **Steering works.** One tilt per player lands the median within 0.4 minutes, including targets far from the
+  role (a starter asked for 12, a bench man for 34). Targets that do not add to 240 are scaled to it first; without
+  that the tilts run away and the team substitutes every minute.
+- **The drawn rotation looks like the played one.** Given the minutes, the model places them better than the
+  player's own recent pattern for every role except the 28-minute starters, where the two are level (0.145
+  against 0.140): their pattern is personal and the pooled curve does not carry it.
+- **First stints are calibrated** (the real one falls evenly across the drawn distribution).
+- **Open**: the draw substitutes a little less often than teams do (0.3 stints a player). With the median fixed
+  a player's minutes still vary by about 5 minutes (sd) across worlds; that spread has not yet been checked against
+  the real spread around a projection, which is the rerun gate's job. Regulation only: overtime is not drawn yet.
+- **Cost**: 1,000 worlds of one team in 0.14 seconds, the same order as the current rotation draw; steering a team
+  takes about 0.6 seconds.
+
 ## What this changes in the model
 
 1. The out-chance is the decay curve **and** the period clock, pooled by role, with one shift per player. The

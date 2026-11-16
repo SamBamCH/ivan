@@ -34,6 +34,13 @@ The NBA game simulation's fitting data and checks (ivan.sports.nba.gamesim; plan
         position flow, rest) scored on the bench that was there, minutes from context-matched games, whether the two teams
         substitute together, and where a sitting regular's minutes and points went. Reads the raw feeds once into
         data/nba/derived/gamesim/timeline_*.parquet
+    scripts/nba/gamesim.py fit-stints [--before 2026-11-01] [--no-write]
+        the stint model's tables (out-chance, return chance, break re-pick, position flow) from every regular-season game
+        before the date -> data/nba/models/gamesim/stints.json
+    scripts/nba/gamesim.py check-stints [--start 2026-11-01 --end 2026-11-15] [-n 200] [--targets actual|usual] [--max-games N]
+        the stint draw on played games with the truth plugged in (who played, who started, the real margin path, each man's
+        real minutes as the number steered to): steering error, stints and first-stint length real vs drawn, on-the-floor
+        by minute against the real grid beside his own trailing curve. Fits as of --start; nothing is written
 """
 from __future__ import annotations
 
@@ -255,6 +262,40 @@ def cmd_stints_study(args) -> None:
         print("next night of the same absence: " + _fmt(T.repeat_heirs(ni)))
 
 
+def _stint_inputs():
+    from ivan.sports.nba.gamesim import stints as T
+    from ivan.sports.nba.projection.groups import group_of, position_map
+    s = get_session(init_db("nba"))
+    st = T.load_stints(s); usual = T.usual_minutes(T.load_box(s))
+    groups = {n: group_of(p) for n, p in position_map(s).items()}
+    _, scores = T.timeline(st.game_id.unique(), log=print)
+    return T, st, T.load_fouls(s), scores, usual, groups
+
+
+def cmd_fit_stints(args) -> None:
+    import warnings
+    warnings.filterwarnings("ignore")
+    T, st, fouls, scores, usual, groups = _stint_inputs()
+    p = T.fit(st, fouls, scores, usual, groups, before=args.before, write=not args.no_write)
+    print(f"{p['games']} games through {p['through']}; out intercept {p['out']['intercept']:.2f}, return {p['in']['intercept']:.2f}, break {p['brk']['intercept']:.2f}")
+    print("position flow: " + "; ".join(f"{o} -> " + ", ".join(f"{i} {v:.2f}" for i, v in d.items()) for o, d in p["flow"].items()))
+    print("not written" if args.no_write else f"written {T.MODEL_JSON}")
+
+
+def cmd_check_stints(args) -> None:
+    import warnings
+    warnings.filterwarnings("ignore")
+    T, st, fouls, scores, usual, groups = _stint_inputs()
+    p = T.fit(st, fouls, scores, usual, groups, before=args.start)
+    print(f"fitted on {p['games']} games through {p['through']}")
+    r = T.check(st, fouls, scores, usual, groups, p, args.start, args.end, n=args.n, targets=args.targets, max_games=args.max_games, log=print)
+    print(_fmt(r["summary"]))
+    pd.set_option("display.width", 220)
+    print(r["by_band"].round(3).to_string(index=False))
+    h, _ = __import__("numpy").histogram(r["rows"].first_pit.dropna(), bins=5, range=(0, 1))
+    print(f"first-stint PIT by fifth: {h.tolist()}   (flat = calibrated)")
+
+
 def cmd_draw_world(args) -> None:
     import time
     from ivan.sports.nba import slates
@@ -303,6 +344,9 @@ def main() -> None:
     cw = sub.add_parser("calibrate-world"); cw.add_argument("--slate", type=int, required=True); cw.add_argument("-n", type=int, default=400); cw.add_argument("--rounds", type=int, default=2)
     cw.set_defaults(fn=cmd_calibrate_world)
     ss = sub.add_parser("stints-study"); ss.add_argument("--only"); ss.add_argument("--rebuild-timeline", action="store_true"); ss.set_defaults(fn=cmd_stints_study)
+    fs = sub.add_parser("fit-stints"); fs.add_argument("--before"); fs.add_argument("--no-write", action="store_true"); fs.set_defaults(fn=cmd_fit_stints)
+    cs = sub.add_parser("check-stints"); cs.add_argument("--start", default="2026-11-01"); cs.add_argument("--end", default="2026-11-15"); cs.add_argument("-n", type=int, default=200)
+    cs.add_argument("--targets", choices=["actual", "usual"], default="actual"); cs.add_argument("--max-games", type=int); cs.set_defaults(fn=cmd_check_stints)
     args = ap.parse_args()
     args.fn(args)
 

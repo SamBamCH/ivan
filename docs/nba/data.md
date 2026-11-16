@@ -101,6 +101,8 @@ data/nba/
 │   ├── correlation.json            the role-pair correlation table measured 2026-10 on walk-forward residuals: the game sim's check target
 │   ├── field_two_group.json        the field's two-group lineup model (the live sampler)
 │   ├── field_ownership.json        the ownership model fitted on real contests (scripts/nba/field_model.py fit)
+│   ├── gamesim/stints.json         the stint model's tables (gamesim.py fit-stints; ivan.sports.nba.gamesim.stints): out-chance, return chance, break
+│   │                               re-pick, position flow. Not read by the live sim
 │   ├── gamesim/script.json         the game script's parameters (gamesim.py fit-script) and the World's calibrated knobs (world_*, calibrate-world), with the fit window and the commit
 │   ├── gamesim/teams.json          every team's trailing pace and the league coupling constants the World falls back on (fit-script)
 │   └── salary_minutes.json         (when fitted) the salary → minutes prior curve

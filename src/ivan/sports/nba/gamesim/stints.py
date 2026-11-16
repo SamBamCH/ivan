@@ -664,3 +664,340 @@ def repeat_heirs(nights: pd.DataFrame) -> dict:
             if b.night == a.night + 1:
                 same.append(a.top == b.top); fsame.append(a.ftop == b.ftop)
     return dict(pairs=len(same), same_minutes_top=float(np.mean(same)) if same else float("nan"), same_fpts_top=float(np.mean(fsame)) if fsame else float("nan"))
+
+
+# ============================================================================= the model
+# Fitted tables (fit) -> a team's inputs for one game (TeamIn) -> draw: n worlds of who is on the floor each STEP.
+# At every step that is not a period break each player on the floor comes out with his out-chance and each man out is
+# replaced by a draw from the bench (pair history + position flow, times the bench man's return chance). At a break
+# the five who open the next period are re-picked. Chances read the world's own margin and fouls. One tilt per player
+# (out-chance down, return and break chance up) steers his minutes to the number asked for (calibrate).
+DOMAINS = {"tbin": list(range(16)), "starter": [0, 1], "period": [1, 2, 3, 4], "clock": list(range(6)), "band": ["new"] + [b for b, _, _ in BANDS],
+           "group": ["big", "guard", "wing"], "phase": ["q1-3", "q4", "last6"], "mbin": MARGIN_LABELS, "trouble": [0, 1], "rbin": list(range(11)),
+           "fresh": [0, 1], "bp": [1, 2, 3], "on": [0, 1], "sno": [1, 2, 3, 4]}
+OUT_TERMS = [("tbin", "starter"), ("period", "clock", "starter"), ("band", "group"), ("sno", "starter"), ("phase", "mbin", "starter"), ("trouble", "period")]
+IN_TERMS = [("rbin", "starter", "fresh"), ("period", "clock", "starter"), ("band", "group"), ("phase", "mbin", "starter"), ("trouble", "period")]
+BRK_TERMS = [("bp", "starter", "on"), ("band", "group"), ("bp", "mbin", "starter"), ("trouble", "bp"), ("rbin", "on")]
+MODEL_JSON = DERIVED_DIR.parent.parent / "models" / "gamesim" / "stints.json"
+PAIR_MIX = 0.5               # the replacement weight: this share pair history, the rest position flow
+BREAK_TILT = 2.0             # a player's tilt counts this many times in the break re-pick
+FOUL_PRIOR_MIN = 300.0       # a player's foul rate is shrunk to the league's by this many minutes
+LEAGUE_FOULS_36 = 2.9
+TILT_MINUTES = 14.0          # the steering's step: a minute off the target moves the tilt by 1/this (a unit of tilt is worth about this many minutes; larger steps oscillate)
+
+
+def _fit_logit(d: pd.DataFrame, y: str, terms: Sequence[Sequence[str]], C: float = 1.0) -> dict:
+    """A logistic fit on one-hot terms, returned as {intercept, terms: {'a|b': dense nested list over the columns' DOMAINS}}."""
+    from scipy import sparse
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import OneHotEncoder
+    mats, encs = [], []
+    for t in terms:
+        key = d[list(t)].astype(str).agg("|".join, axis=1) if len(t) > 1 else d[t[0]].astype(str)
+        enc = OneHotEncoder(handle_unknown="ignore", min_frequency=20).fit(key.to_frame())
+        mats.append(enc.transform(key.to_frame())); encs.append(enc)
+    m = LogisticRegression(C=C, max_iter=400).fit(sparse.hstack(mats).tocsr(), d[y].to_numpy())
+    out = {"intercept": float(m.intercept_[0]), "terms": {}}
+    at = 0
+    for t, enc in zip(terms, encs):
+        names = enc.get_feature_names_out(); coef = m.coef_[0][at:at + len(names)]; at += len(names)
+        look = {str(n).split("_", 1)[1]: float(c) for n, c in zip(names, coef)}
+        other = next((float(c) for n, c in zip(names, coef) if "infrequent" in str(n)), 0.0)
+        arr = np.zeros([len(DOMAINS[c]) for c in t])
+        for idx in np.ndindex(*arr.shape):
+            arr[idx] = look.get("|".join(str(DOMAINS[c][i]) for c, i in zip(t, idx)), other)
+        out["terms"]["|".join(t)] = arr.tolist()
+    return out
+
+
+def break_panel(stints: pd.DataFrame, fouls: pd.DataFrame, scores: pd.DataFrame, usual: pd.DataFrame, groups: Dict[str, str]) -> pd.DataFrame:
+    """One row per player who played the game per period break: on (on the floor into the break), nxt (on the floor out of it), rest, margin, fouls."""
+    games = _games(stints, fouls, scores)
+    rows = []
+    for (gid, team, nm), s in stints.groupby(["game_id", "team", "player_name"], sort=False):
+        a = s.start_sec.to_numpy(float); b = s.end_sec.to_numpy(float); g = games[gid]
+        for k, t in enumerate(BREAKS):
+            on = bool(((a < t) & (b >= t)).any()); nxt = bool(((a <= t) & (b > t)).any())
+            ends = b[b <= t]
+            rest = 0.0 if on else (t - ends.max() if len(ends) else t)
+            rows.append((gid, s.game_date.iloc[0], team, nm, k + 1, int(on), int(nxt), rest, float(g.margin(team, np.array([t - 1.0]))[0]),
+                         int(g.fouls(nm, np.array([t]))[0]), int(s.starter.iloc[0] or 0)))
+    d = pd.DataFrame(rows, columns=["game_id", "game_date", "team", "player_name", "bp", "on", "nxt", "rest", "margin", "fouls", "starter"])
+    d = d.merge(usual[["game_id", "player_name", "usual"]], on=["game_id", "player_name"], how="left")
+    d["band"] = d.usual.map(band_of); d["group"] = d.player_name.map(lambda n: groups.get(n, "wing"))
+    d["mbin"] = pd.cut(d.margin, MARGIN_EDGES, labels=MARGIN_LABELS, right=False).astype(str)
+    d["trouble"] = (d.fouls >= np.minimum(d.bp + 2, 5)).astype(int)          # read against the period about to start
+    d["rbin"] = np.minimum((d.rest - 1e-6).clip(lower=0) // 120, 10).astype(int)
+    return d
+
+
+def fit(stints: pd.DataFrame, fouls: pd.DataFrame, scores: pd.DataFrame, usual: pd.DataFrame, groups: Dict[str, str], before=None, write: bool = False) -> dict:
+    """The model's tables from every regular-season game before `before`: the out-chance, the return chance, the break re-pick, the position flow."""
+    st = stints[~stints.game_date.dt.month.isin(PLAYOFF_MONTHS)]
+    if before is not None:
+        st = st[st.game_date < pd.Timestamp(before)]
+    on = on_panel(st, fouls, scores, usual, groups); be = bench_panel(st, fouls, scores, usual, groups); br = break_panel(st, fouls, scores, usual, groups)
+    p = {"step": STEP, "games": int(st.game_id.nunique()), "through": str(st.game_date.max().date()),
+         "out": _fit_logit(on[on.brk == 0], "out", OUT_TERMS), "in": _fit_logit(be[be.brk == 0], "enter", IN_TERMS), "brk": _fit_logit(br, "nxt", BRK_TERMS),
+         "flow": group_flow(swap_moments(st), groups)}
+    if write:
+        import json
+        MODEL_JSON.parent.mkdir(parents=True, exist_ok=True); MODEL_JSON.write_text(json.dumps(p))
+    return p
+
+
+def load(path=None) -> dict:
+    import json
+    return json.loads((path or MODEL_JSON).read_text())
+
+
+class _Tables:
+    """The fitted terms as arrays, indexed by the integer codes the draw keeps."""
+    def __init__(self, p: dict):
+        g = lambda part, term: np.array(p[part]["terms"][term])   # noqa: E731
+        self.o0, self.i0, self.b0 = p["out"]["intercept"], p["in"]["intercept"], p["brk"]["intercept"]
+        self.o_t, self.o_c, self.o_r, self.o_n, self.o_s, self.o_f = (g("out", "|".join(t)) for t in OUT_TERMS)
+        self.i_r, self.i_c, self.i_b, self.i_s, self.i_f = (g("in", "|".join(t)) for t in IN_TERMS)
+        self.b_p, self.b_b, self.b_s, self.b_f, self.b_r = (g("brk", "|".join(t)) for t in BRK_TERMS)
+
+
+class TeamIn:
+    """One team's inputs for a game: names, starters (bool), usual minutes (the role), groups, pair shares out -> in (k x k, rows sum to at most 1), fouls per minute, tilt."""
+    def __init__(self, names: Sequence[str], starters: Sequence[bool], usual: Sequence[float], groups: Sequence[str], pairs: Optional[np.ndarray] = None,
+                 foul_rate: Optional[Sequence[float]] = None, tilt: Optional[Sequence[float]] = None):
+        self.names = list(names); k = len(self.names)
+        self.starter = np.asarray(starters, dtype=int)
+        self.band = np.array([DOMAINS["band"].index(band_of(float(u))) for u in usual]); self.group = np.array([DOMAINS["group"].index(g) for g in groups])
+        self.pairs = np.zeros((k, k)) if pairs is None else np.asarray(pairs, dtype=float)
+        self.foul_rate = np.full(k, LEAGUE_FOULS_36 / 36.0) if foul_rate is None else np.asarray(foul_rate, dtype=float)
+        self.tilt = np.zeros(k) if tilt is None else np.asarray(tilt, dtype=float)
+
+
+def _sig(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def draw(team: TeamIn, p: dict, n: int, rng: np.random.Generator, margin: Optional[np.ndarray] = None, tables: Optional[_Tables] = None) -> dict:
+    """
+    n worlds of one team's regulation. margin: (n, N_STEPS) or (N_STEPS,) the team's margin at each step's start (zeros
+    when absent; the World passes its own running score through `Stepper`). Returns on (n, k, N_STEPS) bool, minutes
+    (n, k), fouls (n, k), fouled_out (n, k), names.
+    """
+    s = Stepper(team, p, n, rng, tables)
+    m = np.zeros((n, N_STEPS)) if margin is None else np.broadcast_to(np.asarray(margin, dtype=float), (n, N_STEPS))
+    on = np.zeros((n, len(team.names), N_STEPS), dtype=bool)
+    for j in range(N_STEPS):
+        on[:, :, j] = s.step(j, m[:, j])
+    return {"on": on, "minutes": on.sum(axis=2) * STEP / 60.0, "fouls": s.fouls, "fouled_out": s.fouls >= 6, "names": team.names}
+
+
+class Stepper:
+    """The draw one step at a time: step(j, margin) returns who is on the floor during step j in each world, then makes the step's substitutions."""
+    def __init__(self, team: TeamIn, p: dict, n: int, rng: np.random.Generator, tables: Optional[_Tables] = None):
+        self.t = team; self.T = tables or _Tables(p); self.n = n; self.rng = rng
+        k = len(team.names); self.k = k
+        self.on = np.broadcast_to(team.starter.astype(bool), (n, k)).copy()
+        self.tis = np.zeros((n, k)); self.rest = np.zeros((n, k)); self.used = self.on.copy(); self.sno = self.on.astype(int)
+        self.fouls = np.zeros((n, k), dtype=int)
+        f = np.array([[p["flow"].get(DOMAINS["group"][a], {}).get(DOMAINS["group"][b], 1.0) for b in team.group] for a in team.group])
+        np.fill_diagonal(f, 0.0)
+        self.w = PAIR_MIX * team.pairs + (1 - PAIR_MIX) * f / np.maximum(f.sum(axis=1, keepdims=True), 1e-9) + 0.01      # out -> in
+        np.fill_diagonal(self.w, 0.0)
+        self.role_o = self.T.o_r[team.band, team.group]; self.role_i = self.T.i_b[team.band, team.group]; self.role_b = self.T.b_b[team.band, team.group]
+
+    def step(self, j: int, margin: np.ndarray) -> np.ndarray:
+        T, t, n, k, rng = self.T, self.t, self.n, self.k, self.rng
+        cover = self.on.copy()
+        per = j // PER_STEPS; clock = (j % PER_STEPS) // 6
+        phase = 0 if per < 3 else (2 if j >= N_STEPS - 18 else 1)
+        mb = np.digitize(margin, MARGIN_EDGES[1:-1])[:, None]                  # (n, 1)
+        st = t.starter[None, :]
+        can = self.fouls < 6
+        tis_end = self.tis + STEP; rest_end = self.rest + STEP
+        last = j == N_STEPS - 1
+        brk = (j + 1) % PER_STEPS == 0 and not last
+        if brk:
+            bp = per                                                           # index 0..2 of the break ending period per+1
+            trouble = (self.fouls >= min(per + 3, 5)).astype(int)
+            rb = np.where(self.on, 0, np.minimum((rest_end - 1e-6) // 120, 10)).astype(int)
+            z = (T.b0 + T.b_p[bp, st, self.on.astype(int)] + self.role_b[None, :] + T.b_s[bp, mb, st] + T.b_f[trouble, bp] + T.b_r[rb, self.on.astype(int)]
+                 + BREAK_TILT * t.tilt[None, :])
+            z = np.where(can, z, -1e9) + rng.gumbel(size=(n, k))
+            top = np.argsort(-z, axis=1)[:, :5]
+            new = np.zeros((n, k), dtype=bool); np.put_along_axis(new, top, True, axis=1)
+        elif last:
+            new = self.on
+        else:
+            trouble = (self.fouls >= min(per + 2, 5)).astype(int)
+            tb = np.minimum((tis_end - 1e-6) // 60, 15).astype(int)
+            zo = (T.o0 + T.o_t[tb, st] + T.o_c[per, clock, st] + self.role_o[None, :] + T.o_n[np.clip(self.sno, 1, 4) - 1, st] + T.o_s[phase, mb, st]
+                  + T.o_f[trouble, per] - t.tilt[None, :])
+            out = self.on & (rng.random((n, k)) < _sig(zo))
+            rb = np.minimum((rest_end - 1e-6) // 120, 10).astype(int)
+            zi = (T.i0 + T.i_r[rb, st, (~self.used).astype(int)] + T.i_c[per, clock, st] + self.role_i[None, :] + T.i_s[phase, mb, st] + T.i_f[trouble, per]
+                  + t.tilt[None, :])
+            ready = np.where(~self.on & can, _sig(zi), 0.0)
+            new = self.on.copy()
+            for i in rng.permutation(k):
+                rows = np.nonzero(out[:, i])[0]
+                if not len(rows):
+                    continue
+                sc = ready[rows] * self.w[i][None, :]
+                sc[np.arange(len(rows))[:, None], np.nonzero(np.ones((len(rows), k)))[1].reshape(len(rows), k)] *= ~new[rows]      # men already brought in this step are gone
+                ok = sc.sum(axis=1) > 0
+                rows, sc = rows[ok], sc[ok]
+                if not len(rows):
+                    continue
+                pick = np.argmax(np.log(sc + 1e-300) + rng.gumbel(size=sc.shape), axis=1)
+                new[rows, i] = False; new[rows, pick] = True
+                ready[rows, pick] = 0.0
+        # fouls of the step, then a sixth foul forces the man off
+        self.fouls = self.fouls + (cover & (rng.random((n, k)) < t.foul_rate[None, :] * STEP / 60.0))
+        gone = new & (self.fouls >= 6)
+        if gone.any():
+            for i in np.nonzero(gone.any(axis=0))[0]:
+                rows = np.nonzero(gone[:, i])[0]
+                sc = np.where(~new[rows] & (self.fouls[rows] < 6), self.w[i][None, :] + 1e-6, 0.0)
+                rows2 = rows[sc.sum(axis=1) > 0]; sc = sc[sc.sum(axis=1) > 0]
+                if len(rows2):
+                    pick = np.argmax(np.log(sc + 1e-300) + rng.gumbel(size=sc.shape), axis=1)
+                    new[rows2, i] = False; new[rows2, pick] = True
+        came = new & ~self.on; left = self.on & ~new
+        self.tis = np.where(new, np.where(came, 0.0, tis_end), 0.0)
+        self.rest = np.where(new, 0.0, np.where(left, 0.0, rest_end))
+        self.sno = self.sno + came; self.used = self.used | new
+        self.on = new
+        return cover
+
+
+def calibrate(team: TeamIn, p: dict, targets: Sequence[float], margin: Optional[np.ndarray] = None, n: int = 300, rounds: int = 14, seed: int = 7,
+              tables: Optional[_Tables] = None, stat: str = "median") -> dict:
+    """
+    The tilt per player that puts his simulated minutes (the median over worlds; the mean for a target under 8, whose
+    median is not a usable number) on the target. Damped steps on common random numbers. Five men are on the floor
+    whatever the tilts, so only the differences between them can be solved: the targets are first scaled to the 240
+    the team will play (`scale`, 1.0 when they already add up) and the tilts are kept centred, which leaves how often
+    the team substitutes where the history has it. Returns tilt, achieved, resid (against the scaled targets), scale,
+    and sets team.tilt.
+    """
+    tg = np.asarray(targets, dtype=float); T = tables or _Tables(p)
+    scale = 240.0 / tg.sum() if tg.sum() > 0 else 1.0
+    tg = np.minimum(tg * scale, 48.0)
+    tilt = np.zeros(len(tg)); got = np.zeros(len(tg))
+    use_mean = (tg < 8.0) | (stat == "mean")
+    wt = tg / tg.sum() if tg.sum() > 0 else np.full(len(tg), 1.0 / len(tg))
+    for r in range(rounds + 1):
+        team.tilt = tilt
+        d = draw(team, p, n, np.random.default_rng(seed), margin, T)
+        got = np.where(use_mean, d["minutes"].mean(axis=0), np.median(d["minutes"], axis=0))
+        if r == rounds:
+            break
+        tilt = tilt + np.clip((tg - got) / TILT_MINUTES, -1.0, 1.0) * (0.9 if r < rounds // 2 else 0.6)
+        tilt = np.clip(tilt - float((wt * tilt).sum()), -6.0, 6.0)
+    return {"tilt": tilt, "achieved": got, "resid": got - tg, "scale": scale}
+
+
+# ----------------------------------------------------------------------------- the draw against played games
+def team_pairs(moments: pd.DataFrame, names: Sequence[str], groups: Dict[str, str], flow: Dict[str, Dict[str, float]]) -> np.ndarray:
+    """out -> in shares (k x k over `names`) by EM over the given swap moments, position flow as the prior; a man with no history has an empty row."""
+    ms = [(o, i) for o, i in zip(moments.outs, moments.ins)] if len(moments) else []
+    seen = set(n for o, i in ms for n in o + i)
+    prior = {(a, b): 0.5 * flow.get(groups.get(a, "wing"), {}).get(groups.get(b, "wing"), 1.0) for a in seen for b in seen if a != b}
+    sh = _shares(em_pairs(ms, prior=prior))
+    return np.array([[sh.get(a, {}).get(b, 0.0) if a != b else 0.0 for b in names] for a in names])
+
+
+def _sim_stints(on: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """From on (n, k, steps): the number of stints (n, k) and the first stint's length in minutes for a man on at the tip (nan otherwise)."""
+    rise = on[:, :, 1:] & ~on[:, :, :-1]
+    count = rise.sum(axis=2) + on[:, :, 0]
+    off = ~on
+    first_off = np.where(off.any(axis=2), off.argmax(axis=2), on.shape[2])
+    return count, np.where(on[:, :, 0], first_off * STEP / 60.0, np.nan)
+
+
+def check(stints: pd.DataFrame, fouls: pd.DataFrame, scores: pd.DataFrame, usual: pd.DataFrame, groups: Dict[str, str], p: dict, start, end, n: int = 200,
+          max_games: Optional[int] = None, targets: str = "actual", log=None) -> dict:
+    """
+    The draw on played games with the truth plugged in: who played, who started, the real margin path and (targets
+    'actual') each man's real regulation minutes as the number steered to ('usual': his usual minutes instead, the
+    steering then has no knowledge of the night). Pair history from the team's 15 games before. Per player-game: the
+    minutes achieved, the spread, stints (real vs drawn), a starter's first stint (real vs the drawn median, and where
+    the real one falls in the drawn distribution), and the Brier score of on-the-floor by minute against the real grid,
+    beside the same for his trailing ten-game curve scaled to tonight's minutes. Returns {"rows", "summary", "by_band"}.
+    """
+    from ivan.sports.nba.gamesim.fouls import minute_vector
+    T = _Tables(p)
+    mo_all = swap_moments(stints)
+    mo_by = {g: d for g, d in mo_all.groupby("game_id")}
+    us = {(g, nm): u for g, nm, u in zip(usual.game_id, usual.player_name, usual.usual)}
+    fcount = fouls.groupby(["game_id", "player_name"]).size().to_dict()
+    gms = _games(stints, fouls, scores)
+    rows = []; done = 0
+    for team, ts in stints.groupby("team", sort=False):
+        order = list(dict.fromkeys(ts.sort_values(["game_date", "game_id"]).game_id))
+        per_game = {g: d for g, d in ts.groupby("game_id", sort=False)}
+        vec = {g: {nm: minute_vector(s) for nm, s in d.groupby("player_name")} for g, d in per_game.items()}
+        for gi, gid in enumerate(order):
+            g = per_game[gid]; date = g.game_date.iloc[0]
+            if not (pd.Timestamp(start) <= date <= pd.Timestamp(end)) or gi < 8 or _season_start(order, per_game, gi) < 5:
+                continue
+            if max_games and done >= max_games:
+                break
+            names = list(dict.fromkeys(g.player_name))
+            if len(names) < 8 or int(g.groupby("player_name").starter.first().fillna(0).sum()) != 5:
+                continue
+            prev = order[max(0, gi - 15):gi]
+            actual = np.array([vec[gid][nm].sum() for nm in names])
+            st = np.array([int(g[g.player_name == nm].starter.iloc[0] or 0) for nm in names])
+            u = np.array([us.get((gid, nm), np.nan) for nm in names]); u = np.where(np.isnan(u), 8.0, u)
+            hm = pd.concat([mo_by[x] for x in prev if x in mo_by]) if any(x in mo_by for x in prev) else mo_all.iloc[:0]
+            fr = []
+            for nm in names:
+                fl = sum(fcount.get((x, nm), 0) for x in prev); mn = sum(vec[x][nm].sum() for x in prev if nm in vec[x])
+                fr.append((fl + LEAGUE_FOULS_36 / 36.0 * FOUL_PRIOR_MIN) / (mn + FOUL_PRIOR_MIN))
+            team_in = TeamIn(names, st, u, [groups.get(nm, "wing") for nm in names], team_pairs(hm, names, groups, p["flow"]), fr)
+            margin = gms[gid].margin(team, np.arange(N_STEPS) * STEP)
+            tg = actual if targets == "actual" else np.minimum(u, 40.0)
+            cal = calibrate(team_in, p, tg, margin, tables=T)
+            d = draw(team_in, p, n, np.random.default_rng(11), margin, T)
+            cnt, first = _sim_stints(d["on"])
+            prob = d["on"].reshape(n, len(names), 48, 3).mean(axis=(0, 3))
+            for k, nm in enumerate(names):
+                real = vec[gid][nm]
+                hist = [vec[x][nm] for x in prev[-10:] if nm in vec[x]]
+                curve = np.mean(hist, axis=0) if hist else np.full(48, actual[k] / 48.0)
+                curve = np.clip(curve * (actual[k] / curve.sum()) if curve.sum() > 0 else np.full(48, actual[k] / 48.0), 0, 1)
+                s = g[g.player_name == nm]
+                real_first = float(s.end_sec.iloc[0] / 60.0) if st[k] and s.start_sec.iloc[0] == 0 else np.nan
+                f = first[:, k]
+                rows.append(dict(game_id=gid, team=team, player=nm, starter=int(st[k]), band=band_of(float(u[k])), actual=float(actual[k]), usual=float(u[k]),
+                                 achieved=float(cal["achieved"][k]), mean=float(d["minutes"][:, k].mean()), sd=float(d["minutes"][:, k].std()),
+                                 stints=int((s.start_sec < REG).sum()), stints_sim=float(cnt[:, k].mean()),
+                                 first=min(real_first, 48.0) if not np.isnan(real_first) else np.nan, first_sim=float(np.nanmedian(f)) if st[k] else np.nan,
+                                 first_pit=float(np.nanmean(f <= real_first)) if st[k] and not np.isnan(real_first) else np.nan,
+                                 brier=float(((prob[k] - real) ** 2).mean()), brier_curve=float(((curve - real) ** 2).mean()),
+                                 brier_flat=float(((actual[k] / 48.0 - real) ** 2).mean())))
+            done += 1
+            if log and done % 25 == 0:
+                log(f"  check: {done} team-games")
+    r = pd.DataFrame(rows)
+    if r.empty:
+        return {"rows": r, "summary": {}, "by_band": r}
+    fs = r[r["first"].notna()]
+    summary = dict(team_games=int(r.groupby(["game_id", "team"]).ngroups), players=int(len(r)), minutes_resid_mae=float((r.achieved - r.actual).abs().mean()),
+                   minutes_mean_bias=float((r["mean"] - r.actual).mean()), sd_given_target=float(r.sd.mean()),
+                   stints_real=float(r.stints.mean()), stints_sim=float(r.stints_sim.mean()), stints_mae=float((r.stints_sim - r.stints).abs().mean()),
+                   first_real=float(fs["first"].mean()), first_sim=float(fs.first_sim.mean()), first_mae=float((fs.first_sim - fs["first"]).abs().mean()),
+                   first_in_10_90=float(((fs.first_pit > 0.10) & (fs.first_pit <= 0.90)).mean()),
+                   brier=float(r.brier.mean()), brier_curve=float(r.brier_curve.mean()), brier_flat=float(r.brier_flat.mean()))
+    by = r.groupby("band").agg(n=("actual", "size"), actual=("actual", "mean"), resid=("achieved", lambda x: float((x - r.loc[x.index, "actual"]).abs().mean())),
+                               sd=("sd", "mean"), stints=("stints", "mean"), stints_sim=("stints_sim", "mean"), brier=("brier", "mean"),
+                               brier_curve=("brier_curve", "mean"), brier_flat=("brier_flat", "mean")).reset_index()
+    return {"rows": r, "summary": summary, "by_band": by}
+
+
+def _season_start(order: List[str], per_game: Dict[str, pd.DataFrame], gi: int) -> int:
+    """How many of the team's games of the same season came before game gi."""
+    season = season_of(per_game[order[gi]].game_date.iloc[0])
+    return sum(1 for x in order[:gi] if season_of(per_game[x].game_date.iloc[0]) == season)

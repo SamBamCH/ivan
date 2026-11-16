@@ -180,6 +180,8 @@ venv/bin/python scripts/nba/gamesim.py check-script [-n 2000]                   
 venv/bin/python scripts/nba/gamesim.py check-usage [--start --end]                 # layer C: shares over the real fives vs per-minute rates, true minutes plugged in
 venv/bin/python scripts/nba/gamesim.py check-rotation [--start --end] [-n 300]     # layer B: the rotation draw vs the current sampler, the real margin path plugged in
 venv/bin/python scripts/nba/gamesim.py stints-study [--only decay,replace,context,teams,star]   # substitutions measured: when a player comes out and returns, who comes in, which games count, a regular sitting
+venv/bin/python scripts/nba/gamesim.py fit-stints [--before 2026-11-01] [--no-write]        # the stint model's tables -> data/nba/models/gamesim/stints.json
+venv/bin/python scripts/nba/gamesim.py check-stints [--start --end] [-n 200] [--targets actual|usual]   # the stint draw on played games, the truth plugged in
 venv/bin/python scripts/nba/gamesim.py draw-world --slate DG [-n 1000]             # the World on a slate: moments vs the lines, every player's line vs the pool
 venv/bin/python scripts/nba/gamesim.py calibrate-world --slate DG [-n 400]         # the World's four game-level knobs against the real spread of totals, margins, team points, overtime
 ```
@@ -210,6 +212,18 @@ nothing in the sim. Findings 2026-11-16: the period clock predicts a substitutio
 best replacement rule names the man 47% of the time, and a sitting regular's minutes are spread over several
 teammates with the new starter the top gainer on 28% of nights
 ([notes/stint_model_2026-11-16.md](notes/stint_model_2026-11-16.md)).
+
+`fit-stints` and `check-stints` are the model built on those measurements (`gamesim.stints`; **not on the live path**:
+the World still draws the mapped grid). `fit` makes four tables from every regular-season game before a date: the
+chance a man on the floor comes out in a 20-second step (time on, period clock, role, stint number, phase x margin,
+foul trouble), the chance a bench man comes in (rest, clock, role, the same state), the five who open the next period
+at a break, and the position flow. `Stepper` draws a team one step at a time: each man on the floor may come out, and
+each man out is replaced by a draw from the bench weighted by pair history (EM over the team's swap sets) plus position
+flow, times the bench man's return chance; a sixth foul forces a man off. `calibrate` solves one tilt per player so
+his median minutes land on a target (targets are scaled to 240 first). `check-stints` runs it on played games with
+who played, who started, the real margin path and the real minutes plugged in, fitting as of `--start`: 2026-11-01
+to 11-15, steering error 0.4 minutes, first stints calibrated, on-the-floor by minute better than the player's own
+trailing curve (Brier 0.138 against 0.162).
 
 `fit-script` / `check-script` are layer A, the game script (`gamesim.script`): each team's trailing pace and the books'
 total and spread give the game's expected possessions and each team's points per possession; a world draws the pace,

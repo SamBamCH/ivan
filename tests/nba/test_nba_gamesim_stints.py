@@ -96,3 +96,50 @@ def test_star_out_finds_the_night_and_who_took_the_minutes():
     assert np.isclose(heirs.gain.sum(), 34.0 - 4.0)                       # the gains add up to what he left (the team played 236 without him)
     quiet = T.quiet_nights(_box())
     assert len(quiet) == 3 and quiet.top_gain.max() < 1e-9                # the three nights before, nobody sat, nobody gained
+
+
+# ----------------------------------------------------------------------------- the model
+def _params(out=-2.2, enter=-1.5, brk=0.0):
+    """Flat tables: every on-floor man has the same out-chance per step, every bench man the same return chance."""
+    zeros = lambda terms: {"|".join(t): np.zeros([len(T.DOMAINS[c]) for c in t]).tolist() for t in terms}   # noqa: E731
+    return {"out": {"intercept": out, "terms": zeros(T.OUT_TERMS)}, "in": {"intercept": enter, "terms": zeros(T.IN_TERMS)},
+            "brk": {"intercept": brk, "terms": zeros(T.BRK_TERMS)}, "flow": {g: {h: 1.0 for h in T.DOMAINS["group"]} for g in T.DOMAINS["group"]}}
+
+
+def _team(k=9, pairs=None):
+    names = [f"p{i}" for i in range(k)]
+    return T.TeamIn(names, [1] * 5 + [0] * (k - 5), [30] * 5 + [15] * (k - 5), ["guard", "guard", "wing", "wing", "big"] + ["guard", "wing", "big", "wing"][:k - 5], pairs)
+
+
+def test_draw_keeps_five_on_the_floor_and_240_minutes():
+    d = T.draw(_team(), _params(), 200, np.random.default_rng(0))
+    assert (d["on"].sum(axis=1) == 5).all()
+    assert np.allclose(d["minutes"].sum(axis=1), 240.0)
+    assert d["on"][:, :5, 0].all() and not d["on"][:, 5:, 0].any()         # the starters open the game
+    again = T.draw(_team(), _params(), 200, np.random.default_rng(0))
+    assert (again["on"] == d["on"]).all()                                  # one seed, one draw
+
+
+def test_replacement_follows_the_pair_history_and_falls_through_when_the_usual_man_is_gone():
+    k = 9; pairs = np.zeros((k, k)); pairs[0, 5] = 1.0                    # p5 always comes in for p0
+    p = _params()
+    s = T.Stepper(_team(pairs=pairs), p, 4000, np.random.default_rng(1))
+    s.step(0, np.zeros(4000))
+    came = s.on[:, 5:] & (~s.on[:, 0])[:, None]                           # worlds where p0 went out in the first step
+    only = (~s.on[:, 0]) & (s.on[:, :5].sum(axis=1) == 4)
+    assert only.sum() > 100 and came[only, 0].mean() > 0.65               # mostly p5 (one in four by chance)
+    gone = T.Stepper(_team(pairs=pairs), p, 4000, np.random.default_rng(1))
+    gone.fouls[:, 5] = 6                                                  # p5 unavailable: someone else must come in
+    gone.step(0, np.zeros(4000))
+    assert (gone.on.sum(axis=1) == 5).all() and not gone.on[:, 5].any()
+
+
+def test_calibrate_puts_the_minutes_on_the_targets():
+    team = _team(); p = _params()
+    targets = [36, 34, 30, 28, 26, 24, 22, 20, 20]
+    c = T.calibrate(team, p, targets)
+    assert np.isclose(c["scale"], 1.0) and np.abs(c["resid"]).max() < 1.5
+    d = T.draw(team, p, 600, np.random.default_rng(3))
+    assert np.abs(np.median(d["minutes"], axis=0) - np.array(targets)).max() < 2.5
+    short = T.calibrate(_team(), p, [30, 30, 28, 26, 24, 20, 18, 16, 8])   # 200 minutes asked for: scaled to the 240 the team plays
+    assert np.isclose(short["scale"], 1.2) and np.abs(short["tilt"]).max() < 6.0
