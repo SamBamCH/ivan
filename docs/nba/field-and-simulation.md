@@ -99,8 +99,8 @@ points are what the lines say; the misses are rebounded at the team's share and 
 the other team's steals, the missed shots its blocks, the makes carry assists. Garbage time (the closers out while the
 lead holds) is **off** by default (`config/nba.json → gamesim.garbage`): the grid's minutes already discount the blowout
 nights ([notes/garbage_time_2026-11-09.md](notes/garbage_time_2026-11-09.md)). **The rotation draw is a switch**
-(`config/nba.json → gamesim.rotation`). `plan` (the default) is the mapped grid with its substitution times jittered.
-`stints` draws the rotation stint by stint inside the minute loop (`gamesim.stints`): each team's players are steered
+(`config/nba.json → gamesim.rotation`). `plan` is the mapped grid with its substitution times jittered.
+`stints` (the setting since 2026-11-16) draws the rotation stint by stint inside the minute loop (`gamesim.stints`): each team's players are steered
 to the pool's minutes (one tilt per player, solved once per team and kept for the process), the mapped grid only names
 the starters, and every 20 seconds each man on the floor may come out and is replaced by a draw from the bench that is
 in uniform in that world (pair history, position flow, rest). The chances read the World's own score and fouls, so
