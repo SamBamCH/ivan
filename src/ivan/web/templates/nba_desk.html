@@ -183,6 +183,15 @@
   .game { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px }
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
+  /* the team page's two views */
+  .team-view { display:inline-flex; margin:6px 0 8px; border:1px solid var(--line); border-radius:6px; overflow:hidden }
+  .team-view button { font:inherit; font-size:12px; padding:4px 14px; border:0; background:#fff; color:var(--muted); cursor:pointer } .team-view button.on { background:var(--accent); color:#fff }
+  .tsim-head { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:2px 0 8px; font-size:12px } .tsim-head input[type=number] { width:70px }
+  .tsim-bar { display:inline-block; width:140px; height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden; vertical-align:middle } .tsim-bar > span { display:block; height:100%; background:var(--accent); transition:width .4s }
+  table.tsim-t { border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums } table.tsim-t th, table.tsim-t td { padding:2px 7px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line) }
+  table.tsim-t th { font-weight:600; color:var(--muted); font-size:11px } table.tsim-t .l { text-align:left } table.tsim-t tr.zero td.name { color:var(--muted) }
+  table.tsim-t td.d.up { color:var(--ok) } table.tsim-t td.d.down { color:var(--bad) } table.tsim-t td.warn { color:#b45309 }
+  .heat { display:inline-flex; border:1px solid var(--line); background:#fff } .heat i { display:block; width:7px; height:14px } .heat i.q { border-left:1px solid #9ca3af }
   .sides { display:grid; grid-template-columns:1fr; gap:16px }       /* one team across the screen (2026-10-25) */ .side { min-width:0 }
   .side h2 { font-size:15px; margin:0 0 4px; display:flex; gap:10px; align-items:baseline }
   .side { scroll-margin-top:150px }
@@ -411,8 +420,12 @@
       {% if g and g.fav %}<span class="muted" title="the consensus spread of tonight's game">{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line for tonight's game</span>{% endif %}
       {% if g and g.teams|length == 2 %}{% set other = (g.teams|rejectattr('team', 'equalto', team)|first).team %}<span class="muted small">· <a class="other" href="{{ here }}{{ other }}/">the other side ({{ other }})</a></span>{% endif %}
     </div>
+    <div class="seg team-view" id="team-view" data-team="{{ team }}" data-sim="{{ root }}/team/{{ team }}/sim?auto=1" title="Projections: set the minutes, stat totals and starters. Simulation: draw this game from them and watch it run">
+      <button type="button" data-view="proj" class="on">Projections</button><button type="button" data-view="sim">Simulation</button>
+    </div>
     <div class="sides">
       <div class="side" id="card-{{ team }}" hx-get="{{ root }}/team/{{ team }}" hx-trigger="load" hx-swap="innerHTML"><div class="loading"><span class="spin"></span> loading {{ team }}…</div></div>
+      <div class="side sim-side" id="sim-{{ team }}" hidden></div>
     </div>
   </div>
   {% else %}
@@ -529,6 +542,21 @@
     if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
     setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
   });
+  // the team page's two views: Projections (the card) and Simulation (the game drawn from it); the choice is kept for the next team opened
+  (function () {
+    const seg = document.getElementById("team-view"); if (!seg) return;
+    const team = seg.dataset.team, card = document.getElementById("card-" + team), sim = document.getElementById("sim-" + team);
+    function show(view) {
+      seg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.view === view));
+      card.hidden = view !== "proj"; sim.hidden = view !== "sim";
+      try { localStorage.setItem("nba.teamview", view); } catch (e) {}
+      if (view === "sim") htmx.ajax("GET", seg.dataset.sim, {target: "#sim-" + team, swap: "innerHTML"});   // starts a run when the projections moved; an open run keeps polling
+      else sim.innerHTML = "";                                                                              // leaving stops the polling
+    }
+    seg.addEventListener("click", e => { const b = e.target.closest("button[data-view]"); if (b) show(b.dataset.view); });
+    let keep = "proj"; try { keep = localStorage.getItem("nba.teamview") || "proj"; } catch (e) {}
+    if (keep === "sim") show("sim");
+  })();
   // hover popups (td.hover > .pop): shown after a short pause on the cell, beside it rather than over the rows below, gone as
   // soon as the pointer leaves the cell (the popup never takes the pointer); the hovered row and cell are marked so it is
   // clear which player the popup belongs to

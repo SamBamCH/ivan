@@ -177,6 +177,32 @@ slate's jobs run and while the slate refreshes (edits wait for the refresh; a jo
 
 The flags come from `ivan.sports.nba.backtest.validation.review_team`, the same ones `scripts/nba/validate.py review` prints.
 
+### The two views: Projections and Simulation
+
+A toggle above the card (`nba_desk.html`, `#team-view`; the choice is kept in the browser for the next team opened).
+
+- **Projections** is the card described below: the minutes, the stat totals, the starters. Every edit writes the team
+  into the pool.
+- **Simulation** (`GET /team/<TEAM>/sim`, `_nba_teamsim.html`, `ivan.sports.nba.desk.teamsim`; terminal:
+  `scripts/nba/team_sim.py --slate DG --team BOS [-n 2000] [--progress]`) draws this team's game from the pool as it
+  stands and shows it while it runs. Opening the view starts a run when there is none or when the game's inputs (any
+  player's minutes, rates, scratch chance, the starters, the line) changed since the last one; **Run**
+  (`POST /team/<TEAM>/sim/run`, with the worlds box, 250 to 10,000, default 2,000) draws again. The run goes in the
+  background in batches of 250 worlds and the panel reloads itself every second until it is done, so the numbers
+  settle as the worlds come in; leaving the view stops the reloading, not the run. One run per game: the other
+  team's page shows the same one. Nothing is written to the pool or to disk.
+
+  The head line: worlds done, the drawn total and margin beside the line, how often the team wins, how often the game
+  ends 20 or more apart, overtime, the team's fantasy points. Per player: **set** (his minutes on Projections),
+  **min** (the median of his drawn minutes), the 10-90 range, **plays** (the share of worlds he plays at all, amber
+  under 95%), the share under 8 minutes, **on the floor minute by minute** (48 cells, darker = on the floor in more
+  worlds, the quarter breaks marked), **fpts** mean, sd, p10, p50, p90, **5x** (the share of worlds he reaches five
+  fantasy points per $1,000 of salary), and his mean points, rebounds and assists. From the second run on, **±**
+  columns give the change in his median minutes, mean and 90th percentile since the run before, which is how a tweak
+  on Projections is read: change a number, switch over, Run.
+
+  These are the World's raw worlds: a hand fpts pin (the **sim** box) scales the published projection, not this view.
+
 ### The news table
 
 On the slate page under the contests (`_nba_news.html`, `Desk.news_table` =

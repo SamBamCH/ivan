@@ -29,6 +29,29 @@ def team(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
+@slate.get("/team/{team}/sim", response_class=HTMLResponse)
+def team_sim(request: Request, team: str, auto: int = 0):
+    """The Simulation view (desk.teamsim): the run's state now. auto=1 (the toggle) starts a run when there is none or the projections changed since the last."""
+    from ivan.sports.nba.desk import teamsim as TS
+    with LOCK:
+        v = TS.view(desk.dg, team, desk.session)
+    if auto and (v["state"] == "none" or v["stale"]):
+        return team_sim_run(request, team, n=str(v["target"]))
+    return _render(request, "_nba_teamsim.html", v=v)
+
+
+@slate.post("/team/{team}/sim/run", response_class=HTMLResponse)
+def team_sim_run(request: Request, team: str, n: str = Form("")):
+    """Draw the team's game from the pool as it stands, in the background (scripts/nba/team_sim.py); the view polls it."""
+    from ivan.sports.nba.desk import teamsim as TS
+    try:
+        TS.start(desk.dg, team, int(float(n)) if str(n).strip() else TS.DEFAULT_N)
+        v = TS.view(desk.dg, team)
+    except Exception as e:   # noqa: BLE001 - said on the view
+        v = dict(TS.view(desk.dg, team), state="error", error=f"{type(e).__name__}: {e}")
+    return _render(request, "_nba_teamsim.html", v=v)
+
+
 @slate.post("/team/{team}/pin", response_class=HTMLResponse)
 def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form(""),
         fpts: str = Form(""), pub: str = Form(""), points: str = Form(""), rebounds: str = Form(""), assists: str = Form(""), fg3m: str = Form(""),

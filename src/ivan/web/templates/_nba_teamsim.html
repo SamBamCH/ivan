@@ -1,0 +1,50 @@
+{# the team page's Simulation view (ivan.sports.nba.desk.teamsim.view): polls itself every second while the run is going #}
+<div class="tsim" {% if v.state == 'running' %}hx-get="{{ root }}/team/{{ v.team }}/sim" hx-trigger="every 1s" hx-target="#sim-{{ v.team }}" hx-swap="innerHTML"{% endif %}>
+  <div class="tsim-head">
+    <form class="inline" hx-post="{{ root }}/team/{{ v.team }}/sim/run" hx-target="#sim-{{ v.team }}" hx-swap="innerHTML">
+      <button type="submit" title="draw this game from the pool as it stands now (scripts/nba/team_sim.py --team {{ v.team }}); the run before it becomes the baseline the changes are measured from">{% if v.state == 'running' %}Restart{% else %}Run{% endif %}</button>
+      <input type="number" name="n" value="{{ v.target }}" min="250" max="10000" step="250" title="worlds to draw"> worlds
+    </form>
+    {% if v.state == 'none' %}<span class="muted">not simulated yet</span>
+    {% elif v.state == 'error' %}<span class="bad">failed: {{ v.error }}</span>
+    {% else %}
+      <span class="tsim-bar" title="{{ v.n }} of {{ v.target }} worlds"><span style="width:{{ (100 * v.n / v.target)|round(1) if v.target else 0 }}%"></span></span>
+      <b>{{ v.n }}</b> / {{ v.target }} worlds{% if v.state == 'running' %} <span class="spin"></span> running{% else %} · done in {{ '%.1f'|format(v.seconds) }} s{% endif %}
+      {% if v.stale %}<span class="warn" title="the team's minutes, rates, starters or the line changed after this run: Run draws it again">the projections changed since this run</span>{% endif %}
+    {% endif %}
+    {% if v.game %}<span class="muted">· total <b>{{ '%.1f'|format(v.game.total) }}</b>{% if v.game.total_line is not none %} (line {{ '%g'|format(v.game.total_line) }}){% endif %}
+      · margin <b>{{ '%+.1f'|format(v.game.margin) }}</b>{% if v.game.margin_line is not none %} (line {{ '%+g'|format(v.game.margin_line) }}){% endif %}
+      · wins {{ (100 * v.game.p_win)|round|int }}% · by 20+ either way {{ (100 * v.game.blowout)|round|int }}% · overtime {{ (100 * v.game.p_ot)|round|int }}%
+      · team fpts <b>{{ '%.1f'|format(v.game.team_fpts) }}</b></span>{% endif %}
+  </div>
+  {% if v.rows %}
+  <table class="tsim-t">
+    <thead><tr>
+      <th class="l">player</th>
+      <th title="the minutes set on the Projections view">set</th><th title="the median of his drawn minutes">min</th>{% if v.has_baseline %}<th title="change in his median minutes since the run before">±</th>{% endif %}
+      <th title="the middle 80% of his drawn minutes">10–90</th><th title="share of worlds he plays at all">plays</th><th title="share of worlds under {{ v.under|int }} minutes, DNPs included">&lt;{{ v.under|int }}</th>
+      <th class="l" title="share of worlds he is on the floor in each minute of regulation; the lines are the quarter breaks">on the floor, minute by minute</th>
+      <th title="his mean fantasy points over the worlds">fpts</th>{% if v.has_baseline %}<th title="change in his mean since the run before">±</th>{% endif %}
+      <th>sd</th><th>p10</th><th>p50</th><th>p90</th>{% if v.has_baseline %}<th title="change in his 90th percentile since the run before">±</th>{% endif %}
+      <th title="share of worlds he scores {{ v.value_x|int }} fantasy points per $1,000 of salary">{{ v.value_x|int }}x</th>
+      <th>pts</th><th>reb</th><th>ast</th>
+    </tr></thead>
+    <tbody>
+    {% macro delta(x, tol) %}{% if x is none %}<td class="d muted">new</td>{% elif x|abs < tol %}<td class="d muted">·</td>{% else %}<td class="d {{ 'up' if x > 0 else 'down' }}">{{ '%+.1f'|format(x) }}</td>{% endif %}{% endmacro %}
+    {% for r in v.rows %}<tr class="{% if r.target <= 0 %}zero{% endif %}">
+      <td class="l name">{{ r.name }}{% if r.salary %} <span class="muted small">${{ '%.1f'|format(r.salary / 1000) }}k</span>{% endif %}</td>
+      <td class="muted">{{ '%g'|format(r.target|round(1)) }}</td><td><b>{{ '%.1f'|format(r.min_med) }}</b></td>{% if v.has_baseline %}{{ delta(r.d_min, 0.5) }}{% endif %}
+      <td class="muted">{{ '%.0f'|format(r.min_p10) }}–{{ '%.0f'|format(r.min_p90) }}</td>
+      <td class="{% if r.plays < 0.95 %}warn{% else %}muted{% endif %}">{{ (100 * r.plays)|round|int }}%</td><td class="muted">{{ (100 * r.under)|round|int }}%</td>
+      <td class="l"><span class="heat">{% for c in r.cover %}<i {% if loop.index0 in (12, 24, 36) %}class="q"{% endif %} style="background:rgba(37,99,235,{{ c }})" title="minute {{ loop.index }}: on the floor in {{ (100 * c)|round|int }}% of worlds"></i>{% endfor %}</span></td>
+      <td><b>{{ '%.1f'|format(r.fpts) }}</b></td>{% if v.has_baseline %}{{ delta(r.d_fpts, 0.3) }}{% endif %}
+      <td class="muted">{{ '%.1f'|format(r.sd) }}</td><td class="muted">{{ '%.0f'|format(r.p10) }}</td><td>{{ '%.0f'|format(r.p50) }}</td><td>{{ '%.0f'|format(r.p90) }}</td>{% if v.has_baseline %}{{ delta(r.d_p90, 0.5) }}{% endif %}
+      <td>{% if r.value is not none %}{{ (100 * r.value)|round|int }}%{% endif %}</td>
+      <td class="muted">{{ '%.1f'|format(r.pts) }}</td><td class="muted">{{ '%.1f'|format(r.reb) }}</td><td class="muted">{{ '%.1f'|format(r.ast) }}</td>
+    </tr>{% endfor %}
+    </tbody>
+  </table>
+  <div class="muted small">Drawn from the pool as it stands: change minutes, stat totals or starters on Projections, come back and Run.{% if v.has_baseline %} ± is the change from the run before this one.{% endif %}
+    {% if v.state == 'running' %}The numbers settle as the worlds come in.{% endif %}</div>
+  {% endif %}
+</div>
