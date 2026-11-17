@@ -114,9 +114,9 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
   minutes he shows and records the mapping in `data/nba/days/<day>/edits/rotations/<TEAM>.json`; **Clear pins** drops
   the team's minutes pins and the mapping ([projections.md](projections.md)).
 - A player the rotation left off sits as a blank row: type his minutes in its **min** box and Refigure to play him.
-- **late news form**: player + call (out / starts / bench / back) + what to run next (sim and choose
-  before lock, late swap after, or the call only). One request pins, re-allocates, writes the pool and queues the
-  jobs; the page is back in about a second.
+- **late news**: × the player who is out, click the **st** cell of whoever starts in his place, then run the sim and
+  choose (before lock) or the late swap (after) from the pipeline.
+- **Simulate team**: draw the team's game in as many worlds as the box says and write it as its projection.
 - **scenarios**: save the team's edits under a name ("Giannis out"); the scenario whose assumptions all
   hold activates itself when a refresh or a call changes the facts.
 - **News** comes with every Refresh: the pool refresh (`ingest.run_ingest`, so `ingest.py` and the autopilot tick
@@ -126,7 +126,7 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
   the slate's questionable players first, one row each with the model's minutes, your call and the last
   headline; then the players out tonight who played their team's last game (the rotations that move tonight);
   then, collapsed, the ones already out. Work it top down: every question gets a call (a pin, a starter call
-  or the late news form, on the team's page) and every new out gets its team's rotation looked at. Columns and
+  or the × beside his name, on the team's page) and every new out gets its team's rotation looked at. Columns and
   rules are in [../web/nba-desk.md](../web/nba-desk.md#the-news-table).
 
 Terminal equivalents: `scripts/nba/project.py [--team XXX] [--dry-run]` re-projects the pool (or one team) from the overrides file and
@@ -259,7 +259,7 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 
 | Action | Fetches | Writes the pool |
 |---|---|---|
-| pin, Refigure, Map, starter call, a late-news call | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
+| pin, Refigure, Simulate team, Map, starter call, dropping a player | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
 | `scripts/nba/snapshot.py` | no | no (records the pool: capture rows + the projections CSV) |
 | Refresh dk / props, pick a slate | yes | yes |
 | Generate / Sim / Late swap / All from the desk | no | no (a snapshot first, then the job reads the pool; the sim writes the ownership column) |

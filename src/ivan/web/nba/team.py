@@ -1,5 +1,5 @@
 """
-The team page's routes: pins, starter calls, the mapping, the hovers, a played game's grid, scenarios, notes, the late-news call. Every edit re-projects the team and writes it into the pool (Desk.reproject).
+The team page's routes: pins, starter calls, Simulate team, the mapping, the hovers, a played game's grid, scenarios, notes. Every edit re-projects the team and writes it into the pool (Desk.reproject).
 """
 from __future__ import annotations
 
@@ -15,10 +15,8 @@ from ivan.sports.nba.slate import changes as CH
 from ivan.sports.nba.ingest import refresh_market_rates, refresh_public_projection
 from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
-from .core import _active, _busy, _render, desk, LOCK, slate
+from .core import _busy, _render, desk, LOCK, slate
 from .edits import _apply_pin_rows, _num
-from .knobs import pipeline_form
-from .pipeline import _submit
 from ivan.sports.nba import slates as S
 
 
@@ -95,18 +93,24 @@ async def refigure(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@slate.post("/team/{team}/solve", response_class=HTMLResponse)
-def solve(request: Request, team: str):
-    """The optimal lineup in each of the World's worlds, over the whole slate (scripts/nba/optimal.py as a job = the pipeline's
-    Solve): the card's opt column fills when it is done (the page reloads on it)."""
+SIM_MIN, SIM_MAX = 250, 20000      # the Simulate team box's range of worlds
+
+
+@slate.post("/team/{team}/simulate", response_class=HTMLResponse)
+def simulate_team(request: Request, team: str, n: str = Form("")):
+    """Simulate team: the team's game drawn again in `n` worlds (blank = config projection.n_worlds) from the pool as it stands, and
+    written as the team's projection (Desk.reproject = ingest.project_team with n_worlds; terminal: scripts/nba/project.py --slate DG
+    --team TEAM --worlds N). The heatmap, the drawn numbers and every hover's distribution are these worlds until the next draw
+    (a Refigure or any edit draws at the config's number again)."""
     if (b := _busy(request)) is not None:
         return b
     with LOCK:
-        if _active():
-            desk.flash.append("a job is already running on this slate; wait for it or cancel it")
-        else:
-            _submit("solve", pipeline_form)
-            desk.flash.append("solving the optimal lineup in each world (scripts/nba/optimal.py, a few seconds); the opt column fills when it is done")
+        try:
+            worlds = max(SIM_MIN, min(SIM_MAX, int(float(n)))) if str(n).strip() else None
+            desk.reproject(team, n_worlds=worlds)
+            desk.flash.append(f"{team}: game simulated in {int((desk.world.get(team) or {}).get('n_worlds') or 0)} worlds")
+        except Exception as e:   # noqa: BLE001
+            desk.flash.append(f"{team}: not simulated: {type(e).__name__}: {e}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
@@ -277,52 +281,3 @@ def scenario_delete(request: Request, team: str, slug: str = Form(...)):
     with LOCK:
         SC.delete_scenario(team, slug)
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
-
-
-@slate.post("/team/{team}/news", response_class=HTMLResponse)
-def late_news(request: Request, team: str, player: str = Form(...), call: str = Form("out"), then: str = Form("sim")):
-    """
-    Late news in one move: the call (out / starts / bench / back), the team re-allocated around it, the pool published, and
-    the sim + choose (before lock) or the late swap (after) queued. What the pin, Publish and the pipeline buttons did
-    one after another, with nothing to forget in between.
-    """
-    if (b := _busy(request)) is not None:
-        return b
-    with LOCK:
-        key = normalize_name(player)
-        if call == "out":
-            desk.set_override(key, minutes=0.0)
-        elif call == "starts":
-            desk.set_override(key, starter=1.0, minutes=None)          # a starter: any scratch pin lifted, the solve gives him his minutes
-        elif call == "bench":
-            desk.set_override(key, starter=0.0)
-        elif call == "back":
-            desk.set_override(key, minutes=None, starter=None)
-        else:
-            desk.flash.append(f"unknown call {call}")
-            return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
-        desk.reproject(team)
-        desk.write_local()
-        desk.note_call(team, key, call)
-        try:
-            for m in desk.auto_scenarios(calls={team: {key: call}}):
-                desk.flash.append(m)
-        except Exception as e:   # noqa: BLE001
-            desk.flash.append(f"scenario pick failed: {type(e).__name__}: {e}")
-        desk.flash.append(f"{team}: {player} {call}: the team is re-projected and written to the pool ({len(desk.overrides)} edits on the slate)")
-        if then in ("sim", "lateswap"):
-            if _active():
-                desk.flash.append("a job is already running: nothing queued (cancel it or wait, then run Sim / Late swap)")
-            else:
-                try:
-                    if then == "sim":
-                        _submit("sim", pipeline_form); _submit("choose", pipeline_form)
-                    else:
-                        _submit("lateswap", pipeline_form)
-                    desk.flash.append("queued " + ("sim + choose" if then == "sim" else "the late swap"))
-                except (TypeError, ValueError) as e:
-                    desk.flash.append(f"not queued: {e}")
-        desk.rebuild()
-        # the call moved the pool, the header (questions, chips), the scenarios and the pipeline state: the whole page reloads,
-        # so nothing is rendered here (a render would consume the flash the reloaded board is about to show)
-        return HTMLResponse("", headers={"HX-Refresh": "true"})

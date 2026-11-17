@@ -295,7 +295,8 @@ class RowsMixin:
         chart = stat_chart(list(season[stat]) if stat in season.columns else [], dist.get(stat) if isinstance(dist, dict) else None, m.get("line"))
         chart.update(span=span, hist_min=float(season.minutes.mean()) if len(season) else None,
                      ours_min=None if r is None or name not in r.index else float(r.loc[name, "minutes"]))
-        return dict(stat=stat, label=STAT_LABELS.get(stat, stat), proj=pv, mean=m.get("mean"), basis=m.get("basis"), line=m.get("line"), odds=m.get("odds"), chart=chart,
+        return dict(stat=stat, label=STAT_LABELS.get(stat, stat), short=STAT_LABELS.get(stat, stat), games=self.stat_games(name, stat),
+                    proj=pv, mean=m.get("mean"), basis=m.get("basis"), line=m.get("line"), odds=m.get("odds"), chart=chart,
                     pin=self.local_overrides.get(name, {}).get(stat), published=(self._published_of(name) or {}).get(stat) if self._layer_of(name).get(stat) == "published" else None,
                     rows=main, alts=alts, stale=n_stale,
                     status_at=None if p is None or p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"))
@@ -312,6 +313,16 @@ class RowsMixin:
             season = mine[mine.game_date >= datetime(start.year - 1, 10, 1).date()]; span = "this season and last"
         return season, span
 
+    def stat_games(self, name: str, stat: str) -> list:
+        """The player's recent games for a hover's table (recent_shaded: newest first, each with its context and why it is shaded)
+        with `value`, what he put up in `stat` (a box score column) that game; None when he did not play."""
+        box = self.slate.box
+        if stat not in box.columns:
+            return []
+        mine = box[box.player_name == name]
+        val = {str(g): float(v) for g, v in zip(mine.game_id, mine[stat]) if v is not None and not pd.isna(v)}
+        return [dict(g, value=round(val[g["game_id"]], 1) if g.get("played") and g.get("game_id") in val else None) for g in self.recent_shaded(name)]
+
     def draw_hover(self, name: str, stat: str, row, p) -> dict:
         """stat_hover for the min and fpts cells: the drawn minutes (the record's minutes_dist) or fantasy points (its quantiles)
         over his own games, and the draw's numbers for the legend. No books: neither is priced."""
@@ -323,8 +334,9 @@ class RowsMixin:
             pz = num("p_zero")
             drawn = dict(set=num("minutes"), med=num("minutes_med"), mean=num("minutes_sim"), p10=num("minutes_p10"), p90=num("minutes_p90"),
                          plays=None if pz is None else 1.0 - pz, under=None if shares is None else float(sum(shares[:8])))
-            chart = stat_chart(list(season["minutes"]), shares, ymax=None)
-            proj = num("minutes")
+            chart = stat_chart(list(season["minutes"]), shares, line=num("minutes"), ymax=None)      # the set minutes: the dashed line on the chart
+            chart["line_label"] = None if num("minutes") is None else f"set {num('minutes'):g}"
+            proj = None
         else:
             q = None if row is None else row.get("quantiles")
             q = q if isinstance(q, list) and len(q) == 101 else None
@@ -335,7 +347,7 @@ class RowsMixin:
             chart = stat_chart(list(season["dk_fpts"]), quantile_shares(q), ymax=None)
             proj = num("fpts_mean")
         chart.update(span=span, hist_min=float(season.minutes.mean()) if len(season) else None, ours_min=num("minutes"))
-        return dict(stat=stat, label=HOVER_LABELS[stat], proj=proj, mean=None, basis=None, line=None, odds=None, chart=chart, drawn=drawn,
+        return dict(stat=stat, label=HOVER_LABELS[stat], short="fpts", games=self.stat_games(name, "dk_fpts") if stat == "fpts" else [], proj=proj, mean=None, basis=None, line=num("minutes") if stat == "minutes" else None, odds=None, chart=chart, drawn=drawn,
                     pin=self.local_overrides.get(name, {}).get(stat), published=None, rows=[], alts=[], stale=0, status_at=None)
 
     def team_card(self, team: str, now: datetime) -> dict:

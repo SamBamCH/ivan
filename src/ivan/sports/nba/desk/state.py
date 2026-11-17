@@ -502,15 +502,16 @@ class DeskBase:
         self.proj[t], self.hist_only[t], self.rot[t] = PSTORE.merged(rec), rec["hist"], dict(rec.get("rot") or {})
         self.world[t] = dict(rec.get("game") or {}, n_worlds=int(rec.get("n_worlds") or 0), at=rec.get("written_at"))
 
-    def reproject(self, team: str):
+    def reproject(self, team: str, n_worlds: Optional[int] = None):
         """
+        `n_worlds`: the worlds the game is drawn in (the card's Simulate team box); None = config projection.n_worlds.
         Re-project one team and write it through: its mapping and its game drawn again (ingest.project_team, the same path a
         publish takes, the draw seeded by the pair so the numbers are those a publish would give), both teams' nba_player rows
         committed and both store records written. The desk's frames are the records just written (the opponent's too: its
         rebounds, steals and blocks moved with this team's mapping); nothing downstream can see a projection the desk does not show.
         """
         self.void_if_stale(team)
-        rec = project_team(self.session, self.slate, team, self.overrides, ProjectionParams.from_config())
+        rec = project_team(self.session, self.slate, team, self.overrides, ProjectionParams.from_config(), n_worlds=n_worlds)
         self.session.commit()
         self._take(rec)
         opp = self.slate.opponent(team)

@@ -81,8 +81,8 @@ class RotationMixin:
                            floor in that minute (`cover`, 48 shares from the team's stored draw: the same worlds every
                            number on the card is the mean of), with his drawn minutes beside it (min_med, min_p10, min_p90,
                            plays, under). Nothing is painted: the rows follow the minutes typed in the min column. A record
-                           written before the coverage was stored has none (`has_cover` False): the plan's grid shows
-                           instead until the team is projected again. Out players show their usual stretches faintly
+                           written before the coverage was stored has none (`has_cover` False): the cells are blank
+                           until the team is simulated. Out players show their usual stretches faintly
                            (the vacated slots); players the plan left off the floor are blank rows, faintly shaded where
                            the World plays them anyway.
           source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute, the
@@ -256,8 +256,8 @@ class RotationMixin:
                              heir_of="", dropped=b["dropped"], bench=True, **(drawn.get(b["key"]) or NO_DRAW)))
         rows += out_rows
         n_pins = sum(1 for n in names if override_of(self.overrides, n).get("minutes") is not None)
-        # the foot: with the draw, the mean number on the floor each minute (five, whatever the rows show); without it the plan grid's count
-        counts = [round(sum(r["cover"][m] for r in rows if r.get("cover")), 1) for m in range(48)] if has_cover else ROT.column_counts(grid)
+        # the foot: the mean number on the floor each minute (five, whatever the rows show); nothing before the first draw
+        counts = [round(sum(r["cover"][m] for r in rows if r.get("cover")), 1) for m in range(48)] if has_cover else []
         return {**base, "kind": "model", "rows": rows, "counts": counts, "pins": n_pins, "benched": benched, "owners": owners, "has_cover": has_cover}
 
     @staticmethod

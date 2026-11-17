@@ -509,6 +509,7 @@ def test_nba_grid_stat_columns_pin_a_total(open_site):
         assert x.status_code == 200 and 'class="statchart"' in x.text and "<svg" in x.text and "books:" not in x.text
     assert f"/team/{team}/props/{key}/minutes" in r.text and f"/team/{team}/props/{key}/fpts" in r.text and f"/team/{team}/map" in r.text
     assert "rot-hold" not in r.text and "rot-apply" not in r.text and 'class="lock"' not in r.text                                  # nothing to paint or lock
+    assert f"/team/{team}/simulate" in r.text and f"/team/{team}/solve" not in r.text and f"/team/{team}/news" not in r.text          # Simulate team is on the card; Solve and the late-news form are not
     assert open_site.get(f"/nba/{day}/{dg}/team/{team}/sim").status_code == 404                                                    # one view: no simulation page
     assert "books: " in h.text or "not priced for this game: history" in h.text                                    # the books' lines, or why not
     assert open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/nope").status_code == 404
