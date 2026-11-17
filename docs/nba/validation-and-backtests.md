@@ -289,6 +289,22 @@ inside it ([../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-viewba
 A slate archived before 2026-10-23 has no tip record and cannot be rerun. First result (slate 156184, 2026-11-06, 500
 worlds): [notes/game_sim_fit_2026-11-07.md](notes/game_sim_fit_2026-11-07.md).
 
+## How the trailing history is weighted (`ivan.sports.nba.backtest.history_weights`, `scripts/nba/history_weights.py`)
+
+```
+venv/bin/python scripts/nba/history_weights.py [--start 2025-11-15] [--player "nikola vucevic"]
+```
+
+Walk-forward on the box scores alone, for the half-lives and the team / season discounts of
+`projection.history`. For every game a player played, the state strictly before it predicts his
+minutes (the trailing mean) and his fantasy points at the minutes he really played (the shrunk
+per-minute rates alone). Printed as MAE / bias for the live weighting beside the alternatives
+(`history_weights.SETTINGS`), over every player-game, over a player's first 15 games for a new team
+and over his first 15 games of a season; `--player` prints one player's state today under each.
+Run it before changing a constant in `history.py`; the rerun gate below covers the rates' effect on
+the World, not the minutes (a tip record already holds the minutes). Measured 2026-11-16:
+`notes/history_weights_2026-11-16.md`.
+
 ## What does not exist yet
 
 - A replay adapter for NBA (`ivan.core.replay` runs archived slates with today's code; only NFL plugs in),

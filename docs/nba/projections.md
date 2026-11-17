@@ -69,9 +69,14 @@ the minutes model and 5.42 for history alone.
 
 ### 4. History (`history.py`)
 
-Everything is "as of" a date, from `nba_stats`: exponentially weighted minutes (half-life 5 games),
-minute-weighted per-minute rates (half-life 20), starter share (half-life 3), how often he plays
-when dressed (half-life 5). Per team, trailing fantasy production. Players with no history get a
+Everything is "as of" a date, from `nba_stats`: exponentially weighted minutes (half-life 3 games),
+minute-weighted per-minute rates (half-life 10), starter share (half-life 3), how often he plays
+when dressed (half-life 5). A break discounts what came before it: at a player's first game for a
+different team his minutes history keeps 10% of its weight and his rate history 25%; at his first
+game of a new season on the same team his minutes history keeps 25% (the rates carry over). So a
+30-minute starter who moved into a 10-minute bench role reads as the bench player within a few
+games (`MIN_TEAM_KEEP`, `MIN_SEASON_KEEP`, `RATE_TEAM_KEEP`; measured by
+`scripts/nba/history_weights.py`, see validation-and-backtests.md). Per team, trailing fantasy production. Players with no history get a
 salary prior (`minutes.SALARY_CURVE`; `projection.salary_blend`).
 
 ### 5. The minutes solve (`solve.py`, `groups.py`; config `alloc = solve`)

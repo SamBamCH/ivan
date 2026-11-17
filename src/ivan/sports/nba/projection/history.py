@@ -21,8 +21,13 @@ from ivan.sports.nba.scoring import STATS   # noqa: F401  (the seven stats every
 # game (006) are noise for rotation purposes.
 GAME_PREFIXES = ("002", "004")
 
-MIN_HALFLIFE = 5      # games played; minutes move fast with role changes
-RATE_HALFLIFE = 20    # games played; per-minute rates are stable (backtest 2026-10-06: 20 beat 5/10/40)
+MIN_HALFLIFE = 3      # games played; minutes move fast with role changes
+RATE_HALFLIFE = 10    # games played; per-minute rates (10 to 30 score the same; the short end follows a changed role sooner)
+# What a player's history is worth after a break (backtest.history_weights, docs/nba/notes/history_weights_2026-11-16.md):
+# the weight kept by everything before his first game for a new team, and before his first game of a new season.
+MIN_TEAM_KEEP = 0.1     # minutes on another team say little about his role here
+MIN_SEASON_KEEP = 0.25  # last season's minutes, same team
+RATE_TEAM_KEEP = 0.25   # per-minute rates carry over better than minutes do
 START_HALFLIFE = 3    # games played; starter share tracks the current lineup
 PLAY_HALFLIFE = 5     # games dressed; how often a dressed player actually plays
 
@@ -47,6 +52,11 @@ def _decay(halflife: int) -> float:
     return 0.5 ** (1.0 / halflife)
 
 
+def season_of(d) -> int:
+    """The season a game belongs to, by the year it starts in (October on)."""
+    return d.year if d.month >= 10 else d.year - 1
+
+
 @dataclass
 class HistoryState:
     """Per-player trailing state after each game they appeared in."""
@@ -68,7 +78,9 @@ class HistoryState:
 
 
 def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
-                  rate_halflife: int = RATE_HALFLIFE, team_halflife: int = 10) -> HistoryState:
+                  rate_halflife: int = RATE_HALFLIFE, team_halflife: int = 10,
+                  min_team_keep: float = MIN_TEAM_KEEP, min_season_keep: float = MIN_SEASON_KEEP,
+                  rate_team_keep: float = RATE_TEAM_KEEP) -> HistoryState:
     """
     Walk each player's games in order and record, after every game played:
       min_ewm      EWM of minutes (halflife MIN_HALFLIFE games)
@@ -80,6 +92,9 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
       cut10        share of his last 10 roster games (DNP included) under 8 minutes: the soft pool's signal (projection.cuts)
       min_sd20     sd of his minutes over his last 20 games played: his own spread (the World scales his substitution jitter to it)
       games        games played so far
+    Before his first game played for a different team the minutes sums keep min_team_keep of their weight and the rate
+    sums rate_team_keep; before his first game played in a new season (same team) the minutes sums keep min_season_keep.
+    So a 30-minute starter traded into a 10-minute bench role reads as the bench player within a few games.
     A DNP game (dressed, 0 minutes) only moves play_ewm: it says nothing
     about minutes-when-playing or rates, but a lot about whether the coach
     will use him. Live, a DK pool lists every dressed player, so the baseline
@@ -98,6 +113,7 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
         r_num = np.zeros(len(STATS)); r_den = 0.0
         n = 0
         mean = 0.0
+        last_team = None; last_season = None
         last10: list = []; last20: list = []
         for row in g.itertuples(index=False):
             mins = float(row.minutes)
@@ -112,6 +128,14 @@ def build_history(box: pd.DataFrame, min_halflife: int = MIN_HALFLIFE,
                 out.append(rec)
                 continue
             last20.append(mins); last20 = last20[-20:]
+            # a new team or a new season: what came before counts for less
+            season = season_of(row.game_date)
+            if last_team is not None and row.team != last_team:
+                m_num *= min_team_keep; m_den *= min_team_keep; v_num *= min_team_keep
+                r_num = r_num * rate_team_keep; r_den *= rate_team_keep
+            elif last_season is not None and season != last_season:
+                m_num *= min_season_keep; m_den *= min_season_keep; v_num *= min_season_keep
+            last_team, last_season = row.team, season
             # minutes: EWM mean and variance
             m_num = a_min * m_num + mins; m_den = a_min * m_den + 1.0
             mean = m_num / m_den
