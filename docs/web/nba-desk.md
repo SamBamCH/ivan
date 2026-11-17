@@ -163,7 +163,7 @@ refresh, and a slate projected the night on means a later fetch had replaced in 
 
 **Every edit on the page writes the team into the slate's pool at once** (`Desk.reproject` = `ingest.project_team`: the
 team's mapping, then its game drawn again in the World, both teams' `nba_player` rows and store records, about a second
-and a half): a pin, a starter call, a painted row, a scenario, a late-news call. The opponent's card moves with it (its
+and a half): a pin, a starter call, Map, a scenario, a late-news call. The opponent's card moves with it (its
 rebounds, steals and blocks come off this team's misses and turnovers). Leaving the page loses nothing and there is nothing to publish afterwards. The page stays open while the
 slate's jobs run and while the slate refreshes (edits wait for the refresh; a job never blocks a page). The card's alert score
 (bad 10, warn 3, info 1) colours its frame:
@@ -177,61 +177,16 @@ slate's jobs run and while the slate refreshes (edits wait for the refresh; a jo
 
 The flags come from `ivan.sports.nba.backtest.validation.review_team`, the same ones `scripts/nba/validate.py review` prints.
 
-### The two views: Projections and Simulation
+### One view: the card is the simulation
 
-A toggle above the card (`nba_desk.html`, `#team-view`; the choice is kept in the browser for the next team opened).
+There is one view of a team. Every edit re-projects the team and draws its game again in the World (`Desk.reproject`,
+config `projection.n_worlds` worlds, both teams at once), and everything on the card reads that one draw from the
+projection store: the heatmap, the drawn numbers, every hover's distribution. Nothing runs in the background and
+nothing is painted.
 
-- **Projections** is the card described below: the minutes, the stat totals, the starters. Every edit writes the team
-  into the pool.
-- **Simulation** (`GET /team/<TEAM>/sim`, `_nba_teamsim.html`, `ivan.sports.nba.desk.teamsim`; terminal:
-  `scripts/nba/team_sim.py --slate DG --team BOS [-n 2000] [--progress]`) draws this team's game from the pool as it
-  stands and shows it while it runs. Opening the view starts a run when there is none or when the game's inputs (any
-  player's minutes, rates, scratch chance, the starters, the line) changed since the last one; **Run**
-  (`POST /team/<TEAM>/sim/run`, with the worlds box, 250 to 10,000, default 2,000) draws again. The run goes in the
-  background in batches of 250 worlds and the panel reloads itself every second until it is done, so the numbers
-  settle as the worlds come in; leaving the view stops the reloading, not the run. One run per game: the other
-  team's page shows the same one. Nothing is written to the pool or to disk.
-
-  The head line: worlds done, the drawn total and margin beside the line, how often the team wins, how often the game
-  ends 20 or more apart, overtime, the team's fantasy points. Per player: **set** (his minutes on Projections),
-  **min** (the median of his drawn minutes), the 10-90 range, **plays** (the share of worlds he plays at all, amber
-  under 95%), the share under 8 minutes, **on the floor minute by minute** (48 cells, darker = on the floor in more
-  worlds, the quarter breaks marked), **fpts** mean, sd, p10, p50, p90, **5x** (the share of worlds he reaches five
-  fantasy points per $1,000 of salary), and his mean points, rebounds and assists. From the second run on, **±**
-  columns give the change in his median minutes, mean and 90th percentile since the run before, which is how a tweak
-  on Projections is read: change a number, switch over, Run.
-
-  These are the World's raw worlds: a hand fpts pin (the **sim** box) scales the published projection, not this view.
-
-### The news table
-
-On the slate page under the contests (`_nba_news.html`, `Desk.news_table` =
-`ivan.sports.nba.data_fetch.newsfeed.slate_news`; terminal: `scripts/nba/newsfeed.py slate`). Its heading carries the counts, the
-**auto every 5 min** box (reads Rotowire's news every 5 minutes while the desk runs; every Refresh reads it too) and
-when the news was last read. One table, one row per player whose night is news, in three groups:
-
-1. **Questions**: DK status Q / GTD / D / P, not ruled out. Columns: player (bold when in the expected lineup;
-   the name opens his team's page, where the call is made), team, opponent and tip, status, salary, usual minutes (the history state),
-   the model's minutes now with your call ("no call" in amber until a pin or a starter call answers it), the
-   latest headline on file.
-2. **Out tonight, played last game**: DK OUT / O / IR / SUSP and on the floor in his team's last box score. These are
-   the outs the rotation has not absorbed yet: the column shows the last game's date and his minutes in it.
-3. **Already out** (folded; **show** opens them): OUT and out of the team's last game too, or never in a box score.
-
-Each list is ordered earliest tip first, then the most usual minutes. The headline is the newest `nba_news`
-row for the player **since his team's last game** (after 21:00 on the day it played, so post-game reports count and
-what was said before that game does not: every game is a new decision; `newsfeed.since_last_game`; within 7 days at
-most), with its source link (hover for the text), its age, the count of such items and **new** when it arrived after
-the team was mapped (within 3 hours when the team is unmapped). "No news on file" means nothing since the last game:
-Refresh reads the news. The team's last game is the newest box score on file, so until the nightly brings last night's
-game the "last game" is the one before it (and that night's pre-game headlines still show).
-
-### The card
-
-Under the heading, the **World line**: the game as the simulation drew it on this grid (how many worlds, the factor on
-this side's attempts against the line, the drawn total and margin against the books', the team's drawn fantasy points
-against the plan's), the state of the optimal solve (when, how many worlds, stale when a team was projected since) and
-the **Solve** button ([../nba/projections.md](../nba/projections.md), the optimal share).
+The **World** line above the grid: worlds drawn, the drawn total and margin beside their lines, how often this team
+wins, how often the game ends 20 or more apart, overtime, the team's fantasy points (the plan's beside it), the
+optimal solve.
 
 Rows: starters first, then the players who are out, then the bench, minutes descending; the available players the plan
 left at zero or you dropped sit as blank rows with `plays 39% · 8 min`, the World's fringe (the + beside a dropped name restores him). Per player:
@@ -241,8 +196,9 @@ salary, value, the optimal share, the rate source (market or history), the owner
 priced players, the flags.
 
 The grid's columns, right of the 48 minute cells, are the two layers side by side. Layer 1, what you tell the
-simulation: **min** (the row's minutes, a pin box; hover for this season's games with a DNP row in red, the drawn
-minutes with their 10-90 band, his cut chance, and his own minutes sd), then one column per stat, **pts reb ast 3pm stl blk tov** (the plan for the game: the
+simulation: **min** (his minutes, a pin box; hover for the minutes the World drew over his own games, the same chart
+as a stat's, with the set number, the drawn median and mean, the 10-90 band, the share of worlds he plays and the share
+under 8 minutes, then this season's games with a DNP row in red, his cut chance, and his own minutes sd), then one column per stat, **pts reb ast 3pm stl blk tov** (the plan for the game: the
 row's minutes × his per-minute rate; green when the rate is the books', amber when the plan sits 15%+ from the books'
 mean). Layer 2, what came out: **fpts** (the World's mean ± sd over the worlds the game was drawn in; hover for each
 stat as planned and as drawn, the books' line and mean, the 10-50-90 of his night, the plan's total), **sim** (the
@@ -262,7 +218,12 @@ in the legend: how many games, each side's mean and the minutes it came in. A bo
 own (it sat on top of the hover): what the box holds and what typing in it does is the hover's last line, on the
 minutes box (under the recent games) and the stat boxes (under the chart) alike. Above it ours, the books' mean and the
 minutes it was priced over, the line and its prices; under it each book's main line with its over / under in one row
-(`Desk.stat_hover` → `desk.rows.stat_chart`). Our distribution is recorded when the game is drawn
+(`Desk.stat_hover` → `desk.rows.stat_chart`). The **min** and **fpts** cells carry the same chart from the same worlds
+(`GET /team/<TEAM>/props/<player>/minutes` and `.../fpts`, `Desk.draw_hover`): his games' minutes against the drawn
+minutes (the record's `minutes_dist`), his games' fantasy points against the drawn ones (from the record's 101
+quantiles, so a hand **sim** pin moves the chart with it), with the draw's numbers under it (fpts: mean ± sd,
+10-50-90, and the share of worlds at five fantasy points per $1,000 of salary) and no books; their y axis fits the
+tallest bar, the bins being wide. Our distribution is recorded when the game is drawn
 (`projection.worlds.stat_shares`, the store record's `stat_dist`); a team projected before this was recorded shows his
 games alone and says so until any edit or refresh projects it again. The hover is fetched the first time the cell is
 hovered (`GET /team/<TEAM>/props/<player>/<stat>`, `_nba_props.html`; about a second the first time after the odds moved, then at once),
@@ -309,20 +270,29 @@ team, a spread of 10+ (blowout risk) or no line yet, the opponent's regular star
 box scores lag until the nightly brings last night's game, so a back to back can read as a day of rest more before it
 runs.
 
-The **rotation grid** (`_nba_rotation.html`): players × 48 minutes. Paint cells to put a player on the
-floor; the grid autosaves every stroke (`/rotation`). Row lock holds a row exactly; **Re-fill** fills the
-unlocked rows around the locks (`/rotation/propose` with `source=propose`, or a past game's grid with
-`game_id`); **Hold all** locks everything as drawn; **Clear locks**; **Map** adds a player the cut left off
-(`/rotation/add`), **drop** removes one, **restore** undoes. A player the mapping counted on ruled OUT (a DK status on a
-refresh, a scratch call), or a five that comes in differently from the five the grid was drawn for (Rotowire's lineup with
+The **rotation grid** (`_nba_rotation.html`): players × 48 minutes, a heatmap. Each cell is the share of the World's
+worlds the player is on the floor in that minute (the store record's `cover`, `Desk.drawn_of`): white never, full blue
+always, the share in the cell's tooltip; the foot row is the number on the floor each minute (five). It is read-only:
+the rows follow the minutes in the **min** column (type a number, **Refigure**) and the starter calls, and the World
+decides when each man plays (config `gamesim.rotation`). A player the plan left at zero is a blank row, faintly shaded
+where the World plays him anyway. A team projected before the coverage was stored shows the plan's grid and says so
+until it is refigured. **Map** (`POST /team/<TEAM>/map`, `Desk.map_team`; terminal `scripts/nba/mapping.py --slate DG
+--map TEAM`) pins every player with minutes at the minutes he shows and records what the team was mapped against;
+**Clear pins** (`/rotation/clear`) drops the mapping and every minutes pin on the team; **drop** (the × beside a name,
+`/rotation/drop`) gives a player no minutes, **restore** undoes. A player the mapping counted on ruled OUT (a DK status on a
+refresh, a scratch call), or a five that comes in differently from the five it was mapped with (Rotowire's lineup with
 the hand starter calls, a full five against a full five), voids the mapping on its own (`ivan.sports.nba.slate.mapping`,
 `Desk.void_if_stale` before every re-projection, `ingest.void_stale_mappings` inside the refresh; `scripts/nba/mapping.py`):
-the grid and the team's positive minutes pins go, the model's proposal for the new pool and five shows, the card says so and
+the record and the team's positive minutes pins go, the model's minutes for the new pool and five show, the card says so and
 reads unmapped; the old mapping is kept as a scenario assuming what it assumed ("Johnson in", "Hauser starting"), so it comes
 back on its own if the news reverses. A five that comes in as mapped changes nothing. The refresh note and the team's dot
-carry it ("mapping void: the lineup came in differently (-Hauser +Pritchard)"). Spot colours mark the slot each player
-inherited (the lanes under the grid name each spot's holders; there is no separate key); fouls are shown on
-historical views (a digit in a cell is that player's n-th foul in that minute). The row sums are the minutes projection; the foot row adds them up under `min` and, under `proj`, adds up the team's projected fantasy points beside its trailing average.
+carry it ("mapping void: the lineup came in differently (-Hauser +Pritchard)"). On a played game's grid, spot colours mark
+the slot each player held (the lanes under it name each spot's holders; there is no separate key) and a digit in a
+cell is that player's n-th foul in that minute. A played game's **min** column is what the player played, overtime
+included: his stints added up in seconds, the box score's number and the one in the minutes hover
+(`projection.rotation.last_game_grid`); the cells only approximate it, each stint edge being rounded to a whole minute
+and overtime having no column (the cell's tooltip says how much of it was overtime). Tonight's foot row adds the
+minutes up under `min` and, under `proj`, adds up the team's projected fantasy points beside its trailing average.
 Rookies carry a purple **R** badge with their games played this season (`R4`) and a purple edge on the name, on
 tonight's grid and on a past game's alike (`Desk.rookie_of`). A rookie is a player whose first NBA season is this one
 in nba_api's all-players list (`ivan.sports.nba.data_fetch.experience`, fetched by the nightly or `scripts/nba/experience.py
@@ -335,7 +305,7 @@ view does under each team: our grid for that day is the one drawn on the desk th
 else the archive's grid rows at that day's lock (`backtest.slate.grid_for_day`); blue cells were on the floor in both,
 orange played but not in ours, hatched in ours but sat, a player we projected who did not play is a DNP row, the minutes
 column reads played / ours, and the bar gives the share of the 240 player-minutes on the floor in both and where ours came
-from (`Desk.overlay_ours`, `/rotation/propose` with `overlay=1`; the box stays on across the dropdown's games).
+from (`Desk.overlay_ours`, `/rotation/game` with `overlay=1`; the box stays on across the dropdown's games).
 The past game's grid sits right under tonight's, always open, with no header of its own (the dropdown names the game).
 It has two small rows above the minutes: each team's running score at the end of every
 3 minutes, the team's own row green while it leads and red while it trails; the team, home/away and the final sit at the
@@ -522,7 +492,7 @@ directory here. Picking a slate the laptop does not hold has the laptop fetch it
 `IVAN_FEED_SSH` or `IVAN_FEED_URL` set, `slates.is_consumer`) reads a published layer at all; the laptop ignores one it may
 find under a day (`slates.published_pins`, `published_grid`). The laptop's pins and grids
 arrive as the slate's `published/` layer and show as green placeholders; the consumer's own edits (amber) sit on top in
-its own files, a blank box falls back to the published value, Clear locks drops only its own layer, and a pull
+its own files, a blank box falls back to the published value, Clear pins drops only its own layer, and a pull
 re-projects only the teams it edited. The card says "published" and counts "N of your own". No props, lines or news
 buttons, no news auto box: the headlines come with the pool. When nothing changed on the laptop, Refresh says so. The
 header reads "projections HH:MM" (the pool's newest projection time; the hover has the laptop's refresh and the pull time from the slate's record)

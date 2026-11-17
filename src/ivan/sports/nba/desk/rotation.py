@@ -1,9 +1,8 @@
 """
-The rotation grid the team page shows: tonight's grid from the projection store, a played game's from the stints, the mapping fingerprint.
+The rotation grid the team page shows: tonight's heatmap from the World's draw in the projection store, a played game's from the stints, the mapping fingerprint.
 """
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 from typing import Optional
 import numpy as np
@@ -13,6 +12,9 @@ from ivan.sports.nba.projection.live import override_of
 from ivan.sports.nba.projection import rotation as ROT
 from ivan.sports.nba.projection.groups import group_of as SK_group
 from .state import ADD_BACK_MINUTES, FOUL_SHORT_PF, FOUL_SHORT_SHARE, short_name
+
+UNDER_MIN = 8.0            # a night under this many minutes is a cut night (the minutes hover's share, DNPs included)
+NO_DRAW = dict(cover=None, min_med=None, min_p10=None, min_p90=None, plays=None, under=None)
 
 
 class RotationMixin:
@@ -75,16 +77,21 @@ class RotationMixin:
     def _rotation(self, team: str, source: str = "auto", game_id: Optional[str] = None) -> dict:
         """
         The team's rotation grid for the card.
-          source "auto"    the projection's grid: the coach's slots filled at the solve's minutes, the desk's locked rows held
-                           (ivan.sports.nba.projection.skeleton). Out players show their usual stretches faintly (the vacated
-                           slots), players the schedule left off the floor are listed under the grid with an add button.
-          source "propose" the same grid with every lock lifted (a preview, nothing saved)
+          source "auto"    tonight: one row per player with minutes, each cell the share of the World's worlds he is on the
+                           floor in that minute (`cover`, 48 shares from the team's stored draw: the same worlds every
+                           number on the card is the mean of), with his drawn minutes beside it (min_med, min_p10, min_p90,
+                           plays, under). Nothing is painted: the rows follow the minutes typed in the min column. A record
+                           written before the coverage was stored has none (`has_cover` False): the plan's grid shows
+                           instead until the team is projected again. Out players show their usual stretches faintly
+                           (the vacated slots); players the plan left off the floor are blank rows, faintly shaded where
+                           the World plays them anyway.
           source "last"    one of this season's games (`game_id`, else the latest) as played, fouls marked on the minute, the
-                           starters who had not started the game before flagged (new_starter)
+                           starters who had not started the game before flagged (new_starter). A row's minutes are what he
+                           played (his stints in seconds, overtime included: the box score's number and the minutes hover's),
+                           not the cells counted; `ot` is the overtime part, which has no column
         """
         from ivan.sports.nba.data_clean import pbp as PBP
         from ivan.sports.nba.projection.live import OUT_STATUSES
-        from ivan.sports.nba.projection import skeleton as SK
         players = self.players(team)
         names = {normalize_name(p.name): p for p in players}
         is_out = {n: (p.status or "").upper() in OUT_STATUSES or (override_of(self.overrides, n).get("minutes") is not None and override_of(self.overrides, n).get("minutes") <= 0)
@@ -175,7 +182,8 @@ class RotationMixin:
                 for m, no in fouls.get(n, []):
                     marks[m] = no if no is not None else "T"
                 hist = None if curve is None or n not in curve.index else float(curve.loc[n, "minutes"])
-                mins = int(grid.loc[n].sum()); pf = len(fouls.get(n, []))
+                played = (last.get("minutes") or {}).get(n); ot = float((last.get("overtime") or {}).get(n) or 0.0)
+                mins = int(round(played)) if played is not None else int(grid.loc[n].sum()); pf = len(fouls.get(n, []))   # what he played (the box score's number), not the cells counted
                 cell_tips = [None] * 48
                 for m, txt in tips.get(n, {}).items():
                     cell_tips[m] = txt
@@ -183,7 +191,7 @@ class RotationMixin:
                     cell_tips[m] = (f"foul {no}" if no is not None else "technical") + (f" · {cell_tips[m]}" if cell_tips[m] else "")
                 rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, status=((names[n].status or '').upper() if n in names else ''),
                                  starter=bool(cells[0]), new_starter=bool(cells[0]) and n in fresh, out=bool(is_out.get(n, False)), gone=n not in names, vacated=False, locked=False, minutes=mins, target=None,
-                                 hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips,
+                                 hist=hist, cells=cells, marks=marks, pf=pf, spots=[int(x) for x in spots.loc[n].values], tips=cell_tips, played=played, ot=ot,
                                  group=SK_group(names[n].position) if n in names else "wing", rank=ROT._spot_rank(names[n].position if n in names else None, None),
                                  foul_short=bool(pf >= FOUL_SHORT_PF and hist and mins < FOUL_SHORT_SHARE * hist), heir_of=""))
             shown = ctx.get(str(last["game_id"])) or {}
@@ -194,13 +202,8 @@ class RotationMixin:
         grid = rot.get("grid")
         if grid is None or proj is None:
             return base
-        locked = list(grid.attrs.get("locked", []))
-        if source == "propose":
-            avail = [n for n in grid.index]
-            groups = {n: SK_group(names[n].position) for n in names}
-            grid = SK.build_grid(curve, targets, avail, starters=[n for n in avail if n in starters], groups=groups, locks=None, vacated=rot.get("vacated"),
-                                 shares=rot.get("shares"))
-            locked = []
+        drawn = self.drawn_of(team)
+        has_cover = bool(drawn)
         inherited: dict = {}
         for owner, heirs in (grid.attrs.get("inherited") or {}).items():
             for h, share in heirs.items():
@@ -213,10 +216,10 @@ class RotationMixin:
         for n in grid.index:
             hist = None if curve is None or n not in curve.index else float(curve.loc[n, "minutes"])
             mins = int(grid.loc[n].sum())
-            if mins <= 0 and n not in locked:
+            if mins <= 0:
                 continue
             rows.append(dict(name=n, key=n, pos=names[n].position if n in names else "", salary=names[n].salary if n in names else None, status=((names[n].status or '').upper() if n in names else ''),
-                             starter=n in starters, out=False, gone=False, vacated=False, locked=n in locked, minutes=mins,
+                             starter=n in starters, out=False, gone=False, vacated=False, locked=False, minutes=mins, **(drawn.get(n) or NO_DRAW),
                              target=None if n not in targets else round(float(targets[n]), 1),
                              hist=hist, cells=[bool(x) for x in grid.loc[n].values], marks=None, pf=None, foul_short=False,
                              spots=[int(x) for x in spots.loc[n].values], group=SK_group(names[n].position) if n in names else "wing",
@@ -230,11 +233,10 @@ class RotationMixin:
                                  locked=False, minutes=int(round(float(curve.loc[n, "minutes"]))), target=None, hist=float(curve.loc[n, "minutes"]),
                                  cells=cells, marks=None, pf=None, foul_short=False, heir_of="", spots=[-1] * 48, dropped=n in dropped,
                                  group=SK_group(names[n].position), rank=ROT._spot_rank(names[n].position, None)))
-        # one order for every panel (tonight, the unlocked preview, the game below): the saved projection's minutes,
+        # one order for both panels (tonight and the game below): the saved projection's minutes,
         # starters not promoted, vacated slots last; so the rows line up whatever is shown
         rows = self.order_rows(rows, owners)
         self.mark_starter_rule(rows)
-        lanes = self.lanes_of(rows, owners)
         # off the floor tonight: available players the schedule gave no minutes (added back by hand)
         benched = []
         for n, p in names.items():
@@ -244,20 +246,19 @@ class RotationMixin:
             benched.append(dict(name=n, key=n, pos=p.position, salary=p.salary, hist=hist, status=(p.status or "").upper(), dropped=n in dropped,
                                 add_minutes=round(max(ADD_BACK_MINUTES, hist or 0.0))))
         benched.sort(key=lambda r: -(r["salary"] or 0))
-        # they sit in the grid as blank rows (paint one to give him minutes; a dropped player shows DROPPED with his + to restore)
+        # they sit in the grid as blank rows (type minutes to play him; a dropped player shows DROPPED with his + to restore)
         out_rows = [r for r in rows if r.get("vacated") or r.get("out")]
         rows = [r for r in rows if not (r.get("vacated") or r.get("out"))]
         for b in benched:
             rows.append(dict(name=b["name"], key=b["key"], pos=b["pos"] or "", salary=b["salary"], status=b["status"], starter=False, out=False, gone=False,
                              vacated=False, locked=False, minutes=0, target=None, hist=b["hist"], cells=[False] * 48, marks=[None] * 48, pf=0,
                              spots=[-1] * 48, tips=[None] * 48, group=SK_group(b["pos"] or ""), rank=ROT._spot_rank(b["pos"], None), foul_short=False,
-                             heir_of="", dropped=b["dropped"], bench=True))
+                             heir_of="", dropped=b["dropped"], bench=True, **(drawn.get(b["key"]) or NO_DRAW)))
         rows += out_rows
-        avail_keys = {r["key"] for r in rows}
-        shares_json = json.dumps({o: {i: round(v, 3) for i, v in hv.items() if i in avail_keys} for o, hv in shares.items() if o in avail_keys})
         n_pins = sum(1 for n in names if override_of(self.overrides, n).get("minutes") is not None)
-        return {**base, "kind": "model" if source != "propose" else "propose", "rows": rows, "counts": ROT.column_counts(grid), "drawn": bool(locked), "pins": n_pins,
-                "locked": locked, "benched": benched, "owners": owners, "lanes": lanes, "shares_json": shares_json}
+        # the foot: with the draw, the mean number on the floor each minute (five, whatever the rows show); without it the plan grid's count
+        counts = [round(sum(r["cover"][m] for r in rows if r.get("cover")), 1) for m in range(48)] if has_cover else ROT.column_counts(grid)
+        return {**base, "kind": "model", "rows": rows, "counts": counts, "pins": n_pins, "benched": benched, "owners": owners, "has_cover": has_cover}
 
     @staticmethod
     def mark_starter_rule(rows: list[dict]) -> list[dict]:
@@ -377,30 +378,47 @@ class RotationMixin:
             lanes.append(dict(spot=k, owner=owner, segments=segs))
         return lanes
 
-    def apply_rotation(self, team: str, players: list[str], grid: list[list[int]], locked: Optional[list[str]] = None, note: str = "") -> int:
+    def drawn_of(self, team: str) -> dict:
         """
-        Save the painted grid: the locked rows are held exactly by the skeleton and their row totals become the players'
-        minutes (a row painted empty scratches him); a row that was locked and is now unlocked loses its minutes pin; the
-        unlocked rows are re-filled around the locks by the next projection. Out players' rows are dropped.
+        {player: his night as the World drew it} from the team's stored record (projection.store, the draw every number on
+        the card is the mean of): cover (48 shares: the worlds he is on the floor in each minute), min_med, min_p10,
+        min_p90, plays (the share of worlds he plays at all) and under (the share under UNDER_MIN minutes, DNPs included;
+        None when the record has no minutes distribution). {} when the record carries no coverage (written before it was
+        stored, or the game not drawn yet).
         """
-        from ivan.sports.nba.projection.live import OUT_STATUSES
-        status = {normalize_name(p.name): (p.status or "").upper() for p in self.players(team)}
-        keep = [i for i, n in enumerate(players) if n and len(grid[i]) == ROT.MINUTES]       # rows without a key (a popup's table) are not the grid's
-        players = [players[i] for i in keep]; grid = [grid[i] for i in keep]
-        g = pd.DataFrame(np.array(grid, dtype=bool).reshape(len(players), ROT.MINUTES), index=[normalize_name(n) for n in players], columns=list(range(ROT.MINUTES)))
-        g = g.loc[[n for n in g.index if status.get(n, "") not in OUT_STATUSES]]
-        lock_names = [normalize_name(n) for n in (locked if locked is not None else list(g.index))]
-        lock_names = [n for n in lock_names if n in g.index]
-        before = ROT.load_drawn(team)
-        was_locked = set(before.attrs.get("locked", list(before.index))) if before is not None else set()
-        for n in was_locked - set(lock_names):
-            self.set_override(n, minutes=None)
-        for n in lock_names:
-            self.set_override(n, minutes=float(g.loc[n].sum()))
-        # the fingerprint is taken after the pins: a row locked empty scratches its player, and that is part of the mapping
-        ROT.save_drawn(team, g, note, locked=lock_names, fingerprint=self.fingerprint(team))
+        proj = self.proj.get(team)
+        if proj is None or "cover" not in proj.columns:
+            return {}
+        num = lambda v: None if v is None or pd.isna(v) else float(v)   # noqa: E731
+        out = {}
+        for n, r in proj.iterrows():
+            c = r.get("cover")
+            if not isinstance(c, list) or len(c) != ROT.MINUTES:
+                continue
+            d = r.get("minutes_dist"); pz = num(r.get("p_zero"))
+            out[str(n)] = dict(cover=[float(x) for x in c], min_med=num(r.get("minutes_med")), min_p10=num(r.get("minutes_p10")), min_p90=num(r.get("minutes_p90")),
+                               plays=None if pz is None else 1.0 - pz, under=float(sum(d[:int(UNDER_MIN)])) if isinstance(d, list) and d else None)
+        return out
+
+    def map_team(self, team: str) -> int:
+        """
+        Map the team (the card's Map button; scripts/nba/mapping.py --map TEAM): every player with minutes is pinned at the
+        minutes he shows, so a later refresh moves nobody, and the pool it was looked at against (who is available, the
+        statuses, the five starters: fingerprint) is saved beside the plan's grid (projection.rotation.save_drawn). The card
+        reads "mapped" until any of that moves, and a player ruled out or a changed five voids it (slate.mapping). Returns
+        the number of players held.
+        """
+        grid = (self.rot.get(team) or {}).get("grid")
+        if grid is None:
+            raise ValueError(f"{team} has no projection to map")
+        held = [str(n) for n in grid.index if int(grid.loc[n].sum()) > 0]
+        for n in held:
+            if override_of(self.overrides, n).get("minutes") is None:
+                self.set_override(n, minutes=float(grid.loc[n].sum()))
+        # the fingerprint is taken after the pins: they are part of what was mapped
+        ROT.save_drawn(team, grid.loc[held], locked=held, fingerprint=self.fingerprint(team))
         self.reproject(team)
-        return len(lock_names)
+        return len(held)
 
     def fingerprint(self, team: str) -> dict:
         """What a mapping is made against: who is available, who is out, each player's status, the five starters (Rotowire or hand calls)."""
@@ -416,9 +434,9 @@ class RotationMixin:
 
     def mapped_state(self, team: str) -> dict:
         """
-        The team's mapping: unmapped (no held grid: nothing locked, or rows with minutes left to the model), mapped (every row
-        with minutes locked and the inputs as they were when it was saved) or changed (held, but the availability, a status
-        or the starters moved since: the differences listed). A refresh re-renders the card, so a change shows at once.
+        The team's mapping: unmapped (never mapped, or a record from the painted grid that left rows to the model), mapped (Map
+        was pressed and the inputs are as they were then) or changed (mapped, but the availability, a status or the starters
+        moved since: the differences listed). A refresh re-renders the card, so a change shows at once.
         """
         g = ROT.load_drawn(team)
         if g is None:
@@ -451,8 +469,8 @@ class RotationMixin:
                     changed=[t for t, v in states.items() if v["state"] == "changed"], unmapped=[t for t, v in states.items() if v["state"] == "unmapped"])
 
     def clear_rotation(self, team: str) -> int:
-        """Clear locks: the drawn grid goes, and so does every typed minutes pin on the team (locked rows' pins and hand-typed ones alike),
-        so the grid is the model's again. Rates, bands, starter calls and the sim / public overrides stay. Returns the pins lifted."""
+        """Clear pins: the mapping goes, and so does every minutes pin on the team (the ones Map set and the hand-typed ones alike),
+        so the minutes are the model's again. Rates, bands, starter calls and the sim / public overrides stay. Returns the pins lifted."""
         ROT.clear_drawn(team)
         n = 0
         for p in self.players(team):

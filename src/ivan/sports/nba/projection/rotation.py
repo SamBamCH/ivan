@@ -656,8 +656,11 @@ def last_game_grid(session: Session, team: str, before: Optional[date] = None, s
     """
     The team's most recent game (or `game_id`) as a grid (index player, columns
     0..47; each stint runs from its start rounded to the nearest minute to its
-    end rounded the same way; overtime folded into the last minute), with the
-    game id and date. None
+    end rounded the same way; overtime is not on the grid), with the game id and
+    date, and what each player really played: "minutes" (his stints added up in
+    seconds, overtime included: the box score's number, which the cells only
+    approximate, each edge being rounded and overtime having no column) and
+    "overtime" (the part of it after regulation). None
     when the team has no stints (since `since`, when given: the desk asks for
     this season only).
     """
@@ -683,10 +686,13 @@ def last_game_grid(session: Session, team: str, before: Optional[date] = None, s
                 grid[i, m] = True
     g = pd.DataFrame(grid, index=names, columns=list(range(MINUTES)))
     g = g.loc[sorted(g.index, key=lambda n: -int(g.loc[n].sum()))]
-    return {"grid": g, "game_id": str(gid), "game_date": str(gdate)}
+    secs = (st.end_sec.astype(float) - st.start_sec.astype(float)).groupby(st.player_name).sum()
+    ot = ((st.end_sec.astype(float).clip(lower=2880.0) - st.start_sec.astype(float).clip(lower=2880.0))).groupby(st.player_name).sum()
+    return {"grid": g, "game_id": str(gid), "game_date": str(gdate), "minutes": {str(n): float(v) / 60.0 for n, v in secs.items()},
+            "overtime": {str(n): float(v) / 60.0 for n, v in ot.items()}}
 
 
-# ----------------------------------------------------------------------------- drawn rotations (the desk's locked rows)
+# ----------------------------------------------------------------------------- the mapping record (rotations/<team>.json)
 
 
 def drawn_path(team: str) -> Path:
@@ -694,7 +700,7 @@ def drawn_path(team: str) -> Path:
 
 
 def drawn_source(team: str) -> Optional[str]:
-    """Where the team's grid comes from: 'local' (painted on this machine), 'published' (the producer's, pulled), or None."""
+    """Where the team's mapping comes from: 'local' (mapped on this machine), 'published' (the producer's, pulled), or None."""
     if drawn_path(team).exists():
         return "local"
     if S.published_grid(team) is not None:
@@ -704,10 +710,11 @@ def drawn_source(team: str) -> Optional[str]:
 
 def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[Iterable[str]] = None, fingerprint: Optional[dict] = None) -> Path:
     """
-    The team's painted rotation. `locked` names the rows the desk holds exactly (the skeleton fills the others around
-    them, projection/skeleton.py); None locks every row (the older meaning of a drawn grid). `fingerprint` is what the
-    mapping was made against (availability, statuses, starters: desk.fingerprint); the desk compares it to the live pool
-    and says "mapped" or "changed since mapped".
+    The team's mapping record (Desk.map_team): the plan's grid as it stood when the team was mapped, `locked` the players
+    held (every one with minutes; None = every row) and `fingerprint` what it was mapped against (availability, statuses,
+    starters: desk.fingerprint); the desk compares it to the live pool and says "mapped" or "changed since mapped". The
+    projection does not read it: the minutes are held by the pins Map sets. Records from the painted grid (before
+    2026-11-17) have the same shape; their cells are no longer held.
     """
     p = drawn_path(team); p.parent.mkdir(parents=True, exist_ok=True)
     names = [str(n) for n in grid.index]
@@ -719,8 +726,8 @@ def save_drawn(team: str, grid: pd.DataFrame, note: str = "", locked: Optional[I
 
 
 def load_drawn(team: str) -> Optional[pd.DataFrame]:
-    """The whole saved grid (locked rows and the fill that was saved with them); .attrs["locked"] names the locked rows.
-    This machine's own grid first, else the producer's published one (a consumer); .attrs["source"] says which."""
+    """The saved mapping record as its grid; .attrs["locked"] names the players held, .attrs["fingerprint"] and ["saved_at"] what
+    it was mapped against and when. This machine's own first, else the producer's published one (a consumer); .attrs["source"] says which."""
     p = drawn_path(team)
     if not p.exists():
         p = S.published_grid(team)
@@ -731,15 +738,6 @@ def load_drawn(team: str) -> Optional[pd.DataFrame]:
     g.attrs["locked"] = list(d.get("locked", d["players"]))
     g.attrs["fingerprint"] = d.get("fingerprint"); g.attrs["saved_at"] = d.get("saved_at"); g.attrs["source"] = "local" if p == drawn_path(team) else "published"
     return g
-
-
-def load_locks(team: str) -> Optional[pd.DataFrame]:
-    """Only the locked rows of the saved grid (what the skeleton must hold); None when nothing is locked."""
-    g = load_drawn(team)
-    if g is None:
-        return None
-    locked = [n for n in g.attrs.get("locked", list(g.index)) if n in g.index]
-    return g.loc[locked] if locked else None
 
 
 def clear_drawn(team: str) -> bool:

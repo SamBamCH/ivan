@@ -1,5 +1,5 @@
 """
-The team page's routes: pins, starter calls, the rotation grid, scenarios, notes, the late-news call. Every edit re-projects the team and writes it into the pool (Desk.reproject).
+The team page's routes: pins, starter calls, the mapping, the hovers, a played game's grid, scenarios, notes, the late-news call. Every edit re-projects the team and writes it into the pool (Desk.reproject).
 """
 from __future__ import annotations
 
@@ -29,29 +29,6 @@ def team(request: Request, team: str):
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@slate.get("/team/{team}/sim", response_class=HTMLResponse)
-def team_sim(request: Request, team: str, auto: int = 0):
-    """The Simulation view (desk.teamsim): the run's state now. auto=1 (the toggle) starts a run when there is none or the projections changed since the last."""
-    from ivan.sports.nba.desk import teamsim as TS
-    with LOCK:
-        v = TS.view(desk.dg, team, desk.session)
-    if auto and (v["state"] == "none" or v["stale"]):
-        return team_sim_run(request, team, n=str(v["target"]))
-    return _render(request, "_nba_teamsim.html", v=v)
-
-
-@slate.post("/team/{team}/sim/run", response_class=HTMLResponse)
-def team_sim_run(request: Request, team: str, n: str = Form("")):
-    """Draw the team's game from the pool as it stands, in the background (scripts/nba/team_sim.py); the view polls it."""
-    from ivan.sports.nba.desk import teamsim as TS
-    try:
-        TS.start(desk.dg, team, int(float(n)) if str(n).strip() else TS.DEFAULT_N)
-        v = TS.view(desk.dg, team)
-    except Exception as e:   # noqa: BLE001 - said on the view
-        v = dict(TS.view(desk.dg, team), state="error", error=f"{type(e).__name__}: {e}")
-    return _render(request, "_nba_teamsim.html", v=v)
-
-
 @slate.post("/team/{team}/pin", response_class=HTMLResponse)
 def pin(request: Request, team: str, player: str = Form(...), minutes: str = Form(""), fppm: str = Form(""), low: str = Form(""), high: str = Form(""),
         fpts: str = Form(""), pub: str = Form(""), points: str = Form(""), rebounds: str = Form(""), assists: str = Form(""), fg3m: str = Form(""),
@@ -79,14 +56,8 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
             desk.flash.append(f"{key}: fppm overridden on a priced player; the books' total no longer holds for him")
         new_fpts, new_pub = _num(fpts, "fpts"), _num(pub, "pub")
         stat_vals = {k: _num(v, k) for k, v in dict(points=points, rebounds=rebounds, assists=assists, fg3m=fg3m, steals=steals, blocks=blocks, turnovers=turnovers).items()}
-        if new_min is not None and new_min != old.get("minutes"):
-            # typed minutes repaint the row: the lock (if any) is lifted so the skeleton re-fills him to the number, and the
-            # other free rows move around him; a row you still want held exactly, paint it again
-            g = ROT.load_drawn(team)
-            if g is not None and key in set(g.attrs.get("locked", [])):
-                ROT.save_drawn(team, g, locked=[n for n in g.attrs.get("locked", []) if n != key], fingerprint=g.attrs.get("fingerprint"))
         desk.set_override(key, minutes=new_min, fppm=new_fppm, min_low=lo, min_high=hi, fpts=new_fpts, pub=new_pub, **stat_vals)
-        desk.reproject(team)                                  # the solve re-balances the team around the edit; the grid is rebuilt to the pins
+        desk.reproject(team)                                  # the solve re-balances the team around the edit and the game is drawn again
         if new_pub != old.get("pub"):
             # the public number moved: the stored public projection follows at once; the field built on it waits for the next
             # sim or the Field + ownership button (2026-10-28: no field build on an edit)
@@ -103,8 +74,8 @@ def pin(request: Request, team: str, player: str = Form(...), minutes: str = For
 async def refigure(request: Request, team: str):
     """
     Body: JSON {rows: [{player, minutes, fppm, fpts, pub, points, rebounds, ...}, ...]}: every typed value of the team's grid, applied in one go (blank
-    clears that pin), then the team re-projected once: the skeleton re-fills the grid to the typed minutes (a row whose minutes
-    changed loses its lock so it can move), the other free rows move around them. The public numbers that changed rebuild the field.
+    clears that pin), then the team re-projected once: the solve gives the players without a pin the minutes left and the game
+    is drawn again (the heatmap, every drawn number and the hovers' distributions). The public numbers that changed rebuild the field.
     """
     if (b := _busy(request)) is not None:
         return b
@@ -112,7 +83,7 @@ async def refigure(request: Request, team: str):
     with LOCK:
         changed_min, changed_pub, n_set = _apply_pin_rows(team, body.get("rows") or [])
         desk.reproject(team)
-        msg = f"{team}: {n_set} value(s) applied, the grid refigured" + (f" ({len(changed_min)} minutes changed)" if changed_min else "")
+        msg = f"{team}: {n_set} value(s) applied, the game drawn again" + (f" ({len(changed_min)} minutes changed)" if changed_min else "")
         if changed_pub:
             try:
                 refresh_public_projection(desk.session, log=lambda m: None)
@@ -194,49 +165,44 @@ def starter_toggle(request: Request, team: str, player: str = Form(...)):
 
 @slate.get("/team/{team}/props/{player}/{stat}", response_class=HTMLResponse)
 def props_hover(request: Request, team: str, player: str, stat: str):
-    """The stat cell's hover, fetched the first time the cell is hovered (htmx, mouseenter once): every book's line and price for the
-    player's stat tonight (Desk.stat_hover; `_nba_props.html`). Built on request so the card itself stays quick (2026-11-07: building
-    every player's lines into the card made Refigure slow)."""
-    from ivan.sports.nba.desk.rows import STAT_ORDER
-    if stat not in STAT_ORDER:
+    """A cell's hover, fetched the first time the cell is hovered (htmx, mouseenter once): the distribution the World drew for the
+    player's stat tonight over his own games, and every book's line and price for it (Desk.stat_hover; `_nba_props.html`). `stat` is
+    one of the seven stat columns, or `minutes` or `fpts` (the min and fpts cells: the same chart from the same draw, no books).
+    Built on request so the card itself stays quick (2026-11-07: building every player's lines into the card made Refigure slow)."""
+    from ivan.sports.nba.desk.rows import HOVER_STATS
+    if stat not in HOVER_STATS:
         raise HTTPException(status_code=404, detail=f"no stat {stat}")
     with LOCK:
         desk.maybe_reload()
         return _render(request, "_nba_props.html", s=desk.stat_hover(team, normalize_name(player), stat))
 
 
-@slate.get("/team/{team}/rotation", response_class=HTMLResponse)
-def rotation_view(request: Request, team: str):
-    with LOCK:
-        return _render(request, "_nba_rotation.html", rot=desk.rotation(team))
-
-
-@slate.post("/team/{team}/rotation", response_class=HTMLResponse)
-async def rotation_apply(request: Request, team: str):
-    """Body: JSON {players: [...], grid: [[0/1 x 48], ...], locked: [...]} from the desk's grid; the locked rows are held, the rest re-filled."""
-    body = await request.json()
+@slate.post("/team/{team}/map", response_class=HTMLResponse)
+def map_team(request: Request, team: str):
+    """Map the team (Desk.map_team; scripts/nba/mapping.py --map TEAM): every player with minutes pinned at the minutes he shows and the
+    pool it was looked at against remembered; the card says 'changed' when a status, the availability or the five moves."""
+    if (b := _busy(request)) is not None:
+        return b
     with LOCK:
         try:
-            n = desk.apply_rotation(team, body["players"], body["grid"], locked=body.get("locked"), note=str(body.get("note", "")))
-            desk.flash.append(f"{team}: rotation applied, {n} row(s) locked; the rest filled around them")
+            n = desk.map_team(team)
+            desk.flash.append(f"{team}: mapped, {n} player(s) held at their minutes")
         except Exception as e:   # noqa: BLE001
-            desk.flash.append(f"{team}: rotation not applied: {type(e).__name__}: {e}")
+            desk.flash.append(f"{team}: not mapped: {type(e).__name__}: {e}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
-@slate.post("/team/{team}/rotation/propose", response_class=HTMLResponse)
-def rotation_propose(request: Request, team: str, source: str = Form("propose"), game_id: str = Form(""), overlay: str = Form("")):
-    """source=propose: tonight's grid with every lock lifted (the top panel, nothing saved); source=last: a played game for the panel
-    under it, with our grid of that day over it when `overlay` is set (the panel's "vs our grid" box)."""
+@slate.post("/team/{team}/rotation/game", response_class=HTMLResponse)
+def rotation_game(request: Request, team: str, game_id: str = Form(""), overlay: str = Form("")):
+    """A played game for the panel under tonight's heatmap (the picker), with our grid of that day over it when `overlay` is set
+    (the panel's "vs our grid" box)."""
     with LOCK:
-        if source == "last":
-            return _render(request, "_nba_rotation.html", rot=desk.game_grid(team, game_id=game_id.strip() or None, overlay=bool(overlay.strip())))
-        return _render(request, "_nba_rotation.html", rot=desk.rotation(team, source="propose"))
+        return _render(request, "_nba_rotation.html", rot=desk.game_grid(team, game_id=game_id.strip() or None, overlay=bool(overlay.strip())))
 
 
 @slate.post("/team/{team}/rotation/add", response_class=HTMLResponse)
 def rotation_add(request: Request, team: str, player: str = Form(...)):
-    """A player the rotation left off the floor, back in: a minutes pin at his history; the grid schedules him."""
+    """A player the rotation left off the floor, back in: a minutes pin at his history."""
     with LOCK:
         mins = desk.add_back(team, player)
         desk.flash.append(f"{team}: {player} added back at {mins:.0f} minutes (type another number to change it)")
@@ -266,8 +232,8 @@ def rotation_restore(request: Request, team: str, player: str = Form(...)):
 def rotation_clear(request: Request, team: str):
     with LOCK:
         n = desk.clear_rotation(team)
-        back = "the published grid and pins" if ROT.drawn_source(team) == "published" or S.published_pins() is not None else "the model's"
-        desk.flash.append(f"{team}: locks cleared" + (f", {n} typed minutes lifted" if n else "") + f"; the grid is {back}")
+        back = "the published pins" if ROT.drawn_source(team) == "published" or S.published_pins() is not None else "the model's"
+        desk.flash.append(f"{team}: mapping cleared" + (f", {n} minutes pin(s) lifted" if n else "") + f"; the minutes are {back}")
         return _render(request, "_nba_side.html", c=desk.team_card(team, datetime.now()))
 
 
@@ -283,7 +249,7 @@ def clear_team(request: Request, team: str):
 
 @slate.post("/team/{team}/scenario/save", response_class=HTMLResponse)
 def scenario_save(request: Request, team: str, name: str = Form(...)):
-    """Save the team's current edits (pins + grid) under a name; the assumptions are read off the calls in them."""
+    """Save the team's current edits (its pins) under a name; the assumptions are read off the calls in them."""
     if (b := _busy(request)) is not None:
         return b
     with LOCK:

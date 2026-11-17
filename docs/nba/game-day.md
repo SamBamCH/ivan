@@ -103,17 +103,17 @@ Alerts are listed in [../web/nba-desk.md](../web/nba-desk.md). Per team you can:
   mapping was made against a pool and a five the grid's fingerprint recorded; when one of those players is OUT (DK's status
   or a scratch call here), or Rotowire's five with your starter calls is a full five that differs from the five it was drawn
   for, the grid and the team's positive minutes pins go, the model initialises the new pool itself (the last game's
-  rotation minus the outs, plus returners, the new five opening) and its proposal is on the grid; the team reads
-  **unmapped** until you accept it (**Hold all**) or paint and hold. Nothing has to be unlocked or cleared by hand first,
+  rotation minus the outs, plus returners, the new five opening) and its minutes are on the card; the team reads
+  **unmapped** until you **Map** it again. Nothing has to be cleared by hand first,
   and a lineup that comes in as you mapped it changes nothing. The voided mapping is kept as a scenario assuming what it
   assumed ("Johnson in", "Hauser starting"), so a reversed call or lineup puts it straight back. Other changes (a status
   short of OUT, a player back, a lineup not posted when you mapped) still only mark the team **changed** for you to look at.
-- **paint the rotation grid**: who is on the floor in each of the 48 minutes. The grid autosaves on every
-  stroke to `data/nba/days/<day>/edits/rotations/<TEAM>.json`; a **locked** row is held exactly by every later
-  projection, **Re-fill** fills the unlocked rows around the locks, **Hold all** locks the grid as drawn,
-  **Clear locks** drops the team's pins and grid. The grid's row sums are the minutes projection
-  ([projections.md](projections.md)).
-- **Map** a player the rotation left off back onto the grid (he starts at his history or 6 minutes).
+- **read the rotation grid**: a heatmap of who is on the floor in each of the 48 minutes over the worlds the game was
+  drawn in, from the minutes in the **min** column and the starters; nothing is painted. Type the minutes you want
+  and **Refigure**; hover any number for its distribution over the same worlds. **Map** pins every player at the
+  minutes he shows and records the mapping in `data/nba/days/<day>/edits/rotations/<TEAM>.json`; **Clear pins** drops
+  the team's minutes pins and the mapping ([projections.md](projections.md)).
+- A player the rotation left off sits as a blank row: type his minutes in its **min** box and Refigure to play him.
 - **late news form**: player + call (out / starts / bench / back) + what to run next (sim and choose
   before lock, late swap after, or the call only). One request pins, re-allocates, writes the pool and queues the
   jobs; the page is back in about a second.
@@ -259,7 +259,7 @@ Both in [overnight.md](overnight.md). Read the scorecard with `scripts/nba/valid
 
 | Action | Fetches | Writes the pool |
 |---|---|---|
-| paint + Apply, pin, starter call, Re-fill, a late-news call | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
+| pin, Refigure, Map, starter call, a late-news call | no | **yes, that team** (the override files, then `ingest.project_team`: the team's rows and its projection store record) |
 | `scripts/nba/snapshot.py` | no | no (records the pool: capture rows + the projections CSV) |
 | Refresh dk / props, pick a slate | yes | yes |
 | Generate / Sim / Late swap / All from the desk | no | no (a snapshot first, then the job reads the pool; the sim writes the ownership column) |

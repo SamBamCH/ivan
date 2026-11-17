@@ -284,7 +284,7 @@ def test_every_address_the_nba_pages_carry_answers(open_site):
              f"/nba/{day}/{dg}/board?view=games", f"/nba/{day}/{dg}/board?view=players", f"/nba/{day}/{dg}/board?view=lateswap",
              f"/nba/{day}/{dg}/board?view=backtest&dg={dg}", f"/nba/{day}/{dg}/pipeline", f"/nba/{day}/{dg}/pipeline/status", f"/nba/{day}/{dg}/exposures", f"/nba/{day}/{dg}/players"]
     if team:
-        pages += [f"/nba/{day}/{dg}/{team}/", f"/nba/{day}/{dg}/team/{team}", f"/nba/{day}/{dg}/team/{team}/rotation"]
+        pages += [f"/nba/{day}/{dg}/{team}/", f"/nba/{day}/{dg}/team/{team}"]
     gets, posts = set(), set()
     for p in pages:
         r = open_site.get(p)
@@ -503,7 +503,13 @@ def test_nba_grid_stat_columns_pin_a_total(open_site):
     assert 'hx-trigger="mouseenter once"' in r.text and "loading the books' lines" in r.text  # the hover is fetched when hovered
     key = d.proj[team].index[0]
     h = open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/points")
-    assert h.status_code == 200 and 'class="statchart"' in h.text and "<svg" in h.text and "his games" in h.text and "ours tonight" in h.text   # the chart
+    assert h.status_code == 200 and 'class="statchart"' in h.text and "<svg" in h.text and "his games" in h.text and "the worlds drawn tonight" in h.text   # the chart
+    for extra in ("minutes", "fpts"):                                                                                              # the min and fpts cells: the same chart from the same draw, no books
+        x = open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/{extra}")
+        assert x.status_code == 200 and 'class="statchart"' in x.text and "<svg" in x.text and "books:" not in x.text
+    assert f"/team/{team}/props/{key}/minutes" in r.text and f"/team/{team}/props/{key}/fpts" in r.text and f"/team/{team}/map" in r.text
+    assert "rot-hold" not in r.text and "rot-apply" not in r.text and 'class="lock"' not in r.text                                  # nothing to paint or lock
+    assert open_site.get(f"/nba/{day}/{dg}/team/{team}/sim").status_code == 404                                                    # one view: no simulation page
     assert "books: " in h.text or "not priced for this game: history" in h.text                                    # the books' lines, or why not
     assert open_site.get(f"/nba/{day}/{dg}/team/{team}/props/{key}/nope").status_code == 404
     old = override_of(d.overrides, key)

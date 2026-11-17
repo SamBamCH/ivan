@@ -1,14 +1,14 @@
 """
 A team's mapping is void once a player it counted on is out, or the five starters it was drawn for change.
 
-The mapping (the painted grid with its locked rows and the minutes pins, projection.rotation.save_drawn) is made against a pool:
-the players available tonight and the five starters, recorded in the grid's fingerprint. The minutes model initialises that
+The mapping (the minutes pins Map sets on every player with minutes, and its record, projection.rotation.save_drawn) is made against a
+pool: the players available tonight and the five starters, recorded in the record's fingerprint. The minutes model initialises that
 pool itself (the last game's rotation minus tonight's outs, plus returners, the starters opening) and fills it well; what it
-cannot know is which rows the desk held by hand for a pool that no longer exists. So when a player the mapping had available
+cannot know is which minutes the desk pinned by hand for a pool that no longer exists. So when a player the mapping had available
 is ruled out (DK's status, or a scratch call on the desk), or the lineup comes in differently from the five it was drawn for
 (Rotowire's lineup with the hand starter calls; only a full five against a full five counts, a lineup not posted yet is no
-change), the mapping is void: the grid and the team's positive minutes pins go, the model's own rotation for the new pool and
-the new five is what the card shows, and the team reads "unmapped" until it is accepted (Hold all) or painted and held again.
+change), the mapping is void: the record and the team's positive minutes pins go, the model's own minutes for the new pool and
+the new five are what the card shows, and the team reads "unmapped" until it is mapped again (Map).
 A lineup that comes in as mapped changes nothing. The voided mapping is kept as a scenario assuming what it assumed (the
 player in: "Johnson in"; the old starter starting: "Hauser starting"), so a reversed call or lineup puts it straight back
 (scenarios pick themselves when their assumptions hold).

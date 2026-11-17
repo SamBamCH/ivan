@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from ivan.sports.nba.gamesim import world as W
 
 QUANTILES = 101
+BLOWOUT = 20.0             # a final margin this wide either way: the share of worlds the card's World line calls 'by 20+'
 STAT_COLS = {"pts": "points", "fg3m": "fg3m", "reb": "rebounds", "ast": "assists", "stl": "steals", "blk": "blocks", "tov": "turnovers"}
 
 _CTX: dict = {}
@@ -120,12 +121,14 @@ def _frame(setup: W.TeamSetup, acc, n: int) -> Tuple[pd.DataFrame, dict]:
     fpts = W.dk_points(stats)
     minutes = np.asarray(acc.minutes, dtype=float)
     qs = np.linspace(0.0, 1.0, QUANTILES)
+    cover = np.asarray(setup.F, dtype=float).mean(axis=0) if n else np.zeros((len(setup.names), W.MINUTES))     # (k, 48): the share of worlds on the floor each minute
     rows = []
     for j, nm in enumerate(setup.names):
         x = fpts[:, j]; m = minutes[:, j]
         rec = dict(player_name=nm, pid=int(setup.pids[j]), fpts_mean=float(x.mean()), fpts_std=float(x.std()),
                    quantiles=np.quantile(x, qs).round(2).tolist(), minutes_plan=float(setup.base[j]), minutes_sim=float(m.mean()),
-                   minutes_p10=float(np.percentile(m, 10)), minutes_p90=float(np.percentile(m, 90)), p_zero=float((m <= 0).mean()))
+                   minutes_p10=float(np.percentile(m, 10)), minutes_p90=float(np.percentile(m, 90)), p_zero=float((m <= 0).mean()),
+                   minutes_med=float(np.median(m)), minutes_dist=stat_shares(m), cover=[round(float(c), 3) for c in cover[j]])
         dist = {}
         for short, long in STAT_COLS.items():
             v = stats[short][:, j]
@@ -151,6 +154,7 @@ def simulate_game(session: Session, ctx: W.WorldContext, game: W.GameIn, n: Opti
                 exp_points={t: float(d["setups"][t].exp_points) for t in (game.home, game.away)},
                 target_points={t: d["setups"][t].target_points for t in (game.home, game.away)},
                 mean_total=float(np.mean(d["total"])), mean_margin=float(np.mean(d["margin"])), sd_total=float(np.std(d["total"])),
+                p_home=float(np.mean(np.asarray(d["margin"]) > 0)), blowout=float(np.mean(np.abs(np.asarray(d["margin"])) >= BLOWOUT)),
                 p_ot=float(np.mean(d["overtime"] > 0)), garbage=float(np.mean(d["garbage_at"] >= 0)), garbage_on=bool(ctx.params.get("garbage", True)))
     return GameSim(home=game.home, away=game.away, n=n, seed=seed, frames=frames, samples=samples, game=info)
 

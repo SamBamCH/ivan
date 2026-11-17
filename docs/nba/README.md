@@ -47,7 +47,7 @@ Read in this order:
                                                               ▼
                        layer 1 the mapping (projection/engine, live) ─► minutes_proj, rates, the grid row
                        layer 2 the World on it (projection/worlds)   ─► fpts_mean/std, quantiles, the minutes band
-                       desk pins + painted grids ─────────► days/<day>/edits/{minutes_overrides.csv, rotations/*.json}
+                       desk pins + mapping records ───────► days/<day>/edits/{minutes_overrides.csv, rotations/*.json}
                                                               │
                        every edit / Refresh writes the pool ─┼─◄── ssh: publish + rrsync (feed.pull_ssh) ◄── brother's desk: Refresh from laptop
                                                               │

@@ -139,3 +139,19 @@ def test_dropdown_facts_final_score_and_new_starters(tmp_path):
     assert R.starter_changes(s, "BOS", games) == {"g4": 0, "g3": 2, "g2": 1}
     assert R.starter_changes(s, "BOS", R.team_games(s, "BOS", since=date(2026, 10, 1)))["g1"] is None     # nothing before the opener
     assert R.starter_changes(s, "BOS", []) == {}
+
+
+def test_a_played_games_minutes_are_the_stints_added_up_overtime_included(tmp_path):
+    """last_game_grid: the cells round each stint to whole minutes and stop at regulation; "minutes" is what he played (the box score's
+    number, what the desk's min column shows) and "overtime" the part after 48:00."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
+    engine = create_engine(f"sqlite:///{tmp_path / 't.sqlite'}", future=True)
+    with engine.begin() as c:
+        c.execute(text("create table nba_stint (game_id text, game_date text, team text, player_name text, start_sec real, end_sec real, minutes real)"))
+        for a, b in ((0, 500), (1000, 1810), (2300, 3180)):                     # the last stint runs through a five-minute overtime
+            c.execute(text("insert into nba_stint values ('g1', '2026-11-15', 'NYK', 'a b', :a, :b, :m)"), dict(a=a, b=b, m=(b - a) / 60.0))
+    s = sessionmaker(bind=engine)()
+    g = R.last_game_grid(s, "NYK")
+    assert g["minutes"]["a b"] == (500 + 810 + 880) / 60.0 and g["overtime"]["a b"] == 5.0
+    assert int(g["grid"].loc["a b"].sum()) == 8 + 13 + 10                        # 0-8, 17-30, 38-48: the cells, not the minutes

@@ -14,6 +14,9 @@ from ivan.sports.nba.backtest.validation import market_points, recent_minutes, r
 STAT_ORDER = ("points", "rebounds", "assists", "fg3m", "steals", "blocks", "turnovers")      # the grid's stat columns, left to right
 STAT_LABELS = {"points": "pts", "rebounds": "reb", "assists": "ast", "fg3m": "3pm", "steals": "stl", "blocks": "blk", "turnovers": "tov"}
 ALT_SPAN = 3.0                                                                               # alternates shown in the hover: within this many of the line, per book
+HOVER_STATS = STAT_ORDER + ("minutes", "fpts")                                               # what a cell's hover charts: the stat columns, and the min and fpts cells
+HOVER_LABELS = dict(STAT_LABELS, minutes="minutes", fpts="fantasy points")
+VALUE_X = 5.0                                                                                # the fpts hover's 'reaches value' line: this many fantasy points per $1,000 of salary
 STAT_GAP = 0.15                                                                              # a stat cell is amber when our projection sits this far (share) from the books' mean, at least 1
 
 
@@ -23,12 +26,26 @@ CHART_YMAX = 0.5           # the y axis of every stat chart, whatever the stat o
                            # hover to the next. A taller bar (blocks at 0 for a guard) is drawn to the top with its share written on it
 
 
-def stat_chart(history: list, shares: Optional[list], line: Optional[float] = None) -> dict:
+def quantile_shares(q: Optional[list]) -> Optional[list]:
+    """A player's fantasy points as the share of the worlds at each whole value, from the record's 101 quantiles (each gap between
+    two neighbours holds 1% of the worlds, put at its midpoint): the shape stat_chart draws. The quantiles carry a hand fpts
+    pin, so the chart does too. None without the quantiles."""
+    if not isinstance(q, list) or len(q) < 2:
+        return None
+    mids = [max(0, int(round(0.5 * (float(a) + float(b))))) for a, b in zip(q[:-1], q[1:])]
+    out = [0.0] * (max(mids) + 1)
+    for m in mids:
+        out[m] += 1.0 / len(mids)
+    return [round(x, 4) for x in out]
+
+
+def stat_chart(history: list, shares: Optional[list], line: Optional[float] = None, ymax: Optional[float] = CHART_YMAX) -> dict:
     """
     The stat hover's chart: the player's own games and our drawn distribution over the same bins. `history` = the stat in each
     game he played, `shares` = the World's share of worlds at each whole value (projection.worlds.stat_shares; None when the
     record has none). Whole values, binned in equal steps when the range passes CHART_BINS. Returns {bins: [{lo, hi, label,
-    hist, ours}] (shares of games / of worlds), step, ymax (always CHART_YMAX: one fixed axis), n_hist, hist_mean, ours_mean, line_at (the books' line as a
+    hist, ours}] (shares of games / of worlds), step, ymax (CHART_YMAX, one fixed axis, for the stat columns; `ymax` None fits it to the
+    tallest bar in steps of 10%: the minutes and fantasy point charts, whose bins are wide), n_hist, hist_mean, ours_mean, line_at (the books' line as a
     position in bins from the left edge, None when off the chart), has_ours}.
     """
     h = [int(round(float(x))) for x in history if x is not None and not pd.isna(x)]
@@ -44,7 +61,8 @@ def stat_chart(history: list, shares: Optional[list], line: Optional[float] = No
         lo, hi = k * step, (k + 1) * step - 1
         bins.append(dict(lo=lo, hi=hi, label=str(lo) if step == 1 else f"{lo}-{hi}",
                          hist=(sum(1 for x in h if lo <= x <= hi) / len(h)) if h else 0.0, ours=float(sum(p[lo:hi + 1]))))
-    ymax = CHART_YMAX
+    if ymax is None:
+        ymax = max(0.1, float(np.ceil(10 * max([max(b["hist"], b["ours"]) for b in bins] + [0.0]) - 1e-9)) / 10)
     tot = sum(p)
     return dict(bins=bins, step=step, ymax=ymax, n_hist=len(h), hist_mean=(sum(h) / len(h)) if h else None,
                 ours_mean=(sum(i * x for i, x in enumerate(p)) / tot) if tot > 0 else None, has_ours=tot > 0,
@@ -256,22 +274,23 @@ class RowsMixin:
         return rows
 
     def stat_hover(self, team: str, name: str, stat: str) -> dict:
-        """The stat cell's hover (fetched when the cell is hovered): a chart of the player's own games against our drawn distribution
-        (stat_chart: his games played this season, last season's added when there are under CHART_MIN_GAMES; ours from the World's
-        record), the books' line on it; beside it ours, the books' mean over the minutes it was priced at, the consensus line and
-        prices, each book's main line (set-aside lines flagged stale), how many lines are set aside and when he was last downgraded."""
-        m = self.market_rows.get(name, {}).get(stat, {})
+        """A cell's hover (fetched when the cell is hovered): a chart of the player's own games against the distribution the World drew
+        for tonight (stat_chart: his games played this season, last season's added when there are under CHART_MIN_GAMES; ours from the
+        team's stored draw, the worlds every number on the card is the mean of), the books' line on it; beside it ours, the books'
+        mean over the minutes it was priced at, the consensus line and prices, each book's main line (set-aside lines flagged
+        stale), how many lines are set aside and when he was last downgraded. `stat` "minutes" and "fpts" (the min and fpts
+        cells) chart the drawn minutes and fantasy points the same way, with what the draw says about them under `drawn`
+        (minutes: the set number, the median, the 10-90 band, the share of worlds he plays and the share under 8 minutes; fpts:
+        mean, sd, 10-50-90 and the share of worlds at VALUE_X points per $1,000) and no books."""
         r = self.proj.get(team)
-        pv = None if r is None or name not in r.index else float(r.loc[name, f"proj_{stat}"])
+        row = None if r is None or name not in r.index else r.loc[name]
         p = next((x for x in self.players(team) if normalize_name(x.name) == name), None)
+        if stat in ("minutes", "fpts"):
+            return self.draw_hover(name, stat, row, p)
+        m = self.market_rows.get(name, {}).get(stat, {})
+        pv = None if row is None else float(row[f"proj_{stat}"])
         main, alts, n_stale = _split_props(self.prop_rows_for(name, stat), m.get("line"))
-        box = self.slate.box
-        mine = box[(box.player_name == name) & box.played]
-        today = datetime.now().date(); start = datetime(today.year if today.month >= 10 else today.year - 1, 10, 1).date()
-        season = mine[mine.game_date >= start]
-        span = "this season"
-        if len(season) < CHART_MIN_GAMES and len(mine) > len(season):
-            season = mine[mine.game_date >= datetime(start.year - 1, 10, 1).date()]; span = "this season and last"
+        season, span = self.season_games(name)
         dist = None if r is None or name not in r.index or "stat_dist" not in r.columns else r.loc[name, "stat_dist"]
         chart = stat_chart(list(season[stat]) if stat in season.columns else [], dist.get(stat) if isinstance(dist, dict) else None, m.get("line"))
         chart.update(span=span, hist_min=float(season.minutes.mean()) if len(season) else None,
@@ -280,6 +299,44 @@ class RowsMixin:
                     pin=self.local_overrides.get(name, {}).get(stat), published=(self._published_of(name) or {}).get(stat) if self._layer_of(name).get(stat) == "published" else None,
                     rows=main, alts=alts, stale=n_stale,
                     status_at=None if p is None or p.status_changed_at is None else p.status_changed_at.strftime("%H:%M"))
+
+    def season_games(self, name: str) -> tuple:
+        """(the player's games played this season, "this season"); last season's are added when there are under CHART_MIN_GAMES
+        ("this season and last"). The history the hovers' charts draw."""
+        box = self.slate.box
+        mine = box[(box.player_name == name) & box.played]
+        today = datetime.now().date(); start = datetime(today.year if today.month >= 10 else today.year - 1, 10, 1).date()
+        season = mine[mine.game_date >= start]
+        span = "this season"
+        if len(season) < CHART_MIN_GAMES and len(mine) > len(season):
+            season = mine[mine.game_date >= datetime(start.year - 1, 10, 1).date()]; span = "this season and last"
+        return season, span
+
+    def draw_hover(self, name: str, stat: str, row, p) -> dict:
+        """stat_hover for the min and fpts cells: the drawn minutes (the record's minutes_dist) or fantasy points (its quantiles)
+        over his own games, and the draw's numbers for the legend. No books: neither is priced."""
+        num = lambda k: None if row is None or row.get(k) is None or pd.isna(row.get(k)) else float(row.get(k))   # noqa: E731
+        season, span = self.season_games(name)
+        if stat == "minutes":
+            d = None if row is None else row.get("minutes_dist")
+            shares = d if isinstance(d, list) and d else None
+            pz = num("p_zero")
+            drawn = dict(set=num("minutes"), med=num("minutes_med"), mean=num("minutes_sim"), p10=num("minutes_p10"), p90=num("minutes_p90"),
+                         plays=None if pz is None else 1.0 - pz, under=None if shares is None else float(sum(shares[:8])))
+            chart = stat_chart(list(season["minutes"]), shares, ymax=None)
+            proj = num("minutes")
+        else:
+            q = None if row is None else row.get("quantiles")
+            q = q if isinstance(q, list) and len(q) == 101 else None
+            sal = float(p.salary) if p is not None and p.salary else None
+            need = None if sal is None else VALUE_X * sal / 1000.0
+            drawn = dict(mean=num("fpts_mean"), sd=num("fpts_std"), p10=None if q is None else q[10], p50=None if q is None else q[50], p90=None if q is None else q[90],
+                         need=need, value_x=VALUE_X, value=None if q is None or need is None else float(sum(1 for x in q[1:] if x >= need)) / 100.0)
+            chart = stat_chart(list(season["dk_fpts"]), quantile_shares(q), ymax=None)
+            proj = num("fpts_mean")
+        chart.update(span=span, hist_min=float(season.minutes.mean()) if len(season) else None, ours_min=num("minutes"))
+        return dict(stat=stat, label=HOVER_LABELS[stat], proj=proj, mean=None, basis=None, line=None, odds=None, chart=chart, drawn=drawn,
+                    pin=self.local_overrides.get(name, {}).get(stat), published=None, rows=[], alts=[], stale=0, status_at=None)
 
     def team_card(self, team: str, now: datetime) -> dict:
         rows = self.team_rows(team)

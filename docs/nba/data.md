@@ -86,7 +86,7 @@ data/nba/
 │   │                               same files, the next day starts clean); a slate reaches them through the `day` in its slate.json
 │   ├── edits/
 │   │   ├── minutes_overrides.csv   this machine's pins: player, minutes (0 = scratch), fppm, band, fpts, pub, starter calls, a total per stat
-│   │   ├── rotations/<TEAM>.json   the painted grid per team with its locked rows
+│   │   ├── rotations/<TEAM>.json   the mapping record per team (Map): the plan's grid then, who was held, what it was mapped against
 │   │   └── scenarios/<TEAM>/*.json named copies of a team's two files + assumptions, saved on this day; _active.json
 │   └── published/                  consumer only: the laptop's edits of the day as the base layer (minutes_overrides.csv, rotations/)
 ├── archive_state.json              which tips archive_at_lock.py has recorded

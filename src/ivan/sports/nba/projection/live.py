@@ -191,10 +191,11 @@ class LiveSlate:
     def rotation_for(self, team: str, overrides: dict, forced_out: set[str]) -> dict | None:
         """
         The skeleton's inputs for project_team: every roster player's stint curve (absent players' curves are the
-        vacated slots), the desk's locked rows, the boundary spreads. The grid itself is built inside project_team from
-        the solve's minutes and comes back in this dict under "grid". None when nobody is available.
+        vacated slots) and the boundary spreads. The grid itself is built inside project_team from the solve's minutes
+        (the typed minutes pins held) and comes back in this dict under "grid"; no row is held by hand (the desk's
+        grid is the World's heatmap, not a painted one). None when nobody is available.
         """
-        from .rotation import boundary_spreads, curves, load_locks
+        from .rotation import boundary_spreads, curves
         from ivan.sports.nba.data_clean.pbp import sub_shares
         roster = self.roster(team, overrides, forced_out)
         avail = [p.name for p in roster if p.available]
@@ -202,11 +203,6 @@ class LiveSlate:
             return None
         names = [p.name for p in roster]
         curve = curves(self.session, players=names, n_games=10)
-        locks = load_locks(team)
-        if locks is not None:
-            locks = locks.loc[[n for n in locks.index if n in avail]]
-            if not len(locks):
-                locks = None
         try:
             shares = sub_shares(self.session, players=names)          # the coach's habit: who comes in for whom (recorded SUB events)
         except Exception:   # noqa: BLE001 - no substitution table yet
@@ -233,9 +229,9 @@ class LiveSlate:
                 pool_info = None
             if pool_info is not None:
                 pool, depth = pool_info["pool"], None
-        return {"skeleton": True, "curve": curve if not curve.empty else None, "locks": locks,
+        return {"skeleton": True, "curve": curve if not curve.empty else None, "locks": None,
                 "vacated": [p.name for p in roster if not p.available and (curve.empty or p.name in curve.index)],
-                "spreads": boundary_spreads(self.session, avail), "drawn": locks is not None, "shares": shares,
+                "spreads": boundary_spreads(self.session, avail), "drawn": False, "shares": shares,
                 "depth": depth, "pool": pool, "pool_info": pool_info}
 
     def group_targets(self, team: str) -> dict:

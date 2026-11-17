@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-scripts/nba/mapping.py — the team mappings a player now out or a changed five makes void (ivan.sports.nba.slate.mapping): what every
-refresh and every re-projection on the desk does on their own; from a terminal to see or force it.
+scripts/nba/mapping.py — the team mappings: map a team (the card's Map button, Desk.map_team), and void the ones a player now out or
+a changed five makes stale (ivan.sports.nba.slate.mapping): what every refresh and every re-projection on the desk does on their
+own; from a terminal to see or force it.
 
+    venv/bin/python scripts/nba/mapping.py --slate DG --map NYK  # pin every NYK player with minutes at the minutes he shows and record the mapping
     venv/bin/python scripts/nba/mapping.py --slate DG            # list the stale mappings (team: who is out) and void them
     venv/bin/python scripts/nba/mapping.py --slate DG --dry-run  # list only
 """
@@ -21,8 +23,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     S.add_arg(ap)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--map", metavar="TEAM", help="map this team: pin every player with minutes at the minutes he shows and record what it was mapped against")
     a = ap.parse_args()
     dg, session = S.open(a.slate)
+    if a.map:
+        from ivan.sports.nba.desk import Desk
+        session.close()
+        desk = Desk(dg)
+        n = desk.map_team(a.map.upper())
+        print(f"{a.map.upper()}: mapped, {n} player(s) held at their minutes on slate {dg}")
+        return 0
     if a.dry_run:
         from ivan.sports.nba.projection.live import read_overrides_full
         local = read_overrides_full(layered=False) if S.overrides_csv().exists() else {}

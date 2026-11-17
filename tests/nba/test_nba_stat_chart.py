@@ -26,3 +26,13 @@ def test_stat_chart_bins_a_wide_stat_and_stands_without_a_draw():
     assert sum(b["hist"] for b in pts["bins"]) == pytest.approx(1.0) and sum(b["ours"] for b in pts["bins"]) == pytest.approx(1.0, abs=1e-3)
     none = stat_chart([0, 1], None)
     assert not none["has_ours"] and none["ours_mean"] is None and none["line_at"] is None and len(none["bins"]) == 2
+
+
+def test_quantile_shares_turn_the_fpts_quantiles_into_a_chartable_distribution():
+    from ivan.sports.nba.desk.rows import quantile_shares
+    q = list(np.linspace(10.0, 50.0, 101))
+    s = quantile_shares(q)
+    assert sum(s) == pytest.approx(1.0, abs=1e-3) and len(s) == 51 and s[5] == 0.0 and s[30] > 0       # nothing under his worst world, mass through the middle
+    assert quantile_shares(None) is None and quantile_shares([1.0]) is None
+    c = stat_chart([22, 31, 44], s, ymax=None)                                                         # the minutes and fpts hovers: the axis fits the tallest bar
+    assert c["ymax"] in (0.4, 0.3, 0.2, 0.1) and c["ymax"] >= max(max(b["hist"], b["ours"]) for b in c["bins"]) and c["has_ours"]

@@ -14,10 +14,13 @@ A record (pickle, slates/<dg>/projection/<TEAM>.pkl):
     hist      the same roster mapped from history alone (market_weight=0): the "vs history" column and flags
     rot       the rotation inputs and the grid behind the frame (LiveSlate.rotation_for + project_team's grid, targets, zero_minutes)
     sim       layer 2, the World's draw per player (projection.worlds.simulate_game): fpts_mean, fpts_std, quantiles, minutes_sim,
-              minutes_p10/p90, sim_<stat>, stat_dist ({stat: the share of the worlds at each whole value}: the stat hover's
-              chart); fpts_model beside fpts_mean where a hand fpts pin moved it. None until the game is drawn
+              minutes_p10/p90, minutes_med, minutes_dist (the share of the worlds at each whole minute), cover (the share of the
+              worlds he is on the floor in each of the 48 minutes: the card's heatmap), sim_<stat>, stat_dist ({stat: the share
+              of the worlds at each whole value}: the hovers' charts); fpts_model beside fpts_mean where a hand fpts pin moved
+              it. None until the game is drawn
     samples   {names, pids, fpts (n, k), minutes (n, k)} float32: the per-world draws the optimal-lineup share is solved on
-    game      the game's draw: the attempt factor per side, the lines, the drawn total and margin, overtime and garbage shares
+    game      the game's draw: the attempt factor per side, the lines, the drawn total and margin, the home side's win share, the
+              share decided by 20+, overtime and garbage shares
 `merged(rec)` is the frame with the sim's columns laid over it: what the capture rows, the CSV and the desk's rows read.
 """
 from __future__ import annotations
@@ -38,7 +41,8 @@ def path(team: str) -> Path:
 
 
 SIM_COLS = ("fpts_mean", "fpts_std", "quantiles", "fpts_model", "minutes_sim", "minutes_p10", "minutes_p90", "p_zero",
-            "sim_points", "sim_rebounds", "sim_assists", "sim_fg3m", "sim_steals", "sim_blocks", "sim_turnovers", "stat_dist")
+            "sim_points", "sim_rebounds", "sim_assists", "sim_fg3m", "sim_steals", "sim_blocks", "sim_turnovers", "stat_dist",
+            "minutes_med", "minutes_dist", "cover")
 
 
 def record(team: str, frame: pd.DataFrame, hist: pd.DataFrame, rot: dict, draft_group: Optional[int], n_worlds: int = 0,

@@ -549,8 +549,8 @@ class DeskBase:
 
     def void_if_stale(self, team: str) -> Optional[dict]:
         """A player the team's mapping had available is out now (a status, a scratch call), or the five came in differently from the five
-        it was drawn for: the mapping is void (ivan.sports.nba.slate.mapping): grid cleared, positive minutes pins lifted, the model's
-        rotation for the new pool and five proposed, the old mapping kept as a scenario assuming what it assumed; the card says so."""
+        it was mapped with: the mapping is void (ivan.sports.nba.slate.mapping): the record cleared, positive minutes pins lifted, the model's
+        minutes for the new pool and five shown, the old mapping kept as a scenario assuming what it assumed; the card says so."""
         from ivan.sports.nba.slate import mapping as MAP
         statuses = {normalize_name(p.name): (p.status or "") for p in self.players(team)}
         outs = MAP.stale_outs(team, statuses, self.overrides)
@@ -559,8 +559,8 @@ class DeskBase:
             return None
         rep = MAP.void_mapping(team, outs, statuses.keys(), self.local_overrides, log=lambda m: None, lineup=lineup)
         self.write_local()
-        self.flash.append(f"{team}: {rep['why']}: the mapping is void, the model's proposal for the new pool is on the grid"
-                          f" ({rep['pins']} minutes pin(s) lifted{'; the old mapping is scenario ' + repr(rep['label']) if rep['scenario'] else ''}): accept it (Hold all) or paint and hold")
+        self.flash.append(f"{team}: {rep['why']}: the mapping is void, the model's minutes for the new pool are on the card"
+                          f" ({rep['pins']} minutes pin(s) lifted{'; the old mapping is scenario ' + repr(rep['label']) if rep['scenario'] else ''}): type the minutes you want, then Map")
         return rep
 
     def tip(self, team: str) -> Optional[datetime]:

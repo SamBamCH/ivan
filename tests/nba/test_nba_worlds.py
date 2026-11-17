@@ -57,6 +57,12 @@ def test_simulate_game_reads_every_player_back_and_is_seeded_by_the_pair():
         assert s["fpts"].shape == (300, 10) and s["minutes"].shape == (300, 10) and s["fpts"].dtype == np.float32
         assert np.allclose(s["fpts"].mean(axis=0), f["fpts_mean"].to_numpy(), atol=0.05)          # the frame is the samples' summary
         assert abs(f["minutes_sim"].sum() - 240.0) < 3.0                                            # five on the floor for 48 minutes
+        cover = np.array(f["cover"].tolist())                                                       # the card's heatmap: the share of worlds on the floor, minute by minute
+        assert cover.shape == (10, 48) and np.allclose(cover.sum(axis=0), 5.0, atol=0.02) and cover.min() >= 0 and cover.max() <= 1
+        assert abs(cover[0].sum() - f["minutes_sim"].iloc[0]) < 1.5                                 # a row's shares add up to his drawn minutes
+        d = f["minutes_dist"].iloc[0]
+        assert abs(sum(d) - 1.0) < 1e-3 and abs(sum(i * x for i, x in enumerate(d)) - f["minutes_sim"].iloc[0]) < 0.6 and f["minutes_p10"].iloc[0] <= f["minutes_med"].iloc[0] <= f["minutes_p90"].iloc[0]
+    assert 0.0 <= sim.game["blowout"] <= 1.0 and 0.0 <= sim.game["p_home"] <= 1.0
     assert sim.game["garbage"] == 0.0 and not sim.game["garbage_on"]                                 # off: a 20-point spread pulls nobody
     again = WS.simulate_game(None, ctx, _game(), n=300)
     assert np.array_equal(again.samples["AAA"]["fpts"], sim.samples["AAA"]["fpts"])                 # the same inputs draw the same worlds

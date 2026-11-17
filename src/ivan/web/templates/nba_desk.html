@@ -88,7 +88,7 @@
   .rot-bar select.rot-game-pick { font:inherit; font-size:12px; padding:2px 6px }
   .rot-bar { display:flex; gap:10px; align-items:center; margin-bottom:6px } .rot-bar .spacer { flex:1 }
   .rot-bar select.rot-game { font:inherit; font-size:12px; padding:2px 6px }
-  .rot-bar button { font:inherit; font-size:12px; padding:3px 9px; border-radius:5px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer } .rot-bar button.rot-apply { background:var(--accent); color:#fff }
+  .rot-bar button { font:inherit; font-size:12px; padding:3px 9px; border-radius:5px; border:1px solid var(--accent); background:#fff; color:var(--accent); cursor:pointer } .rot-bar button.rot-map { margin-right:4px }
   /* fixed geometry: tonight's grid and the played game sit one above the other and every minute column must line up
      exactly, whatever the names are (16 + 222 + 3x34 + 48x12 = 916px; the .side scrolls sideways rather than squeeze it) */
   table.rot-grid { border-collapse:collapse; margin:0; table-layout:fixed; width:916px; min-width:916px; user-select:none }
@@ -99,7 +99,6 @@
   details.hist-box > summary:hover { border-color:var(--accent) } details.hist-box > summary .muted { font-weight:400 }
   table.rot-grid col.c-ppub { width:50px } table.rot-grid th.pubh, table.rot-grid td.pubc { color:#7c5cff } table.rot-grid th.ours { color:var(--ink) }
   form.news { display:flex; gap:6px; align-items:center; margin:4px 0 2px; font-size:12px } form.news select { font:inherit; font-size:12px; padding:2px 4px; max-width:220px } form.news button { font:inherit; font-size:12px; padding:2px 10px }
-  .rot-bar button.rot-hold { margin-right:4px }
   table.rot-grid col.c-pbook { width:46px } table.rot-grid col.c-pdist { width:160px } table.rot-grid col.c-phist { width:72px } table.rot-grid col.c-pfpm { width:66px }
   table.rot-grid td.optc.stale { color:var(--muted); font-style:italic } .world { margin:4px 0 6px; line-height:1.7 } .world form.inline { display:inline } .world .warn { color:#b45309; font-weight:600 }
   table.rot-grid col.c-pavg { width:50px } table.rot-grid col.c-pproj { width:76px } table.rot-grid col.c-pval { width:44px } table.rot-grid col.c-pown { width:40px }
@@ -167,8 +166,7 @@
   table.rot-grid td.cnt { font-size:9px; color:var(--ok) } table.rot-grid td.cnt.bad { color:#fff; background:var(--bad); font-weight:700 }
   table.rot-grid tr.outrow td.rn { color:#aaa; text-decoration:line-through } table.rot-grid tr.outrow td.cell.on { background:#e8a0a0 } table.rot-grid tr.outrow td.cell { cursor:not-allowed }
   table.rot-grid tr.vacated td.cell.on { background:repeating-linear-gradient(45deg,#f1f1f1 0 2px,#d9c2c2 2px 4px) } table.rot-grid tr.vacated td.rm { color:#bbb }
-  table.rot-grid th.rl, table.rot-grid td.rl { width:16px; min-width:16px; text-align:center } table.rot-grid td.rl .lock { cursor:pointer; font-size:10px; color:#bbb } table.rot-grid tr.locked td.rl .lock { color:var(--accent); font-size:11px }
-  table.rot-grid tr.locked td.cell.on { box-shadow: inset 0 0 0 1.5px #1b1b1b } table.rot-grid tr.locked td.rn { font-style:italic }
+  table.rot-grid th.rl, table.rot-grid td.rl { width:16px; min-width:16px; text-align:center }
   :root { --s0:#2a78d6; --s1:#eb6834; --s2:#1baf7a; --s3:#eda100; --s4:#e87ba4 }
   table.rot-grid td.cell.on.s0 { background:var(--s0) } table.rot-grid td.cell.on.s1 { background:var(--s1) } table.rot-grid td.cell.on.s2 { background:var(--s2) } table.rot-grid td.cell.on.s3 { background:var(--s3) } table.rot-grid td.cell.on.s4 { background:var(--s4) }
   table.rot-grid td.cell.on:not(.s0):not(.s1):not(.s2):not(.s3):not(.s4) { background:#8a8a8a }
@@ -184,14 +182,9 @@
   .game.locked { opacity:.55 } .game.hot { border-color:var(--bad) } .game.warm { border-color:var(--warn) }
   .game .gh { display:flex; gap:14px; align-items:baseline; margin-bottom:6px } .game .gh .muted { font-size:12px }
   /* the team page's two views */
-  .team-view { display:inline-flex; margin:6px 0 8px; border:1px solid var(--line); border-radius:6px; overflow:hidden }
-  .team-view button { font:inherit; font-size:12px; padding:4px 14px; border:0; background:#fff; color:var(--muted); cursor:pointer } .team-view button.on { background:var(--accent); color:#fff }
-  .tsim-head { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:2px 0 8px; font-size:12px } .tsim-head input[type=number] { width:70px }
-  .tsim-bar { display:inline-block; width:140px; height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden; vertical-align:middle } .tsim-bar > span { display:block; height:100%; background:var(--accent); transition:width .4s }
-  table.tsim-t { border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums } table.tsim-t th, table.tsim-t td { padding:2px 7px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line) }
-  table.tsim-t th { font-weight:600; color:var(--muted); font-size:11px } table.tsim-t .l { text-align:left } table.tsim-t tr.zero td.name { color:var(--muted) }
-  table.tsim-t td.d.up { color:var(--ok) } table.tsim-t td.d.down { color:var(--bad) } table.tsim-t td.warn { color:#b45309 }
-  .heat { display:inline-flex; border:1px solid var(--line); background:#fff } .heat i { display:block; width:7px; height:14px } .heat i.q { border-left:1px solid #9ca3af }
+  table.rot-grid:not(.hist) td.cell { cursor:default; background:#f4f4f5 }   /* tonight: read-only; a heat cell's inline colour is the share of worlds on the floor, mixed solid (the frozen block must hide the columns scrolled under it) */
+  .heat-key { display:inline-flex; vertical-align:-2px; border:1px solid var(--line); margin-left:4px } .heat-key i { display:block; width:10px; height:10px }
+  .pop .distslot:not(:empty) { margin-bottom:6px } .pop .distslot .statchart .sc-books { margin-top:2px }
   .sides { display:grid; grid-template-columns:1fr; gap:16px }       /* one team across the screen (2026-10-25) */ .side { min-width:0 }
   .side h2 { font-size:15px; margin:0 0 4px; display:flex; gap:10px; align-items:baseline }
   .side { scroll-margin-top:150px }
@@ -420,12 +413,8 @@
       {% if g and g.fav %}<span class="muted" title="the consensus spread of tonight's game">{% if g.fav[0] %}{{ g.fav[0] }} -{{ '%g'|format(g.fav[1]) }}{% else %}PK{% endif %}{% if g.total %} · O/U {{ '%g'|format(g.total) }}{% endif %}</span>{% else %}<span class="muted">no line for tonight's game</span>{% endif %}
       {% if g and g.teams|length == 2 %}{% set other = (g.teams|rejectattr('team', 'equalto', team)|first).team %}<span class="muted small">· <a class="other" href="{{ here }}{{ other }}/">the other side ({{ other }})</a></span>{% endif %}
     </div>
-    <div class="seg team-view" id="team-view" data-team="{{ team }}" data-sim="{{ root }}/team/{{ team }}/sim?auto=1" title="Projections: set the minutes, stat totals and starters. Simulation: draw this game from them and watch it run">
-      <button type="button" data-view="proj" class="on">Projections</button><button type="button" data-view="sim">Simulation</button>
-    </div>
     <div class="sides">
       <div class="side" id="card-{{ team }}" hx-get="{{ root }}/team/{{ team }}" hx-trigger="load" hx-swap="innerHTML"><div class="loading"><span class="spin"></span> loading {{ team }}…</div></div>
-      <div class="side sim-side" id="sim-{{ team }}" hidden></div>
     </div>
   </div>
   {% else %}
@@ -450,113 +439,6 @@
   document.body.addEventListener("htmx:afterSwap", applyFilter);
   applyFilter();
 
-  // rotation grids: paint with the mouse, keep the counts live, Apply posts the grid
-  let paint = null;
-  // the five spots: the five on at the tip own them (guards first, bigs last); a player coming on takes the spot of the
-  // likest player going off (same group, then nearest position order) - the same rule as rotation.spots_of
-  function rotSpots(grid) {
-    const trs = Array.from(grid.querySelectorAll("tbody.rows > tr[data-key]")).filter(tr => !tr.classList.contains("vacated"));
-    const cells = trs.map(tr => Array.from(tr.querySelectorAll(":scope > td.cell")));
-    const on = cells.map(cs => cs.map(c => c.classList.contains("on")));
-    const n = trs.length, M = 48;
-    const rank = trs.map(tr => parseFloat(tr.dataset.rank || "2")), group = trs.map(tr => tr.dataset.group || "wing");
-    let shares = {}; try { shares = JSON.parse(grid.dataset.shares || "{}"); } catch (e) { shares = {}; }
-    const keysAll = trs.map(tr => tr.dataset.key);
-    const habit = (o, i) => (shares[keysAll[o]] || {})[keysAll[i]] || 0;      // the coach's habit: share of o's exits that i covered
-    const S = on.map(r => r.map(() => -1));
-    let tip = []; for (let i = 0; i < n; i++) if (on[i][0]) tip.push(i);
-    tip.sort((a, b) => rank[a] - rank[b] || a - b); tip = tip.slice(0, 5);
-    tip.forEach((i, k) => { S[i][0] = k; });
-    let free = []; for (let k = tip.length; k < 5; k++) free.push(k);
-    const last = {}; tip.forEach((i, k) => { last[i] = k; });
-    for (let m = 1; m < M; m++) {
-      const outs = [], ins = [];
-      for (let i = 0; i < n; i++) {
-        if (on[i][m] && on[i][m - 1]) S[i][m] = S[i][m - 1];
-        else if (on[i][m - 1] && !on[i][m] && S[i][m - 1] >= 0) outs.push(i);
-        else if (on[i][m] && !on[i][m - 1]) ins.push(i);
-      }
-      let spots = outs.map(o => S[o][m - 1]).concat(free); free = [];
-      const own = i => (i in last) && spots.includes(last[i]);
-      ins.sort((a, b) => (own(a) ? 0 : 1) - (own(b) ? 0 : 1) || rank[a] - rank[b]);
-      const less = (k1, k2) => { for (let z = 0; z < k1.length; z++) { if (k1[z] !== k2[z]) return k1[z] < k2[z]; } return false; };
-      for (const i of ins) {
-        if (!spots.length) break;
-        let best = null, bk = null;
-        if (own(i)) best = last[i];
-        else for (const sp of spots) {
-          const o = outs.find(x => S[x][m - 1] === sp);
-          const hb = o === undefined ? 0 : habit(o, i);
-          const key = o === undefined ? [2, 0, 0] : [group[o] === group[i] ? 0 : 1, -hb, Math.abs(rank[o] - rank[i])];
-          if (bk === null || less(key, bk)) { best = sp; bk = key; }
-        }
-        S[i][m] = best; last[i] = best; spots.splice(spots.indexOf(best), 1);
-      }
-      free = spots;
-    }
-    cells.forEach((cs, i) => cs.forEach((c, m) => { c.classList.remove("s0", "s1", "s2", "s3", "s4"); if (on[i][m] && S[i][m] >= 0) c.classList.add("s" + S[i][m]); }));
-    // the lanes under the grid: who holds each spot, minute by minute
-    const lanes = grid.querySelector("tbody.lanes");
-    if (!lanes) return;
-    const keys = trs.map(tr => tr.dataset.key);
-    const shortOf = k => { const t = k.split(" ").filter(x => !["jr", "sr", "ii", "iii", "iv"].includes(x)); return t.length ? t[t.length - 1] : k; };
-    lanes.querySelectorAll("tr").forEach((tr, k) => {
-      const holder = new Array(M).fill(null);
-      for (let i = 0; i < n; i++) for (let m = 0; m < M; m++) if (on[i][m] && S[i][m] === k) holder[m] = keys[i];
-      tr.querySelectorAll("td.lane").forEach(td => td.remove());
-      let start = 0;
-      for (let m = 1; m <= M; m++) {
-        if (m === M || holder[m] !== holder[start]) {
-          const td = document.createElement("td"); const key = holder[start]; const len = m - start;
-          td.className = "lane " + (key ? "s" + k : "gap") + (start % 12 === 0 ? " q" : ""); td.colSpan = len;
-          td.title = key ? key + " · " + len + " min" : "nobody in this spot"; td.textContent = key ? shortOf(key).slice(0, Math.floor(len * 1.6)) : "";
-          tr.appendChild(td); start = m;
-        }
-      }
-    });
-  }
-  function rotRefresh(grid) {
-    rotSpots(grid);
-    const rows = grid.querySelectorAll("tbody.rows > tr[data-key]"); const counts = new Array(48).fill(0);
-    rows.forEach(tr => { const cells = tr.querySelectorAll(":scope > td.cell"); let n = 0; const vac = tr.classList.contains("vacated"); cells.forEach((c, i) => { if (c.classList.contains("on")) { n++; if (!vac) counts[i]++; } }); const inp = tr.querySelector("td.pincell input"); if (inp && !vac) { inp.placeholder = n; if (!inp.classList.contains("pinned")) inp.title = "the grid's row: " + n + " min; type to pin"; } });
-    const tot = grid.querySelector("tbody.foot td.mintot"); if (tot) { const sum = counts.reduce((a, b) => a + b, 0); tot.innerHTML = "<b>" + sum + "</b>"; tot.classList.toggle("bad", sum !== 240); }
-    grid.querySelectorAll("tbody.foot td.cnt").forEach((c, i) => { c.textContent = counts[i]; c.classList.toggle("bad", counts[i] !== 5); });
-  }
-  function setCell(cell, on) {
-    const tr = cell.closest("tr");
-    if (tr.classList.contains("outrow")) return;                            // an out player's row is his vacated slot: not tonight's
-    if (tr.closest("table.rot-grid").classList.contains("hist")) return;   // a played game is history
-    cell.classList.toggle("on", on);
-    if (!tr.classList.contains("locked")) { tr.classList.add("locked"); const lk = tr.querySelector("td.rl .lock"); if (lk) { lk.innerHTML = "&#128274;"; lk.title = "locked: held exactly; click to unlock"; } }
-  }
-  document.body.addEventListener("click", e => {
-    const lk = e.target.closest("table.rot-grid td.rl .lock"); if (!lk) return;
-    const tr = lk.closest("tr"); const on = !tr.classList.contains("locked");
-    tr.classList.toggle("locked", on); lk.innerHTML = on ? "&#128274;" : "&#8226;"; lk.title = on ? "locked: held exactly; click to unlock" : "filled by the model; paint to lock (unlocked rows are re-filled on Apply)";
-  });
-  document.body.addEventListener("mousedown", e => {
-    const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
-    paint = !cell.classList.contains("on"); setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid")); e.preventDefault();
-  });
-  document.body.addEventListener("mouseover", e => {
-    if (paint === null) return; const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
-    setCell(cell, paint); rotRefresh(cell.closest("table.rot-grid"));
-  });
-  // the team page's two views: Projections (the card) and Simulation (the game drawn from it); the choice is kept for the next team opened
-  (function () {
-    const seg = document.getElementById("team-view"); if (!seg) return;
-    const team = seg.dataset.team, card = document.getElementById("card-" + team), sim = document.getElementById("sim-" + team);
-    function show(view) {
-      seg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.view === view));
-      card.hidden = view !== "proj"; sim.hidden = view !== "sim";
-      try { localStorage.setItem("nba.teamview", view); } catch (e) {}
-      if (view === "sim") htmx.ajax("GET", seg.dataset.sim, {target: "#sim-" + team, swap: "innerHTML"});   // starts a run when the projections moved; an open run keeps polling
-      else sim.innerHTML = "";                                                                              // leaving stops the polling
-    }
-    seg.addEventListener("click", e => { const b = e.target.closest("button[data-view]"); if (b) show(b.dataset.view); });
-    let keep = "proj"; try { keep = localStorage.getItem("nba.teamview") || "proj"; } catch (e) {}
-    if (keep === "sim") show("sim");
-  })();
   // hover popups (td.hover > .pop): shown after a short pause on the cell, beside it rather than over the rows below, gone as
   // soon as the pointer leaves the cell (the popup never takes the pointer); the hovered row and cell are marked so it is
   // clear which player the popup belongs to
@@ -615,7 +497,7 @@
     rows.sort((a, b) => { const x = val(a), y = val(b); if (typeof x === "number" && typeof y === "number") return desc ? y - x : x - y; return desc ? String(y).localeCompare(String(x)) : String(x).localeCompare(String(y)); });
     const tb = table.querySelector(":scope > tbody"); rows.forEach(r => tb.appendChild(r));
   });
-  // typed values in the grid's columns wait for Refigure. Until then they survive any re-render of the card (a paint stroke, a
+  // typed values in the grid's columns wait for Refigure. Until then they survive any re-render of the card (a
   // starter click, a news check): dirty inputs are stashed before the swap and put back after it.
   const pendingByTeam = {};
   function stashPending(card) {
@@ -655,51 +537,6 @@
     fetch(ROOT + "/team/" + team + "/refigure", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rows: Object.values(rows)})})
       .then(r => r.text()).then(html => { delete pendingByTeam[team]; const card = document.getElementById("card-" + team); if (card) { card.innerHTML = html; htmx.process(card); applyFilter(); } })
       .catch(() => { btn.disabled = false; btn.textContent = "Refigure"; });
-  });
-  // the grid saves itself: on every stroke's mouseup and on every lock click the rows go to the server (the locked rows are
-  // held, the rest re-filled); a stroke during a save marks it dirty and it saves again when the reply lands, so nothing
-  // painted is ever lost to a re-render
-  const rotSaving = {}, rotDirty = {}; let paintTeam = null;
-  function rotCollect(rot) {
-    const players = [], grid = [], locked = [];
-    rot.querySelectorAll("tbody.rows > tr[data-key]").forEach(tr => {
-      if (tr.classList.contains("vacated")) return;
-      players.push(tr.dataset.key); grid.push(Array.from(tr.querySelectorAll(":scope > td.cell")).map(c => c.classList.contains("on") ? 1 : 0));
-      if (tr.classList.contains("locked")) locked.push(tr.dataset.key);
-    });
-    return {players, grid, locked};
-  }
-  function rotSave(team) {
-    const rot = document.getElementById("rot-" + team); if (!rot) return;
-    if (rotSaving[team]) { rotDirty[team] = true; return; }
-    const body = rotCollect(rot);
-    rotSaving[team] = true; rotDirty[team] = false;
-    fetch(ROOT + "/team/" + team + "/rotation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
-      .then(r => r.text()).then(html => {
-        rotSaving[team] = false;
-        if (rotDirty[team]) { rotSave(team); return; }               // painted meanwhile: that stroke is what goes in, not this reply
-        const card = document.getElementById("card-" + team); if (card) { stashPending(card); card.innerHTML = html; htmx.process(card); restorePending(card); delete pendingByTeam[team]; applyFilter(); }
-      }).catch(() => { rotSaving[team] = false; });
-  }
-  document.addEventListener("mouseup", () => { if (paint !== null && paintTeam) { const t = paintTeam; paint = null; paintTeam = null; rotSave(t); } paint = null; });
-  document.body.addEventListener("mousedown", e => {
-    const cell = e.target.closest("table.rot-grid td.cell"); if (!cell) return;
-    const rot = cell.closest(".rot"); paintTeam = rot ? rot.dataset.team : null;
-  }, true);
-  document.body.addEventListener("click", e => {
-    const lk = e.target.closest("table.rot-grid td.rl .lock"); if (!lk) return;
-    const rot = lk.closest(".rot"); if (rot && !lk.closest("table.rot-grid").classList.contains("hist")) setTimeout(() => rotSave(rot.dataset.team), 0);
-  });
-  document.body.addEventListener("click", e => {
-    const btn = e.target.closest("button.rot-apply, button.rot-hold"); if (!btn) return;
-    const rot = btn.closest(".rot"); const team = rot.dataset.team;
-    if (btn.classList.contains("rot-hold")) {
-      rot.querySelectorAll("tbody.rows > tr[data-key]").forEach(tr => {
-        if (tr.classList.contains("vacated") || tr.classList.contains("outrow")) return;
-        tr.classList.add("locked"); const lk = tr.querySelector("td.rl .lock"); if (lk) { lk.innerHTML = "&#128274;"; lk.title = "locked: held exactly; click to unlock"; }
-      });
-    }
-    rotSave(team);
   });
 </script>
 </body>

@@ -7,7 +7,6 @@ import json
 from typing import Optional
 from ivan.core.utils import normalize_name
 from ivan.sports.nba.projection.live import STAT_KEYS, override_of
-from ivan.sports.nba.projection import rotation as ROT
 from .core import desk
 
 
@@ -49,12 +48,6 @@ def _apply_pin_rows(team: str, rows: list) -> tuple[list, int, int]:
         if any(vals.get(k) != old.get(k) for k in vals):
             n_set += 1
         desk.set_override(key, **vals)
-    if changed_min:
-        g = ROT.load_drawn(team)
-        if g is not None:
-            kept = [n for n in g.attrs.get("locked", []) if n not in changed_min]
-            if len(kept) != len(g.attrs.get("locked", [])):
-                ROT.save_drawn(team, g, locked=kept, fingerprint=g.attrs.get("fingerprint"))
     return changed_min, changed_pub, n_set
 
 

@@ -17,7 +17,7 @@ lineups are built on. Every switch below is in `config/nba.json → projection` 
 props (odds)            ──► market means per stat (market.py) ──► book-implied minutes (book_minutes.py) ─┐
 box scores (nba_stats)  ──► trailing minutes, rates, starter share, play rate (history.py) ───────────────┤
 DK statuses, Rotowire   ──► availability, named starters                                                 ├─► anchors
-desk pins / locked rows ──► held exactly                                                                 ┘
+desk pins               ──► held exactly                                                                 ┘
                                                                                                           ▼
                               per-team minutes solve within position groups (solve.py, groups.py)
                                                                                                           ▼
@@ -110,7 +110,7 @@ The depth cut and your drops name the rotation; the World does not take it as ce
 off his role and how often he was cut in his last 10 roster games (bench players cut 0 of 10 are cut again 10% of the
 time, 1-2 → 19%, 3-4 → 39%, 5+ → 53%; starters 4%); every available player the plan left at zero or you dropped carries `fringe_p`
 and `fringe_minutes`, the chance he plays anyway and the minutes he takes when he does (39% and 8.4 on the zero-minute
-players of every tip record). A named starter is certain; a typed minutes pin or a locked row says how long he plays when he plays, not whether the coach uses him (config `gamesim.cuts`: `unpinned` makes a typed pin certain too, `off` restores the hard pool). The card's min
+players of every tip record). A named starter is certain; a typed minutes pin (Map pins every row) says how long he plays when he plays, not whether the coach uses him (config `gamesim.cuts`: `unpinned` makes a typed pin certain too, `off` restores the hard pool). The card's min
 hover shows the cut chance, the blank rows under the grid say `plays 39% · 8 min`
 ([notes/minutes_distribution_2026-11-10.md](notes/minutes_distribution_2026-11-10.md)).
 
@@ -122,7 +122,7 @@ Tonight the slots are filled from the solve and the injury report: an available 
 slot; an absent owner's slot is inherited by the players the solve says are owed minutes beyond their
 own, same position group first; a player with no history takes what he inherits or a flat prior.
 `build_grid()` then schedules the game minute by minute, five on the floor, stints kept whole by
-hysteresis, the named starters at the tip, breathers after long stretches, locked rows fixed, and a
+hysteresis, the named starters at the tip, breathers after long stretches, and a
 balance pass moves boundary minutes until each row is within tolerance of the solve's target. **The
 grid's minutes are the solve's minutes**; what the desk shows is what the pipeline uses.
 
@@ -200,7 +200,8 @@ to **pub**.
 Under the day's directory (`data/nba/days/<day>/`, reached through the slate's `day` in `slate.json`,
 `ivan.sports.nba.slates`): `edits/minutes_overrides.csv` holds the pins (minutes, fppm, band, fpts, pub, starter calls, and a
 total per stat: points, rebounds, assists, fg3m, steals, blocks, turnovers, each making that stat's rate total / minutes;
-0 minutes is a scratch); `edits/rotations/<TEAM>.json` the painted grid with its locked rows. A game is mapped once:
+0 minutes is a scratch); `edits/rotations/<TEAM>.json` the team's mapping record (Map: who was held and the pool it was
+mapped against; the projection reads the pins, not this file). A game is mapped once:
 the slates of one evening share these files and the next day starts clean. Both are read by every projection of a
 slate of that day, by any entry point (the slate is the current one in context: a script's `--slate`, the web's
 address). On a consumer the laptop's copies sit under the day's `published/` as the base layer and the consumer's own
@@ -231,7 +232,7 @@ team projected after the solve marks it stale (grey) until the next Solve.
    (history team and games, trailing minutes, last five games, play rate, market-implied minutes) and
    the flags (new team, no history, DNP-prone, above recent maximum, deep bench projected like a
    rotation player, market minutes far from ours). The desk shows the same flags on the card.
-2. The grid: a locked row from a previous slate that was not filed away, or a row the depth cut dropped.
+2. The minutes: a pin from a previous slate that was not filed away, or a row the depth cut dropped.
 3. The props: a stale fetch (the market rate is forward-looking only from its basis minutes) or a
    player the books have not priced yet (he is on history plus the usage bump).
 4. The card's World line: the factor on the team's attempts says how far the plan's rates added up from the
