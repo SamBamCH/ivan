@@ -11,6 +11,16 @@ cells on the desk are layer 1, what you tell the simulation; the fpts, sd, drawn
 layer 2, what came out. One projection: the number the desk shows is the number the field, the sim and the
 lineups are built on. Every switch below is in `config/nba.json → projection` with a `_note` beside it.
 
+## One edit, traced through the code
+
+A minutes pin from the box on the team page to the drawn fantasy points: every function that touches the number,
+in the order it runs, one lane per part of the system. The amber boxes are things the code computes or keeps
+that today's settings (`alloc = solve`, `gamesim.rotation = stints`) do not use; why each is amber, and what was
+checked, is in [notes/process_map_2026-11-20.md](notes/process_map_2026-11-20.md). The plain-words version is on
+the desk's page ([../web/nba-desk.md](../web/nba-desk.md)).
+
+![A minutes pin, from the box to the drawn fantasy points](figures/minutes_pin_trace.drawio.svg)
+
 ## The steps
 
 ```

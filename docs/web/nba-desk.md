@@ -237,6 +237,11 @@ Market rates). **Type a total** (9 rebounds) and that stat is his for the game: 
 becomes total / minutes and the other stats keep the model's, so a pin says "the books are wrong on his boards" without
 touching his points. Blank restores the model's. Turnovers are never priced: that column is history alone.
 
+What a typed minutes number goes through, in plain words (the code-level version of the same path is in
+[../nba/projections.md](../nba/projections.md#one-edit-traced-through-the-code)):
+
+![What happens to a minutes number you type](../nba/figures/minutes_pin_overview.drawio.svg)
+
 Inputs on the row:
 
 - **minutes** pins (0 scratches); a **stat** total per column; **fpts** (sim) pin; **pub** pin; blank unpins. Saved to

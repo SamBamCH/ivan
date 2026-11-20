@@ -32,3 +32,10 @@ area (setup, game day, projections, field and simulation, overnight jobs, valida
 - Commands are written to run from the repository root with `venv/bin/python`; every path in the
   project is resolved against the repository root, so the current directory never matters.
 - When code moves, the page that names it moves with it in the same change.
+- Figures live in `docs/<sport>/figures/` as `*.drawio.svg`: an SVG a page embeds like any image, with the
+  draw.io diagram inside it, so the same file opens in draw.io for editing (File > Open, or the draw.io
+  extension in VS Code) and saving it there keeps it embeddable. Process maps are swim lanes, one lane per part
+  of the system (the UI is always the first), the flow top to bottom; box text is plain text with hard line
+  breaks. A figure is part of the page that embeds it: when the process changes, the figure changes in the same
+  commit. After editing a `.drawio` source instead, export with
+  `drawio -x -f svg --embed-diagram -o <name>.drawio.svg <name>.drawio`.
