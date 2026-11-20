@@ -125,6 +125,17 @@ def rotation_setting() -> str:
         return "plan"
 
 
+def pool_setting() -> tuple:
+    """config/nba.json gamesim.rotation_pool (whether the stint rotation draws each team's rotation per world: who the coach uses
+    tonight, gamesim.stints.sit_draw) and gamesim.rotation_pool_scale (the factor on each man's sit chance). Off and 1.0 without a config."""
+    try:
+        from ivan.core.config import cfg, load_config
+        c = load_config("nba")
+        return bool(cfg(c, "gamesim.rotation_pool", False)), float(cfg(c, "gamesim.rotation_pool_scale", 1.0))
+    except Exception:   # noqa: BLE001 - no config file: the default
+        return False, 1.0
+
+
 @dataclass
 class WorldContext:
     """
@@ -157,6 +168,9 @@ class WorldContext:
         foul_state = fr.before(as_of) if as_of else fr.rows.groupby("player").tail(1).set_index("player")
         if "rotation" not in params:
             params["rotation"] = rotation_setting()
+        if "rotation_pool" not in params:
+            params["rotation_pool"], scale = pool_setting()
+            params.setdefault("rotation_pool_scale", scale)
         st = None
         if params["rotation"] == "stints":
             from ivan.sports.nba.gamesim import stints as ST
@@ -288,7 +302,7 @@ def _setup_stints(players, opp_players, n, rng, P, target_points, prof_state, pr
     ct = CUTS.load_table()
     side = stints.side(players[0].team if players else "", players, n, rng, expected_margin, float(params.get("real_sd_margin", 13.0)),
                        {p.name: foul_rates.rate(foul_state, p.name, p.minutes) for p in players},
-                       dnp_share={p.name: CUTS.dnp_share(ct, p.minutes, None) for p in players if p.p_cut > 0}, cuts=bool(params.get("stint_cuts", False)))
+                       dnp_share={p.name: CUTS.dnp_share(ct, p.minutes, None) for p in players if p.p_cut > 0}, cuts=bool(params.get("stint_cuts", False)), pool=bool(params.get("rotation_pool", False)), pool_scale=float(params.get("rotation_pool_scale", 1.0)))
     k = len(players)
     return _finish_setup(players, opp_players, P, target_points, prof_state, profiles, teams, np.zeros((n, k, MINUTES)), np.zeros((n, k), dtype=int), side.avail.copy(), side)
 

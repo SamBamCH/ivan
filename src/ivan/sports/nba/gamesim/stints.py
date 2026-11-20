@@ -1045,10 +1045,14 @@ class Context:
         return cls(p or load(), moments, groups)
 
     def side(self, team: str, players: Sequence, n: int, rng: np.random.Generator, expected_margin: float, sd_margin: float, foul_rate: Dict[str, float],
-             dnp_share: Optional[Dict[str, float]] = None, cuts: bool = False) -> "Side":
+             dnp_share: Optional[Dict[str, float]] = None, cuts: bool = False, pool: bool = False, pool_scale: float = 1.0) -> "Side":
         """players: the World's PlayerIn rows for the team, in the order of its TeamSetup. cuts: also draw the soft pool's cut nights (off: the
         stint draw already spreads a bench man's minutes, and the cut nights on top put the bench 1.2 and the deep bench 3.3 minutes low on the
-        rerun of 25 slates, 2026-11-16)."""
+        rerun of 25 slates, 2026-11-16). pool: the team's rotation is drawn per world (`sit_draw`): each man sits the whole night with his own
+        chance (p_cut x the DNP share of his cut nights; a fringe man 1 - fringe_p), the number sitting held near its expectation so the
+        men at the end of the bench trade places from world to world; a man who plays is steered to his minutes as before (the minutes are
+        his minutes when he plays), a fringe man who plays to his fringe minutes. No token-minute nights are added: the stint draw's own
+        spread makes them."""
         names = [q.name for q in players]
         target = np.array([q.minutes if q.minutes > 0 else q.fringe_p * q.fringe_minutes for q in players], dtype=float)
         first = np.array([bool(q.cells[0]) if q.cells else False for q in players])
@@ -1068,9 +1072,38 @@ class Context:
             cut = rng.random((n, len(players))) < np.array([q.p_cut for q in players])[None, :]
             dnp = cut & (rng.random((n, len(players))) < np.array([(dnp_share or {}).get(q.name, 0.0) for q in players])[None, :])
             avail &= ~dnp; tilt_w = np.where(cut & ~dnp, -CUT_TILT, 0.0)
+        if pool:
+            fringe = np.array([q.minutes <= 0 and q.fringe_p > 0 for q in players])
+            sit_p = np.array([(1.0 - q.fringe_p) if f else min(SIT_MAX, pool_scale * q.p_cut * (dnp_share or {}).get(q.name, 0.0)) for q, f in zip(players, fringe)])
+            sit_p = np.where(starter, 0.0, sit_p)                              # the five at the tip play
+            avail &= ~sit_draw(sit_p, n, rng)
+            # a fringe man's target is his unconditional minutes (fringe_p x fringe_minutes): in the worlds he plays, lift him to the minutes he plays
+            lift = np.array([(q.fringe_minutes - q.fringe_p * q.fringe_minutes) / TILT_MINUTES if f else 0.0 for q, f in zip(players, fringe)])
+            tilt_w = tilt_w + lift[None, :]
         short = avail.sum(axis=1) < 5                                          # never fewer than five in uniform
         avail[short] = True
         return Side(tin, Stepper(tin, self.p, n, rng, self.tables, avail, tilt_w), avail)
+
+
+SIT_MAX = 0.9                # no man in the pool sits more often than this
+
+
+def sit_draw(sit_p: Sequence[float], n: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    (n, k) who sits the whole night in each world: man i in a share sit_p[i] of the worlds exactly in expectation, and the number
+    sitting in a world within one of sum(sit_p) (systematic sampling over a fresh random order per world). So the rotation is a draw
+    per team, not per man: with two men at 50% one of them plays in every world, which one changes.
+    """
+    q = np.clip(np.asarray(sit_p, dtype=float), 0.0, 1.0); k = len(q)
+    if not k or not q.any():
+        return np.zeros((n, k), dtype=bool)
+    order = np.argsort(rng.random((n, k)), axis=1)
+    qo = q[order]
+    hi = np.cumsum(qo, axis=1) + rng.random((n, 1))
+    hit = np.floor(hi) > np.floor(hi - qo)
+    out = np.zeros((n, k), dtype=bool)
+    np.put_along_axis(out, order, hit, axis=1)
+    return out
 
 
 class Side:

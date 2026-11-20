@@ -107,7 +107,14 @@ in uniform in that world (pair history, position flow, rest). The chances read t
 starters sit a blowout and a man in foul trouble sits; there is no separate garbage-time pull on this path. A scratched
 player (`p_out`) is out of uniform in that world and his minutes land on whoever is drawn; a cut night (`p_cut`) would be a
 DNP or a night he is barely used, and is off on this path unless the World's parameters set `stint_cuts` (on top of
-the stint draw it puts the bench low). Rerun of 25 slates, 2026-11-16: minutes MAE 4.97 against 5.31 published and
+the stint draw it puts the bench low). **Who the coach uses tonight is drawn per team, per world** when
+`gamesim.rotation_pool` is on (`gamesim.stints.sit_draw`; off in the config until the gate's numbers are accepted): each man who is not one of the five at the tip sits the whole
+night with his own chance (`gamesim.rotation_pool_scale` x `p_cut` x the DNP share of his cut nights; a fringe man `1 -
+fringe_p`), the number sitting held within one of its expectation so the end of the bench trades places from world to
+world; a man who plays is steered to his minutes, which are therefore his minutes when he plays, and a sitter's minutes
+go to the others. Gate on 13 slates: the 12-20 minute bench sits out 10% of worlds against 10% of real nights (3% without
+it) and scores under its own drawn 10th percentile 11% of the time instead of 19%, minutes MAE 5.46 against 5.49
+([notes/rotation_pool_2026-11-19.md](notes/rotation_pool_2026-11-19.md)). Rerun of 25 slates, 2026-11-16: minutes MAE 4.97 against 5.31 published and
 fantasy points 7.60 against 7.92 ([notes/stint_model_2026-11-16.md](notes/stint_model_2026-11-16.md)). The tables are `data/nba/models/gamesim/stints.json` (`gamesim.py fit-stints`).
 Four game-level knobs (a team's pull toward
 its own expected scoring, the lead's pull-back, the pace-efficiency coupling, the endgame tie bump) are calibrated on the
