@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from typing import Optional
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name      # the NBA key (no Jr / III): the one the pool, the pins file and the desk use
 from ivan.sports.nba.projection.live import STAT_KEYS, override_of
 from .core import desk
 

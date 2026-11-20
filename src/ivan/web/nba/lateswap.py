@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name      # the NBA key (no Jr / III): the one the pool, the pins file and the desk use
 from .core import _active, _busy, _here, _render, desk, LIMITED, LOCK, slate
 from .knobs import pipeline_form
 from .outputs import _entries_info, _entries_path

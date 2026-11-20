@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name      # the NBA key (no Jr / III): the one the pool, the pins file and the desk use
 from ivan.sports.nba.models import Lineup
 from ivan.sports.nba import slates as S
 from ivan.sports.nba.projection.live import override_of

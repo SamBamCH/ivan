@@ -611,8 +611,12 @@ class DeskBase:
 
     def set_override(self, name: str, **fields) -> None:
         """Set or clear a player's pins in this machine's own layer (a value None clears that field here; on a consumer the
-        published value then shows through); the merged view is refreshed. Persisted at once."""
-        rec = dict(self.local_overrides.get(name, {}))
+        published value then shows through); the merged view is refreshed. Persisted at once. The name is taken to its NBA
+        key and every other spelling of it held here is folded into that one record first, so a clear clears the player."""
+        name = normalize_name(name)
+        rec = {}
+        for other in [n for n in self.local_overrides if normalize_name(n) == name]:
+            rec.update({k: v for k, v in self.local_overrides.pop(other).items() if v is not None})
         for k, v in fields.items():
             rec[k] = v
         rec = {k: v for k, v in rec.items() if v is not None}

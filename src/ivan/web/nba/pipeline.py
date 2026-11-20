@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from ivan.core import feed
 from ivan.sports.nba.slate import autopilot
 from ivan.sports.nba.slate import job_time as JT
-from ivan.core.utils import normalize_name
+from ivan.sports.nba.names import normalize_name      # the NBA key (no Jr / III): the one the pool, the pins file and the desk use
 from ivan.sports.nba.ingest import after_pull, capture_pool, refresh_pool
 from ivan.sports.nba.data_fetch.slate import IngestError
 from ivan.sports.nba.models import Lineup, LineupSimulationResult, NBAPlayer
