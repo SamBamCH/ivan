@@ -24,7 +24,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Iterable, Callable, Optional
+from typing import Dict, Iterable, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -182,17 +182,41 @@ def refresh_market_rates(session: Session, gametimes: dict, pool: set, history=N
     basis = basis_minutes_for_market(slate, read_overrides_full(), set())
     return store_market_rates(session, means, basis, odds_stamp=stamp)
 
+def ownership_by_id(session: Session) -> Dict[int, float]:
+    """{player id: ownership} of the pool as it stands (the last field build's exposure); {} before the first pool."""
+    try:
+        return {int(i): float(o) for i, o in session.query(NBAPlayer.id, NBAPlayer.ownership).all() if o is not None}
+    except Exception:   # noqa: BLE001 - no table yet
+        return {}
+
+
+def carry_ownership(session: Session, before: Dict[int, float]) -> int:
+    """Write the ownership the pool had before it was replaced back onto the new rows, by player id (a player new to the pool keeps
+    0.0: the field never held him). Returns the rows written."""
+    if not before:
+        return 0
+    n = 0
+    for p in session.query(NBAPlayer).filter(NBAPlayer.id.in_(list(before))).all():
+        p.ownership = before[int(p.id)]; n += 1
+    session.commit()
+    return n
+
+
 def store_slate(session: Session, fetched: SlateFetch, *, log: Log = print) -> StoreInfo:
     info = StoreInfo()
     try:
         before_status = CH.status_state(session)            # the statuses and the five as they stood: what the props on file priced
     except Exception:   # noqa: BLE001 - a pool from before the column
         before_status = {}
-    # the pool: replace in full (one slate at a time in nba_player)
+    # the pool: replace in full (one slate at a time in nba_player); the ownership column, the last field build's by-product, carries
+    # over by player id (2026-11-10: every refresh since the field left the refresh on 10-28 zeroed it, and the desk read 0% for
+    # everyone until the next Field + ownership or sim)
+    before_own = ownership_by_id(session)
     session.query(NBAPlayer).delete(synchronize_session=False)
     for row in fetched.players:
         session.add(NBAPlayer(**row))
     session.commit()
+    carry_ownership(session, before_own)
     info.players = len(fetched.players)
     if fetched.starters is not None:
         info.starters = store_starting_lineups(session, fetched.starters, fetched_at=fetched.fetched_at)
