@@ -175,7 +175,7 @@ STEPS: list[Step] = [
         key="choose_slate", title="Choose the slate as one book",
         blurb="Every contest of the entries file chosen at once from one bankroll, in dollars: the picks spread across the slate's "
               "worlds and across contests, and the same lineup can be played where it does most. The per-contest knobs are not used.",
-        fields=[Field("bankroll_dollars", "Bankroll $", default="", min=1, step="50",
+        fields=[Field("bankroll_dollars", "Bankroll $", default="", min=0.01, step="any",
                       help="blank = read from our results (config/bankroll.json start + what the entries made; scripts/bankroll.py). "
                            "A figure here is used for this run only: the scale of the log utility (a smaller one asks for more caution)")],
         needs_entries=True,
