@@ -52,7 +52,7 @@ next slot or `systemctl --user start ivan-nba-nightly.service` repeats it. The j
 
 At each game's tip of every slate this machine holds (the first tip is the slate lock), within 12 minutes
 after it, it writes as they stand: **the tip's record on disk**, `data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/`
-(`ivan.sports.nba.backtest.tips`: the pool with its projections, ownership and grid rows, the props as stored, the game lines,
+(`ivan.sports.nba.backtest.tips`: the pool with its projections, ownership, grid rows and each player's scratch, cut and fringe chances, the props as stored, the game lines,
 the slate's news seen so far, a copy of the day's edits; the source of truth a backtest of that game's models reads,
 [validation-and-backtests.md](validation-and-backtests.md#the-record-at-each-games-tip-ivansportsnbatips-scriptsnbatipspy)),
 `nba_projection_capture` rows (source `at_tip`, lock = that tip) from the slate's `nba_player`, and an `archived_slate`

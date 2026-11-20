@@ -334,9 +334,17 @@ proj, value, ownership, flags. A name or a team opens the team's page. The fpts 
 
 ## Backtest (view `backtest`, `/?view=backtest&dg=<draft group>`, `_nba_backtest.html`)
 
-A past slate, read only (`ivan.sports.nba.backtest.slate`, terminal `scripts/nba/backtest_slate.py --draft-group N |
---date YYYY-MM-DD`; the panels' routes are `ivan.web.nba.backtest`). Built in about four seconds from what is on disk and
-kept for two minutes so the panels open at once; the desk's working tables are not touched. Top to bottom:
+A past slate, drilled into one level at a time (the routes are `ivan.web.nba.backtest`); the desk's working tables are not
+touched. Each level shows only what belongs to it:
+
+1. **The slate** (`?view=backtest`): its games, one row each. Everything else of the slate is folded under them.
+2. **One game** (`?view=backtest&game=<AWAY-HOME>`): both teams as published at the tip, as the game simulation draws them
+   from the tip record, and as played, with the draw's inputs open to change.
+3. **One player** (a name on the game's page): his drawn distributions against what he did.
+
+Terminal: `scripts/nba/backtest_game.py --slate N [--game AWAY-HOME] [--player NAME]` for the three levels
+(`ivan.sports.nba.backtest.game`), `scripts/nba/backtest_slate.py --draft-group N | --date YYYY-MM-DD` for the money and the
+player table (`ivan.sports.nba.backtest.slate`). The slate's first screen, top to bottom:
 
 - **The head**: the day, the slate, its lock, and **Restore into the desk** (`POST /slate`, source archive): loads the
   slate's archive capture (the pool as it stood at lock) into the slate's own directory and opens its desk, so a past slate
@@ -352,12 +360,25 @@ kept for two minutes so the panels open at once; the desk's working tables are n
   public ones, through the logged-in Chrome; off when every contest is scored, and on a desk without the login). The strip
   polls while the job runs and the page reloads on the new data when it is done. The morning after a slate, with the box
   scores and the standings not yet in, this is where they are fetched from.
-- **Tiles**: net and ROI, winnings on fees, entries cashed, the sim's claim (the chooser's ROI for the same entries,
+- **Games** (`ivan.sports.nba.backtest.game.overview`; `scripts/nba/backtest_game.py --slate N`): one row per game, by tip:
+  the books' line in the tip record (the home spread, the total), the final, how far the total and the home margin landed
+  from the line, each team's fantasy points published → scored, and over everyone projected to play or who played, how
+  far our minutes and fantasy points were off (mean absolute error) and the bias, the three largest misses (8 points or
+  more), and whether the game has been drawn here (`yes`, or `edited` when an edited draw is on file). Each game is judged
+  on **its own tip record** (the newest at or before its tip), the same numbers its page calls published, so a player
+  ruled out between the slate's lock and his game's tip is not a miss. The line above the table sums the slate. A row
+  opens the game. A slate without tip records (not held here, or archived before 2026-10-23) lists its games from the
+  scorecard's projection at lock and cannot open them.
+- **Three folds** under the games, closed by default and built only when opened (`GET /backtest/fold/<money|rerun|players>`,
+  `_nba_bt_fold.html`; the slate's backtest behind the money and the players takes about five seconds the first time and
+  is kept two minutes; `?open=money|rerun|players` in the address opens one on load): **Money** (the tiles and the
+  contests), **Whole slate, current code** (the rerun block) and **Every player** (the table). They are described next.
+- **Tiles** (the Money fold): net and ROI, winnings on fees, entries cashed, the sim's claim (the chooser's ROI for the same entries,
   fee-weighted; red when it claimed far more than happened). The money (the tiles, the contests and their panels) shows
   **on the laptop only**: a consumer desk (the server) gets a line saying so and keeps the players. The same numbers,
   summed per day and over the season, are on the NBA picker and the Ivan home tile ([README.md](README.md#the-money));
   `ivan.sports.nba.backtest.results` makes them for all three.
-- **Contests**: fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, the share of
+- **Contests** (the Money fold): fee, field, our entries found, best rank, cashed, the cash line, won, net, ROI, the claim, the share of
   the field duplicated, where the points came from. Our entries are the ones under our DraftKings user name plus the Entry
   IDs in the upload files the desk wrote (`chosen_entries.classic.*.csv`, `lateswap.*.csv`). A contest is scored only from
   a **final** standings export (every game over, no LOCKED slot, `standings.export_is_final`): DraftKings' own points,
@@ -377,7 +398,7 @@ kept for two minutes so the panels open at once; the desk's working tables are n
   ownership (DraftKings' %drafted in this contest), our projected ownership at the first tip (red when the field had 10+
   points more than we projected), our share of our entries in this contest, **lev** = the field's ownership minus ours (red
   when the field was 10+ points heavier on him than we were, green the other way), points projected and scored.
-- **Current code** (`_nba_rerun.html`, `ivan.web.nba.rerun`; terminal `scripts/nba/rerun_slate.py --slate N [-n 1000]
+- **Current code** (the Whole slate fold; `_nba_rerun.html`, `ivan.web.nba.rerun`; terminal `scripts/nba/rerun_slate.py --slate N [-n 1000]
   [--tip HHMM]`): what the game simulation on this checkout says about the slate, drawn from its **tip record** (the
   pool, grid rows, props and lines as the desk had them at the first tip; [../nba/data.md](../nba/data.md)) with the
   history cut at that day, against what happened. **Rerun with the current code** queues the script as a job with the
@@ -393,7 +414,7 @@ kept for two minutes so the panels open at once; the desk's working tables are n
   percentile the actual fell at (red under 10 or over 90). The stat select (fantasy points, minutes, points, rebounds,
   assists, threes, steals, blocks, turnovers, attempts, free throws) re-renders the block. Records live under
   `data/nba/slates/<dg>/rerun/<stamp>-<commit>/`; a slate archived before 2026-10-23 has no tip record and the button says so.
-- **Players**: a row of **team chips** (projected → scored fantasy points, the grid agreement), then **every player of
+- **Players** (the Every player fold): a row of **team chips** (projected → scored fantasy points, the grid agreement), then **every player of
   the slate in one sortable table** (`_nba_bt_rows.html`, `flat_table`), the most points scored first: team, position,
   salary, the lineup at lock (S confirmed starter, s expected, b bench), minutes and fantasy points projected (our last
   capture before lock) → played, the miss, the value as played (points per $1k), our share of our entries, the field's
@@ -405,6 +426,63 @@ kept for two minutes so the panels open at once; the desk's working tables are n
   floor in both, played but not in ours, or in ours and sat; the share of the 240 player-minutes on the floor in both) and
   the team's rows with the same columns. The same overlay is on a live slate's team page, per past game (the last-game
   panel's **vs our grid** box).
+
+### One game (`?view=backtest&game=<AWAY-HOME>`, `_nba_bt_game.html`)
+
+`GET /backtest/game/<AWAY-HOME>` (`ivan.sports.nba.backtest.game.view`; `scripts/nba/backtest_game.py --slate N --game
+AWAY-HOME`, or one of its teams). Only this game: the head (tip, the line, the final, a chip per game of the slate, **‹
+games** back to the slate), then one card per team, away first. The game is **drawn by the game simulation on this
+checkout from the game's tip record** (the pool with its minutes, grid rows, scratch and cut chances as the desk had
+them; per-minute rates rebuilt as of that day; shooting profiles, foul rates and paces cut at the day: the same inputs
+as the whole-slate rerun, one game of them). The first time a game is opened it is drawn at once (about 15 seconds the
+first time a day is opened in a server process, a second or two after that) and the draw is kept in
+`data/nba/slates/<dg>/backtest/<AWAY-HOME>/base.json`.
+
+Each team's table is the pre-lock grid read backwards. Per pool player who was projected or played:
+
+- **the grid**: each of the 48 minutes coloured by the share of the drawn worlds he is on the floor (the pre-lock heat
+  steps), with an **orange bar under the minutes he really was on the floor** (the stored stints). The foot row is the
+  drawn five per minute.
+- **min**: published at the tip, **set** (the draw's input, a box), the drawn mean (hover: 10-90, how often he plays),
+  played (red when 6 or more from the drawn mean).
+- **st**: a box for the draw's starters (the tip record's call until changed) and what happened (S = he started, red
+  when it was not what the tip record had).
+- **fpts**: published, **model** (the mean drawn from the tip record as it was), **edited** (the mean with your edits,
+  blue when it moved 2 or more), scored, Δ (scored minus the drawn mean) and **pct**, where the score fell in the drawn
+  distribution (red under 10 or over 90).
+- **the seven stats**: the drawn mean and what he did (red outside the drawn 10-90).
+
+The line above the tables is the game as drawn (total, margin, win, 20+ and overtime shares, the worlds, the commit);
+each team's head has its fantasy points published / drawn / scored and the minutes and fantasy point errors of the draw
+beside those of what was published. Players who played from outside the pool are named under the table.
+
+**Changing the inputs** (`POST /backtest/game/<AWAY-HOME>/simulate`; one form over both teams):
+
+| Button | What it does | Terminal |
+|---|---|---|
+| **Simulate game** | draws the game with the boxes as they stand, at the sims typed (250 to 20,000) | `backtest_game.py --slate N --game K --set "name=min, name=min" [--start NAME] [--bench NAME] [--spread X] [--total X] [--worlds N]` (`--simulate` to draw again as stored) |
+| **Actual minutes** | sets every pool player to the minutes he played (0 for one who sat) and the five who started, and draws | `backtest_game.py --slate N --game K --actual` |
+| **Reset** | drops the edits and the edited draw | `backtest_game.py --slate N --game K --reset` |
+
+A typed **minutes** number is what the player's rotation is steered to, with no scratch and no cut chance (the backtest
+says he played that); 0 takes him out; his team-mates without a number share what is left of 240 in proportion to their
+minutes (the set column's grey number is what the draw used, its foot the team's total, red off 240). The per-minute
+**rates stay the tip record's**, so with Actual minutes what is left between drawn and scored is the rates and the luck,
+not the minutes. A typed number moves where a player's minutes centre, not how widely the stint draw spreads them. The
+**line** boxes replace the spread and total the draw is reconciled to (**use the final** fills them with the result). A
+**starter** box decides who is on the floor at the tip; it and the minutes need the stint rotation (config
+`gamesim.rotation`: the plan rotation draws the stored grid rows and the page says so). The edits are kept in
+`backtest/<AWAY-HOME>/edits.json` and their draw in `what_if.json`; the unedited draw is redrawn first when it is from
+another commit or another number of worlds, so the model and edited columns differ by the edits alone (both draws use
+the game's seed). Nothing is written to the pool, the tip record or the projection store.
+
+### One player (`GET /backtest/game/<AWAY-HOME>/player/<name>`, `_nba_bt_player.html`)
+
+A name on the game's page opens his panel under his team (`ivan.sports.nba.backtest.game.player_view`;
+`backtest_game.py --slate N --game K --player NAME`): nine charts, fantasy points, minutes and the seven stats, each the
+distribution the game was drawn in (blue; the tip record's draw in grey beside it when the game carries edits), **what he
+did as the orange line**, what was published as the dashed one, with the drawn mean, the 10-50-90 and the percentile his
+night fell at. Each chart's y axis fits its own tallest bar.
 
 The plan this is phase 1 of: [../nba/notes/slate_views_plan_2026-10-29.md](../nba/notes/slate_views_plan_2026-10-29.md).
 

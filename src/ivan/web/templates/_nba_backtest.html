@@ -1,15 +1,17 @@
 {# a past slate, read only (ivan.web.nba.pages._backtest_board = ivan.sports.nba.backtest.slate; the panels' routes ivan.web.nba.backtest;
-   terminal: scripts/nba/backtest_slate.py). Top to bottom: the slate and what is on file for it (the fetch buttons), the money, the
-   contests (a row opens the contest's panel: our entries there, the field's ownership, the payouts), the current code's rerun, every
-   player of the slate in one table (a team opens its panel: the game as played over our grid, its rows). Nothing here loads the slate
-   into the desk; "Restore into the desk" does, for re-working it. #}
+   terminal: scripts/nba/backtest_slate.py, scripts/nba/backtest_game.py). The first screen is the slate and what is on file for it (the
+   fetch buttons) and its games, one row each; a game opens on its own (?view=backtest&game=AWAY-HOME: `_nba_bt_game.html`). Folded under
+   the games: the money (the tiles, the contests; a row opens the contest's panel), the whole-slate rerun by the current code, every
+   player in one table (a team opens its panel). Nothing here loads the slate into the desk; "Restore into the desk" does. #}
 {% from "_nba_bt_rows.html" import ptable %}
 {% macro money(x) %}{% if x is none %}—{% else %}{{ '-' if x < 0 else '' }}${{ '%.2f'|format(x|abs) }}{% endif %}{% endmacro %}
 {% macro pct(x) %}{% if x is none %}—{% else %}{{ '%+.0f%%'|format(100 * x) }}{% endif %}{% endmacro %}
 <div class="bt">
-{% if bt_error %}<p class="flash">backtest failed: {{ bt_error }}</p>
-{% elif not bt %}<p class="muted">pick a slate of an earlier day in the picker</p>
-{% else %}{% set sm = bt.summary %}
+{% if bt_game is defined and bt_game %}
+  <div id="bt-game" hx-get="{{ root }}/backtest/game/{{ bt_game }}" hx-trigger="load" hx-swap="outerHTML"><div class="loading"><span class="spin"></span> loading {{ bt_game }}…</div></div>
+{% elif bt_error %}<p class="flash">backtest failed: {{ bt_error }}</p>
+{% elif not bt_head is defined or not bt_head %}<p class="muted">pick a slate of an earlier day in the picker</p>
+{% else %}{% set bt = bt_head %}
   <div class="bt-head">
     <h2>{{ bt.day.strftime('%a %m-%d') if bt.day else '' }} · slate {{ bt.draft_group }}{% if bt.lock %} <span class="muted">lock {{ bt.lock.strftime('%H:%M') }}</span>{% endif %}</h2>
     <form method="post" action="{{ sport_root }}/slate" onsubmit="return confirm('Restore slate {{ bt.draft_group }} into the desk? Its archive capture (the pool as it was at lock) is loaded into the slate\'s own directory so it can be re-worked like a live slate: refreshed, mapped, generated, simmed. Nothing on this page is changed or deleted.')">
@@ -17,39 +19,42 @@
       <button type="submit" title="re-work this past slate: load its archive capture (the pool as it stood at lock) into its own directory and open its desk. This page stays as it is; the restore only matters when a past slate is to be worked again (a what-if, a re-run of the chain by hand)">Restore into the desk</button></form>
   </div>
   {% if fetch is defined and bt_held %}{% include "_nba_bt_fetch.html" %}{% endif %}
-  {% set actuals = actuals if actuals is defined else true %}
-  {% if actuals %}
-  <div class="bt-tiles">
-    <div class="tile"><b>{{ money(sm.net) }}</b><span>net · {{ pct(sm.roi) }} ROI</span></div>
-    <div class="tile"><b>{{ money(sm.won) }}</b><span>won on {{ money(sm.fees) }} in fees</span></div>
-    <div class="tile"><b>{{ sm.cashed }} / {{ sm.entries }}</b><span>entries cashed · {{ sm.contests }} contest{{ '' if sm.contests == 1 else 's' }}</span></div>
-    <div class="tile {% if sm.claimed_roi is not none and sm.roi is not none and sm.claimed_roi > sm.roi + 0.5 %}over{% endif %}"><b>{{ pct(sm.claimed_roi) }}</b><span>the sim's claim (chooser's ROI, fee-weighted)</span></div>
-  </div>
-  <p class="muted small">Points, ranks and payouts from DraftKings' final standings exports (the payout table for the money; ties share the places they cover); our entries are the ones under our DraftKings user name plus the upload files' Entry IDs.{% if sm.unscored %} <b>Unscored: {{ sm.unscored|length }} contest{{ '' if sm.unscored|length == 1 else 's' }}, {{ money(sm.fees_unscored) }} in fees</b>, whose only export is mid-slate (the late swap's fetch, LOCKED slots) or missing: not in the tiles until fetched final (Fetch standings above, or <code>scripts/nba/standings.py scrape</code>).{% endif %}</p>
-  {% else %}<p class="muted small">The entries' results are shown on the laptop only; this desk shows the model against the games.</p>{% endif %}
-
-  {% if bt.contests and actuals %}<h3>Contests <span class="muted small">click a contest for its own panel: our entries in it, who the field was on against who we were on, the payout curve</span></h3>
-  <table class="players sortable bt-contests">
-    <thead><tr><th>contest</th><th class="n">fee</th><th class="n" title="entries in the export">field</th><th class="n">ours</th><th class="n">best</th><th class="n">cashed</th><th class="n" title="the lowest score that cashed">cash line</th><th class="n">won</th><th class="n">net</th><th class="n">ROI</th><th class="n" title="the chooser's claimed ROI for these entries (its run closest before lock)">claimed</th><th class="n" title="the share of the field's entries that are a copy of another">dup</th><th>scored from</th></tr></thead>
-    <tbody>{% for r in bt.contests %}<tr class="pick {% if not r.final %}dnp{% endif %}" hx-get="{{ root }}/backtest/contest/{{ r.contest_id }}" hx-target="#bt-contest" hx-swap="innerHTML show:#bt-contest:top" onclick="this.closest('tbody').querySelectorAll('tr.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="open this contest's panel">
-      <td>{{ r.name }}</td><td class="n" data-v="{{ r.entry_fee }}">{{ money(r.entry_fee) }}</td><td class="n">{{ r.field or '' }}</td><td class="n">{% if r.final %}{{ r.found }}{% if r.found != r.ours %}<span class="muted small"> of {{ r.ours }}</span>{% endif %}{% else %}{{ r.ours }}{% endif %}</td>
-      <td class="n">{{ r.best_rank or '' }}</td><td class="n">{{ r.cashed if r.final else '' }}</td><td class="n">{{ '%.1f'|format(r.min_cash) if r.min_cash is not none else '' }}</td>
-      <td class="n" data-v="{{ r.won or 0 }}">{{ money(r.won) if r.final else '—' }}</td><td class="n {% if r.final and r.net < 0 %}lo{% elif r.final and r.net > 0 %}hi{% endif %}" data-v="{{ r.net or 0 }}">{{ money(r.net) if r.final else '—' }}</td>
-      <td class="n" data-v="{{ r.roi if r.roi is not none else 0 }}">{{ pct(r.roi) if r.final else '—' }}</td>
-      <td class="n" data-v="{{ r.claim.roi if r.claim and r.claim.roi is not none else 0 }}">{{ pct(r.claim.roi) if r.claim else '—' }}</td>
-      <td class="n" data-v="{{ r.dup_share or 0 }}">{{ '%.0f%%'|format(100 * r.dup_share) if r.dup_share is not none else '' }}</td>
-      <td class="muted small">{% if not r.final %}unscored: {% endif %}{{ r.scored }}</td></tr>{% endfor %}</tbody>
+  {% set actuals = actuals if actuals is defined else true %}{% set bt_open = bt_open if bt_open is defined else none %}
+  {# the first screen: the slate's games, one row each (ivan.sports.nba.backtest.game.overview); a row opens the game #}
+  {% if bt_games_error is defined and bt_games_error %}<p class="flash">the games could not be listed: {{ bt_games_error }}</p>{% endif %}
+  {% if bt_games is defined and bt_games %}
+  {% set ns = namespace(n=0, m=0.0, f=0.0, b=0.0) %}{% for g in bt_games %}{% if g.fpts_mae is not none %}{% set ns.n = ns.n + g.n %}{% set ns.m = ns.m + g.min_mae * g.n %}{% set ns.f = ns.f + g.fpts_mae * g.n %}{% set ns.b = ns.b + g.fpts_bias * g.n %}{% endif %}{% endfor %}
+  <h3>Games <span class="muted small">what we published at each game's tip against what was played{% if ns.n %} · over {{ ns.n }} players: minutes off by <b>{{ '%.1f'|format(ns.m / ns.n) }}</b>, fantasy points by <b>{{ '%.1f'|format(ns.f / ns.n) }}</b> (bias {{ '%+.1f'|format(ns.b / ns.n) }}){% endif %} · click a game to open it</span></h3>
+  <table class="players bt-games">
+    <thead><tr><th>game</th><th>tip</th><th class="n" title="the books' line in the tip record: the home team's spread and the total">line</th><th class="n" title="the final score, away - home">final</th>
+      <th class="n" title="the final total minus the books' total">total</th><th class="n" title="the home team's final margin minus what the spread implied">margin</th>
+      <th class="n" title="each team's fantasy points: published at the game's tip → scored">fpts, away</th><th class="n">fpts, home</th>
+      <th class="n" title="mean absolute error of our minutes over everyone projected to play or who played">min off</th><th class="n" title="mean absolute error of our fantasy points over the same players">fpts off</th>
+      <th class="n" title="projected minus scored, averaged: + we were high">bias</th><th title="scored minus projected, the largest (8 points or more)">largest misses</th><th title="whether the game has been drawn from its tip record here, and whether an edited draw is on file">drawn</th></tr></thead>
+    <tbody>{% for g in bt_games %}{% set f = g.final %}
+      <tr class="{% if g.can_open %}pick{% endif %}" {% if g.can_open %}onclick="location.href = '?view=backtest&amp;game={{ g.key }}'" title="open {{ g.away }} @ {{ g.home }}: both teams as published, as drawn from the tip record and as played"{% else %}title="no tip record for this slate on this machine: the game cannot be opened"{% endif %}>
+        <td>{% if g.can_open %}<a href="?view=backtest&amp;game={{ g.key }}"><b>{{ g.away }} @ {{ g.home }}</b></a>{% else %}<b>{{ g.away }} {{ '@' if g.sided else 'v' }} {{ g.home }}</b>{% endif %}</td>
+        <td class="muted">{{ g.tip.strftime('%H:%M') if g.tip else '' }}</td>
+        <td class="n">{% if g.total is not none %}{{ g.home }} {{ '%+g'|format(g.spread_home) if g.spread_home is not none else '' }} · {{ '%g'|format(g.total) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="n">{% if f %}<b>{{ '%.0f'|format(f.away) }}–{{ '%.0f'|format(f.home) }}</b>{% if f.overtime %} <span class="muted small">OT</span>{% endif %}{% else %}<span class="muted">no box score</span>{% endif %}</td>
+        {% set dt = (f.total - g.total) if f and g.total is not none else none %}{% set dm = (f.margin + g.spread_home) if f and g.spread_home is not none else none %}
+        <td class="n {% if dt is not none and dt|abs >= 20 %}lo{% endif %}">{{ '%+.0f'|format(dt) if dt is not none else '' }}</td>
+        <td class="n {% if dm is not none and dm|abs >= 15 %}lo{% endif %}">{{ '%+.0f'|format(dm) if dm is not none else '' }}</td>
+        {% for t in g.teams %}<td class="n" title="{{ t.team }}{% if t.agreement is not none %} · our grid and the game agree on {{ '%.0f%%'|format(100 * t.agreement) }} of the player-minutes{% endif %}"><span class="muted">{{ t.team }}</span> {{ '%.0f'|format(t.fpts_proj) }} → <b>{{ '%.0f'|format(t.fpts_act) if t.fpts_act is not none else '—' }}</b></td>{% endfor %}
+        <td class="n {% if g.min_mae is not none and g.min_mae >= 6 %}lo{% endif %}">{{ '%.1f'|format(g.min_mae) if g.min_mae is not none else '' }}</td>
+        <td class="n {% if g.fpts_mae is not none and g.fpts_mae >= 8 %}lo{% endif %}">{{ '%.1f'|format(g.fpts_mae) if g.fpts_mae is not none else '' }}</td>
+        <td class="n">{{ '%+.1f'|format(g.fpts_bias) if g.fpts_bias is not none else '' }}</td>
+        <td class="small">{% for m in g.misses %}{{ m.name }} <span class="{{ 'hi' if m.delta > 0 else 'lo' }}">{{ '%+.0f'|format(m.delta) }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</td>
+        <td class="small muted">{% if g.what_if %}edited{% elif g.drawn %}yes{% endif %}</td></tr>{% endfor %}</tbody>
   </table>
-  <div id="bt-contest"></div>
-  {% elif actuals %}<p class="muted">No entries of ours found for this slate's contests (our user name in a final export, or the slate's upload files).</p>{% endif %}
+  {% else %}<p class="muted small">No games to list for this slate: no tip record and no projection capture on file.</p>{% endif %}
 
-  {% if rr_dg is defined %}{% include "_nba_rerun.html" %}{% endif %}
-
-  <h3>Players <span class="muted small">every player of the slate, our last projection before lock against the box score{% if not bt.scorecard %}: no projection capture or no box scores for this slate{% endif %} · click a header to sort · a team opens its panel</span></h3>
-  <div class="bt-chips">{% for team, rows in bt.players|dictsort %}{% set ov = bt.rotations.get(team) if bt.rotations else none %}
-    <button type="button" hx-get="{{ root }}/backtest/team/{{ team }}" hx-target="#bt-team" hx-swap="innerHTML show:#bt-team:top" onclick="this.closest('.bt-chips').querySelectorAll('button.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="{{ team }}: projected {{ '%.0f'|format(rows|map(attribute='fpts_proj')|select('number')|sum) }} fpts, scored {{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }}{% if ov and ov.agreement is not none %} · grid agreement {{ '%.0f%%'|format(100 * ov.agreement) }}{% endif %}">
-      <b>{{ team }}</b> <span class="muted">{{ '%.0f'|format(rows|map(attribute='fpts_proj')|select('number')|sum) }}→{{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }}</span>{% if ov and ov.agreement is not none %} <span class="ag {% if ov.agreement >= 0.8 %}ok{% elif ov.agreement < 0.6 %}warn{% endif %}">{{ '%.0f%%'|format(100 * ov.agreement) }}</span>{% endif %}</button>{% endfor %}</div>
-  <div id="bt-team"></div>
-  {{ ptable(bt.table, team_col=True, root=root, id='bt-table') }}
+  {# everything else of the slate is folded and built only when opened (GET /backtest/fold/<what>, `_nba_bt_fold.html`), or by ?open=money|rerun|players in the address #}
+  {% if actuals %}<details class="bt-fold" {% if bt_open == 'money' %}open{% endif %} hx-get="{{ root }}/backtest/fold/money" hx-trigger="{% if bt_open == 'money' %}load{% else %}toggle once{% endif %}" hx-target="find .fold-body" hx-swap="innerHTML"><summary><b>Money</b> <span class="muted small">our entries' results, the contests, the sim's claim</span></summary>
+    <div class="fold-body"><div class="loading"><span class="spin"></span> loading…</div></div></details>{% endif %}
+  {% if bt_held %}<details class="bt-fold" {% if bt_open == 'rerun' %}open{% endif %} hx-get="{{ root }}/backtest/fold/rerun" hx-trigger="{% if bt_open == 'rerun' %}load{% else %}toggle once{% endif %}" hx-target="find .fold-body" hx-swap="innerHTML"><summary><b>Whole slate, current code</b> <span class="muted small">every game drawn from its tip record, scored layer by layer against the actuals</span></summary>
+    <div class="fold-body"><div class="loading"><span class="spin"></span> loading…</div></div></details>{% endif %}
+  <details class="bt-fold" {% if bt_open == 'players' %}open{% endif %} hx-get="{{ root }}/backtest/fold/players" hx-trigger="{% if bt_open == 'players' %}load{% else %}toggle once{% endif %}" hx-target="find .fold-body" hx-swap="innerHTML"><summary><b>Every player</b> <span class="muted small">one sortable table: the projection at lock against the box score, our exposure, the field's ownership</span></summary>
+    <div class="fold-body"><div class="loading"><span class="spin"></span> loading…</div></div></details>
 {% endif %}
 </div>

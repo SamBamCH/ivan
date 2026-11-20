@@ -1,0 +1,92 @@
+{# one game of the backtest (ivan.web.nba.backtest.game_panel / game_simulate -> ivan.sports.nba.backtest.game.view; terminal:
+   scripts/nba/backtest_game.py --slate DG --game AWAY-HOME). Only this game's data: the line against the final, and per team every pool
+   player as published at the tip, as the game simulation on this checkout draws him from the tip record, and as he played. The grid is
+   the pre-lock grid read backwards: each cell the share of the drawn worlds he is on the floor that minute, the minutes he really was on
+   the floor marked on it. The min boxes, the starter boxes and the line are the draw's inputs: type and Simulate game to see what the
+   model says with them; Actual minutes fills every player with what he played. A player's name opens his distributions
+   (`_nba_bt_player.html`) under his team. #}
+{% macro f1(x) %}{% if x is none %}—{% else %}{{ '%.1f'|format(x) }}{% endif %}{% endmacro %}
+{% macro f0(x) %}{% if x is none %}—{% else %}{{ '%.0f'|format(x) }}{% endif %}{% endmacro %}
+<div id="bt-game" class="bt bt-game">
+{% if bt_error or not gv %}
+  <div class="bg-head"><a class="btn back" href="?view=backtest">‹ games</a></div>
+  <p class="flash">this game could not be opened: {{ bt_error }}</p>
+{% else %}{% set g = gv.game %}{% set fin = gv.final %}{% set shown = gv.shown %}
+  <div class="bg-head">
+    <a class="btn back" href="?view=backtest" title="back to the slate's games">‹ games</a>
+    <h2>{{ g.away }} @ {{ g.home }}</h2>
+    <span class="muted">{{ g.tip.strftime('%a %m-%d %H:%M') if g.tip else '' }} · line {% if g.total is not none %}{{ g.home }} {{ '%+g'|format(g.spread_home) if g.spread_home is not none else '' }}, O/U {{ '%g'|format(g.total) }}{% else %}none{% endif %}</span>
+    {% if fin %}<span>final <b>{{ g.away }} {{ '%.0f'|format(fin.away) }}, {{ g.home }} {{ '%.0f'|format(fin.home) }}</b>{% if fin.overtime %} <span class="muted small">OT</span>{% endif %} <span class="muted small">total {{ '%.0f'|format(fin.total) }}{% if g.total is not none %} ({{ '%+.0f'|format(fin.total - g.total) }} to the line){% endif %}</span></span>{% else %}<span class="warn">no box score on file for this game</span>{% endif %}
+    <span class="bg-nav">{% for x in gv.games %}<a class="{% if x.key == gv.key %}on{% endif %}" href="?view=backtest&amp;game={{ x.key }}" title="{{ x.away }} @ {{ x.home }}{% if x.tip %} · {{ x.tip.strftime('%H:%M') }}{% endif %}">{{ x.away }}@{{ x.home }}</a>{% endfor %}</span>
+  </div>
+
+  <form id="bg-form" hx-post="{{ root }}/backtest/game/{{ gv.key }}/simulate" hx-target="#bt-game" hx-swap="outerHTML" hx-indicator="#bg-spin" hx-disabled-elt="#bg-form button">
+  <div class="bg-bar">
+    <button type="submit" name="do" value="simulate" class="primary" title="draw this game with the numbers in the boxes below (scripts/nba/backtest_game.py --slate {{ gv.draft_group }} --game {{ gv.key }} --set ...): a typed minutes number is what the player's rotation is steered to, with no scratch and no cut chance; 0 takes him out; his team-mates without a number share what is left of 240. Blank boxes are the tip record's">Simulate game</button>
+    <input type="number" name="n" value="{{ shown.n if shown else 1000 }}" min="{{ sims_min }}" max="{{ sims_max }}" step="250" title="worlds to draw ({{ sims_min }} to {{ sims_max }})"> <span class="muted small">sims</span>
+    <button type="submit" name="do" value="actual" {% if not gv.has_box %}disabled{% endif %} title="{% if gv.has_box %}set every player to the minutes he played and the five who started, and draw (--actual): what the model says once the minutes are known. What is left between drawn and actual is the rates and the luck{% else %}no box score on file{% endif %}">Actual minutes</button>
+    {% if gv.n_edits %}<button type="submit" name="do" value="reset" title="drop the {{ gv.n_edits }} edit{{ '' if gv.n_edits == 1 else 's' }} and the edited draw: the game is the tip record's again (--reset)">Reset</button>{% endif %}
+    <span class="bg-line">line: {{ g.home }} <input type="text" name="spread_home" value="{{ '%g'|format(gv.edits.spread_home) if gv.edits.spread_home is defined else '' }}" placeholder="{{ '%+g'|format(g.spread_home) if g.spread_home is not none else '' }}" class="{% if gv.edits.spread_home is defined %}pinned{% endif %}" title="the home team's spread the draw is reconciled to (blank = the tip record's)">
+      O/U <input type="text" name="total" value="{{ '%g'|format(gv.edits.total) if gv.edits.total is defined else '' }}" placeholder="{{ '%g'|format(g.total) if g.total is not none else '' }}" class="{% if gv.edits.total is defined %}pinned{% endif %}" title="the total the draw is reconciled to (blank = the tip record's)">
+      {% if fin %}<button type="button" class="link" onclick="var f = this.closest('form'); f.spread_home.value = '{{ '%g'|format(-fin.margin) }}'; f.total.value = '{{ '%g'|format(fin.total) }}'" title="fill the line with the final: {{ g.home }} {{ '%+g'|format(-fin.margin) }}, total {{ '%g'|format(fin.total) }} (then Simulate game)">use the final</button>{% endif %}</span>
+    <span class="spin htmx-indicator" id="bg-spin"></span>
+    {% if gnote %}<span class="{% if gnote.startswith('not drawn') %}bad{% else %}ok{% endif %} small">{{ gnote }}</span>{% endif %}
+  </div>
+  <div class="bg-world small">
+    {% if shown %}{% set w = shown.game %}
+    <b>{% if gv.which == 'what_if' %}with your {{ gv.n_edits }} edit{{ '' if gv.n_edits == 1 else 's' }}{% else %}the tip record as it was{% endif %}</b>
+    · drawn total <b>{{ '%.1f'|format(w.mean_total) }}</b>{% if fin %} <span class="muted">(final {{ '%.0f'|format(fin.total) }})</span>{% endif %}
+    · {{ g.home }} by <b>{{ '%+.1f'|format(w.mean_margin) }}</b>{% if fin %} <span class="muted">(final {{ '%+.0f'|format(fin.margin) }})</span>{% endif %}
+    · {{ g.home }} wins {{ '%.0f%%'|format(100 * w.p_home) }} · by 20+ {{ '%.0f%%'|format(100 * w.blowout) }} · overtime {{ '%.1f%%'|format(100 * w.p_ot) }}
+    <span class="muted">· {{ shown.n }} worlds · commit {{ shown.commit }}{% if shown.dirty %}*{% endif %} · {{ shown.written_at[5:16].replace('T', ' ') }} · tip record {{ g.record.strftime('%H:%M') }} · rotation {{ shown.rotation }}{% if shown.rotation != 'stints' %} <span class="warn">(the plan rotation draws the stored grid rows: a typed minutes number or starter moves nothing)</span>{% endif %}</span>
+    {% elif gnote %}<span class="muted">no draw on file: the published numbers and the actuals only</span>
+    {% else %}<span id="bg-auto" hx-post="{{ root }}/backtest/game/{{ gv.key }}/simulate" hx-trigger="load" hx-vals='{"do": "simulate"}' hx-target="#bt-game" hx-swap="outerHTML"><span class="spin"></span> drawing the game from its tip record with the current code (about 15 s the first time a day is opened, a second or two after)…</span>{% endif %}
+  </div>
+
+  {% for t in gv.teams %}{% set tt = t.totals %}
+  <div class="bg-team">
+    <div class="bg-th"><h3>{{ t.team }} <span class="muted small">{{ 'home' if t.home else 'away' }}</span></h3>
+      <span class="small">fantasy points: published <b>{{ f0(tt.fpts_pub) }}</b>{% if shown %} · drawn <b>{{ f0(tt.fpts_drawn) }}</b>{% endif %}{% if gv.has_box %} · scored <b>{{ f0(tt.fpts_act) }}</b>{% endif %}</span>
+      {% if gv.has_box %}<span class="small muted" title="mean absolute error over the players projected to play or who played: the draw's means{% if gv.which == 'what_if' %} (with your edits){% endif %}, and what was published at the tip">minutes off by {% if t.min_mae is not none %}<b>{{ f1(t.min_mae) }}</b> drawn · {% endif %}{{ f1(t.min_mae_pub) }} published · fantasy points off by {% if t.fpts_mae is not none %}<b>{{ f1(t.fpts_mae) }}</b> drawn · {% endif %}{{ f1(t.fpts_mae_pub) }} published</span>{% endif %}
+      {% if loop.first %}<span class="heat-key small muted" title="each cell: the share of the drawn worlds the player is on the floor in that minute (white = never, navy = always); the orange bar under a cell = he really was on the floor that minute"><i class="h0"></i>never<i class="h1"></i><i class="h2"></i><i class="h3"></i><i class="h4"></i><i class="h5"></i><i class="h6"></i>always <i class="h0 on"></i>played</span>{% endif %}
+    </div>
+    <div class="grid-scroll">
+    <table class="bg-grid">
+      <thead><tr>
+        <th class="nm">player <span class="muted">· click for his distributions</span></th><th title="starts: the box is the draw's input (the tip record's call until you change it); the letter after it is what happened, S = he started">st</th>
+        {% for m in range(48) %}<th class="c {% if m % 12 == 0 %}q{% endif %}">{% if m % 12 == 0 %}Q{{ (m // 12) + 1 }}{% endif %}</th>{% endfor %}
+        <th class="n sep" title="minutes published at the tip">min</th><th class="n" title="the minutes the draw is steered to: type a number (0 takes him out), blank = the tip record's. The grey number is what the draw used">set</th><th class="n" title="the mean of the minutes drawn; hover for the 10-90 range and how often he plays">drawn</th><th class="n" title="minutes played (the box score)">played</th>
+        <th class="n sep" title="fantasy points published at the tip">fpts</th><th class="n" title="the mean drawn from the tip record as it was, by the current code">model</th>{% if gv.what_if %}<th class="n" title="the mean drawn with your edits">edited</th>{% endif %}<th class="n" title="fantasy points scored">scored</th><th class="n" title="scored minus the drawn mean{% if gv.what_if %} (with your edits){% endif %}">Δ</th><th class="n" title="where the score fell in the drawn distribution: 50 = the middle; under 10 or over 90 is a night the draw called unlikely">pct</th>
+        {% for s, lab in (('points', 'pts'), ('rebounds', 'reb'), ('assists', 'ast'), ('fg3m', '3pm'), ('steals', 'stl'), ('blocks', 'blk'), ('turnovers', 'tov')) %}<th class="n {% if loop.first %}sep{% endif %}" title="{{ s }}: the drawn mean, then what he did (red when outside the drawn 10-90)">{{ lab }}</th>{% endfor %}
+      </tr></thead>
+      <tbody>{% for r in t.rows %}
+        <tr class="{% if gv.has_box and not r.played %}dnp{% endif %} {% if not r.drawn and shown %}nodraw{% endif %}">
+          <td class="nm"><input type="hidden" name="row" value="{{ r.name }}"><button type="button" class="pl" hx-get="{{ root }}/backtest/game/{{ gv.key }}/player/{{ r.name|urlencode }}" hx-target="#bg-player-{{ t.team }}" hx-swap="innerHTML show:#bg-player-{{ t.team }}:bottom" title="{{ r.pos }}{% if r.salary %} · ${{ r.salary }}{% endif %} · open his drawn distributions against what he did">{% if r.starter_pub %}<b>{{ r.name }}</b>{% else %}{{ r.name }}{% endif %}</button>{% if r.salary %} <span class="rsal">{{ (r.salary / 1000)|round(1) }}k</span>{% endif %}{% if r.status %} <span class="status">{{ r.status }}</span>{% endif %}{% if gv.has_box and not r.played %} <span class="status">DNP</span>{% endif %}</td>
+          <td class="st"><input type="checkbox" name="st:{{ r.name }}" value="1" {% if r.starter %}checked{% endif %} class="{% if r.starter_edit %}pinned{% endif %}" title="{% if r.starter_edit %}your call ({{ 'starts' if r.starter else 'bench' }}); the tip record had him {{ 'starting' if r.starter_pub else 'on the bench' }}{% else %}the tip record's call: {{ 'starts' if r.starter_pub else 'bench' }}{% endif %}">{% if r.started is not none %}<span class="{% if r.started != r.starter_pub %}bad{% else %}muted{% endif %}" title="{{ 'started' if r.started else 'did not start' }}{% if r.started != r.starter_pub %}: not what the tip record had{% endif %}">{{ 'S' if r.started else '·' }}</span>{% endif %}</td>
+          {% for m in range(48) %}{% set cv = r.cover[m] if r.cover else 0 %}<td class="c h{{ 0 if cv < 0.02 else (6 if cv >= 0.98 else [1 + (cv * 5)|int, 5]|min) }} {% if r.floor and r.floor[m] %}on{% endif %} {% if m % 12 == 0 %}q{% endif %}" title="{{ r.name }} · minute {{ m + 1 }}{% if r.cover %}: on the floor in {{ (100 * cv)|round|int }}% of the worlds{% endif %}{% if r.floor %} · {{ 'played' if r.floor[m] else 'sat' }}{% endif %}"></td>{% endfor %}
+          <td class="n sep muted">{{ f0(r.min_pub) }}</td>
+          <td class="n"><input type="text" class="min sm {% if r.min_set is not none %}pinned{% endif %}" name="min:{{ r.name }}" value="{{ '%g'|format(r.min_set) if r.min_set is not none else '' }}" placeholder="{{ '%.0f'|format(r.min_in) if r.min_in is not none else ('%.0f'|format(r.min_pub) if r.min_pub is not none else '') }}" title="{% if r.min_set is not none %}your number; blank to go back to the tip record{% elif r.min_in is not none and r.min_pub is not none and (r.min_in - r.min_pub)|abs >= 0.5 %}the draw used {{ '%.1f'|format(r.min_in) }}: his share of what your numbers left of 240{% else %}type the minutes to steer him to{% endif %}"></td>
+          <td class="n" title="{% if r.min_p10 is not none %}10-90: {{ '%.0f'|format(r.min_p10) }}-{{ '%.0f'|format(r.min_p90) }}{% endif %}{% if r.plays is not none %} · plays in {{ (100 * r.plays)|round|int }}% of the worlds{% endif %}{% if gv.what_if and r.min_base is not none %} · the tip record's draw: {{ '%.1f'|format(r.min_base) }}{% endif %}">{{ f1(r.min_drawn) }}</td>
+          <td class="n {% if r.min_act is not none and r.min_drawn is not none and (r.min_act - r.min_drawn)|abs >= 6 %}lo{% endif %}" title="{% if r.min_pct is not none %}the {{ (100 * r.min_pct)|round|int }}th percentile of the minutes drawn{% endif %}"><b>{{ f1(r.min_act) }}</b></td>
+          <td class="n sep muted">{{ f1(r.fpts_pub) }}</td>
+          <td class="n">{{ f1(r.fpts_base) }}</td>
+          {% if gv.what_if %}<td class="n {% if r.fpts_what_if is not none and r.fpts_base is not none and (r.fpts_what_if - r.fpts_base)|abs >= 2 %}moved{% endif %}" title="{% if r.fpts_what_if is not none and r.fpts_base is not none %}{{ '%+.1f'|format(r.fpts_what_if - r.fpts_base) }} to the tip record's draw{% endif %}">{{ f1(r.fpts_what_if) }}</td>{% endif %}
+          <td class="n"><b>{{ f1(r.fpts_act) }}</b></td>
+          <td class="n {% if r.delta is not none and r.delta <= -8 %}lo{% elif r.delta is not none and r.delta >= 8 %}hi{% endif %}" title="{% if r.delta_pub is not none %}{{ '%+.1f'|format(r.delta_pub) }} to the published number{% endif %}{% if r.fpts_sd is not none %} · drawn sd {{ '%.1f'|format(r.fpts_sd) }}{% endif %}">{{ '%+.1f'|format(r.delta) if r.delta is not none else '' }}</td>
+          <td class="n {% if r.pct is not none and (r.pct < 0.1 or r.pct > 0.9) %}lo{% endif %}">{{ (100 * r.pct)|round|int if r.pct is not none else '' }}</td>
+          {% for s in r.stats %}<td class="n {% if loop.first %}sep{% endif %}" title="{{ r.name }} · {{ s.stat }}{% if s.pct is not none %}: the {{ (100 * s.pct)|round|int }}th percentile of the draw{% endif %}{% if gv.what_if and s.base is not none %} · the tip record's draw: {{ '%.1f'|format(s.base) }}{% endif %}"><span class="muted">{{ f1(s.drawn) }}</span>{% if s.act is not none %} <b class="{% if s.pct is not none and (s.pct < 0.1 or s.pct > 0.9) %}lo{% endif %}">{{ '%g'|format(s.act) }}</b>{% endif %}</td>{% endfor %}
+        </tr>{% endfor %}</tbody>
+      <tfoot><tr><td class="nm muted small">on the floor · totals</td><td></td>
+        {% for m in range(48) %}<td class="c cnt {% if m % 12 == 0 %}q{% endif %} {% if t.on5 and (t.on5[m] - 5)|abs > 0.15 %}bad{% endif %}">{% if t.on5 %}{{ '%g'|format(t.on5[m]|round(0)) }}{% endif %}</td>{% endfor %}
+        <td class="n sep muted">{{ f0(tt.min_pub) }}</td><td class="n muted {% if shown and (tt.min_in - 240)|abs > 1.5 %}bad{% endif %}" title="the minutes the draw was given, added up (240 = five on the floor for 48 minutes; an overtime game's actual minutes add to more)">{% if shown %}{{ f0(tt.min_in) }}{% endif %}</td><td class="n muted">{% if shown %}{{ f0(tt.min_drawn) }}{% endif %}</td><td class="n"><b>{{ f0(tt.min_act) if gv.has_box else '' }}</b></td>
+        <td class="n sep muted">{{ f0(tt.fpts_pub) }}</td><td class="n">{% if gv.base %}{{ f0(tt.fpts_base) }}{% endif %}</td>{% if gv.what_if %}<td class="n">{{ f0(tt.fpts_what_if) }}</td>{% endif %}<td class="n"><b>{{ f0(tt.fpts_act) if gv.has_box else '' }}</b></td><td colspan="9"></td></tr></tfoot>
+    </table>
+    </div>
+    {% if not t.has_floor and gv.has_box %}<p class="muted small">no stints stored for this game yet (the nightly's play-by-play): the grid shows the draw alone</p>{% endif %}
+    {% if t.outside or t.hidden %}<p class="muted small">{% if t.outside %}played, but not in the pool at the tip: {% for o in t.outside %}{{ o.name }} {{ '%.0f'|format(o.minutes) }} min, {{ '%.1f'|format(o.fpts) }} fpts{% if not loop.last %} · {% endif %}{% endfor %}. {% endif %}{% if t.hidden %}{{ t.hidden }} more in the pool neither projected nor played.{% endif %}</p>{% endif %}
+    <div id="bg-player-{{ t.team }}"></div>
+  </div>
+  {% endfor %}
+  </form>
+{% endif %}
+</div>

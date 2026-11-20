@@ -10,7 +10,8 @@ One module per concern; the routes register on the shared app when the package i
     exposures.py  the players table of pre-lock and post-lock (every player's row and his exposure in a set of lineups)
     exports.py    CSV exports and downloads
     rerun.py      the backtest view's "current code" block: the game simulation rerun from a past slate's tip record (a job), scored per layer
-    backtest.py   the backtest view's panels (a team, a contest), its readiness strip and the fetch jobs for what a past slate is missing
+    backtest.py   the backtest view: the slate's games, one game drawn from its tip record with its inputs open to change, one player's distributions;
+                  the folded sections (money, rerun, players), the team and contest panels, the readiness strip and the fetch jobs
     knobs.py      the pipeline's knobs; edits.py the typed edits; outputs.py what the pipeline wrote
 """
 from __future__ import annotations

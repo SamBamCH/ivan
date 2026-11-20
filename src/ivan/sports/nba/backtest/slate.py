@@ -298,7 +298,8 @@ def slate_backtest(session: Session, dg: int, now: Optional[datetime] = None) ->
                                 priced=bool(getattr(r, "priced", False)) if getattr(r, "priced", None) is not None and getattr(r, "priced") == getattr(r, "priced") else False,
                                 note=getattr(r, "note", None) if isinstance(getattr(r, "note", None), str) else None,
                                 exposure=(exp[n] / len(entries)) if entries else None, own=own.get(n), own_proj=own_proj.get(n),
-                                salary=_f(getattr(r, "salary", None))))
+                                salary=_f(getattr(r, "salary", None)), opp=str(getattr(r, "opponent", "") or "") or None,
+                                gametime=str(getattr(r, "gametime", "") or "") or None))
             players[str(t)] = lst
     rotations = {}
     if day is not None:

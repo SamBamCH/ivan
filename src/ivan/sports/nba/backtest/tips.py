@@ -8,7 +8,8 @@ nothing dated after the tip of the game it is projecting.
     data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/
         meta.json          tip, written_at, the teams tipping now, the counts, where each part came from
         players.json       the pool as the desk showed it: id, name, team, opponent, position, salary, status, starter, dk_avg_fpts,
-                           minutes_proj, fpts_mean, fpts_std, p_out, minutes_p10/p90, ownership, pub_fpts, rotation_cells (the grid row)
+                           minutes_proj, fpts_mean, fpts_std, p_out, minutes_p10/p90, ownership, pub_fpts, rotation_cells (the grid row), and from
+                           2026-11-19 p_cut, fringe_p, fringe_minutes, minutes_sd, boundary_sd, rates (empty in older records)
         odds.parquet       the stored props for the slate's players (player, market, sportsbook, side, point, price, last_update): the
                            odds table is replaced per player at every refresh, so this is the only record of the props at the tip
         game_lines.json    spreads and totals for the slate's games as stored

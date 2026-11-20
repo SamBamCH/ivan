@@ -77,9 +77,12 @@ data/nba/
 │   │   ├── chosen_entries.{classic,exposures,lineups}.<stamp>.csv, .choose.<stamp>.json, .simroi.<stamp>.npz
 │   │   └── lateswap.<stamp>.csv + .json
 │   ├── tips/<YYYYMMDD-HHMM>/       the record at each game's tip (ivan.sports.nba.backtest.tips, written once by archive_at_lock.py): meta.json,
-│   │                               players.json (the pool with projections, ownership, grid rows), odds.parquet (the props as stored:
+│   │                               players.json (the pool with projections, ownership, grid rows, scratch / cut / fringe chances), odds.parquet (the props as stored:
 │   │                               the odds table is replaced per player at every refresh), game_lines.json, news.json (the slate's
 │   │                               news seen by then), edits/ (a copy of the day's edits). What a backtest of that game's models may read
+│   ├── backtest/<AWAY-HOME>/       one game of the backtest drawn from its tip record (ivan.sports.nba.backtest.game = scripts/nba/backtest_game.py):
+│   │                               base.json (the tip record as it was), edits.json (minutes, starters, the line typed on the game's page),
+│   │                               what_if.json (the draw with them). Safe to delete: the page draws the game again
 │   └── results/ledger.json         the money (ivan.sports.nba.backtest.results): our entries' result per contest from DraftKings' final exports,
 │                                   cached; complete once every contest has a final export, re-checked every 10 minutes until then
 ├── days/<YYYY-MM-DD>/              the day's edits, shared by its slates (a game is mapped once; the 6:00 and 6:30 slates read the

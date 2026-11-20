@@ -103,14 +103,14 @@ def rates_as_of(session: Session, day: date, players: list, odds: pd.DataFrame, 
 
 def soft_pool(players: list, state: pd.DataFrame) -> int:
     """
-    A tip record written before the soft pool (2026-11-10) has no p_cut / fringe_p / minutes_sd: fill them from the history state
-    as of the day the way the mapping does now (projection.cuts: every row rated except named starters, since the record does not
-    say which rows carried a minutes pin; a zero-minute available player is fringe). Records that carry the fields are left alone. Returns
-    how many players were filled.
+    A tip record without the soft pool (no p_cut / fringe_p / minutes_sd on any player: every record written before 2026-11-19,
+    the archive not having passed them) gets them from the history state as of the day the way the mapping does now
+    (projection.cuts: every row rated except named starters, since the record does not say which rows carried a minutes pin; a
+    zero-minute available player is fringe). Records that carry the fields are left alone. Returns how many players were filled.
     """
     from ivan.sports.nba.projection import cuts as CUTS
     from ivan.sports.nba.projection.live import OUT_STATUSES
-    if any("p_cut" in p for p in players):
+    if any(p.get("p_cut") is not None for p in players):        # the key alone is not the value: tips.write_tip writes every field, None when the archive gave none
         return 0
     table = CUTS.load_table(); n = 0
     for p in players:

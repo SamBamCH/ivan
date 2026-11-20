@@ -1,0 +1,37 @@
+{# one player of a backtest game (ivan.web.nba.backtest.game_player -> ivan.sports.nba.backtest.game.player_view; terminal:
+   scripts/nba/backtest_game.py --slate DG --game KEY --player NAME): his fantasy points, minutes and each stat as the distribution the game
+   was drawn in (blue; the tip record's draw in grey beside it when the game carries edits), what he did as the orange line, what was
+   published at the tip as the dashed one. Each chart's y axis fits its own tallest bar. #}
+{% set DRAW = '#2a78d6' %}{% set BASE = '#c4c7cc' %}{% set ACT = '#eb6834' %}
+<div class="bt-panel bg-player">
+  {% if bt_error or not pv %}<p class="bad">{{ bt_error }}</p>{% else %}
+  <div class="ph"><h3>{{ pv.name }}</h3>
+    <span class="muted small">{{ pv.team }}{% if pv.pos %} · {{ pv.pos }}{% endif %}{% if pv.salary %} · ${{ pv.salary }}{% endif %}{% if pv.drawn %} · {{ 'the draw with your edits' if pv.what_if else "the tip record's draw" }}, {{ pv.n }} worlds{% if pv.minutes_in is not none %}, steered to {{ '%.1f'|format(pv.minutes_in) }} minutes{% endif %}{% endif %}{% if not pv.in_box %} · no box score line{% elif not pv.played %} · did not play{% endif %}</span>
+    <span class="small sc-key"><i style="background:{{ DRAW }}"></i>drawn{% if pv.what_if %} <i style="background:{{ BASE }}"></i>the tip record's draw{% endif %} <i class="ln" style="background:{{ ACT }}"></i>what he did <i class="ln dash"></i>published</span>
+    <button type="button" class="x" onclick="this.closest('.bg-player').parentElement.innerHTML = ''" title="close">&times;</button></div>
+  {% if not pv.drawn %}<p class="muted small">No draw on file for him: he was not in the game as drawn (out of the pool, or typed to 0). Give him minutes in the set column and Simulate game.</p>{% else %}
+  <div class="bg-charts">
+  {% for c in pv.charts %}{% set ch = c.chart %}{% if ch %}
+    {% set W = 290 %}{% set H = 140 %}{% set left = 28 %}{% set right = 6 %}{% set top = 14 %}{% set bottom = 18 %}
+    {% set nb = ch.bins|length %}{% set bw = (W - left - right) / nb %}{% set ph = H - top - bottom %}
+    {% set two = pv.what_if %}{% set bar = [((bw - 5) / 2) if two else (bw - 3), 18]|min %}{% set bar = [bar, 2]|max %}
+    <div class="bg-chart">
+      <div class="sc-head"><b>{{ c.label }}</b> <span class="muted">drawn {{ '%.1f'|format(ch.mean) }}{% if ch.other_mean is not none %} (was {{ '%.1f'|format(ch.other_mean) }}){% endif %}{% if c.published is not none %} · published {{ '%.1f'|format(c.published) }}{% endif %}</span>{% if c.actual is not none %} · <b style="color:{{ ACT }}">{{ '%g'|format(c.actual) }}</b>{% endif %}</div>
+      <svg viewBox="0 0 {{ W }} {{ H }}" width="{{ W }}" height="{{ H }}" role="img" aria-label="{{ pv.name }}, {{ c.label }}: the drawn distribution{% if c.actual is not none %} with the actual {{ '%g'|format(c.actual) }}{% endif %}">
+        {% for t in (0.5, 1.0) %}{% set y = top + ph * (1 - t) %}<line x1="{{ left }}" x2="{{ W - right }}" y1="{{ y }}" y2="{{ y }}" stroke="#ececec" stroke-width="1"/><text x="{{ left - 4 }}" y="{{ y }}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#888">{{ '%.0f%%'|format(100 * ch.ymax * t) }}</text>{% endfor %}
+        <line x1="{{ left }}" x2="{{ W - right }}" y1="{{ top + ph }}" y2="{{ top + ph }}" stroke="#cfcfcf" stroke-width="1"/>
+        {% for b in ch.bins %}{% set cx = left + (loop.index0 + 0.5) * bw %}{% set ha = ph * ([b.a, ch.ymax]|min) / ch.ymax %}
+        {% if two %}{% set hb = ph * ([b.b or 0, ch.ymax]|min) / ch.ymax %}
+          {% if hb > 0 %}<rect x="{{ cx - bar - 1 }}" y="{{ top + ph - hb }}" width="{{ bar }}" height="{{ hb }}" rx="{{ [2, bar / 2]|min }}" fill="{{ BASE }}"><title>{{ b.label }}: {{ '%.1f%%'|format(100 * (b.b or 0)) }} of the tip record's worlds</title></rect>{% endif %}
+          {% if ha > 0 %}<rect x="{{ cx + 1 }}" y="{{ top + ph - ha }}" width="{{ bar }}" height="{{ ha }}" rx="{{ [2, bar / 2]|min }}" fill="{{ DRAW }}"><title>{{ b.label }}: {{ '%.1f%%'|format(100 * b.a) }} of the worlds</title></rect>{% endif %}
+        {% elif ha > 0 %}<rect x="{{ cx - bar / 2 }}" y="{{ top + ph - ha }}" width="{{ bar }}" height="{{ ha }}" rx="{{ [2, bar / 2]|min }}" fill="{{ DRAW }}"><title>{{ b.label }}: {{ '%.1f%%'|format(100 * b.a) }} of the worlds</title></rect>{% endif %}
+        {% if nb <= 9 or loop.index0 % 2 == 0 %}<text x="{{ cx }}" y="{{ H - 5 }}" text-anchor="middle" font-size="9" fill="#666">{{ b.label }}</text>{% endif %}{% endfor %}
+        {% if ch.mark_at is not none and ch.mark_at <= nb %}{% set mx = left + ch.mark_at * bw %}<line x1="{{ mx }}" x2="{{ mx }}" y1="{{ top - 2 }}" y2="{{ top + ph }}" stroke="#333" stroke-width="1.2" stroke-dasharray="4 3"/>{% endif %}
+        {% if ch.actual_at is not none %}{% set ax = left + ([ch.actual_at, nb]|min) * bw %}<line x1="{{ ax }}" x2="{{ ax }}" y1="{{ top - 8 }}" y2="{{ top + ph }}" stroke="{{ ACT }}" stroke-width="2.5"/><text x="{{ ax + 4 if ch.actual_at < nb * 0.75 else ax - 4 }}" y="{{ top - 3 }}" text-anchor="{{ 'start' if ch.actual_at < nb * 0.75 else 'end' }}" font-size="10" font-weight="700" fill="{{ ACT }}">{{ '%g'|format(c.actual) }}</text>{% endif %}
+      </svg>
+      <div class="muted small">10-50-90: {{ ch.p10 }} · {{ ch.p50 }} · {{ ch.p90 }}{% if ch.pct is not none %} · <span class="{% if ch.pct < 0.1 or ch.pct > 0.9 %}bad{% endif %}">what he did: the {{ (100 * ch.pct)|round|int }}th percentile</span>{% endif %}</div>
+    </div>
+  {% endif %}{% endfor %}
+  </div>
+  {% endif %}{% endif %}
+</div>

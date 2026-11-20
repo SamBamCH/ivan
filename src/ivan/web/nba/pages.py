@@ -207,23 +207,42 @@ def team_page(request: Request, day: str, key: str, team: str):
         return _shell(request, "games", team.upper(), page, now, header)
 
 
+def _page_query(request: Request, name: str) -> Optional[str]:
+    """A query parameter of the page the board is loaded into (htmx sends the page's address as HX-Current-URL), else of the request."""
+    from urllib.parse import parse_qs, urlsplit
+    v = request.query_params.get(name)
+    if v is None:
+        v = (parse_qs(urlsplit(request.headers.get("HX-Current-URL") or "").query).get(name) or [None])[0]
+    return v
+
+
 def _backtest_board(request: Request, dg: Optional[int]):
-    """A slate's backtest, read only (ivan.sports.nba.backtest.slate = scripts/nba/backtest_slate.py; the routes of its panels are
-    ivan.web.nba.backtest): nothing is loaded or deleted. A held slate is read through its own database (its contests, lineups and
-    sims), another through the history (its captures)."""
-    from .backtest import backtest_of, fetch_ctx
+    """A slate's backtest (ivan.sports.nba.backtest.slate = scripts/nba/backtest_slate.py; the routes of its panels are
+    ivan.web.nba.backtest): the slate's games first, the money, the whole-slate rerun and the player table folded under them;
+    ?game=<AWAY-HOME> in the page's address shows that game alone (ivan.sports.nba.backtest.game). Nothing of the slate is
+    loaded or deleted. A held slate is read through its own database (its contests, lineups and sims), another through the
+    history (its captures)."""
+    from .backtest import backtest_of, fetch_ctx, games_ctx
     if dg is None:
         return _render(request, "_nba_board.html", busy=None, view="backtest", bt=None, bt_error="no slate picked", menu=[], games=[], players=[],
                        lateswap=None, exposures=None, card=None, game=None, open_team=None)
-    bt, err = backtest_of(int(dg))
-    from .rerun import rerun_ctx
-    try:
-        rr = rerun_ctx(int(dg), request.query_params.get("stat")) if S.holds(dg) else {}     # the current code's rerun of this slate (its tip records live in its directory)
-    except Exception:   # noqa: BLE001 - a record from another version of the code: the block says there is none
-        rr = {}
-    return _render(request, "_nba_board.html", busy=None, view="backtest", bt=bt, bt_error=err, menu=[], games=[], players=[],
-                   lateswap=None, exposures=None, card=None, game=None, open_team=None, bt_held=S.holds(dg),
-                   actuals=not CONSUMER, **fetch_ctx(int(dg)), **rr)   # the money (our entries, the contests) is this machine's only
+    game = _page_query(request, "game")
+    if game:                                                         # one game: its own panel loads itself, nothing of the slate is built
+        return _render(request, "_nba_board.html", busy=None, view="backtest", bt=None, bt_error=None, bt_game=game.upper(), bt_dg=int(dg), menu=[], games=[],
+                       players=[], lateswap=None, exposures=None, card=None, game=None, open_team=None)
+    from ivan.sports.nba.backtest import game as G
+    held = S.holds(dg)
+    games = G.slate_games(int(dg)) if held else []
+    bt, err = (None, None) if games else backtest_of(int(dg))          # a slate with tip records lists its games from them; another needs its scorecard
+    if games:
+        tips = [g["tip"] for g in games if g["tip"] is not None]
+        head = dict(draft_group=int(dg), day=games[0]["record"].date(), lock=min(tips) if tips else None)
+    else:
+        head = None if bt is None else dict(draft_group=int(dg), day=bt.get("day"), lock=bt.get("lock"))
+    return _render(request, "_nba_board.html", busy=None, view="backtest", bt=bt, bt_head=head, bt_error=err, menu=[], games=[], players=[],
+                   lateswap=None, exposures=None, card=None, game=None, open_team=None, bt_held=held,
+                   actuals=not CONSUMER, bt_open=_page_query(request, "open") or ("rerun" if request.query_params.get("stat") else None),
+                   **games_ctx(int(dg), bt), **fetch_ctx(int(dg)))   # the money (our entries, the contests) is this machine's only
 
 
 VIEW_ALIAS = {"exposures": "games", "players": "games"}      # old addresses: the players table (with the exposures) is a section of pre-lock and post-lock

@@ -71,7 +71,8 @@ def archive_tip(session, players, tip, now, dg) -> dict:
                  gametime=p.gametime.isoformat() if p.gametime else None, salary=p.salary, status=p.status, dk_avg_fpts=p.dk_avg_fpts,
                  draft_group_id=p.draft_group_id, starter=starters.get(p.name, "bench"), minutes_proj=p.minutes_proj,
                  fpts_mean=p.fpts_mean, fpts_std=p.fpts_std, ownership=p.ownership, pub_fpts=p.pub_fpts,
-                 rotation_cells=p.rotation_cells, minutes_p10=p.minutes_p10, minutes_p90=p.minutes_p90) for p in players]   # the grid row: the backtest's "our grid" for teams not drawn by hand
+                 rotation_cells=p.rotation_cells, minutes_p10=p.minutes_p10, minutes_p90=p.minutes_p90, p_out=p.p_out, p_cut=p.p_cut, fringe_p=p.fringe_p,
+                 fringe_minutes=p.fringe_minutes, minutes_sd=p.minutes_sd, boundary_sd=p.boundary_sd, rates=p.rates) for p in players]   # the grid row: the backtest's "our grid" for teams not drawn by hand
     pool = {p.name for p in players}
     odds = load_odds(session)                                     # with each row's game, so a backtest of the record reads only this slate's games
     odds = odds[odds.player.isin(pool)]

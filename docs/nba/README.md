@@ -17,7 +17,7 @@ src/ivan/sports/nba/
   field/        public_projection, public_field, model, generate, solver, optimal   the public's field; our candidate pool; the optimal per world
   contest/      simulate, choose, export                                            each contest simulated, lineups chosen
   lateswap/     swap, ingame, entry_parsing                                         after lock
-  backtest/     validation, slate, results, readiness, field, tips, rerun           how it went, how right the model was
+  backtest/     validation, slate, game, results, readiness, field, tips, rerun     how it went, how right the model was
   slate/        autopilot, changes, mapping, scenarios, notes, considerations, job_time   the desk's working files
   desk/         the Desk object the pages render
 ```

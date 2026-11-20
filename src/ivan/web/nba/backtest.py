@@ -2,11 +2,20 @@
 The backtest view's own routes (a past slate, read only; the page is `_nba_backtest.html`, the builder
 ivan.sports.nba.backtest.slate = scripts/nba/backtest_slate.py):
 
+    GET  /<day>/<dg>/backtest/fold/<what>        a folded section built when opened: money, rerun, players (`_nba_bt_fold.html`)
     GET  /<day>/<dg>/backtest/team/<TEAM>        the team's panel: its game as played over our grid, its rows (`_nba_bt_team.html`)
     GET  /<day>/<dg>/backtest/contest/<id>       one contest drilled into: our entries, the field's ownership, the payouts (`_nba_bt_contest.html`)
     GET  /<day>/<dg>/backtest/fetch              the readiness strip: what is on file, the fetch buttons, the running fetch (`_nba_bt_fetch.html`)
     POST /<day>/<dg>/backtest/fetch/standings    scripts/nba/standings.py --slate <dg> scrape, as a job (the final exports of this slate's contests)
     POST /<day>/<dg>/backtest/fetch/boxscores    scripts/nba/nightly.py --max-games 40, as a job (the box scores, then the scorecards)
+    GET  /<day>/<dg>/backtest/game/<AWAY-HOME>   one game drilled into (`_nba_bt_game.html`; ivan.sports.nba.backtest.game = scripts/nba/backtest_game.py):
+                                                 both teams as published, as drawn from the tip record and as played, the inputs open to change
+    POST /<day>/<dg>/backtest/game/<key>/simulate  draw the game with the form's edits (do = simulate), with every player at the minutes he
+                                                 played (do = actual), or drop the edits (do = reset)
+    GET  /<day>/<dg>/backtest/game/<key>/player/<name>   one player's drawn distributions against what he did (`_nba_bt_player.html`)
+
+The slate's page shows its games (ivan.sports.nba.backtest.game.overview) and keeps the money, the whole-slate rerun and the
+player table folded, each built when it is opened; a game opens with ?view=backtest&game=<AWAY-HOME> in the address (pages.board reads it off the page's address).
 
 The slate's backtest is built once and kept for CACHE_SECONDS (about 4 s to build), so the panels open at once; a fetch job
 that ends drops it and reloads the page.
@@ -22,6 +31,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from ivan.database.session import get_session
 from ivan.sports.nba import slates as S
@@ -136,6 +146,26 @@ def fetch_run(request: Request, what: str):
     return _render(request, "_nba_bt_fetch.html", **fetch_ctx(dg))
 
 
+@slate.get("/backtest/fold/{what}", response_class=HTMLResponse)
+def fold(request: Request, what: str):
+    """One folded section of the first screen, built when it is opened: money (the tiles, the contests), rerun (the whole slate by the
+    current code), players (every player in one table). The slate's backtest is built here (about 5 s, then kept), not for the games."""
+    dg = _dg(request)
+    if what not in ("money", "rerun", "players"):
+        raise HTTPException(404, "money, rerun or players")
+    if what == "rerun":
+        from .rerun import rerun_ctx
+        try:
+            rr = rerun_ctx(dg, request.query_params.get("stat")) if S.holds(dg) else {}
+        except Exception:   # noqa: BLE001 - a record from another version of the code: the block says there is none
+            rr = {}
+        return _render(request, "_nba_bt_fold.html", what=what, bt=None, bt_error=None, **rr)
+    if what == "money" and CONSUMER:
+        return HTMLResponse('<p class="muted small">The entries\' results are shown on the laptop only; this desk shows the model against the games.</p>')
+    bt, err = backtest_of(dg)
+    return _render(request, "_nba_bt_fold.html", what=what, bt=bt, bt_error=err, actuals=not CONSUMER)
+
+
 @slate.get("/backtest/team/{team}", response_class=HTMLResponse)
 def team_panel(request: Request, team: str):
     """The team on the backtest: the game as played over our grid (the overlay) and its rows, from the cached backtest."""
@@ -167,3 +197,105 @@ def contest_panel(request: Request, cid: int):
     finally:
         sess.close()
     return _render(request, "_nba_bt_contest.html", cd=cd, bt_error=cerr, bt=bt)
+
+
+# ----------------------------------------------------------------------------- one game
+def games_ctx(dg: int, bt: Optional[dict]) -> dict:
+    """The slate's games for the backtest's first screen (ivan.sports.nba.backtest.game.overview): from the tip records, or from the
+    slate's backtest `bt` when it has none."""
+    from ivan.sports.nba.backtest import game as G
+    sess = get_session(engine)
+    try:
+        if bt:                                                       # no tip records: the games from the scorecard's rows
+            return dict(bt_games=G.overview(sess, dg, bt["players"], bt.get("day"), bt.get("rotations")), bt_games_error=None)
+        return dict(bt_games=G.overview(sess, dg), bt_games_error=None)
+    except Exception as e:   # noqa: BLE001 - the rest of the page still shows
+        return dict(bt_games=[], bt_games_error=f"{type(e).__name__}: {e}")
+    finally:
+        sess.close()
+
+
+def _game_view(request: Request, dg: int, key: str, note: Optional[str] = None):
+    from ivan.sports.nba.backtest import game as G
+    sess = get_session(engine)
+    try:
+        v, err = G.view(sess, dg, key), None
+    except Exception as e:   # noqa: BLE001
+        v, err = None, f"{type(e).__name__}: {e}"
+    finally:
+        sess.close()
+    return _render(request, "_nba_bt_game.html", gv=v, bt_error=err, gnote=note, sims_min=G.N_MIN, sims_max=G.N_MAX)
+
+
+@slate.get("/backtest/game/{game}", response_class=HTMLResponse)
+def game_panel(request: Request, game: str):
+    """One game of the backtest: both teams, each pool player's minutes, fantasy points and stats as published at the tip, as drawn
+    by the game simulation from the tip record and as played; the heat grid of the draw over the minutes he was on the floor."""
+    return _game_view(request, _dg(request), game)
+
+
+def _edits_of(form, view: dict) -> dict:
+    """The form's edits: a number in a player's min box, a starter box that differs from the tip record's call, the line boxes."""
+    mins, starters = {}, {}
+    published = {r["name"]: r["starter_pub"] for t in view["teams"] for r in t["rows"]}
+    for k, v in form.multi_items():
+        if k.startswith("min:") and str(v).strip() != "":
+            mins[k[4:]] = v
+    for name in form.getlist("row"):
+        on = f"st:{name}" in form
+        if name in published and on != published[name]:
+            starters[name] = on
+    return dict(minutes=mins, starters=starters, spread_home=form.get("spread_home"), total=form.get("total"))
+
+
+@slate.post("/backtest/game/{game}/simulate", response_class=HTMLResponse)
+async def game_simulate(request: Request, game: str):
+    """Draw the game (ivan.sports.nba.backtest.game.simulate; terminal: scripts/nba/backtest_game.py --slate DG --game KEY --simulate /
+    --set / --actual / --reset). The form carries the sims count, `do` and every box of both teams; the draw runs off the event loop
+    (about 15 s the first time a day is opened in this process, a second or two after that)."""
+    from ivan.sports.nba.backtest import game as G
+    dg, key = _dg(request), game
+    form = await request.form()
+    do = str(form.get("do") or "simulate")
+
+    def work() -> Optional[str]:
+        sess = get_session(engine)
+        try:
+            if do == "reset":
+                G.reset(dg, key)
+                if G.load_draw(dg, key) is not None:
+                    return "edits dropped: the game is the tip record's again"
+                edits = {}
+            elif do == "actual":
+                edits = dict(G.actual_edits(sess, dg, key), spread_home=form.get("spread_home"), total=form.get("total"))
+            else:
+                edits = _edits_of(form, G.view(sess, dg, key))
+            try:
+                n = int(float(form.get("n") or 0)) or None
+            except ValueError:
+                n = None
+            out = G.simulate(sess, dg, key, n=n, edits=edits)
+            m = (out["what_if"] or out["base"])["meta"]
+            return f"drawn in {m['n']} worlds" + (" with the edits" if out["what_if"] else " from the tip record as it was")
+        except Exception as e:   # noqa: BLE001
+            return f"not drawn: {type(e).__name__}: {e}"
+        finally:
+            sess.close()
+
+    note = await run_in_threadpool(work)
+    return await run_in_threadpool(_game_view, request, dg, key, note)
+
+
+@slate.get("/backtest/game/{game}/player/{name}", response_class=HTMLResponse)
+def game_player(request: Request, game: str, name: str):
+    """One player of the game: his drawn fantasy points, minutes and each stat as distributions with what he did marked."""
+    from ivan.sports.nba.backtest import game as G
+    dg = _dg(request)
+    sess = get_session(engine)
+    try:
+        pv, err = G.player_view(sess, dg, game, name), None
+    except Exception as e:   # noqa: BLE001
+        pv, err = None, f"{type(e).__name__}: {e}"
+    finally:
+        sess.close()
+    return _render(request, "_nba_bt_player.html", pv=pv, bt_error=err)

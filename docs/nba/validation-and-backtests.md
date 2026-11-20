@@ -55,9 +55,31 @@ desk: our entries there with their field copies, the field's ownership against o
 projection at lock against the box score, with each team's game as played over our grid. Read only. How the numbers are
 made is on [../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-dgdraft-group-_nba_backtesthtml); what a past
 slate is missing (box scores, final exports) is fetched from the same page.
-`--date` lists every held slate whose `slate.json` day is that date. The redesign this is the first step of (one lock
+On the desk these sit folded under the slate's games (the money, the player table). `--date` lists every held slate whose `slate.json` day is that date. The redesign this is the first step of (one lock
 snapshot per slate, each date's data on its own, the pre-lock models re-run on it against the actuals) is
 [notes/backtest_redesign_2026-11-05.md](notes/backtest_redesign_2026-11-05.md).
+
+## One game of a past slate (`ivan.sports.nba.backtest.game`, `scripts/nba/backtest_game.py`, the backtest view's games)
+
+```bash
+venv/bin/python scripts/nba/backtest_game.py --slate 156831                          # the games: line vs final, the published numbers' errors
+venv/bin/python scripts/nba/backtest_game.py --slate 156831 --game MIL-MIA            # the game (drawn first when no draw is on file)
+venv/bin/python scripts/nba/backtest_game.py --slate 156831 --game MIA --set "bam adebayo=36, nikola jovic=0" [--start NAME] [--bench NAME] [--spread -4.5] [--total 231] [--worlds 2000]
+venv/bin/python scripts/nba/backtest_game.py --slate 156831 --game MIA --actual       # every player at the minutes he played, the five who started
+venv/bin/python scripts/nba/backtest_game.py --slate 156831 --game MIA --reset
+venv/bin/python scripts/nba/backtest_game.py --slate 156831 --game MIA --player "bam adebayo"
+```
+
+The backtest view's drill-down ([../web/nba-desk.md](../web/nba-desk.md#backtest-view-backtest-viewbacktestdgdraft-group-_nba_backtesthtml)):
+the slate's games, one game, one player. A game is judged on **its own tip record** (the newest at or before its tip) and
+drawn from it by the game simulation on this checkout with the same as-of inputs as the rerun below (`rerun.history_as_of`,
+`rates_as_of`, `soft_pool`, `lines_from_record`; `WorldContext.build(as_of=day)`), one game at a time, so it answers in
+seconds and can be asked again with different inputs: a player's minutes, who starts, the line. The answers are kept
+under `data/nba/slates/<dg>/backtest/<AWAY-HOME>/` (`base.json` the tip record as it was, `edits.json`, `what_if.json`);
+each record holds per player the drawn means, the 101 quantiles of his fantasy points, the share of worlds at each whole
+value of his minutes and of every stat, and the share of worlds he is on the floor each minute. What the edits mean is on
+the desk's page. It is a looking glass, not a gate: a change to the sim still passes the rerun's scorecard over many
+slates before it goes live.
 
 ## The money (`ivan.sports.nba.backtest.results`, `scripts/nba/results.py`)
 
@@ -98,7 +120,9 @@ The source of truth for a backtest of a game: what the system knew when that gam
 timer to `data/nba/slates/<dg>/tips/<YYYYMMDD-HHMM>/` (the pool with its projections, ownership and grid rows; the props
 as stored; the game lines; the slate's news seen by then; a copy of the day's edits). A model re-run for a game may read
 that tip's record, the box scores and stints dated before the slate's day, and the slate's contests, payouts and
-entries: nothing dated after the tip. Tips backfilled from the archive captures carry players, props and lines only (no
+entries: nothing dated after the tip. From 2026-11-19 the record also carries each player's soft-pool fields (`p_cut`,
+`fringe_p`, `fringe_minutes`, `minutes_sd`), his `p_out`, `boundary_sd` and stored per-minute `rates`; a record written
+before that has them empty and the rerun fills the soft pool from the history as of the day (`rerun.soft_pool`). Tips backfilled from the archive captures carry players, props and lines only (no
 edits or news were kept then) and say so in `meta.json`. The layout and what is deliberately not stored are in the
 module's docstring and [data.md](data.md).
 

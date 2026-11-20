@@ -1,0 +1,40 @@
+{# one folded section of the backtest's first screen, built when it is opened (ivan.web.nba.backtest.fold): `what` = money (the tiles, the
+   contests; a row opens the contest's panel), rerun (the whole slate drawn by the current code, `_nba_rerun.html`), players (every player
+   in one table; a team opens its panel). The slate's backtest behind them is ivan.sports.nba.backtest.slate, kept two minutes. #}
+{% from "_nba_bt_rows.html" import ptable %}
+{% macro money(x) %}{% if x is none %}—{% else %}{{ '-' if x < 0 else '' }}${{ '%.2f'|format(x|abs) }}{% endif %}{% endmacro %}
+{% macro pct(x) %}{% if x is none %}—{% else %}{{ '%+.0f%%'|format(100 * x) }}{% endif %}{% endmacro %}
+{% if what == 'rerun' %}{% if rr_dg is defined %}{% include "_nba_rerun.html" %}{% else %}<p class="muted small">this slate is not held here: nothing to rerun from</p>{% endif %}
+{% elif bt_error or not bt %}<p class="flash">the slate's backtest failed: {{ bt_error }}</p>
+{% elif what == 'money' %}{% set sm = bt.summary %}
+  <div class="bt-tiles">
+    <div class="tile"><b>{{ money(sm.net) }}</b><span>net · {{ pct(sm.roi) }} ROI</span></div>
+    <div class="tile"><b>{{ money(sm.won) }}</b><span>won on {{ money(sm.fees) }} in fees</span></div>
+    <div class="tile"><b>{{ sm.cashed }} / {{ sm.entries }}</b><span>entries cashed · {{ sm.contests }} contest{{ '' if sm.contests == 1 else 's' }}</span></div>
+    <div class="tile {% if sm.claimed_roi is not none and sm.roi is not none and sm.claimed_roi > sm.roi + 0.5 %}over{% endif %}"><b>{{ pct(sm.claimed_roi) }}</b><span>the sim's claim (chooser's ROI, fee-weighted)</span></div>
+  </div>
+  <p class="muted small">Points, ranks and payouts from DraftKings' final standings exports (the payout table for the money; ties share the places they cover); our entries are the ones under our DraftKings user name plus the upload files' Entry IDs.{% if sm.unscored %} <b>Unscored: {{ sm.unscored|length }} contest{{ '' if sm.unscored|length == 1 else 's' }}, {{ money(sm.fees_unscored) }} in fees</b>, whose only export is mid-slate (the late swap's fetch, LOCKED slots) or missing: not in the tiles until fetched final (Fetch standings above, or <code>scripts/nba/standings.py scrape</code>).{% endif %}</p>
+
+  {% if bt.contests and actuals %}<h4>Contests <span class="muted small">click a contest for its own panel: our entries in it, who the field was on against who we were on, the payout curve</span></h4>
+  <table class="players sortable bt-contests">
+    <thead><tr><th>contest</th><th class="n">fee</th><th class="n" title="entries in the export">field</th><th class="n">ours</th><th class="n">best</th><th class="n">cashed</th><th class="n" title="the lowest score that cashed">cash line</th><th class="n">won</th><th class="n">net</th><th class="n">ROI</th><th class="n" title="the chooser's claimed ROI for these entries (its run closest before lock)">claimed</th><th class="n" title="the share of the field's entries that are a copy of another">dup</th><th>scored from</th></tr></thead>
+    <tbody>{% for r in bt.contests %}<tr class="pick {% if not r.final %}dnp{% endif %}" hx-get="{{ root }}/backtest/contest/{{ r.contest_id }}" hx-target="#bt-contest" hx-swap="innerHTML show:#bt-contest:top" onclick="this.closest('tbody').querySelectorAll('tr.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="open this contest's panel">
+      <td>{{ r.name }}</td><td class="n" data-v="{{ r.entry_fee }}">{{ money(r.entry_fee) }}</td><td class="n">{{ r.field or '' }}</td><td class="n">{% if r.final %}{{ r.found }}{% if r.found != r.ours %}<span class="muted small"> of {{ r.ours }}</span>{% endif %}{% else %}{{ r.ours }}{% endif %}</td>
+      <td class="n">{{ r.best_rank or '' }}</td><td class="n">{{ r.cashed if r.final else '' }}</td><td class="n">{{ '%.1f'|format(r.min_cash) if r.min_cash is not none else '' }}</td>
+      <td class="n" data-v="{{ r.won or 0 }}">{{ money(r.won) if r.final else '—' }}</td><td class="n {% if r.final and r.net < 0 %}lo{% elif r.final and r.net > 0 %}hi{% endif %}" data-v="{{ r.net or 0 }}">{{ money(r.net) if r.final else '—' }}</td>
+      <td class="n" data-v="{{ r.roi if r.roi is not none else 0 }}">{{ pct(r.roi) if r.final else '—' }}</td>
+      <td class="n" data-v="{{ r.claim.roi if r.claim and r.claim.roi is not none else 0 }}">{{ pct(r.claim.roi) if r.claim else '—' }}</td>
+      <td class="n" data-v="{{ r.dup_share or 0 }}">{{ '%.0f%%'|format(100 * r.dup_share) if r.dup_share is not none else '' }}</td>
+      <td class="muted small">{% if not r.final %}unscored: {% endif %}{{ r.scored }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <div id="bt-contest"></div>
+  {% elif actuals %}<p class="muted">No entries of ours found for this slate's contests (our user name in a final export, or the slate's upload files).</p>{% endif %}
+
+{% else %}
+  <p class="muted small">Every player of the slate, our last projection before lock against the box score{% if not bt.scorecard %}: no projection capture or no box scores for this slate{% endif %} · click a header to sort · a team opens its panel.</p>
+  <div class="bt-chips">{% for team, rows in bt.players|dictsort %}{% set ov = bt.rotations.get(team) if bt.rotations else none %}
+    <button type="button" hx-get="{{ root }}/backtest/team/{{ team }}" hx-target="#bt-team" hx-swap="innerHTML show:#bt-team:top" onclick="this.closest('.bt-chips').querySelectorAll('button.on').forEach(x => x.classList.remove('on')); this.classList.add('on')" title="{{ team }}: projected {{ '%.0f'|format(rows|map(attribute='fpts_proj')|select('number')|sum) }} fpts, scored {{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }}{% if ov and ov.agreement is not none %} · grid agreement {{ '%.0f%%'|format(100 * ov.agreement) }}{% endif %}">
+      <b>{{ team }}</b> <span class="muted">{{ '%.0f'|format(rows|map(attribute='fpts_proj')|select('number')|sum) }}→{{ '%.0f'|format(rows|map(attribute='fpts_act')|select('number')|sum) }}</span>{% if ov and ov.agreement is not none %} <span class="ag {% if ov.agreement >= 0.8 %}ok{% elif ov.agreement < 0.6 %}warn{% endif %}">{{ '%.0f%%'|format(100 * ov.agreement) }}</span>{% endif %}</button>{% endfor %}</div>
+  <div id="bt-team"></div>
+  {{ ptable(bt.table, team_col=True, root=root, id='bt-table') }}
+{% endif %}
