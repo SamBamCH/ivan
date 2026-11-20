@@ -108,7 +108,7 @@ starters sit a blowout and a man in foul trouble sits; there is no separate garb
 player (`p_out`) is out of uniform in that world and his minutes land on whoever is drawn; a cut night (`p_cut`) would be a
 DNP or a night he is barely used, and is off on this path unless the World's parameters set `stint_cuts` (on top of
 the stint draw it puts the bench low). **Who the coach uses tonight is drawn per team, per world** when
-`gamesim.rotation_pool` is on (`gamesim.stints.sit_draw`; off in the config until the gate's numbers are accepted): each man who is not one of the five at the tip sits the whole
+`gamesim.rotation_pool` is on (`gamesim.stints.sit_draw`; on since 2026-11-19): each man who is not one of the five at the tip sits the whole
 night with his own chance (`gamesim.rotation_pool_scale` x `p_cut` x the DNP share of his cut nights; a fringe man `1 -
 fringe_p`), the number sitting held within one of its expectation so the end of the bench trades places from world to
 world; a man who plays is steered to his minutes, which are therefore his minutes when he plays, and a sitter's minutes
